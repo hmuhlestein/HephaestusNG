@@ -1,252 +1,187 @@
 ---
 type: architecture
-feature_id: des-91c8-cost-collectors
+feature_id: des-91c8-pi-extension
 status: complete
 ---
 
-# Architecture: CLI Cost Collectors (Pi + Claude Code)
+# Architecture: Pi Cost Tracker Extension
 
-**Feature ID:** des-91c8-cost-collectors
+**Feature ID:** des-91c8-pi-extension
 **Status:** Architecture Complete
-**Date:** 2026-07-25
+**Date:** 2026-07-26
 **Input:** `docs/requirements_analysis.md` (PASS per `docs/scope_review/scope_review_result.md`)
 
 ## 1. Scope Recap
 
-This feature is packaging/deployment only. The collector runtime logic
-(`PiJsonlCollector`, `ClaudeCodeCollector`, checkpointing, the `/cost-entries`
-API, the pi extension's TypeScript source) is already implemented and merged.
-Nothing here touches `src/services/cost_collection_service.py`,
-`src/core/cost_derivation.py`, the DB schema, or budget enforcement.
+This feature has no new runtime architecture. The pi extension
+(`extensions/hephaestus-cost-tracker/src/index.ts`), its install/build
+wiring (`scripts/install.sh:783-806`), the `POST /api/autopilot/cost-entries`
+endpoint (`src/mcp/autopilot_api.py:2144`), and the env-var-based
+attribution scheme are all already implemented and merged. Confirmed by
+direct inspection (`git log main..HEAD` is empty as of the requirements
+phase).
 
-Three concrete gaps, all inside `scripts/install.sh` and
-`extensions/hephaestus-cost-tracker/README.md`:
+What remains is exactly what `docs/requirements_analysis.md` scoped:
 
-1. `scripts/install.sh` never copies/builds the pi extension → dead code in
-   practice (JSONL-tailing fallback still collects the cost, just not in
-   real time).
-2. `install.sh --update` doesn't refresh an already-installed extension.
-3. `README.md` documents the wrong default API URL (`8000` vs. actual `8300`).
+1. **FR-1**: one wrong line in `extensions/hephaestus-cost-tracker/README.md`
+   (documents `POST /cost-entries`, actual route is
+   `POST /api/autopilot/cost-entries`).
+2. **FR-2**: verification-only — confirm the extension actually loads under
+   a real `pi` binary and produces a `cost_entries` row. No code is expected
+   to come out of this unless verification finds a defect.
+3. **FR-3**: verification-only — re-run the existing Python collector tests
+   and confirm no regression.
 
-No architecture diagram beyond this is warranted — there is one script, one
-doc file, and one one-way data flow (install-time file copy + build), not a
-running system with components that talk to each other at runtime.
+No component diagram is warranted beyond this — there is one incorrect
+sentence in a doc file and two verification checks, not a system with new
+parts that talk to each other.
 
-## 2. Design Decision: Where the install step goes
+## 2. Design Decision: no code changes beyond the doc fix
 
-`scripts/install.sh` already has a pi-detection block at line 569:
+Development should not use this phase as license to touch
+`cost_collection_service.py`, `cost_derivation.py`, the `CostEntry` schema,
+budget enforcement, or the extension's `index.ts` logic. All of that is
+correct, tested-by-inspection, and out of scope per
+`docs/requirements_analysis.md` §5/§9. **Decision:** the only file this
+feature edits is `extensions/hephaestus-cost-tracker/README.md`. Any other
+diff produced by the development phase is scope creep and should be
+rejected at architectural review.
 
-```bash
-if command -v pi >/dev/null 2>&1 || [ -d "$HOME/.pi" ]; then
-    log "Pi detected — configuring MCP tools"
-    ...
-    log "Restart Pi after installation for MCP tools to take effect"
-    ...
-else
-    log "Pi not detected — skipping MCP tool configuration"
-fi
+This also means there is nothing to introduce a JS/TS test framework for
+(NFR in requirements doc, §5) — do not add Jest/Vitest to verify a 140-line
+extension that has no existing test tooling anywhere in this repo.
+
+## 3. Component: `README.md` fix
+
+**File:** `extensions/hephaestus-cost-tracker/README.md`, "How It Works",
+line 44.
+
+**Change:**
+```diff
+-4. The cost entry is posted to Hephaestus API (`POST /cost-entries`)
++4. The cost entry is posted to Hephaestus API (`POST /api/autopilot/cost-entries`)
 ```
 
-This is the FR-1 hook point the requirements doc asked architecture to
-confirm — it exists, matching the same `command -v pi / [ -d ~/.pi ]` check
-used everywhere else in the script for CLI-presence detection. **Decision:**
-add a new step inside this existing `if` block (after the pi-mcp-adapter
-install, before the "Restart Pi" log line), rather than adding a second
-top-level `if command -v pi` block. One pi-detection branch, one place a
-future reader looks for "what happens when pi is present."
+No other line in the file is wrong — the `Configuration` section's
+`http://localhost:8300` default (lines 30-31) already matches
+`index.ts:58` and `hephaestus_config.yaml`; that was fixed by the prior
+`CLI Cost Collectors` feature and is not touched here.
 
-The step must run on both fresh install and `--update` (FR-2) — unlike the
-venv/frontend/node_modules steps elsewhere in the script, there's no
-"skip if already present" gate here: `npm install && npm run build` is
-idempotent and cheap (single-package extension, no lockfile-heavy deps), so
-it always re-runs. This also satisfies the idempotent-reinstall NFR without
-extra branching.
+## 4. Interface Contract (existing, unchanged — documented for reference)
 
-## 3. Component: pi extension install/build step in `scripts/install.sh`
+**Request:** `POST {HEPHAESTUS_API_URL}/api/autopilot/cost-entries`
+(`index.ts:123`, matching `autopilot_api.py:2144`'s router prefix
+`/api/autopilot` + route `/cost-entries`)
 
-**Location:** inside the existing `if command -v pi ... ; then` block
-(current lines 569–790), after the "Generating Hephaestus pi agents" step
-and before `log "Restart Pi after installation..."`.
+Headers: `Content-Type: application/json`, `X-Agent-ID: <agent_id>`
+(`index.ts:127-130`, verified server-side by `verify_agent_authentication`,
+`autopilot_api.py:2156`).
 
-**Logic** (matches existing script style: `log`/`ok`/`warn` helpers, no
-fatal exit for this optional step):
-
-```bash
-# Install/update the real-time cost tracking extension
-EXT_SRC_DIR="$PREFIX/extensions/hephaestus-cost-tracker"
-EXT_DEST_DIR="$HOME/.pi/agent/extensions/hephaestus-cost-tracker"
-
-if [ -d "$EXT_SRC_DIR" ]; then
-    log "Installing Hephaestus cost tracker extension..."
-    if command -v npm >/dev/null 2>&1; then
-        if ! rm -rf "$EXT_DEST_DIR" 2>/dev/null || ! mkdir -p "$EXT_DEST_DIR" 2>/dev/null || ! cp -r "$EXT_SRC_DIR"/* "$EXT_DEST_DIR/" 2>/dev/null; then
-            warn "Could not write to $EXT_DEST_DIR — skipping cost tracker extension"
-            warn "Cost data will still be collected via task-completion fallback"
-        else
-            if EXT_BUILD_OUTPUT=$(cd "$EXT_DEST_DIR" && npm install --silent 2>&1 && npm run build 2>&1); then
-                ok "Cost tracker extension installed"
-            else
-                warn "Cost tracker extension build failed — real-time cost tracking disabled"
-                warn "Cost data will still be collected via task-completion fallback"
-                echo "$EXT_BUILD_OUTPUT" | tail -6
-            fi
-        fi
-    else
-        warn "npm not found — skipping cost tracker extension (fallback collection still works)"
-    fi
-else
-    warn "Extension source not found at $EXT_SRC_DIR — skipping"
-fi
+Body (`CostEntry` interface, `index.ts:35-48`):
+```
+{
+  task_id?: string; agent_id?: string; workflow_id?: string;
+  source: string;                // always "pi" for this collector
+  model?: string;
+  input_tokens?, output_tokens?, cache_read_tokens?,
+  cache_write_tokens?, reasoning_tokens?: number;
+  cost_usd: number;
+  raw_usage?: Record<string, any>;
+}
 ```
 
-(This matches the implemented block verbatim — development hardened the
-directory-write step with an explicit `rm -rf`/`mkdir -p`/`cp -r` failure
-check, added a fresh `$EXT_DEST_DIR` on each run instead of overwriting in
-place, and captured build output in `$EXT_BUILD_OUTPUT` to print the last 6
-lines on failure instead of piping through `tail` mid-pipeline.)
+This contract is not changing. It's included here only so development and
+QA don't have to re-derive it from source when writing the FR-2
+verification report.
 
-**Interfaces:**
-- Input: `$PREFIX/extensions/hephaestus-cost-tracker/` (source tree, already
-  in the repo, contains `src/`, `package.json`, `tsconfig.json`, `README.md`).
-- Output: `$HOME/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js`
-  (built artifact pi loads on next launch), plus copied `package.json`,
-  `node_modules/` from the local `npm install`.
-- No network calls beyond `npm install` resolving `typescript` from the
-  configured npm registry (existing script already assumes npm registry
-  access for the frontend `npm install` step at line 448).
-
-**Failure handling:** every failure path is `warn`, not `err` — matches
-FR-1's acceptance criterion ("reports success/failure without aborting the
-rest of install") and the existing script's pattern for the pi-mcp-adapter
-install a few lines above it, which uses the same non-fatal `warn` on
-failure.
-
-**Idempotency:** `cp -r` overwrites existing files in `$EXT_DEST_DIR`;
-`npm install`/`npm run build` are naturally idempotent. No pre-check for
-"already installed" needed — re-running always produces a fresh `dist/`
-from current `src/`, which is exactly what FR-2 (`--update` refreshes the
-build) requires. `--update` needs no special-case code: the same block
-already runs unconditionally for both fresh and `--update` invocations.
-
-## 4. Component: `README.md` fix
-
-`extensions/hephaestus-cost-tracker/README.md` has two lines with the wrong
-default, both to change from `8000` to `8300`:
-
-- Line 30: `# Hephaestus API URL (default: http://localhost:8000)`
-- Line 31: `export HEPHAESTUS_API_URL=http://localhost:8000`
-
-No other change to this file. `src/index.ts` (already correct at `8300`)
-and `hephaestus_config.yaml` (`port: 8300`) are untouched — they're the
-source of truth this doc is being corrected to match.
-
-## 5. Data Flow
+## 5. Data Flow (existing, unchanged)
 
 ```
-scripts/install.sh (pi detected)
-  └─ copy extensions/hephaestus-cost-tracker/{src,package.json,tsconfig.json}
-       → ~/.pi/agent/extensions/hephaestus-cost-tracker/
-  └─ npm install && npm run build (in dest dir)
-       → ~/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js
+pi agent session (HEPHAESTUS_AGENT_ID/TASK_ID/WORKFLOW_ID set by
+manager.py when the tmux session is launched)
+  └─ pi loads ~/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js
+  └─ on turn_end: reads message.usage.cost.total
+  └─ updates TUI status bar via ctx.ui.setStatus()
+  └─ POSTs CostEntry to /api/autopilot/cost-entries (fire-and-forget,
+     failures only logged, never block the turn)
+  └─ Hephaestus API authenticates via X-Agent-ID, persists the row,
+     triggers cost_derivation.py rollup (unchanged, upstream)
 
-pi launches an agent session (unrelated to this feature, pre-existing)
-  └─ loads dist/index.js as an extension
-  └─ on turn_end: reads HEPHAESTUS_AGENT_ID / TASK_ID / WORKFLOW_ID (env,
-     already set by manager.py:481-484)
-  └─ POSTs to http://localhost:8300/cost-entries (already implemented,
-     now correctly documented)
+if the extension isn't loaded (pi absent, build failed, etc.):
+  └─ PiJsonlCollector tails the JSONL transcript at task completion
+     (unchanged fallback, already tested by test_cost_collection_service.py)
 ```
-
-Nothing in this flow is new at the API/schema level — the diagram exists
-only to confirm the install step lands the artifact in the exact path the
-already-implemented `POST /cost-entries` consumer expects it.
 
 ## 6. Infrastructure Requirements
 
-- No new infrastructure. Reuses `npm`/`node`, already a prerequisite check
-  for the frontend build step (`install.sh` line 148-155). This feature
-  does not add a second Node/npm detection block earlier in the script —
-  it checks `command -v npm` independently inside the new step, since the
-  pi-detection block can run even when `--skip-frontend` skipped the
-  earlier Node check.
-- No `--skip-pi-extension` flag: per requirements FR-1 risk note, this is
-  only warranted if the step is "heavy or risky enough to need one." A
-  single-package `npm install && tsc build` (no runtime deps, per
-  `package.json`) is neither — it already degrades gracefully via `warn` on
-  any failure. Not adding the flag; noting this as a deliberate
-  architecture decision so development doesn't add one unprompted.
+None new. No schema migration, no new config, no new dependency. FR-2's
+verification needs a machine with a real `pi` binary installed, which this
+sandboxed repo checkout does not have — per requirements §10, if no such
+environment exists anywhere in this pipeline's execution, development
+should document that as an accepted, explicit risk rather than block on it
+or fabricate a result.
 
 ## 7. Task Breakdown
 
-### Task 1: Add pi extension install/build step to `scripts/install.sh`
-**Blocks:** Task 3 (verification)
+### Task 1: Fix `README.md`'s documented POST path
+**Blocks:** none
 **Blocked by:** none
 
-- Add the install/build block (Section 3 above) inside the existing
-  `if command -v pi ...` block in `scripts/install.sh`, after the
-  "Hephaestus pi agents" generation step and before the "Restart Pi"
-  log line.
-- Use `$PREFIX/extensions/hephaestus-cost-tracker` as source (matches how
-  `PI_AGENTS_DIR` copying already resolves paths relative to `$PREFIX` a
-  few lines above).
-- Use the existing `log`/`ok`/`warn` helpers only — no new logging function.
-
-**Acceptance criteria:**
-- On a machine with `pi` installed (`command -v pi` or `~/.pi` present) and
-  `npm` available, running `./scripts/install.sh` results in
-  `~/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js` existing.
-- On a machine without `pi` detected, the step does not run at all (stays
-  inside the existing `if` block) and install completes normally.
-- On a machine with `pi` but without `npm`, install completes with a `warn`
-  and no `dist/` directory — install does not abort.
-- Running `./scripts/install.sh --update` on a machine that already has the
-  extension installed re-runs the copy/build and produces a `dist/index.js`
-  reflecting the current `src/index.ts` (verify by touching a comment in
-  `src/index.ts`, running `--update`, and confirming the built `dist/`
-  changed).
-- Re-running `install.sh` twice in a row (fresh, no `--update`) does not
-  error — `cp -r` and `npm install`/`build` overwrite cleanly.
-
-### Task 2: Fix `HEPHAESTUS_API_URL` default in `extensions/hephaestus-cost-tracker/README.md`
-**Blocks:** Task 3 (verification)
-**Blocked by:** none
-
-- Change both occurrences of `http://localhost:8000` to `http://localhost:8300`
-  in the "Configuration" section (lines 30-31).
+- Change `extensions/hephaestus-cost-tracker/README.md` line 44 from
+  `POST /cost-entries` to `POST /api/autopilot/cost-entries` (Section 3).
 - No other edits to the file.
 
 **Acceptance criteria:**
-- `README.md`'s documented default is `http://localhost:8300`, matching
-  `src/index.ts`'s actual default and `hephaestus_config.yaml`'s `port: 8300`.
+- Line 44 reads `POST /api/autopilot/cost-entries`.
+- The string matches `index.ts:123`'s literal path and resolves against
+  `autopilot_api.py`'s router prefix (`/api/autopilot`) + route decorator
+  (`/cost-entries`).
+- `git diff` for this task touches only that one line.
 
-### Task 3: Regression check on existing collector tests (verification only)
+### Task 2: Verify the extension loads and runs under a real `pi` install
 **Blocks:** none
-**Blocked by:** Task 1, Task 2 (run after, to confirm the install-script
-change didn't touch anything the tests exercise — it shouldn't, since
-`cost_collection_service.py` is untouched by this feature)
+**Blocked by:** none (independent of Task 1 — different files, no shared state)
 
-- Run `pytest tests/test_cost_collection_service.py` and confirm it passes
-  unchanged. No new tests are expected — FR-4 is explicit that this is
-  verification only, not re-implementation, and this feature makes no
-  changes to Python collector code.
-- Do not add install-script tests unless development finds `install.sh`
-  already has a test harness (bats, shellcheck, etc.) to extend — check
-  `tests/` and the repo root for an existing shell-test runner before
-  deciding whether one is warranted. If none exists, manual verification
-  per Task 1's acceptance criteria is sufficient — do not introduce a new
-  shell-testing framework for a ~15-line script change.
+- Install `pi`, run `scripts/install.sh`, confirm
+  `~/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js` builds and
+  loads without error on pi startup.
+- Run one real turn with `HEPHAESTUS_AGENT_ID`/`TASK_ID`/`WORKFLOW_ID` set
+  and confirm: the TUI status bar updates, and a `cost_entries` row is
+  created with `source="pi"` and a correct `cost_usd`.
+- If this environment isn't available anywhere in this pipeline run,
+  document that explicitly as an accepted risk (per requirements §10) —
+  do not fabricate a verification result and do not block the pipeline on
+  it.
 
 **Acceptance criteria:**
-- `tests/test_cost_collection_service.py` passes with no modifications.
-- If a shell-test harness for `install.sh` already exists, extend it to
-  cover Task 1's acceptance criteria; if none exists, this criterion is
-  satisfied by manual verification (documented in the development phase's
-  summary), no new framework introduced.
+- Either: a documented real `pi` session produced a `cost_entries` row as
+  described above, or: a documented statement that no environment with
+  `pi` installed was available to this pipeline, filed as an accepted risk.
+- No source code changes result from this task unless verification
+  surfaces an actual defect — in which case, stop and report the defect
+  rather than silently patching around it, since the requirements and
+  scope review both concluded the extension's logic is already correct.
+
+### Task 3: Regression check on existing collector tests
+**Blocks:** none
+**Blocked by:** Task 1 (run after, to confirm the doc-only change didn't
+touch anything — it shouldn't, since no `.py` file changes)
+
+- Run `pytest tests/test_cost_collection_service.py tests/test_cost_tracking.py`
+  and confirm both pass unchanged.
+- Do not introduce a JS/TS test framework for the extension (Section 2) —
+  none exists anywhere in this repo (`frontend/package.json` has no `test`
+  script either), and this is a 140-line extension with no logic change.
+
+**Acceptance criteria:**
+- `tests/test_cost_collection_service.py` and `tests/test_cost_tracking.py`
+  pass with no modifications to their source or to the code they test.
 
 ## 8. Non-Goals (carried from requirements, restated for development phase)
 
 - No changes to `PiJsonlCollector`, `ClaudeCodeCollector`, `CostEntry`
-  schema, checkpoint semantics, or `POST /cost-entries`.
-- No `--skip-pi-extension` flag (Section 6).
+  schema, `cost_derivation.py`, or budget enforcement.
+- No `session_id` field added anywhere (requirements §9 — deliberate,
+  already-justified deviation from design.md's literal text).
+- No new JS/TS test framework.
 - No OpenCode/Codex collector work.
-- No historical cost backfill.
