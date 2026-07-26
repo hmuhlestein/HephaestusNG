@@ -112,7 +112,23 @@ const Autopilot: React.FC = () => {
             // Already running (this project) despite the 409 -- the
             // optimistic "now running" flip from onMutate was actually
             // correct, just confirmed a different way. Not a revert case.
-            toast.success(`${selectedProject.name} is already running — no action needed.`);
+            // But "the service loop is up" isn't the same as "nothing is
+            // stuck" -- a workflow can sit paused forever on an
+            // individually-blocked task with the service otherwise idle
+            // (nothing about the loop being alive re-drives it). Cascade
+            // into the same recovery the per-design Resume button uses,
+            // scoped to every workflow in this project, instead of a bare
+            // no-op that leaves Play looking like it does nothing.
+            try {
+              const recovery = await apiService.recoverProject(selectedProject.id);
+              if (recovery.resumed_agents > 0) {
+                toast.success(`${selectedProject.name} was already running — resumed ${recovery.resumed_agents} stuck task(s).`);
+              } else {
+                toast.success(`${selectedProject.name} is already running — nothing stuck to resume.`);
+              }
+            } catch {
+              toast.success(`${selectedProject.name} is already running — no action needed.`);
+            }
             return { confirmed: true };
           }
 
