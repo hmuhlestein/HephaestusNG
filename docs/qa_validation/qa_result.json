@@ -1,11 +1,11 @@
 {
-  "capped": true,
-  "capped_after_runs": 12,
-  "passed_tests": 1,
+  "type": "qa_validation_result",
+  "passed_tests": 56,
   "failed_tests": 0,
-  "total_tests": 1,
+  "total_tests": 56,
   "pass_rate": 100.0,
   "critical_issues": 0,
-  "requirements_met": 1,
-  "requirements_total": 1
+  "requirements_met": 2,
+  "requirements_total": 2,
+  "recommendation": "done"
 }

@@ -1,24 +1,16 @@
 {
-  "verdict": "CONDITIONAL_PASS",
+  "verdict": "PASS",
   "blocker_count": 0,
-  "requirements_met": 7,
-  "requirements_total": 8,
-  "unmet_requirements": [
-    {
-      "id": "FR-7",
-      "description": "Cost indicator (\"$current / $limit\") on the autopilot design/pipeline screen",
-      "severity": "important",
-      "detail": "BudgetStatusCard.tsx implements this correctly but is not imported or rendered by any page/panel component (DesignQueuePanel.tsx, PipelineStatusCard.tsx, Autopilot.tsx have no cost/budget references). Budget status is only visible via ProjectSettingsModal.",
-      "recommended_fix": "Import and render BudgetStatusCard in DesignQueuePanel.tsx or PipelineStatusCard.tsx using project.cost_total_usd / project.cost_limit_usd."
-    }
-  ],
+  "requirements_met": 4,
+  "requirements_total": 4,
+  "unmet_requirements": [],
   "test_results": {
-    "passed": 84,
+    "passed": 27,
     "failed": 0,
-    "total": 84,
+    "total": 27,
     "pass_rate": 100.0
   },
   "regressions_found": false,
-  "prior_run_verdict": "CONDITIONAL_PASS",
-  "prior_run_blocker_count": 0
+  "prior_run_verdict": null,
+  "prior_run_blocker_count": null
 }
