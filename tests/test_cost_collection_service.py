@@ -4,10 +4,13 @@ import json
 import os
 import sqlite3
 import tempfile
+import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from src.services.cost_collection_service import (
     ClaudeCodeCollector,
@@ -441,7 +444,9 @@ def _append_session_row(path: Path, row: dict) -> None:
 
 
 def _ms(dt: datetime) -> int:
-    return int(dt.timestamp() * 1000)
+    """Convert a naive UTC datetime to real UTC epoch-ms (matching OpenCode's own
+    session.time_created values), independent of the host's local timezone."""
+    return int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
 
 
 # ── OpenCodeCollector ───────────────────────────────────────────
@@ -632,6 +637,47 @@ class TestDiscoverOpencodeSession:
 
         result = _discover_opencode_session("/proj", datetime.utcnow() - timedelta(minutes=5))
         assert result is None
+
+    def test_finds_session_using_real_utc_epoch_regardless_of_host_tz(self, tmp_path, monkeypatch):
+        """B-1 regression: naive-datetime .timestamp() assumes *local* time, so
+        computing the window bounds from naive UTC datetimes without attaching
+        tzinfo=utc shifts both bounds away from real UTC epoch-ms by the host's
+        UTC offset -- a genuinely-UTC session.time_created (written by OpenCode's
+        own runtime, unaffected by this bug) then never falls inside the window
+        on any host whose local timezone isn't UTC.
+
+        The session's time_created here is computed independently via
+        calendar.timegm (always interprets a naive tuple as UTC, ignoring the
+        host's local TZ) rather than via the production/test-fixture .timestamp()
+        conversion under test, so this checks the result against a real,
+        TZ-independent UTC epoch value rather than just checking both sides of
+        the comparison agree with each other. This machine's ambient timezone is
+        already non-UTC (MDT), which is exactly the condition this bug requires
+        to reproduce -- no TZ manipulation needed.
+        """
+        import calendar
+
+        if time.timezone == 0 and time.altzone == 0:
+            pytest.skip("Host timezone is already UTC; this regression only reproduces on a non-UTC host.")
+
+        opencode_dir = tmp_path / ".local" / "share" / "opencode"
+        opencode_dir.mkdir(parents=True)
+        db_path = opencode_dir / "opencode.db"
+
+        now_utc = datetime.utcnow()
+        agent_created = now_utc - timedelta(minutes=5)
+        session_created = now_utc - timedelta(minutes=1)
+        session_time_ms = calendar.timegm(session_created.timetuple()) * 1000
+
+        _write_session_rows(
+            db_path,
+            [{"id": "ses_tz", "directory": "/proj", "time_created": session_time_ms}],
+        )
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        result = _discover_opencode_session("/proj", agent_created)
+
+        assert result == (db_path, "ses_tz")
 
 
 # ── _discover_session_file ──────────────────────────────────────
