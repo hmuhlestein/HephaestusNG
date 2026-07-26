@@ -786,13 +786,17 @@ print('OK')
     if [ -d "$EXT_SRC_DIR" ]; then
         log "Installing Hephaestus cost tracker extension..."
         if command -v npm >/dev/null 2>&1; then
-            mkdir -p "$EXT_DEST_DIR"
-            cp -r "$EXT_SRC_DIR"/* "$EXT_DEST_DIR/"
-            if (cd "$EXT_DEST_DIR" && npm install --silent 2>&1 | tail -3 && npm run build 2>&1 | tail -3); then
-                ok "Cost tracker extension installed"
-            else
-                warn "Cost tracker extension build failed — real-time cost tracking disabled"
+            if ! rm -rf "$EXT_DEST_DIR" 2>/dev/null || ! mkdir -p "$EXT_DEST_DIR" 2>/dev/null || ! cp -r "$EXT_SRC_DIR"/* "$EXT_DEST_DIR/" 2>/dev/null; then
+                warn "Could not write to $EXT_DEST_DIR — skipping cost tracker extension"
                 warn "Cost data will still be collected via task-completion fallback"
+            else
+                if EXT_BUILD_OUTPUT=$(cd "$EXT_DEST_DIR" && npm install --silent 2>&1 && npm run build 2>&1); then
+                    ok "Cost tracker extension installed"
+                else
+                    warn "Cost tracker extension build failed — real-time cost tracking disabled"
+                    warn "Cost data will still be collected via task-completion fallback"
+                    echo "$EXT_BUILD_OUTPUT" | tail -6
+                fi
             fi
         else
             warn "npm not found — skipping cost tracker extension (fallback collection still works)"
