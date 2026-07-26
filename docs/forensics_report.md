@@ -1,80 +1,79 @@
-# Forensics Report: Cost Tracking UI (des-91c8-cost-ui)
+---
+type: forensics_report
+---
 
-**Date:** 2026-07-25
-**Workflow ID:** 33f63b4c-1641-4a06-b42d-d3bf1db28958
-**Feature:** Cost Tracking UI (feature/des-91c8/cost-ui)
-**Parent Design:** Cost Tracking Design (DES-91c8)
-**Pipeline Status:** Completed cleanly through doc_review, no unresolved blockers.
+# Forensics Report: Pi Cost Tracker Extension (des-91c8-pi-extension)
+
+**Date:** 2026-07-26
+**Workflow ID:** f20aaf3f-2997-4a5d-9fda-f41e0ab78382
+**Feature:** Pi Cost Tracker Extension (feature/des-91c8/pi-extension)
+**Pipeline status:** Completed cleanly through doc_review. All 12 phases present, 1 pass each except adversarial_review (2 runs: fail→fix→verify) and security_review (2 commits: initial pass under-rated a finding, second pass corrected it).
 
 ## Data quality caveat
 
-No `pipeline_metrics.json` or `phase_prompts/` directory exists scoped to this workflow_id anywhere under `.hephaestus/` (checked this worktree and the main repo's `.hephaestus/features/*`) — both live at the parent multi-feature design session level, and this sub-feature's run never got its own copy. Timing/iteration data below is reconstructed from `git log --date=iso-strict` (main..HEAD, 12 commits) plus `.hephaestus/tmux/*.transcript.log` file mtimes and content, which together give minute-level resolution and are sufficient to substitute for missing per-phase metrics. This report itself overwrote a stale `docs/forensics_report.md` left in this worktree by an unrelated sibling feature ("Budget Enforcement and Pipeline Throttling", workflow `0acbf2fc-...`) — direct evidence for finding §3.1.
+No `pipeline_metrics.json`, `phase_prompts/`, or per-run feature folder scoped to this workflow_id exists anywhere under `.hephaestus/` — checked this worktree (`.hephaestus/features/pi-extension/` is empty) and the main repo's `.hephaestus/features/*_COST_TRACKING_DESIGN/features/pi-extension/` (contains only `scope.md`). `run_health.json` is also absent, so LIGHT/FULL MODE could not be selected via that signal — proceeded FULL MODE per the yaml's default when the file is missing. Analysis below is reconstructed from `git log --date=iso-strict` (main..HEAD, 12 commits, each with full agent self-reported detail in the commit body), `docs/` artifacts, and 2 sampled `.hephaestus/tmux/*.log` files, cross-checked against file mtimes. This is the same gap documented in the prior sibling forensics report (`des-91c8-cost-ui`, §"Data quality caveat") — recurring across runs, still unfixed.
 
-## 1. Commit-history → phase/iteration mapping
+## 1. Commit-history → phase mapping
 
 | Time | Commit | Phase | Outcome |
 |---|---|---|---|
-| 16:43–17:08 | `bad74ea` | product_requirements | **3 crashed attempts + 1 success** (see §3.2) |
-| 17:11:00 | `5ebf56b` | scope_review | PASS, 1 run. Found 1 minor factual inaccuracy in requirements doc (non-blocking) |
-| 17:16:49 | `f209b42` | architecture_design | Clean, 1 run. Resolved 2 explicit judgment calls (FR-3 DesignCostRow-vs-CostDisplay, FR-5 BudgetPausedLabel deletion) |
-| 17:26:00 | `2f8fcb3` | development (run 1) | Self-review caught and fixed a TS-narrowing regression it introduced during its own cleanup pass |
-| 17:31:11 | `3712252` | architectural_review | PASS, 0 BLOCKER, 1 DEFER (correctly left an unrelated orphaned component untouched) |
-| 17:37:32 | `b250e83` | adversarial_review (run 1) | 2 BLOCKERs: dead "Set budget limit" button (no onClick wiring); budget-pause reason not surfaced through the design-status API, contradicting an explicit design.md requirement |
-| 17:46:08 | `57c3a14` | development (run 2, fix) | Both blockers fixed; also fixed 2 WARNINGs and 1 NIT from the same review pass |
-| 17:48:21 | `393add0` | adversarial_review (run 2, verify) | Confirmed all fixed, 0 BLOCKER/WARNING remaining |
-| 20:03–20:46 | `d113278` | security_review | **4 crashed attempts + 1 success** (see §3.2). Fixed 1 CRITICAL (unvalidated `cost_limit_usd` allowing Infinity/NaN/negative to bypass budget), 1 HIGH (missing auth on project mutation endpoints), 1 MEDIUM (SQL string formatting in a migration) |
-| 00:21:45 | `bcb3b8f` | qa_validation | 145/145 tests pass. Found and worked around stale sibling-feature docs (see §3.1) |
-| 00:26:08 | `0186962` | product_validation | PASS, 5/5 FR, 4/4 NFR. Also found and overwrote stale sibling-feature docs |
-| 00:29:32 | `d6cd1bb` | doc_review | No content inaccuracies found; overwrote 2 more stale sibling-feature files, added missing `code_summary.md` |
+| 01:01 | `b231bbe` | product_requirements | Clean, 1 run. Correctly identified this as an almost-no-op feature: 1 doc bug (README POST path) + 1 unverifiable item (no `pi` binary in sandbox) |
+| 01:04 | `dc2ba5d` | scope_review | PASS, 1 run |
+| 01:06 | `ec6dcd3` | architecture_design | Clean, 1 run |
+| 01:09 | `618804b` | development (run 1) | Fixed the one documented defect (README path) |
+| 01:11 | `6b1aeb8` | architectural_review | PASS, 0 blocker, 1 defer (pre-existing unrelated test import break, correctly left alone) |
+| 07:47 | `81917e2` | adversarial_review (run 1) | **2 BLOCKERs** found by extending scope past this feature's trivial 1-line diff into the pipeline the README describes (see §2) |
+| 07:55 | `2f9fc73` | development (run 2, fix) | Both BLOCKERs fixed in `cost_collection_service.py::collect_task_cost` |
+| 07:57 | `b9b679b` | adversarial_review (run 2, verify) | Confirmed fixed; found 1 new lower-severity WARNING introduced by the B-1 fix itself |
+| 08:06 | `0f677b3` | security_review (pass 1) | Rated the WARNING's residual gap (fake `source=pi` entry can suppress real cost tracking) as **Medium**, ticketed only |
+| 08:14 | `de8eaab` | security_review (pass 2) | Re-analyzed same finding, **escalated to High**, fixed in code + added regression test (see §2) |
+| 08:19 | `b76f92c` | qa_validation | Pass |
+| 08:22 | `1e22b8c` | product_validation | PASS, 3/3 FR (2 done, 1 correctly downgraded to accepted risk) |
+| 08:26 | `d40d7e8` | doc_review | No inaccuracies found; fixed stale artifacts (see §3) |
 
-**Active work time:** ~2h46m of actual phase execution (16:43→17:48 for requirements-through-adversarial, then 20:03→00:29 for security-through-doc_review), spread across a much longer wall-clock window. Only 2 of 11 phases needed more than one substantive iteration, and both were legitimate: one blocker-fix loop (adversarial_review, exactly 2 rounds) and one self-caught regression (development run 1's self-review). This is a well-functioning pipeline — the *quality* loops are not the problem; see §3.2 for the real time sink.
+Wall-clock: 01:01→01:11 (requirements→architectural_review), gap, then 07:47→08:26 (adversarial_review→doc_review). Only 2 of 12 phase-commits were re-runs, both legitimate (blocker-fix loop; self-correction within security_review).
 
-## 2. What worked well (preserve, don't change)
+## 2. What worked well
 
-- **Adversarial review caught 2 real defects in one pass** (dead budget-limit button, missing budget-pause reason contradicting a design requirement) and both were fixed and verified in exactly one development→re-review cycle. No wasted iterations.
-- **development's self-review is earning its keep**: in run 1 it caught a TS-narrowing bug the phase introduced in its *own* cleanup edit, and verified via `git stash` diff that the failure was newly introduced rather than pre-existing — a rigor pattern worth keeping as-is.
-- **Every downstream phase independently re-verified upstream claims against code** rather than trusting prior reports at face value (scope_review re-grepped requirements' factual claims; qa_validation, product_validation, and doc_review all found and fixed stale cross-feature pollution rather than propagating it — see §3.1). This defense-in-depth pattern is working exactly as intended and should not be simplified away.
-- **security_review's fixes were precise and scoped**: validator on `cost_limit_usd`, auth on mutation endpoints, parameterized SQL — no scope creep into unrelated hardening.
+- **adversarial_review correctly widened scope beyond a 1-line diff.** The feature's own change was trivially correct; the phase instead adversarially re-examined the *pipeline the README documents* and found 2 real BLOCKERs (double-counting between the pi extension's real-time POST and the JSONL fallback tailer; silent whole-batch data loss on one bad entry) that pre-dated this feature but were in scope because the README's accuracy claims about that pipeline were the actual review surface. This is the review agent reasoning about *intent*, not just diff lines — worth preserving as-is.
+- **The unverifiable requirement (FR-2, "confirm pi actually loads the extension" — no `pi` binary available in this sandbox) was handled consistently and honestly across every downstream phase**: requirements flagged it as a gap, architecture and implementation_status both note the same constraint, product_validation explicitly downgrades it to an "accepted risk, not fabricated as done" rather than claiming false completion or silently dropping it. No phase inflated confidence on an item it couldn't actually test.
+- **security_review pass 2 self-corrected its own severity call** (Medium→High) via independent sub-agent verification rather than leaving a known-wrong Medium ticket in place — see finding below for the flip side of this.
 
-## 3. Issues found and root causes
+## 3. Findings
 
-### 3.1 Systemic (recurring across ≥3 sibling feature runs): stale cross-feature artifacts pollute shared docs directories
+### 3.1 (Recurring, unfixed since prior report) Stale cross-feature docs still pollute the shared `docs/` tree
 
-**Pattern:** In this run alone, `qa_validation`, `product_validation`, and `doc_review` each independently discovered leftover doc files from unrelated sibling features (`des-91c8-budget-enforcement`) sharing the same `docs/` tree, and this very forensics phase found a stale `forensics_report.md` from the same sibling. This is now documented as a recurring pattern across at least 3 sibling forensics reports under the parent "Cost Tracking Design" pipeline (this one, `0acbf2fc-...`, and `8f2e9f79-...`), each phase re-deriving "is this stale or mine?" independently.
+**What happened:** `docs/security_report.md`, `docs/product_validation.md` (top-level, not `docs/product_validation/`), and other files from the sibling `feature/des-91c8-cost-ui` run remain in this worktree's `docs/` root, dated 2025-07-24, branch header literally reads `feature/des-91c8-cost-ui`. This run's actual artifacts correctly land in namespaced subdirectories (`docs/security_review/security_report.md`, `docs/product_validation/product_validation.md`, `docs/adversarial_review/`, `docs/architectural_review/`) — every phase in *this* run wrote to the right place. But nothing removed the old top-level files, and this very forensics phase had to overwrite a stale `docs/forensics_report.md` from `des-91c8-cost-ui` to write this one.
 
-**Root cause:** `docs/` is a single shared directory per worktree/project; nothing resets or namespaces phase-output files per sub-feature workflow before a new sibling feature's pipeline starts writing into it.
+**Root cause:** Same as the prior report's §3.1 — `docs/` is a single directory shared across all sibling features in this design's worktree lineage; no pipeline step clears or archives non-current-feature files before a new sibling's pipeline starts.
 
-**Recommendation:** Before `product_requirements` (or as a pipeline pre-step), clear or archive phase-output files/subdirectories that don't belong to the current feature's workflow_id, rather than relying on every downstream phase to detect and paper over staleness independently. This has now cost measurable agent effort in 3 consecutive sibling runs with no fix landed.
+**Recommendation:** Unchanged from the prior report, now recurring a 4th time: add a pre-`product_requirements` step that archives or namespaces prior-feature `docs/` output before a new sibling feature pipeline begins writing. Documenting-and-hoping across every downstream phase is not converging on a fix.
 
-### 3.2 Critical: repeated "monthly spend limit" crashes cost ~1h10m of wall-clock time across 2 phases (7 wasted agent spawns)
+### 3.2 security_review's first pass under-rated a finding it later called High
 
-**Finding:** `product_requirements` crashed 3 times (16:43, 16:50, 16:57 — `.hephaestus/tmux/product_requirements_{659d3fa2,b597c877,d5b10019}.log`) before succeeding on the 4th attempt at 17:08. `security_review` crashed 4 times (20:03, 20:12, 20:18, 20:27 — `.hephaestus/tmux/security_review_{6e1f73ec,ef74a51a,3cb31a25,d28c6ecb}.log`) before succeeding on the 5th attempt at 20:46. Every crashed log shows the identical signature:
+**What happened:** Pass 1 (`0f677b3`) rated the "forged `source=pi` CostEntry can permanently suppress real cost/budget tracking for a task" finding as **Medium**, filed a ticket, did not fix. Pass 2 (`de8eaab`), same phase, re-analyzed the same finding using "independent sub-agent verification, confidence 8/10" and found `task_id`/`agent_id` are both enumerable via unauthenticated `GET /api/tasks` / `GET /api/agents`, making the attack deterministic rather than requiring a guess — clearing the bar for High. It then fixed it in-code with a regression test.
 
-```
-[GUARDIAN - LAST RESORT]: Login expired error is blocking progress. Attempt to proceed despite this issue...
-⎿  You've hit your monthly spend limit.
-✻ <verb> for 0s
-⏺ Unknown command: /rate-limit-options
-```
+**Root cause:** Pass 1's severity judgment assessed the suppression mechanism but didn't check attacker-reachability (enumerability) of the two IDs the attack depends on before assigning impact.
 
-This is not an agent/prompt failure — the underlying CLI agent process hit an account-level spend cap immediately on startup, produced almost no output (49-50 lines, effectively just the injected prompt echoed back), and Guardian correctly detected the stuck state and respawned, but had no way to distinguish "spend limit, retrying won't help right now" from a transient stall, so it burned 7 full agent-spawn cycles retrying the same failing precondition.
+**Recommendation:** Add to the security_review phase prompt: when rating severity for a finding that depends on guessing/matching an ID (task_id, agent_id, etc.), explicitly check whether that ID is enumerable via any existing unauthenticated or lightly-authenticated endpoint before assigning Medium — enumerable-precondition findings should default one severity tier higher than the same bug with a hard-to-guess precondition.
 
-**Recommendation:**
-1. Guardian's stuck-detection should special-case the `"You've hit your monthly spend limit"` / `Unknown command: /rate-limit-options` signature specifically — on this signature, back off with an increasing delay (or pause the workflow and alert) rather than immediately respawning, since a fresh agent process will hit the identical cap immediately.
-2. Track this as an infra/ops issue (billing plan headroom for the account driving these agents), not a prompt-engineering issue — no phase prompt change would have prevented it.
+## 4. Prompt rewrites
 
-## 4. Prompt rewrites proposed
+**Phase:** security_review
 
-No prompt rewrite is indicated for the substantive review phases (scope_review, architecture_design, adversarial_review, security_review, qa_validation, product_validation, doc_review) — all performed correctly and produced accurate, well-scoped output on their first successful attempt. The two issues found in this run (§3.1, §3.2) are both infrastructure/pipeline-orchestration issues, not agent-prompt issues, so no before/after prompt text is proposed here.
+**Problem:** No `phase_prompts/` directory exists for this run (see data-quality caveat), so the actual prompt text couldn't be read or quoted verbatim. The behavior in §3.2 is inferred from the two-pass commit history, not a diffed prompt — treat this as circumstantial support, not a verified before/after.
 
-## 5. Tickets filed
+**Proposed addition** (to whatever severity-rating instructions exist in security_review.yaml):
+> Before finalizing severity for any finding whose exploit path depends on guessing or matching an identifier (user_id, task_id, agent_id, session token, etc.), check whether that identifier is enumerable via any existing endpoint — authenticated or not. If enumerable, the finding is at least one tier higher than the same defect with a cryptographically-hard-to-guess precondition.
 
-- `ticket-610707f9-18aa-41a9-94db-4fe8aa2dcc1c` (high): Guardian should not respawn agents on "monthly spend limit" errors — back off/alert instead of burning agent-spawn cycles against an account-level cap (§3.2).
-- `ticket-0a09583e-a8ae-40fc-b30b-f46ed334ceaa` (medium): Namespace/clear phase-output docs between sibling features sharing a design pipeline (§3.1).
+## 5. Patterns
 
-## 6. Summary
+- **Cross-feature `docs/` pollution** (§3.1) is now a 4-run pattern with a known, un-implemented fix. This is the single highest-leverage item across both forensics reports for this design.
+- **Severity re-assessment on second look caught a real gap** (§3.2) — the pipeline's willingness to revisit its own prior-pass conclusions is working, but the first pass shouldn't need a second pass to get enumerability right.
 
-- 11/12 pipeline phases executed cleanly on the first substantive attempt.
-- 1 legitimate blocker-fix loop (adversarial_review, 2 rounds) — pipeline functioning as designed.
-- 0 phases required a prompt change.
-- 2 systemic, cross-cutting issues identified, both already documented as recurring in prior sibling forensics reports: stale shared-docs pollution (3rd+ occurrence, no fix landed yet) and spend-limit-triggered Guardian respawn thrashing (new finding this run, costing ~1h10m / 7 wasted agent spawns).
+## Summary
+
+- Highest-impact fix: implement the `docs/` namespacing/archival step (§3.1) — 4th consecutive run recommending this with no landed fix.
+- security_review: add an explicit enumerability check to severity rating (§3.2/§4) so first-pass ratings don't need self-correction.
+- adversarial_review's scope-widening-to-intent behavior and the pipeline's honest handling of the unverifiable FR-2 requirement are both working well — preserve as-is, no changes proposed.
+- No prompt-vs-outcome gaps found in product_requirements, scope_review, architecture_design, development, architectural_review, qa_validation, product_validation, or doc_review — all performed to spec for this run.
