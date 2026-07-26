@@ -1,89 +1,110 @@
 ---
 type: doc_review_result
-feature_id: des-91c8-cost-collectors
+feature_id: des-91c8-opencode-collector
 verdict: PASS
 ---
 
 # Documentation Quality Review Report
 
 **Reviewer:** Hephaestus Doc Review Agent (Phase 10)
-**Date:** 2026-07-25
-**Feature:** CLI Cost Collectors (Pi + Claude Code) (des-91c8-cost-collectors)
-**Workflow ID:** 263e9b05-29ab-4e8d-962e-722c4ff24511
+**Date:** 2026-07-26
+**Feature:** OpenCode Cost Collector (des-91c8-opencode-collector)
+**Workflow ID:** b0087459-85b3-4937-a50e-faee96194a7e
 
 ---
 
 ## 1. Executive Summary
 
-Documentation quality is **GOOD**. `requirements_analysis.md`,
-`qa_validation/qa_report.md`, `security_review/security_report.md`, and
-`product_validation/product_validation.md` were checked against
-`git diff main...HEAD` and match the actual shipped code exactly — no
-inaccuracies found in any of them. Two problems were found and fixed:
+Documentation quality is **GOOD**. `docs/requirements_analysis.md`,
+`docs/security_review/security_report.md`, `docs/qa_validation/qa_report.md`,
+`docs/product_validation/product_validation.md`, `docs/architectural_review/architectural_review_report.md`,
+and `docs/adversarial_review/adversarial_review_report.md` were checked against
+`src/services/cost_collection_service.py` (the actual shipped
+implementation) and match it exactly — including their descriptions of the
+two BLOCKERs found and fixed mid-pipeline (adversarial_review's naive-datetime
+timezone bug, architectural_review's checkpoint-key bug), both independently
+re-verified against the real code (lines 456-457, 583).
 
-1. **`docs/architecture.md`'s Section 3 code sample was stale** — it showed
-   the pre-development draft of the `install.sh` block, not what was
-   actually implemented (development hardened the write step's error
-   handling and changed how build failures are reported).
-2. **`docs/autopilot.md`'s Cost Tracking section didn't mention the
-   real-time pi extension at all** — it only described the JSONL-tailing
-   fallback, even though making the extension actually installable is this
-   feature's entire purpose.
+One document was stale: **`docs/architecture.md`**, written during Phase 3
+before either BLOCKER fix landed, still described the pre-fix, buggy
+behavior in two places. Both are fixed below.
 
-No stray files were found at the project root or outside `docs/` — `git
-status` is clean and no orphaned reports from a prior pipeline run exist at
-the `docs/` top level for this feature.
+`docs/doc_review_report.md`, `docs/feature_report.html`, and
+`docs/code_summary.md` are overwritten each pipeline run for whichever
+feature currently occupies this Docs Path; before this pass they held
+content from a prior sibling feature (`des-91c8-cost-ui`) and are replaced
+here with this feature's report — not a "stray file" in the sense of being
+misplaced, just expected churn on paths that aren't versioned per-feature.
+No other stray files were found at the project root or elsewhere; `git
+status` shows only this phase's edit to `docs/architecture.md`.
 
 ## 2. Documentation Inventory
 
 | Document | Path | Status |
 |----------|------|--------|
 | Requirements Analysis | `docs/requirements_analysis.md` | ✅ Accurate, matches implementation |
-| Architecture | `docs/architecture.md` | ⚠️ Section 3 code sample stale — **fixed** |
-| Security Report | `docs/security_review/security_report.md` | ✅ Accurate (ACCEPTABLE, 1 High fixed, 2 low pre-existing/ticketed) |
-| QA Report | `docs/qa_validation/qa_report.md` | ✅ Accurate (56/56 targeted tests) |
-| Product Validation | `docs/product_validation/product_validation.md` | ✅ Accurate (PASS, 4/4 requirements met) |
-| Pipeline Reference | `docs/autopilot.md` | ⚠️ Cost Tracking section missing real-time extension — **fixed** |
+| Architecture | `docs/architecture.md` | ⚠️ Two stale code descriptions — **fixed** |
+| Security Report | `docs/security_review/security_report.md` | ✅ Accurate (PASS) |
+| QA Report | `docs/qa_validation/qa_report.md` | ✅ Accurate (83/83 tests, confirmed by live collection) |
+| Product Validation | `docs/product_validation/product_validation.md` | ✅ Accurate (PASS) |
+| Architectural Review | `docs/architectural_review/architectural_review_report.md` | ✅ Accurate |
+| Adversarial Review | `docs/adversarial_review/adversarial_review_report.md` | ✅ Accurate |
 
-## 3. Inaccuracies Found and Fixed
+## 3. Verification Method
 
-### 3.1 `docs/architecture.md` — stale install.sh code sample (Critical)
+Rather than trusting each doc's own claims, the implementation itself
+(`src/services/cost_collection_service.py`) was read directly and compared
+line-by-line against every architectural and behavioral claim:
 
-Section 3's `bash` code block was the pre-development design sketch for the
-extension-install step. The implemented version in `scripts/install.sh`
-differs in three ways the doc didn't reflect: it does an explicit `rm -rf`
-before `mkdir -p`/`cp -r` (so `--update` starts from a clean destination
-directory rather than overwriting in place) and checks each of those three
-commands for failure before proceeding; and it captures combined
-`npm install`/`npm run build` output into `$EXT_BUILD_OUTPUT` to print the
-last 6 lines on failure, instead of piping each command through `tail`
-independently. A reader relying on the architecture doc to understand the
-shipped install step would get a subtly wrong picture of its failure
-handling. Fixed by replacing the code block with the actual implemented
-block (verified byte-for-byte against `scripts/install.sh`) and adding a
-one-line note calling out what changed during development.
+- `OpenCodeCollector.collect()` (lines 264-342) — checkpoint 0/1 semantics, column mapping, zero-cost handling — matches `docs/architecture.md` §2.2 and `docs/requirements_analysis.md` FR3.
+- `_discover_opencode_session()` (lines 423-481) — directory + time-window matching, most-recent tie-break, read-only SQLite, path-safety guard — matches §2.1 and FR2, **except** the UTC-timestamp detail (§3.1 below).
+- `collect_task_cost()`'s opencode branch and checkpoint-key line (lines 559-593) — matches §2.3 and Data Flow §3, **except** the checkpoint-key detail (§3.2 below).
+- Test collection count: `pytest tests/test_cost_collection_service.py tests/test_cost_tracking.py --collect-only -q` → **83 tests collected**, matching the QA and product-validation reports' "83/83" claims exactly.
 
-### 3.2 `docs/autopilot.md` — Cost Tracking section missing the real-time extension (Gap)
+## 4. Inaccuracies Found and Fixed
 
-The "Budget Enforcement" subsection described `CostEntry` ingestion as
-coming "from the Pi JSONL usage log" — true of the fallback path, but this
-feature's whole purpose is making a second, real-time path
-(`hephaestus-cost-tracker` pi extension, installed by `scripts/install.sh`)
-actually functional. A reader of this doc would have no idea the extension
-exists or how it relates to the fallback. Added two sentences naming both
-collectors (`ClaudeCodeCollector` for Claude Code, and for Pi: the
-extension when built, else the JSONL fallback) and pointing at the install
-step. No other content in this section needed changes — the budget
-enforcement semantics it describes are unaffected by this feature.
+### 4.1 `docs/architecture.md` §2.1 — missing UTC tzinfo in timestamp params (Critical)
 
-## 4. Stray Files
+Section 2.1, step 4 described the time-window query params as
+`int(agent_created_at.timestamp() * 1000)` / `int(datetime.utcnow().timestamp()
+* 1000)` — the pre-fix, buggy form. The shipped code
+(`cost_collection_service.py:456-457`) attaches `tzinfo=timezone.utc` to both
+values before calling `.timestamp()`, because naive `.timestamp()` on a
+UTC-wall-clock-but-tzinfo-less datetime is misread as local time, silently
+shifting the query window on any non-UTC host and dropping 100% of OpenCode
+cost collection there. This exact bug was found and fixed as adversarial_review
+BLOCKER B-1 (commit `af59ac8`) — the architecture doc simply predates the fix
+and was never updated. A reader relying on this doc to understand or
+re-implement the discovery query would reproduce the bug. Fixed by updating
+the params description to match the actual `.replace(tzinfo=timezone.utc)`
+calls and adding a note explaining why, citing B-1.
 
-None found. `git status` is clean; no top-level `docs/` files left over from
-a different feature's pipeline run.
+### 4.2 `docs/architecture.md` §3 Data Flow, step 7 — wrong checkpoint key (Critical)
 
-## 5. Verdict
+Step 7 stated the `SessionCostCheckpoint` row for OpenCode is "keyed by
+Hephaestus's own internal `session_id`" — this was the doc's original design,
+but it's wrong: OpenCode never resumes a session, so a second task launch
+sharing the same Hephaestus `session_id` (e.g. a reused `session_role`) would
+find the first launch's checkpoint already at 1 and silently skip collecting
+its own, different `opencode.db` session row, dropping its cost with no
+error. The shipped code (`cost_collection_service.py:583`) keys the OpenCode
+checkpoint by `opencode_session_row_id` instead — the correct fix, found and
+applied as architectural_review BLOCKER B-1 (commit `adae90b`), which that
+report explicitly calls out as "the implementation is more correct than the
+spec." The architecture doc was never updated to reflect its own design
+error being overridden. Fixed by rewriting step 7 to describe the actual
+`opencode_session_row_id` keying and why it's necessary.
 
-**PASS.** All phase reports (requirements, security, QA, product validation)
-were already accurate against the actual code diff. The two fixes applied —
-correcting `architecture.md`'s stale code sample and filling a coverage gap
-in `autopilot.md`'s Cost Tracking section — address the only issues found.
+## 5. Stray Files
+
+None found. `git status` shows no untracked or misplaced files.
+
+## 6. Verdict
+
+**PASS.** Every phase report (requirements, security, QA, product
+validation, architectural review, adversarial review) was already accurate
+against the actual shipped code — including their descriptions of the two
+BLOCKER fixes. The only inaccuracies were in `docs/architecture.md`, which
+predated those fixes; both are corrected above to describe the real,
+shipped behavior. `feature_report.html` and `code_summary.md` are produced
+alongside this report per the phase's required outputs.
