@@ -48,8 +48,10 @@ export HEPHAESTUS_WORKFLOW_ID=your-workflow-id
 
 If the extension is not loaded, Hephaestus falls back to JSONL tailing:
 - Costs are collected when tasks complete (not real-time)
-- `SessionCostCheckpoint` prevents double-counting
 - Same data accuracy, just delayed timing
+- If the extension already posted real-time costs for a task, the JSONL
+  fallback skips that task entirely rather than re-tailing and
+  double-recording the same turns
 
 ## Development
 

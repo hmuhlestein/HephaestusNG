@@ -412,7 +412,7 @@ def collect_task_cost(task_id: str) -> None:
         task_id: The completed task's ID
     """
     from src.core.cost_derivation import record_cost
-    from src.core.database import Agent, SessionCostCheckpoint, Task, get_db
+    from src.core.database import Agent, CostEntry, SessionCostCheckpoint, Task, get_db
 
     with get_db() as db:
         task = db.query(Task).filter_by(id=task_id).first()
@@ -433,6 +433,23 @@ def collect_task_cost(task_id: str) -> None:
             logger.debug(f"[COST-COLLECT] Task {task_id[:8]} has no assigned agent — skipping")
             return
 
+        # Discover session file based on CLI type
+        cli_type = agent.cli_type or "pi"
+
+        # The pi extension posts costs to /api/autopilot/cost-entries in
+        # real time as turns complete (source="pi" CostEntry rows). If any
+        # such rows already exist for this task, the extension was active
+        # for this session and is the source of truth — tailing the JSONL
+        # transcript here as well would re-record the same turns a second
+        # time (they were never checkpointed by the real-time POST path).
+        # Trust the extension exclusively once it's proven active, rather
+        # than double-counting.
+        if cli_type == "pi":
+            has_realtime_entries = db.query(CostEntry).filter_by(task_id=task_id, source="pi").first() is not None
+            if has_realtime_entries:
+                logger.debug(f"[COST-COLLECT] Task {task_id[:8]} already has real-time pi cost entries — skipping JSONL fallback to avoid double-counting")
+                return
+
         # Get session ID from agent's launch params or task metadata
         # The session ID is typically stored in the agent's tmux session name
         # or passed via --session-id flag
@@ -445,8 +462,6 @@ def collect_task_cost(task_id: str) -> None:
         checkpoint_row = db.query(SessionCostCheckpoint).filter_by(session_id=session_id).first()
         checkpoint = checkpoint_row.lines_processed if checkpoint_row else 0
 
-        # Discover session file based on CLI type
-        cli_type = agent.cli_type or "pi"
         session_file = None
 
         if cli_type == "pi":
@@ -512,23 +527,36 @@ def collect_task_cost(task_id: str) -> None:
             checkpoint=checkpoint,
         )
 
-        # Write entries and trigger derivation
+        # Write entries and trigger derivation. Each entry is committed
+        # individually so a single bad entry (e.g. a validation error) can't
+        # roll back and silently discard entries already recorded earlier in
+        # this batch, or skip the checkpoint update below.
+        failed_count = 0
         for entry_data in entries:
-            record_cost(
-                db=db,
-                cost_usd=entry_data["cost_usd"],
-                source=entry_data["source"],
-                task_id=entry_data["task_id"],
-                agent_id=entry_data["agent_id"],
-                workflow_id=entry_data["workflow_id"],
-                model=entry_data.get("model"),
-                input_tokens=entry_data.get("input_tokens", 0),
-                output_tokens=entry_data.get("output_tokens", 0),
-                cache_read_tokens=entry_data.get("cache_read_tokens", 0),
-                cache_write_tokens=entry_data.get("cache_write_tokens", 0),
-                reasoning_tokens=entry_data.get("reasoning_tokens", 0),
-                raw_usage=entry_data.get("raw_usage"),
-            )
+            try:
+                record_cost(
+                    db=db,
+                    cost_usd=entry_data["cost_usd"],
+                    source=entry_data["source"],
+                    task_id=entry_data["task_id"],
+                    agent_id=entry_data["agent_id"],
+                    workflow_id=entry_data["workflow_id"],
+                    model=entry_data.get("model"),
+                    input_tokens=entry_data.get("input_tokens", 0),
+                    output_tokens=entry_data.get("output_tokens", 0),
+                    cache_read_tokens=entry_data.get("cache_read_tokens", 0),
+                    cache_write_tokens=entry_data.get("cache_write_tokens", 0),
+                    reasoning_tokens=entry_data.get("reasoning_tokens", 0),
+                    raw_usage=entry_data.get("raw_usage"),
+                )
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                failed_count += 1
+                logger.error(f"[COST-COLLECT] Failed to record cost entry for task {task_id[:8]}: {e}")
+
+        if failed_count:
+            logger.error(f"[COST-COLLECT] {failed_count}/{len(entries)} cost entries failed to record for task {task_id[:8]} — skipped, rest of batch still processed")
 
         # Update checkpoint
         if checkpoint_row:
