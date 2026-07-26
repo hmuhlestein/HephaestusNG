@@ -1,3 +1,12 @@
+---
+type: product_validation_result
+feature_id: des-91c8-cost-collectors
+verdict: PASS
+blocker_count: 0
+requirements_met: 4
+requirements_total: 4
+---
+
 # Product Validation Report: CLI Cost Collectors (Pi + Claude Code)
 
 **Feature ID:** des-91c8-cost-collectors
