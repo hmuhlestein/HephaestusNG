@@ -505,16 +505,56 @@ class PhaseManager:
             )
 
             # Convert DB Phase rows to sdk Phase objects
+            from src.autopilot.spec import load_phase_output_artifacts
+
+            # workflow.yaml's required_output overrides, keyed by phase name
+            # -- read fresh from disk (see load_phase_output_artifacts),
+            # unlike Phase.outputs below. Looked up once per workflow_id,
+            # not per phase, to avoid re-parsing the same YAML N times.
+            output_overrides = load_phase_output_artifacts(phase.workflow_id)
+
             sdk_phases = []
             current_sdk_phase = None
             for p in all_phases:
-                # Reconstruct outputs/next_steps as lists
+                # Reconstruct outputs/next_steps as lists. Phase.outputs/
+                # next_steps are plain Text columns holding a JSON-encoded
+                # string (not a native list) -- without the json.loads
+                # attempt, a string value fell through to the bare
+                # `[val]` wrap below, embedding the raw, still-JSON-encoded
+                # text as one garbled list item in the agent's prompt.
                 def _to_list(val):
                     if val is None:
                         return []
                     if isinstance(val, list):
                         return val
+                    if isinstance(val, str):
+                        try:
+                            parsed = json.loads(val)
+                            if isinstance(parsed, list):
+                                return parsed
+                        except Exception:
+                            pass
                     return [val]
+
+                # Prefer workflow.yaml's required_output override when this
+                # phase has one -- Phase.outputs is a per-workflow-instance
+                # snapshot taken at workflow-creation time from whatever
+                # workflow.yaml said then, and never refreshed afterward. A
+                # workflow created before an output-format change (e.g. the
+                # OKF single-file refactor) would otherwise keep telling the
+                # agent, via this exact text (PhaseContext.to_prompt_context's
+                # "Outputs:" line), to produce the OLD file(s) for every
+                # phase, for its entire remaining run. Phases with no
+                # override (development, git_commit_push, ...) keep using
+                # Phase.outputs unchanged, including non-file descriptive
+                # text like "source code in project path" that a strict
+                # required-files check would otherwise filter out.
+                override = output_overrides.get(p.name)
+                phase_outputs = (
+                    (override if isinstance(override, list) else [override])
+                    if override
+                    else _to_list(p.outputs)
+                )
 
                 sdk_phase = SdkPhase(
                     id=p.order,
@@ -523,7 +563,7 @@ class PhaseManager:
                     done_definitions=p.done_definitions or [],
                     working_directory=p.working_directory or ".",
                     additional_notes=p.additional_notes or "",
-                    outputs=_to_list(p.outputs),
+                    outputs=phase_outputs,
                     next_steps=_to_list(p.next_steps),
                     cli_tool=p.cli_tool,
                     cli_model=p.cli_model,

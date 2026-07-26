@@ -1074,3 +1074,100 @@ class TestTagCompletingTask:
             task = session.query(Task).filter_by(id="task-dev").first()
             assert task.action == "goto"
             assert task.action_target_phase == "architecture_design"
+
+
+class TestGetPhaseContextUsesLiveRequiredOutput:
+    """Regression: get_phase_context built each phase's SdkPhase.outputs
+    from the raw Phase.outputs column -- a per-workflow-instance snapshot
+    taken at workflow-creation time from whatever workflow.yaml said then,
+    and never refreshed afterward. This shows up verbatim in the agent's
+    own prompt (PhaseContext.to_prompt_context's "Outputs:" line), so a
+    workflow created before an output-format change (e.g. the OKF
+    single-file refactor collapsing a phase's json+md pair into one .md)
+    kept telling the agent to produce the OLD file(s), for every phase, for
+    its entire remaining run -- not just its next retry. Must prefer
+    workflow.yaml's required_output override, which IS read fresh from disk
+    on every call, while still falling back to Phase.outputs (preserving
+    non-file descriptive text) for phases with no override."""
+
+    @pytest.fixture
+    def real_db_with_override(self, tmp_path, monkeypatch):
+        import json as _json
+
+        from src.core.database import DatabaseManager as _DBM
+        from src.core.database import Phase, PhaseExecution, Workflow, WorkflowDefinition
+
+        db = _DBM(str(tmp_path / "test.db"))
+        db.create_tables()
+        monkeypatch.setattr("src.core.database.DatabaseManager", lambda *a, **kw: db)
+
+        workflows_dir = tmp_path / "workflows"
+        (workflows_dir / "phase_mgr_test_def").mkdir(parents=True)
+        (workflows_dir / "phase_mgr_test_def" / "workflow.yaml").write_text(
+            "required_output:\n"
+            "  architectural_review: architectural_review_report.md\n"
+        )
+        monkeypatch.setattr("src.workflow_registry._WORKFLOWS_DIR", workflows_dir)
+
+        with db.session_scope() as session:
+            session.add(WorkflowDefinition(id="phase_mgr_test_def", name="t"))
+            session.add(
+                Workflow(
+                    id="wf-1", name="t", phases_folder_path="/tmp",
+                    definition_id="phase_mgr_test_def",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-review", workflow_id="wf-1", order=5,
+                    name="architectural_review", description="d",
+                    done_definitions=["x"],
+                    # The stale snapshot: this workflow was created back
+                    # when the phase still wrote a json+md pair.
+                    outputs=_json.dumps(
+                        [
+                            "architectural_review_report.md",
+                            "architectural_review_result.json",
+                        ]
+                    ),
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-dev", workflow_id="wf-1", order=4,
+                    name="development", description="d",
+                    done_definitions=["x"],
+                    # No required_output override for this phase -- non-file
+                    # descriptive text like this must survive unchanged.
+                    outputs=_json.dumps(["source code in project path"]),
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-review", phase_id="phase-review",
+                    workflow_execution_id="wf-1", status="in_progress",
+                )
+            )
+        return db
+
+    def test_gated_phase_outputs_reflects_the_current_override(
+        self, real_db_with_override
+    ):
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=real_db_with_override)
+        ctx = pm.get_phase_context("phase-review")
+        assert ctx.phase.outputs == ["architectural_review_report.md"]
+
+    def test_non_file_outputs_survive_for_a_phase_with_no_override(
+        self, real_db_with_override
+    ):
+        """Sanity check the fix isn't overbroad: a phase with no
+        required_output override (development) must keep its non-file
+        descriptive text, not have it dropped by a strict required-files
+        check."""
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=real_db_with_override)
+        ctx = pm.get_phase_context("phase-dev")
+        assert ctx.phase.outputs == ["source code in project path"]
