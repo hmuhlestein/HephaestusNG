@@ -4,14 +4,23 @@ import json
 import os
 import tempfile
 import uuid
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from src.core.database import Agent, Base, CostEntry, SessionCostCheckpoint, Task, Workflow
 from src.services.cost_collection_service import (
     ClaudeCodeCollector,
     CodexStubCollector,
     OpenCodeCollector,
     PiJsonlCollector,
     _discover_session_file,
+    collect_task_cost,
 )
 
 # ── Helpers ─────────────────────────────────────────────────────
@@ -433,3 +442,167 @@ class TestDiscoverSessionFile:
         """Returns None when sessions directory doesn't exist."""
         result = _discover_session_file("sess-nonexistent", "/completely/fake/path/xyz123")
         assert result is None
+
+
+# ── collect_task_cost (adversarial review B-1 / B-2) ────────────
+
+
+@pytest.fixture
+def cost_db_session():
+    """In-memory SQLite session used in place of get_db()'s real DB."""
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    session = session_local()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def _make_task_agent_workflow(db, cli_type="pi", session_suffix="sess-abc123"):
+    """Create the minimal Task/Agent/Workflow rows collect_task_cost needs."""
+    workflow = Workflow(
+        id="wf-1",
+        name="test",
+        phases_folder_path="config/workflows/test",
+        working_directory="/tmp/test-cwd",
+    )
+    agent = Agent(
+        id="agent-1",
+        system_prompt="test",
+        cli_type=cli_type,
+        tmux_session_name=f"hephaestus-{session_suffix}",
+    )
+    task = Task(
+        id="task-1",
+        raw_description="test",
+        done_definition="test",
+        workflow_id=workflow.id,
+        assigned_agent_id=agent.id,
+    )
+    db.add_all([workflow, agent, task])
+    db.commit()
+    return task, agent, workflow
+
+
+class TestCollectTaskCostRealtimeVsFallback:
+    """B-1: pi extension real-time POSTs and the JSONL fallback must not both run."""
+
+    def test_skips_jsonl_fallback_when_realtime_pi_entries_exist(self, cost_db_session):
+        """If source='pi' CostEntry rows already exist for this task (the
+        extension posted them in real time), collect_task_cost must not
+        also tail the JSONL transcript and re-record the same turns.
+        """
+        task, agent, _ = _make_task_agent_workflow(cost_db_session)
+
+        # Simulate the extension having already POSTed one turn's cost
+        # in real time via /api/autopilot/cost-entries.
+        cost_db_session.add(
+            CostEntry(
+                id="cost-realtime1",
+                task_id=task.id,
+                agent_id=agent.id,
+                workflow_id=task.workflow_id,
+                source="pi",
+                cost_usd=0.01,
+                recorded_at=datetime.utcnow(),
+            )
+        )
+        cost_db_session.commit()
+
+        # The JSONL transcript for the same session contains that same
+        # turn (plus another) -- this is what the fallback would tail if
+        # it ran, reproducing B-1's double count.
+        lines = [_make_assistant_message(0.01), _make_assistant_message(0.02)]
+        session_file = _make_temp_jsonl(lines)
+
+        with (
+            patch("src.core.database.get_db") as mock_get_db,
+            patch(
+                "src.services.cost_collection_service._discover_session_file",
+                return_value=session_file,
+            ),
+        ):
+            mock_get_db.return_value.__enter__ = lambda self: cost_db_session
+            mock_get_db.return_value.__exit__ = lambda self, *a: False
+
+            collect_task_cost(task.id)
+
+        entries = cost_db_session.query(CostEntry).filter_by(task_id=task.id).all()
+        assert len(entries) == 1, "JSONL fallback ran despite real-time pi entries already existing — turns were double-counted"
+        assert entries[0].id == "cost-realtime1"
+
+    def test_jsonl_fallback_still_runs_when_no_realtime_entries_exist(self, cost_db_session):
+        """Sanity check: the fallback must still work normally (no
+        regression) when the extension never posted anything for this task.
+        """
+        task, agent, _ = _make_task_agent_workflow(cost_db_session)
+
+        lines = [_make_assistant_message(0.01), _make_assistant_message(0.02)]
+        session_file = _make_temp_jsonl(lines)
+
+        with (
+            patch("src.core.database.get_db") as mock_get_db,
+            patch(
+                "src.services.cost_collection_service._discover_session_file",
+                return_value=session_file,
+            ),
+        ):
+            mock_get_db.return_value.__enter__ = lambda self: cost_db_session
+            mock_get_db.return_value.__exit__ = lambda self, *a: False
+
+            collect_task_cost(task.id)
+
+        entries = cost_db_session.query(CostEntry).filter_by(task_id=task.id).all()
+        assert len(entries) == 2
+        assert {e.source for e in entries} == {"pi"}
+
+
+class TestCollectTaskCostPartialFailure:
+    """B-2: one bad entry must not discard the rest of the batch."""
+
+    def test_bad_entry_does_not_discard_rest_of_batch(self, cost_db_session):
+        """A negative cost_usd (rejected by record_cost's own validation)
+        for one turn must not roll back the other, valid entries in the
+        same collection batch, and the checkpoint must still advance.
+        """
+        task, agent, _ = _make_task_agent_workflow(cost_db_session)
+
+        lines = [_make_assistant_message(0.01), _make_assistant_message(0.02)]
+        session_file = _make_temp_jsonl(lines)
+
+        # Force the second collected entry to be invalid so record_cost()
+        # raises ValueError partway through the batch.
+        real_collect = PiJsonlCollector.collect
+
+        def _poisoned_collect(self, *args, **kwargs):
+            entries, checkpoint = real_collect(self, *args, **kwargs)
+            assert len(entries) == 2
+            entries[1]["cost_usd"] = -5.0
+            return entries, checkpoint
+
+        with (
+            patch("src.core.database.get_db") as mock_get_db,
+            patch(
+                "src.services.cost_collection_service._discover_session_file",
+                return_value=session_file,
+            ),
+            patch.object(PiJsonlCollector, "collect", _poisoned_collect),
+        ):
+            mock_get_db.return_value.__enter__ = lambda self: cost_db_session
+            mock_get_db.return_value.__exit__ = lambda self, *a: False
+
+            collect_task_cost(task.id)
+
+        entries = cost_db_session.query(CostEntry).filter_by(task_id=task.id).all()
+        assert len(entries) == 1, "the valid entry was discarded along with the bad one"
+        assert entries[0].cost_usd == 0.01
+
+        checkpoint_row = cost_db_session.query(SessionCostCheckpoint).first()
+        assert checkpoint_row is not None
+        assert checkpoint_row.lines_processed == 2, "checkpoint wasn't advanced past the batch — a permanently bad entry would be retried forever"
