@@ -17,7 +17,7 @@ import re
 import sqlite3
 import uuid
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
@@ -448,8 +448,13 @@ def _discover_opencode_session(cwd: str, agent_created_at: datetime) -> Optional
     if not db_path.exists():
         return None
 
-    start_ms = int(agent_created_at.timestamp() * 1000)
-    end_ms = int(datetime.utcnow().timestamp() * 1000)
+    # agent_created_at and datetime.utcnow() are naive datetimes whose wall-clock
+    # reading is UTC, but naive .timestamp() assumes *local* time -- on any host
+    # not set to the UTC timezone this silently shifts both bounds by the host's
+    # UTC offset, so a real (genuinely UTC epoch-ms) OpenCode session never falls
+    # inside the window. Must attach tzinfo=utc before calling .timestamp().
+    start_ms = int(agent_created_at.replace(tzinfo=timezone.utc).timestamp() * 1000)
+    end_ms = int(datetime.utcnow().replace(tzinfo=timezone.utc).timestamp() * 1000)
 
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
