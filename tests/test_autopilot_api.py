@@ -1042,7 +1042,7 @@ def project_client(tmp_path, project_dirs, monkeypatch):
 
     app = FastAPI()
     app.include_router(router)
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Agent-ID": "system"})
 
     import src.mcp.autopilot_api as api_mod
 
