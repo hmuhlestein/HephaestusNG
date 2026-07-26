@@ -1,11 +1,12 @@
 {
   "type": "qa_validation_result",
-  "passed_tests": 56,
+  "feature_id": "des-91c8-pi-extension",
+  "passed_tests": 84,
   "failed_tests": 0,
-  "total_tests": 56,
+  "total_tests": 84,
   "pass_rate": 100.0,
   "critical_issues": 0,
-  "requirements_met": 2,
-  "requirements_total": 2,
+  "requirements_met": 3,
+  "requirements_total": 3,
   "recommendation": "done"
 }
