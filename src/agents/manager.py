@@ -1519,15 +1519,7 @@ class AgentManager:
                                                 get_cli_agent,
                                             )
 
-                                            try:
-                                                _cli = get_cli_agent(agent.cli_type)
-                                                clean_scrollback = (
-                                                    _cli.strip_tui_chrome(
-                                                        full_scrollback
-                                                    )
-                                                )
-                                            except Exception:
-                                                clean_scrollback = full_scrollback
+                                            clean_scrollback = full_scrollback
                                             log_file.write_text(clean_scrollback)
                                             logger.info(
                                                 f"[TMUX-LOG] Final capture for "
@@ -2046,13 +2038,6 @@ class AgentManager:
             # saves the full transcript to a file independently).
             output = pane.cmd("capture-pane", "-p", "-S", "-").stdout
             text = "\n".join(output) if output else ""
-
-            from src.interfaces.cli_interface import get_cli_agent
-
-            try:
-                text = get_cli_agent(agent.cli_type).strip_tui_chrome(text)
-            except Exception:
-                pass
             return text
 
         except Exception as e:
@@ -2061,45 +2046,6 @@ class AgentManager:
         finally:
             session.close()
 
-    def get_agent_raw_pane(self, agent_id: str, lines: int = 50) -> str:
-        """Capture the agent's CURRENT tmux pane content directly, with none
-        of get_agent_output's chrome-stripping applied.
-
-        get_agent_output always strips TUI chrome (status bars, spinners,
-        the "MCP: N/M servers" line) before returning -- both via
-        _read_transcript_log's mcp_status_re filter and via
-        strip_tui_chrome on its own capture-pane fallback. That's correct
-        for callers that want clean, human/LLM-readable output (Guardian's
-        trajectory analysis, the frontend), but it means there is no way to
-        observe the MCP connection status line through that method at all.
-        This method exists for callers that specifically need current
-        chrome, not history -- a plain, unfiltered capture-pane snapshot.
-        """
-        session = self.db_manager.get_session()
-        try:
-            agent = session.query(Agent).filter_by(id=agent_id).first()
-            if not agent or not agent.tmux_session_name:
-                return ""
-            if not self.tmux_server.has_session(agent.tmux_session_name):
-                return ""
-            tmux_session = next(
-                (
-                    s
-                    for s in self.tmux_server.sessions
-                    if s.name == agent.tmux_session_name
-                ),
-                None,
-            )
-            if not tmux_session:
-                return ""
-            pane = tmux_session.attached_window.attached_pane
-            output = pane.cmd("capture-pane", "-p", "-S", f"-{lines}").stdout
-            return "\n".join(output) if output else ""
-        except Exception as e:
-            logger.warning(f"Failed to get raw pane for {agent_id}: {e}")
-            return ""
-        finally:
-            session.close()
 
     def _read_transcript_log(self, agent, lines: int) -> str:
         """Read output from the pipe-pane transcript log file.
@@ -2212,20 +2158,6 @@ class AgentManager:
                     line = line.rsplit("\r", 1)[-1]
                 collapsed.append(line.rstrip())
             text = "\n".join(collapsed)
-
-            # Filter TUI chrome (status bars, spinners, elapsed timers, etc.)
-            spinner_re = re.compile(r'^\s*(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$')
-            thinking_re = re.compile(r'^\s*Thinking\.{0,3}\s*$')
-            tui_chrome_re = re.compile(r'^\s*\.\.\. (?:\(\d+ (?:more|earlier) lines|\d+ lines omitted)')
-            status_bar_re = re.compile(r'^\s*↑\d+.*↓\d+.*R\d+.*CH\d+.*\$\d+')
-            mcp_status_re = re.compile(r'^\s*MCP:\s*\d+/\d+\s*servers')
-            prompt_only_re = re.compile(r'^\s*\$\s*$|^\s*%\s*$|^\s*:\s*$')
-            elapsed_re = re.compile(r'^\s*(?:Elapsed|Took) \d+\.\d+s\s*$')
-            # Filter shell prompt lines (~/path (branch))
-            shell_prompt_re = re.compile(r'^~/\S+ \([^)]+\)\s*$')
-            # Filter empty command lines ($ ...)
-            empty_cmd_re = re.compile(r'^\s*\$ \.\.\.\s*$')
-            dots_only_re = re.compile(r'^\.{1,20}\s*$')
             # Horizontal separator lines pi draws between message blocks
             # (each char individually SGR-wrapped). Same pattern as the
             # frontend's RealTimeAgentOutput filter. Filtering these is
@@ -2279,28 +2211,10 @@ class AgentManager:
                 clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', stripped)
                 clean = re.sub(r'\x1b\][^\x07]*\x07', '', clean).strip()
                 clean = orphan_ansi_re.sub('', clean).strip()
-                if (
-                    spinner_re.match(clean)
-                    or thinking_re.match(clean)
-                    or tui_chrome_re.match(clean)
-                    or status_bar_re.match(clean)
-                    or mcp_status_re.match(clean)
-                    or prompt_only_re.match(clean)
-                    or elapsed_re.match(clean)
-                    or shell_prompt_re.match(clean)
-                    or empty_cmd_re.match(clean)
-                    or dots_only_re.match(clean)
-                ):
-                    kind = 'chrome'
+                if not clean:
+                    kind = 'blank'
                 elif separator_re.match(clean):
                     kind = 'sep'
-                elif not clean:
-                    # Blank padding rows and lines that are only ANSI codes
-                    # (the latter render as literal garbage in non-ANSI
-                    # views). Raw stream blanks are NOT kept as spacing:
-                    # pi's redraw pads every content line with one, so
-                    # preserving them doubles the output.
-                    kind = 'blank'
                 else:
                     kind = 'content'
                 classified.append((kind, line, clean))
