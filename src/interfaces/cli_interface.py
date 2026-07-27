@@ -406,17 +406,49 @@ class ClaudeCodeAgent(CLIAgentInterface):
             # requires a UUID and splits this into two flags that each only
             # work once: --session-id errors "already in use" on a repeat
             # id, --resume errors "no conversation found" on a fresh one.
-            # Try create-new first, fall back to resume -- covers both the
-            # first launch and every goto/retry that reuses this id.
+            # Try the one that should actually work first (see
+            # _claude_session_exists), falling back to the other -- this
+            # still covers both the first launch and every goto/retry that
+            # reuses this id even if the existence check is wrong (stale
+            # sanitization heuristic, race, permissions), it just no longer
+            # prints the "already in use" error in the common case.
             session_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, session_id))
+            working_directory = kwargs.get("working_directory", "")
+            first, second = "--session-id", "--resume"
+            if working_directory and self._claude_session_exists(
+                working_directory, session_uuid
+            ):
+                first, second = "--resume", "--session-id"
             command = (
-                f"(claude --session-id {session_uuid} {base_flags} || "
-                f"claude --resume {session_uuid} {base_flags})"
+                f"(claude {first} {session_uuid} {base_flags} || "
+                f"claude {second} {session_uuid} {base_flags})"
             )
         else:
             command = f"claude {base_flags}"
 
         return command
+
+    @staticmethod
+    def _claude_session_exists(working_directory: str, session_uuid: str) -> bool:
+        """Best-effort check for whether Claude Code already has a stored
+        session for this uuid in this working directory, so the launch
+        command can try the branch that will actually succeed first instead
+        of always eating an "already in use" failure on every resumed
+        session. Mirrors Claude Code's own project-key sanitization
+        (verified empirically against ~/.claude/projects/ directory names:
+        every '/', '.', and '_' in the canonical path becomes '-'). If this
+        heuristic is ever wrong, the caller's || fallback still covers it --
+        this only affects which branch is tried first.
+        """
+        try:
+            canonical = os.path.realpath(working_directory)
+            project_key = re.sub(r"[/._]", "-", canonical)
+            session_file = (
+                Path.home() / ".claude" / "projects" / project_key / f"{session_uuid}.jsonl"
+            )
+            return session_file.exists()
+        except Exception:
+            return False
 
     def get_health_check_pattern(self) -> str:
         return r"(Assistant:|Human:|›)"

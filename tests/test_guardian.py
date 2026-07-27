@@ -142,6 +142,63 @@ class TestGuardian:
         mock_llm_provider.analyze_agent_trajectory.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_benign_session_id_error_stripped_before_llm_sees_it(
+        self, guardian, mock_llm_provider
+    ):
+        """Regression: session-reuse launches (see cli_interface.py's
+        ClaudeCodeAgent.get_launch_command) print "Error: Session ID X is
+        already in use" as an expected, self-resolving artifact of trying
+        --session-id before falling back to --resume. Fed raw to the
+        Guardian LLM, this was misread as a live problem and produced a
+        fabricated "fix your session conflict" steering message. It must be
+        stripped from what the LLM sees, without altering the agent's real
+        output around it."""
+        agent = Agent(
+            id="test-agent-1",
+            current_task_id="task-1",
+            tmux_session_name="agent-test-1",
+        )
+        mock_task = Task(
+            id="task-1",
+            raw_description="Validate the feature",
+            enriched_description="Validate the feature against design",
+            done_definition="Validation report written",
+        )
+        raw_output = (
+            "some earlier output\n"
+            "Error: Session ID fb7e5fdc-9568-52ef-b37b-e81a8fef240b is already in use.\n"
+            "resumed conversation continues here"
+        )
+
+        with patch.object(
+            guardian,
+            "_build_accumulated_context",
+            return_value={
+                "overall_goal": "Validate the feature",
+                "constraints": [],
+                "lifted_constraints": [],
+                "standing_instructions": [],
+                "session_start": datetime.utcnow() - timedelta(minutes=5),
+                "conversation_length": 1,
+                "current_focus": "validation",
+            },
+        ):
+            with patch.object(
+                guardian, "_get_agent_task", return_value=_task_dict(mock_task)
+            ):
+                await guardian.analyze_agent_with_trajectory(
+                    agent=agent,
+                    tmux_output=raw_output,
+                    past_summaries=[],
+                )
+
+        call_kwargs = mock_llm_provider.analyze_agent_trajectory.call_args.kwargs
+        sent_output = call_kwargs["agent_output"]
+        assert "already in use" not in sent_output
+        assert "some earlier output" in sent_output
+        assert "resumed conversation continues here" in sent_output
+
+    @pytest.mark.asyncio
     async def test_analyze_agent_with_steering_needed(
         self, guardian, mock_llm_provider
     ):
