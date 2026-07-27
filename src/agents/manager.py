@@ -341,6 +341,24 @@ class AgentManager:
 
         logger.info(f"Creating {cli_type} agent {agent_id} for task {task.id}")
 
+        # Insert a stub Agent row BEFORE worktree creation so the
+        # agent_worktrees.agent_id FK passes. The full Agent details
+        # (system_prompt, tmux_session_name) are filled in later.
+        session = self.db_manager.get_session()
+        agent = Agent(
+            id=agent_id,
+            system_prompt="(pending: worktree + prompt setup)",
+            status="idle",
+            cli_type=cli_type,
+            agent_type=agent_type,
+            current_task_id=task.id,
+            last_activity=datetime.utcnow(),
+            health_check_failures=0,
+        )
+        session.add(agent)
+        session.commit()
+        session.close()
+
         try:
             # Gather inbound context (design doc, qa_spec, project context) to copy
             # into the worktree's git-excluded .hephaestus/ dir, so the agent never
@@ -701,9 +719,9 @@ class AgentManager:
                 launch_command, enter=True
             )  # enter=True sends Enter key after command
 
-            # 6. Register agent in database
+            # 6. Update the stub agent with full details
             session = self.db_manager.get_session()
-            agent = Agent(
+            agent = session.merge(Agent(
                 id=agent_id,
                 system_prompt=system_prompt,
                 status="working",
@@ -713,9 +731,8 @@ class AgentManager:
                 current_task_id=task.id,
                 last_activity=datetime.utcnow(),
                 health_check_failures=0,
-                agent_type=agent_type,  # Set the agent type
-            )
-            session.add(agent)
+                agent_type=agent_type,
+            ))
 
             # Assign task to agent
             task.assigned_agent_id = agent_id
