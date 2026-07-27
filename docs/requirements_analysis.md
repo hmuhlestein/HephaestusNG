@@ -1,97 +1,96 @@
-# Product Requirements Analysis: OpenCode Cost Collector
+---
+type: requirements
+feature_id: des-91c8-pi-extension
+status: complete
+---
 
-**Feature ID:** des-91c8-opencode-collector
-**Feature Name:** OpenCode Cost Collector
+# Product Requirements Analysis: Pi Cost Tracker Extension
+
+**Feature ID:** des-91c8-pi-extension
+**Feature Name:** Pi Cost Tracker Extension
 **Status:** Requirements Extracted
-**Date:** 2026-07-25
-**Design Document:** `.hephaestus/design.md` ("OpenCode" subsections, lines 167-221 and 540-577; Implementation Phase 6, lines 695-705)
-**Parent Feature:** Cost Tracking Design (DES-91c8) — Budget Enforcement and Cost Tracking UI slices already merged (`a71d84d` and ancestors)
+**Date:** 2026-07-26
+**Design Document:** `.hephaestus/design.md`, "Pi Extension Collector" section (lines 621-647)
+**Parent Features (already merged to `main`):** Cost Tracking Database Schema → Cost Derivation Engine → Budget Enforcement and Pipeline Throttling → CLI Cost Collectors (Pi + Claude Code)
 
 ---
 
-## 0. Critical Finding: The Design's Core Premise for OpenCode Is Stale
+## 1. Executive Summary
 
-The design document assumes OpenCode is invoked **one-shot** (`opencode run "$msg" --model X`, no `-i`), and builds its entire OpenCode collection strategy around that: capture `--format json` from stdout, or fall back to querying the OpenCode SQLite DB after the process exits, because "there's no session to wait for."
+This branch (`feature/des-91c8/pi-extension`) is currently **identical to `main`** (`git log main..HEAD` is empty). Direct inspection shows the pi extension described in the design's "Pi Extension Collector" section is **already fully implemented, installed, and wired**:
 
-**That assumption no longer matches the shipped code.** `OpenCodeAgent.get_launch_command` (`src/interfaces/cli_interface.py:465-485`) now launches `opencode run -i --dangerously-skip-permissions --model {model} "$(cat {prompt_file})"` — the `-i` flag was added with an inline comment explaining that bare one-shot mode left the tmux pane at a dead shell prompt before Hephaestus's task message arrived ~25s later, "same bug class as the claude/pi launch." **OpenCode is now a persistent interactive session, architecturally identical in lifecycle to `pi` and Claude Code, not a one-shot process.** The design's "simpler than pi/Claude Code, no session to tail" framing is the opposite of current reality; the stdout-JSON-capture option is not viable at all (a `-i` session never exits after one exchange, so there is no single terminal JSON blob on stdout).
+- `extensions/hephaestus-cost-tracker/src/index.ts` exists: hooks `turn_end`, reads `message.usage.cost.total`, accumulates a running session total, updates the pi TUI status bar via `ctx.ui.setStatus()`, and POSTs a fire-and-forget cost entry that never blocks the turn on failure.
+- `scripts/install.sh:783-806` copies the extension to `~/.pi/agent/extensions/hephaestus-cost-tracker/`, runs `npm install && npm run build`, and degrades gracefully (warns, doesn't abort install) if `npm` is missing or the build fails.
+- `POST /api/autopilot/cost-entries` (`src/mcp/autopilot_api.py:2144`) requires and verifies `X-Agent-ID` via `verify_agent_authentication`, matching the extension's request headers.
+- `HEPHAESTUS_API_URL` defaults agree everywhere: `index.ts:58` → `http://localhost:8300`, `README.md:31` → `http://localhost:8300`, `hephaestus_config.yaml` → `port: 8300`.
+- Cost attribution uses `HEPHAESTUS_AGENT_ID`/`TASK_ID`/`WORKFLOW_ID` env vars (already set by `manager.py` when launching agent tmux sessions), not a `session_id` field — this is a deliberate, reasonable deviation from one sentence in the design doc (which describes reading `session_id` via `ctx.sessionManager`), since `CostEntry` (`src/core/database.py:1230`) has no `session_id` column at all; every other collector attributes by `task_id`/`agent_id`/`workflow_id` too. Not a defect.
 
-This changes the actual engineering problem from "capture one process's stdout" to "correlate a completed task to the right OpenCode session for cost totals" — much closer in shape to the pi/Claude Code collectors already built, except OpenCode never got the `--session-id`-equivalent wiring pi and Claude Code have.
+**What this feature is actually about, given that state:** one concrete documentation bug, plus closing an unverified assumption about how pi loads the extension. There is no missing collection logic, no missing install wiring, and no missing schema/API work.
 
-## 1. Current State (verified against real code and a real OpenCode installation)
+## 2. Problem Statement
 
-- ✅ `CostEntry`/`SessionCostCheckpoint` tables, `record_cost()` rollup helper (`src/core/cost_derivation.py:38`), and `collect_task_cost()` orchestration entry point (`src/services/cost_collection_service.py:404`) are already built and working end-to-end for `pi` and `claude_code`.
-- ✅ `collect_task_cost()` already branches on `cli_type == "opencode"` at `cost_collection_service.py:482-485`, but the branch is a bare `pass` — no session file is ever discovered, so `collect_task_cost()` always returns early at line 490 for OpenCode tasks. **OpenCode cost is unconditionally zero today.**
-- ⚠️ `OpenCodeCollector` (`cost_collection_service.py:263-323`) is a real, implemented class — but it deserializes `session_file` as a single JSON document (`json.load(f)`) with a top-level `cost`/`modelID`/`tokens` shape, i.e. it implements the *stdout-capture* design that `collect_task_cost()` never actually calls into (no code path ever sets `session_file` for `cli_type == "opencode"`). It is dead code today and, per Finding 0, built for a launch mode (`opencode run` one-shot) the agent no longer uses.
-- ❌ `OpenCodeAgent.get_launch_command`/`get_session_args` pass no session identifier at all — the base `CLIAgentInterface.get_session_args` returns `""` and `OpenCodeAgent` doesn't override it (confirmed: no `session_id` reference anywhere in the `OpenCodeAgent` class). Unlike `pi` (`--session-id`, freely create-or-resume) and Claude Code (`--session-id <uuid5>`, landed in an earlier phase per the design doc), there is no deterministic, pre-known identifier this feature can use to look up "the session this task's agent created."
-- ✅ **Verified directly against a real `~/.local/share/opencode/opencode.db` on this machine** (SQLite, `session` table): the `session` row itself carries **pre-aggregated** cost and token totals as real columns — `cost REAL`, `tokens_input`, `tokens_output`, `tokens_reasoning`, `tokens_cache_read`, `tokens_cache_write` — plus `directory TEXT` (the agent's cwd, stored as a literal path, no hashing/sanitization) and `time_created`/`time_updated` (epoch-ms integers). Sample real row: `directory='/Users/hmuhlestein/code/sotto', cost=0.0118441344, tokens_input=44012, tokens_output=6976, model='{"id":"xiaomi/mimo-v2.5","providerID":"openrouter",...}'`. This directly contradicts the design doc's claim that dollar cost requires either stdout capture or querying `message`/`part` rows for per-turn detail — **the `session` table alone has everything `CostEntry` needs, already summed, no per-turn tailing required.**
-- ❌ No code anywhere in `src/` references OpenCode's SQLite DB, `opencode export`, or `opencode stats`.
+### 2.1 Confirmed defect: `README.md`'s documented POST path is wrong
 
-## 2. Larger Project Context
+`extensions/hephaestus-cost-tracker/README.md:44` ("How It Works", step 4) says the extension posts to `POST /cost-entries`. The actual code (`src/index.ts:123`) posts to `${apiUrl}/api/autopilot/cost-entries`, matching the real route (`autopilot_api.py:37,144`: router prefix `/api/autopilot` + `@router.post("/cost-entries")`). A developer following the README literally to test the API by hand would hit a 404. One-line doc fix.
 
-This is the final data-source slice of the Cost Tracking feature family (design doc's Implementation Phases 1-7). Already merged: the `cost_entries`/`session_cost_checkpoints` schema, the `pi` collector, budget enforcement (`cost_limit_usd`, `_pause_project_workflows`, the `paused_by is not None` guard generalization), and the Cost Tracking UI (`ProjectCostSummary`, `FeatureCostBadge`, `DesignCostRow`, `BudgetPausedLabel`, wired into `PipelineStatusCard`/`DesignQueuePanel`). The design doc explicitly gates this phase ("OpenCode collector — gate on actual usage first") on checking whether `cli_type: opencode` is actually configured anywhere live before building — that check is performed in FR1 (§3 below), and **the design's own criterion for "stay deferred" is met**, which FR1 flags as a blocking decision for `scope_review` rather than resolving here. Codex remains an explicit stub/non-goal, out of scope here.
+### 2.2 Unverified: does pi actually load this extension shape?
 
-If `scope_review` authorizes proceeding despite the gate: because the rollup/budget/UI machinery already consumes `CostEntry` rows regardless of `source`, this feature's scope is: **produce correct `CostEntry` rows for OpenCode-driven tasks.** Nothing downstream needs to change.
+Nothing in this repo can confirm that pi's real extension loader invokes `initialize(ctx)` / `turn_end(ctx, turn)` on a default-exported class instance the way `index.ts` assumes — `.pi/agent/extensions/` is pi's own runtime, external to this codebase, and there is no pi installation available here to smoke-test against. The design doc asserts this shape works; nothing in this repo's test suite (`tests/test_cost_collection_service.py` only covers the Python-side JSONL/Claude Code collectors) exercises the TypeScript extension at all. This is a real gap in verification, not implementation — flagged for QA/architecture to close with an actual `pi` install + a running turn, not more source-reading.
 
-## 3. Functional Requirements
+### 2.3 Everything else in scope is done
 
-**FR1 — The design's own build/defer gate, checked exactly as specified. [Gate condition for deferral is MET — flagged as a blocking decision for scope_review, not resolved here.]**
+Extension install/build (FR-1/FR-2 from the prior `CLI Cost Collectors` requirements doc), the `HEPHAESTUS_API_URL` port fix (its FR-3), and the collector's own correctness (its FR-4) all landed in the merged `feat: CLI Cost Collectors (Pi + Claude Code)` work. No further code changes to `cost_collection_service.py`, the schema, or budget enforcement are needed or in scope here.
 
-The design document (`.hephaestus/design.md:695-699`) states an explicit, unconditional gate for this entire phase of work: *"Before building anything, check `config/workflows/autopilot/workflow.yaml` and any `phase_cli_tool` overrides for whether `cli_type: opencode` is set on any live phase; if nothing in the current deployment uses it, this phase is dead weight and should stay deferred indefinitely rather than land speculatively."*
+## 3. Existing Project Context
 
-Checked exactly as specified: `config/workflows/autopilot/workflow.yaml` and every other file under `config/workflows/autopilot/` (`security_review.yaml`, `architectural_review.yaml`, `scope_review.yaml`, `development.yaml`, `adversarial_review.yaml`, `doc_review.yaml`, `product_requirements.yaml`, `architecture_design.yaml`, `qa_validation.yaml`, `product_validation.yaml`, `git_commit_push.yaml`, `forensics_analysis.yaml`) were grepped for `cli_type`/`phase_cli_tool`/`opencode` — **zero matches across all of them.** `hephaestus_config.yaml`'s own `agents.default_cli_tool` is `claude`; `simple_config.py:14`'s hardcoded fallback if that key is absent is `pi`. Neither is `opencode`. **By the design's own stated criterion, this is exactly the "nothing in the current deployment uses it" case it says should stay deferred.**
+- **Cost Tracking Database Schema** (merged): `cost_entries` ledger, `SessionCostCheckpoint`, `cost_total_usd` rollups on `Task`/`Feature`/`Workflow`/`AutopilotDesign`/`AutopilotProject`.
+- **Cost Derivation Engine** (merged): `src/core/cost_derivation.py` self-healing rollup.
+- **Budget Enforcement and Pipeline Throttling** (merged): `cost_limit_usd`, `_pause_project_workflows`, UI budget config.
+- **CLI Cost Collectors (Pi + Claude Code)** (merged): `PiJsonlCollector`, `ClaudeCodeCollector`, task-completion wiring, extension install/build in `scripts/install.sh`, README port fix.
+- This feature sits entirely on top of that stack — it touches only the pi extension's own doc accuracy and its verification status, nothing upstream.
 
-Additional context, stated but not used here to override the design's criterion: `OpenCodeAgent` is a maintained, non-stub class (`src/interfaces/cli_interface.py`, recently fixed for the `-i` hang bug), and `cli_type` is configurable per-project at runtime (`AutopilotProject.cli_tool`, `src/core/database.py:490`) even though no UI exposes that choice today (`ProjectSettingsModal.tsx` has no `cli_tool` field) — so "in use" is theoretically possible without appearing in any workflow YAML. That's a real fact about the codebase, but it doesn't satisfy the design's check, which asks specifically about workflow YAML / `phase_cli_tool` overrides, not about theoretical reachability.
+## 4. Functional Requirements
 
-**This is a direct conflict this requirements pass is not positioned to resolve unilaterally:** the design says defer; this feature was nonetheless explicitly commissioned as its own workflow ("OpenCode Cost Collector"). Whoever scoped this workflow may have information not visible in this repo (e.g. a deployment target where `cli_type: opencode` genuinely is configured) that justifies overriding the design's gate — but that's a scope decision, not a requirements-extraction one. **Flagged for `scope_review` (Phase 2) to explicitly rule on** before FR2-FR5 below are authorized to proceed. FR2-FR5 describe *how* to build the collector correctly, contingent on that gate being explicitly overridden by scope_review — they are not, themselves, a decision to build.
+**FR-1: Fix `README.md`'s documented POST path**
+- Change `extensions/hephaestus-cost-tracker/README.md`'s "How It Works" step 4 from `POST /cost-entries` to `POST /api/autopilot/cost-entries` to match `src/index.ts:123` and the real route.
+- Acceptance: README's documented path matches the literal string in `index.ts` and resolves against `autopilot_api.py`'s router prefix + route decorator.
 
-**FR2 — Correlate a completed task's agent to its OpenCode session row.**
-No deterministic session ID exists for OpenCode (Finding 0). Acceptance criteria for the correlation mechanism:
-- Match `session.directory` to the agent's cwd (via the same `_get_agent_cwd` helper already used by the `pi`/`claude_code` branches at `cost_collection_service.py:454`, `:459` — no path sanitization needed here since `session.directory` is stored as a literal path, unlike pi's/Claude Code's dash-mangled directory names).
-- Narrow by a time window bounded by `Agent.created_at` (lower bound) and task-completion time (upper bound, i.e. "now" at `collect_task_cost()` call time) against `session.time_created`.
-- Handle the case of zero matches (log and skip, matching the existing `pi`/`claude_code` "no session file found" debug-log-and-return pattern at line 490) and multiple matches (document the chosen tie-break, e.g. most recent `time_created` in-window) explicitly — don't leave this ambiguous, since a wrong pick silently attributes cost to the wrong task.
-- Whether OpenCode's `-s`/`--session` flag can mint a *new* session under a caller-chosen ID (unresolved in the design doc, `-s` docs describe it as "continue," not "create") is worth one real test before committing to time-window matching as the permanent mechanism instead of a `pi`-style deterministic ID — if `-s` does support create-with-ID, that's a strictly better fix (same shape as the Claude Code UUID5 fix already landed) and should be preferred.
+**FR-2 (verification, no code expected unless a defect is found): Confirm the extension actually loads and runs under a real pi install**
+- Install `pi`, run `scripts/install.sh`, confirm `~/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js` builds and loads on pi startup without error, and that a real turn triggers `turn_end`, updates the TUI status, and produces a `cost_entries` row via the API.
+- Acceptance: one real pi session with `HEPHAESTUS_AGENT_ID`/`TASK_ID`/`WORKFLOW_ID` set produces a `cost_entries` row with `source="pi"` and correct `cost_usd`.
 
-**FR3 — Replace the stdout-JSON `OpenCodeCollector` with a `session`-table query.**
-Per §1, the existing `OpenCodeCollector.collect()` deserializes a `session_file` as a single JSON blob — that shape doesn't exist under `-i` mode. Rewrite it to query the OpenCode SQLite DB's `session` row (matched per FR2) and map its already-aggregated columns directly onto `CostEntry` fields: `cost` → `cost_usd`, `tokens_input/output/reasoning/cache_read/cache_write` → the matching `CostEntry` token columns, `model` (JSON string — parse `id`/`providerID`) → `CostEntry.model`. No new schema needed; `CostEntry.source="opencode"` already exists.
+**FR-3 (verification only, no code expected): Existing behavior holds**
+- `PiJsonlCollector` fallback, `verify_agent_authentication` gating on `/cost-entries`, and the install.sh copy/build step must not regress. Re-run `tests/test_cost_collection_service.py`; do not re-implement.
 
-**FR4 — Wire the `collect_task_cost()` opencode branch to actually run.**
-Replace the `pass` at `cost_collection_service.py:483-485` with real DB-path resolution (`~/.local/share/opencode/opencode.db`, matching the `Path.home() / ...` pattern the `pi`/`claude_code` branches already use) and the FR2 correlation query, then hand off to the rewritten collector from FR3.
+## 5. Non-Functional Requirements
 
-**FR5 — Checkpointing / re-collection safety.**
-Unlike `pi`/Claude Code transcript tailing, there is no natural "byte offset" — the `session` row's `cost` is a running total for that session's lifetime, not a per-turn delta. Since `OpenCodeAgent` never resumes a prior session (no session-ID flag passed at all, so every launch mints a fresh `session` row — confirmed by the absence of `get_session_args` override), each session row corresponds to exactly one agent launch, so `SessionCostCheckpoint`'s existing "already collected this session" guard (keyed by whatever ID FR2 settles on — see the open question in FR2 about whether a deterministic ID becomes available) is sufficient to prevent double-counting on collector re-runs, without needing partial/delta collection logic.
+- **No behavior change to the extension's collection logic**: `turn_end`'s cost extraction, TUI status update, and fire-and-forget POST are already correct and tested-by-inspection against the design; this feature must not alter them beyond FR-1's doc fix.
+- **No new test tooling**: this repo has no JS/TS test framework anywhere (not even `frontend/`, which has no `test` script). Do not introduce Jest/Vitest solely to unit-test this 140-line extension — inconsistent with existing project conventions. Verification is manual/integration (FR-2), not a new unit-test suite.
+- **Graceful degradation preserved**: extension failures (build failure, POST failure, auth failure when run outside Hephaestus) must continue to only log a warning and never block a pi turn or fail `scripts/install.sh`.
 
-## 4. Non-Functional Requirements
+## 6. Component Dependencies
 
-- **No new tables/columns.** `CostEntry`, `SessionCostCheckpoint`, and the rollup chain are unchanged; this is purely a new data-source implementation plugging into existing sinks (matches the design doc: "No schema changes needed beyond what phase 1 already added").
-- **Read-only access to `opencode.db`.** Never write to OpenCode's own database; open it read-only (e.g. SQLite URI `file:...?mode=ro`) to avoid any risk of corrupting a file another live OpenCode process may have open (the DB was observed with active `-wal`/`-shm` files, i.e. WAL mode, on this machine — concurrent read access is safe under WAL, writes are not this feature's business).
-- **Path safety.** Match the existing `pi`/`claude_code` branches' pattern of resolving and verifying the target path stays under the expected base directory (`~/.local/share/opencode/`) before opening — same defensive pattern already applied to `_discover_session_file` (lines 360-383) and the Claude Code branch (lines 461-481).
-- **Graceful absence.** If `~/.local/share/opencode/opencode.db` doesn't exist (OpenCode never run on this host) or the query returns nothing, skip silently (debug log), matching every other collector's existing behavior — never raise into `collect_task_cost()`'s caller.
-- **No timer-based collection.** Same as every other collector: triggered once, from `collect_task_cost()` at task completion, not polled.
+- `extensions/hephaestus-cost-tracker/README.md` — doc-only change (FR-1).
+- `extensions/hephaestus-cost-tracker/src/index.ts` → `POST /api/autopilot/cost-entries` (`autopilot_api.py:2144`, already exists, no change) — verification only (FR-2).
+- No dependency on `cost_collection_service.py`, `cost_derivation.py`, or the database schema — all upstream, merged, and untouched by this feature.
 
-## 5. Component Dependencies
+## 7. Technology Constraints
 
-- `src/services/cost_collection_service.py` — `OpenCodeCollector.collect()` (rewrite), `collect_task_cost()`'s `opencode` branch (implement), possibly a new `_discover_opencode_session()` helper mirroring `_discover_session_file()`.
-- `src/core/cost_derivation.py` — `record_cost()` consumed as-is, no changes expected.
-- `src/core/database.py` — `Agent.created_at`, `Agent.cli_type`, `AgentWorktree`/`Workflow.working_directory` (via `_get_agent_cwd`, reused as-is) for FR2's cwd lookup.
-- `src/interfaces/cli_interface.py` — `OpenCodeAgent` — only touched if FR2's investigation into `-s`/session-ID minting concludes a launch-command change is warranted; otherwise read-only reference.
-- External: `~/.local/share/opencode/opencode.db` (OpenCode's own SQLite store, schema owned by the `opencode` CLI, not this codebase — a version bump of `opencode` could change this schema without warning; no migration/versioning hook exists for that today and none is proposed here beyond graceful-failure on unexpected shape).
+- `README.md` is plain Markdown; no toolchain implications for FR-1.
+- FR-2's verification requires a real `pi` binary and a machine where `npm`/`node` are available — this cannot be done inside this sandboxed repo checkout and must happen wherever the next phase actually has `pi` installed (or be explicitly deferred/accepted as an open risk if no such environment is available to this pipeline).
 
-## 6. Technology Constraints
+## 8. Integration Points
 
-- Python's stdlib `sqlite3` (already a transitive dependency via SQLAlchemy) is sufficient — no new package needed to read OpenCode's DB.
-- Must not introduce a dependency on the `opencode` CLI binary being installed/on `PATH` at collection time (only at agent-launch time, which is a separate, pre-existing requirement) — direct DB reads mean collection works even if `opencode` itself isn't invoked again.
-- Follows this codebase's existing multi-collector `ABC`/subclass pattern (`CostCollector`) — no new abstraction warranted for one additional source.
+- No new integration points. The extension already integrates with `scripts/install.sh` (install-time) and `POST /api/autopilot/cost-entries` (runtime) — both pre-existing and unchanged.
 
-## 7. Integration Points
+## 9. Out of Scope
 
-- `collect_task_cost()` is already called from task-completion handling (per the design doc, "on task completion... where the codebase already does end-of-task bookkeeping") — this feature adds a working implementation behind an existing, already-wired call path; no new call sites.
-- Downstream consumers (`cost_derivation.py` rollups, budget enforcement, all Cost Tracking UI components) require no changes — they already treat `source="opencode"` as a valid, first-class value.
+- Any change to `cost_entries` schema, `cost_derivation.py`, or budget enforcement (merged, stable).
+- Adding a `session_id` field to `CostEntry` or the extension's POST body — the design doc's mention of `ctx.sessionManager` is superseded by the simpler, already-working env-var-based attribution; not a gap to close.
+- OpenCode/Codex collectors (separately deferred per `.hephaestus/design.md`'s Non-Goals).
+- Introducing a JS/TS test framework (see NFR above).
 
-## Open Questions — Blocking Item for scope_review
+## 10. Risks / Open Questions for Architecture/Scope Review
 
-0. **[BLOCKING] FR1's gate conflict must be explicitly ruled on before architecture starts.** The design document's own build/defer criterion (`design.md:695-699`) is unambiguous, and this pass's direct verification (grepping every file under `config/workflows/autopilot/` plus `hephaestus_config.yaml`'s `default_cli_tool`) confirms the deferral condition as the design defines it — zero live usage of `cli_type: opencode`. This feature was nonetheless commissioned as its own workflow. `scope_review` must explicitly decide: (a) proceed anyway, on the basis that this workflow's existence is itself the authorization to override the design's gate, or (b) treat the gate as still binding and return/close this feature without an architecture phase. This is not a decision the product_requirements phase should make on scope_review's behalf.
-
-## Open Questions for Architecture Phase (contingent on scope_review authorizing FR2-FR5)
-
-1. Does OpenCode's `-s <id>` flag support minting a **new** session under a caller-chosen ID (making time-window correlation unnecessary, mirroring the Claude Code UUID5 fix), or only resuming an existing one? One live test resolves this and should happen before locking in FR2's time-window design.
-2. Tie-break policy when FR2's directory+time-window match returns multiple candidate sessions (e.g. two OpenCode tasks launched back-to-back in the same worktree within the same second).
+- **This feature may be a documentation-only, one-line change plus a manual verification step.** Scope review should confirm whether that's sufficient to satisfy the workflow's intent, or whether there's additional scope (e.g., a real pi-install smoke test harness) expected that isn't visible from the design doc or repo state alone.
+- FR-2 depends on an environment with `pi` actually installed, which this repo checkout does not have. If no such environment exists anywhere in this pipeline's execution, FR-2 should be downgraded to a documented, accepted risk rather than blocking the pipeline.

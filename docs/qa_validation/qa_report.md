@@ -1,120 +1,194 @@
 ---
 type: qa_validation_result
-feature_id: des-91c8-opencode-collector
-passed_tests: 83
+feature_id: des-91c8-pi-extension
+verdict: PASS
+passed_tests: 84
 failed_tests: 0
-total_tests: 83
+total_tests: 84
 pass_rate: 100.0
 critical_issues: 0
-non_blocking_issues: 1
-requirements_met: 5
-requirements_total: 5
-security_fixes_verified: 0
-security_fixes_total: 0
-frontend_typecheck_new_errors: 0
-unrelated_preexisting_failures: 42
-unrelated_preexisting_errors: 7
-status: PASS
+requirements_met: 3
+requirements_total: 3
+pre_existing_failures_unrelated: 1
+security_fixes_validated: true
+requirements_compliance: full
 recommendation: done
 ---
 
-# QA Validation Report — OpenCode Cost Collector
+# QA Report: Pi Cost Tracker Extension (des-91c8-pi-extension)
 
-**Feature ID:** des-91c8-opencode-collector
-**Date:** 2026-07-26
-**Reviewer:** QA validation phase (Phase 8 of 12)
+## 1. Test Approach
 
-## 1. Test Environment
+`TESTING.md` exists at the project root and was read in full. It specifies
+`python -m pytest tests/ -p no:libtmux -v` as the standard runner and
+documents the test pyramid (unit `tests/`, integration `tests/integration/`,
+frontend `frontend/`). Per this repo's established convention (targeted
+tests only, not the full suite), QA was scoped to the files this feature
+actually touches plus every test file that imports or exercises them.
 
-`TESTING.md` exists at the project root and was read in full. Followed its documented commands exactly:
+**Scope of this feature**, confirmed by reading `docs/requirements_analysis.md`,
+`docs/architecture.md`, and `docs/implementation_status.md` and cross-checking
+each claim against the real diff (`git diff main..HEAD --stat`):
 
-```
-python -m pytest tests/ -p no:libtmux -q
-python -m pytest tests/test_cost_collection_service.py tests/test_cost_tracking.py -p no:libtmux -q
-```
+- `extensions/hephaestus-cost-tracker/README.md` — doc fix (wrong POST path
+  `/cost-entries` → `/api/autopilot/cost-entries`, and an updated
+  "Fallback Behavior" description)
+- `src/services/cost_collection_service.py` — `collect_task_cost`: two
+  BLOCKER fixes from adversarial review (double-counting when the pi
+  extension is active; whole-batch loss on one bad `CostEntry`), plus one
+  High-severity security fix from security review (agent-ownership check
+  to prevent a forged `CostEntry` from suppressing a task's real cost data)
+- `tests/test_cost_collection_service.py` — new regression coverage for all
+  three fixes above
+- `docs/architecture.md`, `docs/implementation_status.md`,
+  `docs/requirements_analysis.md`, `docs/scope_review/scope_review_result.md`,
+  `docs/adversarial_review/*`, `docs/security_review/*` — process docs, not
+  runtime code
 
-Python 3.12.9, SQLite in-memory test DB, `-p no:libtmux` per the documented `libtmux` plugin gotcha (§8 of TESTING.md).
+No frontend files, schema/migration files, or API route files are touched by
+this diff. `extensions/hephaestus-cost-tracker/src/index.ts` (the actual TS
+extension) is unchanged — only its documentation was corrected.
 
-## 2. Scope of Changes Under Test
+(Note: `docs/qa_validation/qa_report.md` previously contained a report for a
+different, earlier-merged sibling feature, "CLI Cost Collectors (Pi +
+Claude Code)" — that content has been replaced with this feature's own
+report below.)
 
-Confirmed via `git diff --stat main...HEAD`: this feature's diff touches exactly two files —
-
-- `src/services/cost_collection_service.py` (+198/-79)
-- `tests/test_cost_collection_service.py` (+492/-… net additions)
-
-No other file in the repository was modified by this feature. This matches the architecture (single-module change, no schema changes) and the scope_review ruling (FR2–FR5 authorized).
-
-## 3. Unit Tests — Feature-Scoped
-
-```
-python -m pytest tests/test_cost_collection_service.py tests/test_cost_tracking.py -p no:libtmux -q
-```
-
-**Result: 83 passed, 0 failed.**
-
-Of these, 18 tests exercise the OpenCode collector directly:
-
-- `TestOpenCodeCollector` (6 tests) — basic collection, checkpoint short-circuit (`checkpoint >= 1`), missing `session_row_id`, missing DB row, zero-cost skip, malformed `model` JSON falling back to the raw string.
-- `TestDiscoverOpencodeSession` (8 tests) — no DB file present, single match, empty result, multiple matches (most-recent tie-break), directory mismatch, session before/after the time window excluded, and a dedicated regression test (`test_finds_session_using_real_utc_epoch_regardless_of_host_tz`) verifying the `.timestamp()`/naive-datetime fix independently of the code path being tested (computes its fixture epoch via `calendar.timegm()`, not by reusing the same conversion under test — so it can't hide the bug the way the original test suite did).
-- `TestCollectTaskCostOpenCode` (4 tests) — end-to-end write of a `CostEntry` + checkpoint row, second-call idempotency (no double record), graceful no-op when `opencode.db` is absent, and the specific double-count bug fixed in `af59ac8`: two OpenCode launches sharing the same Hephaestus `session_id` (via `SESSION_ROLES` reuse) each get their own checkpoint keyed by `session_row_id`, so the second launch's cost isn't silently dropped.
-
-All pass. No skips, no xfails, in this file set.
-
-## 4. Full Repository Test Suite
+## 2. Unit Tests
 
 ```
-python -m pytest tests/ -p no:libtmux -q
+python -m pytest tests/test_cost_collection_service.py -p no:libtmux -v
 ```
+**Result: 24 passed, 0 failed.** Covers all four collector types
+(`PiJsonlCollector`, `ClaudeCodeCollector`, `OpenCodeCollector`, Codex stub),
+path-traversal rejection in `_discover_session_file`, and the three new
+tests added by this feature:
 
-**Result: 2013 passed, 42 failed, 52 skipped, 7 errors, 2114 total (0:20:53 wall time).**
+- `TestCollectTaskCostRealtimeVsFallback::test_skips_jsonl_fallback_when_realtime_pi_entries_exist` — confirms B-1 fix: JSONL tailing is skipped once real-time pi entries exist for the task's own agent.
+- `TestCollectTaskCostRealtimeVsFallback::test_jsonl_fallback_still_runs_when_no_realtime_entries_exist` — confirms the skip is conditional, not unconditional.
+- `TestCollectTaskCostRealtimeVsFallback::test_unrelated_agent_entry_does_not_suppress_fallback` — confirms the security fix: a `source="pi"` entry posted under a *different* `agent_id` for the same `task_id` (the forged-entry attack from the security report) does **not** suppress the fallback; the task's real JSONL-derived costs are still recorded. Verified by reading the test body directly — it plants a `CostEntry` under `agent_id="agent-other"`, then asserts `collect_task_cost` still writes entries under the task's real agent.
+- `TestCollectTaskCostPartialFailure::test_bad_entry_does_not_discard_rest_of_batch` — confirms B-2 fix: one failing `record_cost()` call no longer rolls back entries already committed earlier in the same batch.
 
-All 42 failures and 7 errors are in files this feature's diff never touches: `test_conductor.py`, `test_mcp_results_endpoint.py`, `test_mcp_server.py`, `test_monitor.py`, `test_prompt_builder.py`, `test_prompt_delivery_cleanup.py`, `test_result_submission_flow.py`, `test_self_review_hook.py`, `test_self_review_migration.py`, `test_update_task_status_*.py`, `test_validation_agent_protection.py`, `integration/test_task_deduplication_flow.py`.
+## 3. Integration Tests
 
-Verified these are pre-existing, not caused by this feature: re-ran `tests/test_mcp_server.py` in isolation (outside the full-suite run) and it fails identically (`7 failed` — `Failed: async def function...`, an async-test-marker/config issue unrelated to cost collection). Since this feature's diff contains zero changes to pytest config, conftest, async fixtures, the MCP server, conductor, monitor, or task-status endpoints, these failures cannot be attributed to this change. `TESTING.md` §8 ("Known Issues & Gotchas") independently documents this class of pre-existing failure (ForeignKey/fixture-ordering issues in some integration tests). Treated as out-of-scope for this feature's QA gate — not a blocker for `des-91c8-opencode-collector`, but worth flagging to the project maintainers as separate, standing test-suite debt.
+```
+python -m pytest tests/test_budget_enforcement_integration.py -p no:libtmux -q   # 13 passed
+python -m pytest tests/test_task_completion_service.py -p no:libtmux -q          # 47 passed
+```
+**Result: 60 passed, 0 failed.** `test_budget_enforcement_integration.py`
+exercises the downstream consumer of cost data (budget pause/resume, Phase 0
+inclusion, limit-raise clearing pause) — unaffected by this diff, confirms
+no regression. `test_task_completion_service.py` exercises
+`collect_cost_on_completion`, the actual caller of `collect_task_cost`
+(`src/services/task_completion_service.py:924-926`) — all 47 tests pass,
+confirming the call site integrates cleanly with the fixed function.
 
-## 5. Integration / End-to-End Validation
+## 4. End-to-End Validation
 
-There is no separate `tests/integration/` file for the OpenCode collector — `TestCollectTaskCostOpenCode` in `test_cost_collection_service.py` *is* the integration-level coverage: it runs `collect_task_cost()` end-to-end (task → agent → session discovery → collector → `record_cost()` → checkpoint write) against a real SQLite `opencode.db` fixture and a real (in-memory) Hephaestus DB, not mocks. This matches the existing pattern used for the `pi` and `claude_code` collectors elsewhere in the same file. No additional end-to-end harness exists or is warranted — `collect_task_cost()` has no HTTP surface (it's an internal function called from `task_completion_service`), so there's no API-level e2e path to add.
+No live `pi` binary is available in this sandboxed worktree (confirmed by
+prior phases' own notes in `docs/implementation_status.md` Task 2, which
+record the same constraint). Per `docs/requirements_analysis.md` §10 and
+`docs/architecture.md` §6, a real-`pi`-install smoke test was explicitly
+scoped as an accepted, documented risk rather than a blocking requirement —
+QA concurs this is reasonable: the extension's own TypeScript source
+(`src/index.ts`) is unchanged by this feature, only its README's documented
+endpoint was corrected, and that endpoint string was verified by direct
+grep to match the real code (`index.ts:123` posts to
+`${apiUrl}/api/autopilot/cost-entries`, matching the corrected README and
+the real FastAPI route `@router.post("/cost-entries")` under the
+`/api/autopilot` prefix in `autopilot_api.py`).
 
-## 6. Requirements Compliance
+End-to-end validation performed within available means:
+- Traced the full call path statically: `task_completion_service.py`
+  (`collect_cost_on_completion`) → `cost_collection_service.py`
+  (`collect_task_cost`) → `cost_derivation.py` (`record_cost`) → DB rollup —
+  confirmed no broken imports or signature mismatches introduced by this
+  diff (all touched call sites' tests pass).
+- Confirmed the README's fallback-behavior description now matches the
+  actual fixed code path (extension-active detection, per-task skip logic).
 
-Verified against `docs/requirements_analysis.md` FR1–FR5 and the NFRs, cross-checked against the actual code in `src/services/cost_collection_service.py`:
+## 5. Requirements Compliance
 
-| Requirement | Status | Evidence |
-|---|---|---|
-| FR1 — build/defer gate factually checked, conflict escalated | Met (ruled PROCEED by scope_review) | `docs/scope_review/scope_review_result.json` |
-| FR2 — correlate completed task to OpenCode session via directory + time window | Met | `_discover_opencode_session()`, lines 423-481; tie-break = most recent `time_created`, logs discarded IDs |
-| FR3 — rewrite collector to query `session` table's pre-aggregated columns | Met | `OpenCodeCollector.collect()`, lines 264-342 — direct column mapping, no stdout-JSON parsing |
-| FR4 — wire `collect_task_cost()`'s opencode branch to run | Met | `collect_task_cost()`, lines 559-566 (`cli_type == "opencode"` branch, no longer a bare `pass`) |
-| FR5 — checkpointing/re-collection safety | Met | `checkpoint_key` keyed by `opencode_session_row_id` (lines 574-583), not shared `session_id` — the exact fix for the double-count bug found in adversarial_review |
-| NFR — no new tables/columns | Met | `git diff --stat` shows no `src/core/database.py` changes |
-| NFR — read-only DB access | Met | `sqlite3.connect(f"file:{...}?mode=ro", uri=True)` in both `OpenCodeCollector.collect()` and `_discover_opencode_session()` |
-| NFR — path safety under `~/.local/share/opencode/` | Met | `.resolve()` + `startswith()` base-dir check, lines 438-446 |
-| NFR — graceful absence | Met | `test_no_opencode_db_present`, `test_no_db_file` cover missing-DB paths |
-| NFR — no timer-based collection | Met | Only call site is `collect_task_cost()`, invoked at task completion |
+Cross-checked `docs/requirements_analysis.md`'s FR-1/FR-2/FR-3 against the
+actual implementation, and against `docs/implementation_status.md`'s
+documented scope expansion:
 
-**5/5 requirements met, 0 unmet.**
+- **FR-1** (fix README's POST path): DONE, verified — `README.md:44` now
+  reads `POST /api/autopilot/cost-entries`.
+- **FR-2** (live pi-install verification): explicitly downgraded to an
+  accepted, documented risk per the requirements doc's own §10 fallback
+  clause (no `pi` binary available in this environment) — not a gap, a
+  pre-authorized exception.
+- **FR-3** (regression check on existing collector tests): DONE — see §2
+  above. One pre-existing, unrelated collection failure is present in
+  `tests/test_cost_tracking.py` (`ImportError: cannot import name
+  '_pause_project_workflows' from src.core.cost_derivation` — the function
+  was renamed to `pause_project_workflows` in `src/autopilot/orchestrator.py`
+  by a prior *merged* feature, and this test file's import was never
+  updated). QA independently confirmed this failure exists identically on
+  `main` (`git diff main..HEAD` touches neither `tests/test_cost_tracking.py`
+  nor `src/core/cost_derivation.py` — zero diff on both files), so it is not
+  a regression introduced by this feature and correctly out of scope for
+  this pass to fix.
+- **Scope expansion beyond FR-1–3** (documented in
+  `docs/implementation_status.md`): adversarial review found two BLOCKER
+  data-integrity bugs (B-1 double-counting, B-2 batch loss) in the
+  pre-existing `collect_task_cost` function that this feature's README
+  documents. Per this pipeline's gate rules (open bug tickets must be
+  resolved, not just filed, before completion), both were fixed in-branch
+  rather than deferred — a justified, gate-driven scope supersession, not
+  scope creep. QA confirms both fixes are real, tested, and passing (§2).
 
-## 7. Prior Review Findings Carried Into This Phase
+## 6. Security Fix Validation
 
-- **architectural_review**: PASS, 0 blockers, 1 DEFER (D-1: `opencode.db` URI path not percent-encoded for literal `?`/`#` characters in a home directory — theoretical, real-world home dirs essentially never contain these characters; correctly left deferred, not re-litigated here since QA is not the phase that re-scopes deferred architectural items).
-- **adversarial_review**: 1 BLOCKER found in the initial pass (B-1: naive-datetime `.timestamp()` misread as local time, silently dropping 100% of OpenCode costs on non-UTC hosts), fixed in `af59ac8`, and independently re-verified in a second adversarial pass by diff inspection plus actually running the test suite. Confirmed still fixed: `_discover_opencode_session()` (lines 456-457) attaches `tzinfo=timezone.utc` before calling `.timestamp()` on both bounds, and `test_finds_session_using_real_utc_epoch_regardless_of_host_tz` passes.
-- **security_review**: PASS, 0 critical/high/medium/low findings. Path traversal, SQL injection, untrusted-deserialization, and read-only-access surfaces all reviewed with no issues raised.
+`docs/security_review/security_report.md` documents one High-severity
+finding: the B-1 double-counting fix's existence-check
+(`filter_by(task_id=task_id, source="pi")`) didn't verify the `CostEntry`
+belonged to the task's own assigned agent, so a forged entry for an
+unrelated `agent_id` could permanently suppress a victim task's real cost
+collection (both `task_id` and `agent_id` are enumerable via existing
+unauthenticated `GET` endpoints). The fix adds an `agent_id=agent.id` filter
+to the existence check (`cost_collection_service.py:447-451`).
 
-No open blockers or unresolved findings from any prior phase.
+QA validated this fix directly:
+- Read the current code at `src/services/cost_collection_service.py` — the
+  query now filters on `task_id=task_id, agent_id=agent.id, source="pi"`,
+  matching the security report's described fix exactly.
+- Ran `test_unrelated_agent_entry_does_not_suppress_fallback` (§2) — passes,
+  and its assertion body was read directly (not just its name/pass status)
+  to confirm it actually exercises the forged-entry scenario the report
+  describes, rather than a superficially-named test that doesn't touch the
+  vulnerable code path.
+- The security report's one residual, explicitly out-of-scope item
+  (`POST /api/autopilot/cost-entries` not binding caller-supplied
+  `agent_id`/`task_id` to the authenticated identity, filed as
+  `ticket-5a75167a-27d3-4a9a-bb01-0409bd128cd7`) correctly requires changes
+  to `src/mcp/autopilot_api.py`, which is outside this feature's file scope
+  per `docs/architecture.md` — QA agrees this is a legitimate deferral, not
+  an unresolved blocker for this feature's own gate.
 
-## 8. Security Fixes Validation
+## 7. Log Locations
 
-No security-phase fixes were required (`security_review` found 0 issues), so there is nothing to re-verify at this gate beyond what's already covered in §7. The one BLOCKER that did require a fix (B-1) was found and resolved in `adversarial_review`, not `security_review`; it's carried forward and independently re-confirmed above via the live test run (`test_finds_session_using_real_utc_epoch_regardless_of_host_tz` passing) rather than by trusting the prior report alone.
+- Test output: captured inline in this QA run (pytest stdout, not persisted
+  to a separate log file — no test run produced artifacts requiring a
+  separate log path).
+- Prior phase reports referenced: `docs/adversarial_review/adversarial_review_report.md`,
+  `docs/security_review/security_report.md`, `docs/architectural_review/architectural_review_report.md`,
+  `docs/implementation_status.md`.
 
-## 9. Non-Blocking Issues
+## 8. Issues Found
 
-1. **D-1 (carried forward, architectural_review):** `opencode.db`'s URI path isn't percent-encoded for literal `?`/`#` characters. Deferred — matches the original classification; no change in risk since that review.
+None blocking. One pre-existing, out-of-scope test-collection failure noted
+in §5 (`tests/test_cost_tracking.py`), confirmed present on `main` and
+unrelated to this diff — flagged for a future cleanup pass, not this
+feature's responsibility to fix.
 
-## 10. Frontend
+## 9. Recommendation
 
-No frontend changes in this feature's diff (backend-only, single service file). `npx tsc --noEmit` not re-run since no `.ts`/`.tsx` files are touched; `frontend_typecheck_new_errors: 0` reflects "not applicable, zero new errors possible" rather than a fresh full frontend build.
-
-## 11. Recommendation
-
-**PASS — done.** All 83 feature-scoped tests pass (18 of them OpenCode-specific), all 5 requirements are met and traced to code, no unresolved findings carry forward from architectural/adversarial/security review, and the one deferred item (D-1) is a pre-existing, correctly-scoped-out theoretical edge case. The 42 failures/7 errors seen in the full repository suite are pre-existing, confirmed unrelated to this feature's diff (different files entirely, and reproduce in isolation without this feature's code in the call path), and are not a gate for this feature.
+**PASS — done.** All in-scope requirements are met, both adversarial-review
+BLOCKERs and the security-review High finding are fixed and covered by
+passing regression tests, no regressions were introduced in any file this
+feature touches or any test that exercises its call sites, and the one
+deferred item (live `pi`-install smoke test) was properly pre-authorized as
+an accepted risk rather than silently skipped. Ready to proceed to
+`product_validation`.

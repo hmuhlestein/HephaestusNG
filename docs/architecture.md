@@ -1,308 +1,187 @@
 ---
-type: architecture_design_report
+type: architecture
+feature_id: des-91c8-pi-extension
+status: complete
 ---
 
-# Architecture: OpenCode Cost Collector
+# Architecture: Pi Cost Tracker Extension
 
-**Feature ID:** des-91c8-opencode-collector
-**Status:** Ready for implementation (scope_review verdict: PROCEED_TO_ARCHITECTURE_DESIGN, `docs/scope_review/scope_review_result.json`)
-**Input:** `docs/requirements_analysis.md` (FR1-FR5, NFRs, Open Questions)
+**Feature ID:** des-91c8-pi-extension
+**Status:** Architecture Complete
+**Date:** 2026-07-26
+**Input:** `docs/requirements_analysis.md` (PASS per `docs/scope_review/scope_review_result.md`)
 
-This document is scoped strictly to what `docs/requirements_analysis.md` authorized: make `collect_task_cost()` produce correct `CostEntry` rows for `cli_type == "opencode"` tasks by reading OpenCode's own SQLite DB. No schema changes, no new call sites, no UI changes.
+## 1. Scope Recap
 
----
+This feature has no new runtime architecture. The pi extension
+(`extensions/hephaestus-cost-tracker/src/index.ts`), its install/build
+wiring (`scripts/install.sh:783-806`), the `POST /api/autopilot/cost-entries`
+endpoint (`src/mcp/autopilot_api.py:2144`), and the env-var-based
+attribution scheme are all already implemented and merged. Confirmed by
+direct inspection (`git log main..HEAD` is empty as of the requirements
+phase).
 
-## 1. System Architecture
+What remains is exactly what `docs/requirements_analysis.md` scoped:
 
-No new components. This feature replaces the body of one existing branch (`cost_collection_service.py:482-485`) and one existing class (`OpenCodeCollector`), and adds one new private helper. Everything else in the cost pipeline — `record_cost()`, `SessionCostCheckpoint`, the rollup chain, the UI — is consumed unchanged, per requirements NFR "No new tables/columns."
+1. **FR-1**: one wrong line in `extensions/hephaestus-cost-tracker/README.md`
+   (documents `POST /cost-entries`, actual route is
+   `POST /api/autopilot/cost-entries`).
+2. **FR-2**: verification-only — confirm the extension actually loads under
+   a real `pi` binary and produces a `cost_entries` row. No code is expected
+   to come out of this unless verification finds a defect.
+3. **FR-3**: verification-only — re-run the existing Python collector tests
+   and confirm no regression.
 
-```
-Task completion
-      │
-      ▼
-collect_task_cost(task_id)                    [cost_collection_service.py:404]
-      │
-      ├─ cli_type == "pi"          → _discover_session_file()      (unchanged)
-      ├─ cli_type == "claude_code" → inline .claude/projects lookup (unchanged)
-      ├─ cli_type == "opencode"    → _discover_opencode_session()  (NEW)
-      │                                   │
-      │                                   ▼
-      │                          opens ~/.local/share/opencode/opencode.db
-      │                          read-only, queries `session` table by
-      │                          directory + time window
-      │                                   │
-      │                                   ▼
-      │                          returns (db_path, session_row_id) or None
-      │
-      ▼
-collector.collect(...)  →  OpenCodeCollector (REWRITTEN)
-      │  opens same opencode.db read-only, re-selects the row by
-      │  session_row_id, maps columns → entry dict
-      ▼
-record_cost() + SessionCostCheckpoint update           (unchanged)
-```
+No component diagram is warranted beyond this — there is one incorrect
+sentence in a doc file and two verification checks, not a system with new
+parts that talk to each other.
 
-The existing `if not session_file: ... return` guard at line 489 is the natural join point: OpenCode's discovery step returns something usable there, everything downstream (collector dispatch, `record_cost`, checkpoint write, logging) requires zero changes.
+## 2. Design Decision: no code changes beyond the doc fix
 
-### 1.1 Why the collector interface doesn't change
+Development should not use this phase as license to touch
+`cost_collection_service.py`, `cost_derivation.py`, the `CostEntry` schema,
+budget enforcement, or the extension's `index.ts` logic. All of that is
+correct, tested-by-inspection, and out of scope per
+`docs/requirements_analysis.md` §5/§9. **Decision:** the only file this
+feature edits is `extensions/hephaestus-cost-tracker/README.md`. Any other
+diff produced by the development phase is scope creep and should be
+rejected at architectural review.
 
-`CostCollector.collect()`'s signature takes `session_file: Path`. For OpenCode this isn't a session transcript — it's the OpenCode `opencode.db` path plus a row identifier. Two options were considered:
+This also means there is nothing to introduce a JS/TS test framework for
+(NFR in requirements doc, §5) — do not add Jest/Vitest to verify a 140-line
+extension that has no existing test tooling anywhere in this repo.
 
-- **(Rejected) Add a new method to the `ABC`** (e.g. `collect_db(db_path, row_id, ...)`) — requires stub overrides on `PiJsonlCollector`/`ClaudeCodeCollector`/`CodexStubCollector` for a method they'll never use, violates "no new abstraction for one additional source" (NFR, Technology Constraints).
-- **(Chosen) Reuse `session_file` as the DB path, and thread the matched row's rowid through `checkpoint`** — `checkpoint` is currently `int` (`lines_processed`), and OpenCode has no line concept at all (FR5). `_discover_opencode_session()` returns `(db_path: Path, session_row_id: str)`. `session_file` becomes `db_path`. The matched `session_row_id` is passed to the collector via a new optional constructor field on `OpenCodeCollector`, set by `collect_task_cost()` right before calling `.collect()` — mirroring the existing pattern where each collector is a fresh instance per call (`collectors = {...}` dict is rebuilt every invocation, line 494-499).
+## 3. Component: `README.md` fix
 
-This keeps the `ABC` contract untouched and confines OpenCode-specific plumbing to the OpenCode branch and class, matching "Touch only what you must."
+**File:** `extensions/hephaestus-cost-tracker/README.md`, "How It Works",
+line 44.
 
----
-
-## 2. Component Interfaces
-
-### 2.1 `_discover_opencode_session(cwd: str, agent_created_at: datetime) -> Optional[Tuple[Path, str]]`
-
-New private helper in `cost_collection_service.py`, placed after `_discover_session_file()` (mirrors its shape and security pattern per requirements §5).
-
-```python
-def _discover_opencode_session(cwd: str, agent_created_at: datetime) -> Optional[Tuple[Path, str]]:
-    """Discover the OpenCode session row matching an agent's cwd and launch time.
-
-    OpenCode assigns no deterministic session ID Hephaestus controls (unlike
-    pi's --session-id / Claude Code's uuid5). Correlation is by directory
-    (session.directory is a literal, unsanitized path) and a time window
-    bounded by [agent_created_at, now].
-
-    Returns (db_path, session.id) for the most recent in-window match, or
-    None if the DB doesn't exist or no session matches.
-    """
+**Change:**
+```diff
+-4. The cost entry is posted to Hephaestus API (`POST /cost-entries`)
++4. The cost entry is posted to Hephaestus API (`POST /api/autopilot/cost-entries`)
 ```
 
-**Behavior:**
-1. Resolve `db_path = Path.home() / ".local" / "share" / "opencode" / "opencode.db"`. Resolve-and-verify-under-base the same way `_discover_session_file` does for its sessions dir (NFR "Path safety") — defensive even though this path has no user-supplied component, for consistency with the sibling branches.
-2. If `db_path` doesn't exist, return `None` (NFR "Graceful absence").
-3. Open with `sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)` (NFR "Read-only access").
-4. Query:
-   ```sql
-   SELECT id, time_created FROM session
-   WHERE directory = ?
-     AND time_created >= ?
-     AND time_created <= ?
-   ORDER BY time_created DESC
-   ```
-   Params: `cwd`, `int(agent_created_at.replace(tzinfo=timezone.utc).timestamp() * 1000)` (epoch-ms, per requirements §1's confirmed schema), `int(datetime.utcnow().replace(tzinfo=timezone.utc).timestamp() * 1000)`. Both bounds must attach `tzinfo=timezone.utc` before calling `.timestamp()` — `agent_created_at` and `datetime.utcnow()` are naive datetimes whose wall-clock reading is UTC, but naive `.timestamp()` assumes *local* time, so on any non-UTC host the window silently shifts and never overlaps a real session (found and fixed as adversarial_review BLOCKER B-1).
-5. Zero rows → log at debug, return `None` (FR2 "log and skip").
-6. One or more rows → take the first (`ORDER BY time_created DESC` already puts the most recent first) — this is the explicit tie-break policy for FR2's multiple-match case and Open Question 2: **most recent `time_created` in-window wins.** Log at debug when `len(rows) > 1` noting the discarded candidate IDs, so a misattribution is traceable after the fact.
-7. Return `(db_path, row["id"])`.
-8. Any `sqlite3.Error` → log and return `None` (matches every other collector's "never raise into `collect_task_cost()`'s caller").
+No other line in the file is wrong — the `Configuration` section's
+`http://localhost:8300` default (lines 30-31) already matches
+`index.ts:58` and `hephaestus_config.yaml`; that was fixed by the prior
+`CLI Cost Collectors` feature and is not touched here.
 
-`cwd` comes from the existing `_get_agent_cwd(db, agent, task)` helper, reused as-is (requirements §5) — called from `collect_task_cost()` exactly like the `pi`/`claude_code` branches already do.
+## 4. Interface Contract (existing, unchanged — documented for reference)
 
-### 2.2 `OpenCodeCollector` (rewritten)
+**Request:** `POST {HEPHAESTUS_API_URL}/api/autopilot/cost-entries`
+(`index.ts:123`, matching `autopilot_api.py:2144`'s router prefix
+`/api/autopilot` + route `/cost-entries`)
 
-Replaces the current stdout-JSON body (`cost_collection_service.py:263-323`) entirely — it is dead code today (requirements §1) and its shape doesn't fit `-i` mode.
+Headers: `Content-Type: application/json`, `X-Agent-ID: <agent_id>`
+(`index.ts:127-130`, verified server-side by `verify_agent_authentication`,
+`autopilot_api.py:2156`).
 
-```python
-class OpenCodeCollector(CostCollector):
-    """Collector for OpenCode sessions via opencode.db.
-
-    OpenCode's `session` table stores pre-aggregated cost/token totals
-    per session row -- no per-turn tailing needed. Each agent launch
-    mints exactly one fresh session row (OpenCodeAgent never resumes),
-    so checkpoint is a simple 0/1 "already collected" guard, not a
-    line count.
-    """
-
-    def __init__(self, session_row_id: Optional[str] = None):
-        self.session_row_id = session_row_id
-
-    def collect(
-        self,
-        session_id: str,
-        task_id: str,
-        workflow_id: str,
-        agent_id: Optional[str],
-        session_file: Path,   # repurposed: path to opencode.db
-        checkpoint: int,      # repurposed: 0 = not yet collected, 1 = collected
-    ) -> Tuple[List[dict], int]:
-        entries: List[dict] = []
-
-        if checkpoint >= 1:
-            return entries, checkpoint  # already collected this session
-
-        if not self.session_row_id:
-            return entries, checkpoint
-
-        try:
-            conn = sqlite3.connect(f"file:{session_file}?mode=ro", uri=True)
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT cost, tokens_input, tokens_output, tokens_reasoning, "
-                "tokens_cache_read, tokens_cache_write, model FROM session "
-                "WHERE id = ?",
-                (self.session_row_id,),
-            ).fetchone()
-            conn.close()
-        except sqlite3.Error as e:
-            logger.error(f"Error reading opencode.db for session {self.session_row_id}: {e}")
-            return entries, checkpoint
-
-        if not row or (row["cost"] or 0) <= 0:
-            return entries, 1
-
-        model = None
-        try:
-            model_info = json.loads(row["model"]) if row["model"] else {}
-            model = model_info.get("id")
-        except json.JSONDecodeError:
-            model = row["model"]
-
-        entries.append(
-            {
-                "id": f"cost-{uuid.uuid4().hex[:8]}",
-                "task_id": task_id,
-                "agent_id": agent_id,
-                "workflow_id": workflow_id,
-                "source": "opencode",
-                "model": model,
-                "input_tokens": row["tokens_input"] or 0,
-                "output_tokens": row["tokens_output"] or 0,
-                "cache_read_tokens": row["tokens_cache_read"] or 0,
-                "cache_write_tokens": row["tokens_cache_write"] or 0,
-                "reasoning_tokens": row["tokens_reasoning"] or 0,
-                "cost_usd": row["cost"],
-                "recorded_at": datetime.utcnow(),
-                "raw_usage": dict(row),
-            }
-        )
-
-        return entries, 1
+Body (`CostEntry` interface, `index.ts:35-48`):
 ```
-
-Column mapping is a direct match against the real schema confirmed in requirements §1 (`cost`, `tokens_input`, `tokens_output`, `tokens_reasoning`, `tokens_cache_read`, `tokens_cache_write`, `model` as a JSON string with `id`/`providerID`). No new `CostEntry` columns — `source="opencode"` already exists.
-
-`sqlite3` import needs adding to `cost_collection_service.py`'s import block (stdlib, no new dependency, per Technology Constraints).
-
-### 2.3 `collect_task_cost()` opencode branch (rewritten)
-
-Replaces `cost_collection_service.py:482-485`:
-
-```python
-elif cli_type == "opencode":
-    cwd = _get_agent_cwd(db, agent, task)
-    if cwd:
-        result = _discover_opencode_session(cwd, agent.created_at)
-        if result:
-            db_path, session_row_id = result
-            session_file = db_path
-            opencode_session_row_id = session_row_id
-```
-
-`opencode_session_row_id` is a new local variable in `collect_task_cost()`, initialized to `None` alongside `session_file = None` at line 450. It's read when instantiating the collector:
-
-```python
-collectors = {
-    "pi": PiJsonlCollector(),
-    "claude_code": ClaudeCodeCollector(),
-    "opencode": OpenCodeCollector(session_row_id=opencode_session_row_id),
-    "codex": CodexStubCollector(),
+{
+  task_id?: string; agent_id?: string; workflow_id?: string;
+  source: string;                // always "pi" for this collector
+  model?: string;
+  input_tokens?, output_tokens?, cache_read_tokens?,
+  cache_write_tokens?, reasoning_tokens?: number;
+  cost_usd: number;
+  raw_usage?: Record<string, any>;
 }
 ```
 
-No change to the `if not session_file: ... return` guard, the collector-dispatch block, `record_cost()` call, or checkpoint write — all reused as-is.
+This contract is not changing. It's included here only so development and
+QA don't have to re-derive it from source when writing the FR-2
+verification report.
 
----
+## 5. Data Flow (existing, unchanged)
 
-## 3. Data Flow
+```
+pi agent session (HEPHAESTUS_AGENT_ID/TASK_ID/WORKFLOW_ID set by
+manager.py when the tmux session is launched)
+  └─ pi loads ~/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js
+  └─ on turn_end: reads message.usage.cost.total
+  └─ updates TUI status bar via ctx.ui.setStatus()
+  └─ POSTs CostEntry to /api/autopilot/cost-entries (fire-and-forget,
+     failures only logged, never block the turn)
+  └─ Hephaestus API authenticates via X-Agent-ID, persists the row,
+     triggers cost_derivation.py rollup (unchanged, upstream)
 
-1. Task completes → existing task-completion handler calls `collect_task_cost(task_id)` (unchanged call site, per requirements Integration Points).
-2. `collect_task_cost` loads `Task`, `Agent`; `agent.cli_type == "opencode"`.
-3. `_get_agent_cwd(db, agent, task)` → literal cwd string (existing helper, unchanged).
-4. `_discover_opencode_session(cwd, agent.created_at)` opens `~/.local/share/opencode/opencode.db` read-only, matches `session.directory == cwd` within `[agent.created_at, now]`, returns the most recent match's `(db_path, id)`.
-5. `OpenCodeCollector(session_row_id=id).collect(..., session_file=db_path, checkpoint=<0 or 1 from SessionCostCheckpoint>)` re-queries the same row by `id`, maps its pre-aggregated columns to a single `CostEntry` dict, returns checkpoint `1`.
-6. `record_cost()` writes the `CostEntry` row and triggers the existing rollup chain (Task → Feature → AutopilotDesign → AutopilotProject `cost_total_usd`) — unchanged.
-7. `SessionCostCheckpoint` row is created/updated with `lines_processed=1`, keyed by `opencode_session_row_id` (OpenCode's own `session.id`), not by Hephaestus's internal `session_id` as this section originally specified. OpenCode never resumes — every launch mints a fresh `opencode.db` session row even when it shares a Hephaestus `session_id` with a prior task (e.g. the same `session_role` reused across phases per `get_session_id()`) — so keying by the shared `session_id` would let a second launch find the first launch's checkpoint already at 1 and silently skip collection, dropping its cost. This was found and fixed as architectural_review BLOCKER B-1; the implementation's `opencode_session_row_id` keying is correct and this doc's original `session_id`-keyed design was the error.
+if the extension isn't loaded (pi absent, build failed, etc.):
+  └─ PiJsonlCollector tails the JSONL transcript at task completion
+     (unchanged fallback, already tested by test_cost_collection_service.py)
+```
 
-**No polling, no timer** — same single trigger point as every other collector (NFR "No timer-based collection").
+## 6. Infrastructure Requirements
 
----
+None new. No schema migration, no new config, no new dependency. FR-2's
+verification needs a machine with a real `pi` binary installed, which this
+sandboxed repo checkout does not have — per requirements §10, if no such
+environment exists anywhere in this pipeline's execution, development
+should document that as an accepted, explicit risk rather than block on it
+or fabricate a result.
 
-## 4. Infrastructure Requirements
+## 7. Task Breakdown
 
-None beyond what's already present. `sqlite3` is stdlib. No new environment variables, no new config keys, no new files under `config/`. The one external dependency is `~/.local/share/opencode/opencode.db` existing on the host running the agent — a file this feature only ever opens read-only, never creates or migrates.
+### Task 1: Fix `README.md`'s documented POST path
+**Blocks:** none
+**Blocked by:** none
 
----
-
-## 5. Task Breakdown
-
-Tasks are ordered by blocking dependency. All tasks operate on files already identified in requirements §5; no new files.
-
-### Task 1 — Resolve Open Question 1: test `opencode -s <id>` session-creation semantics
-**Blocks:** Task 2, Task 3 (their design depends on the outcome)
-**Not blocking:** none upstream
-
-Run a real `opencode -s <caller-chosen-id> run "..."` invocation (or `-i` equivalent) against a scratch directory and inspect `~/.local/share/opencode/opencode.db`'s `session` table afterward.
-
-**Acceptance criteria:**
-- Determine definitively: does `-s <id>` (a) mint a **new** session row with `id == <id>` when no such session exists, or (b) error/no-op when the ID doesn't already exist (i.e. resume-only)?
-- Record the finding in a code comment at the top of `_discover_opencode_session()` (or, if (a), skip directly to implementing Task 2's deterministic-ID variant instead of time-window matching) and in the memory saved at the end of this phase.
-- If (a) is true: implement `OpenCodeAgent.get_session_args()` override passing `-s {session_id}` (mirroring `ClaudeCodeAgent`'s uuid5 pattern at `cli_interface.py:403-411`), and change `_discover_opencode_session()` to look up `session.id = ?` directly instead of directory+time-window matching — this is strictly simpler and eliminates the multiple-match ambiguity in FR2 entirely. Re-scope Tasks 2-3 below accordingly before implementing them.
-- If (b): proceed with Tasks 2-3 as specified (time-window matching).
-
-### Task 2 — Implement `_discover_opencode_session()`
-**Blocks:** Task 3, Task 4
-**Blocked by:** Task 1
-
-Add the helper described in §2.1 to `cost_collection_service.py`, placed after `_discover_session_file()` (~line 402).
+- Change `extensions/hephaestus-cost-tracker/README.md` line 44 from
+  `POST /cost-entries` to `POST /api/autopilot/cost-entries` (Section 3).
+- No other edits to the file.
 
 **Acceptance criteria:**
-- Function signature and behavior match §2.1 exactly (or the Task-1-conditional deterministic-ID variant if `-s` supports create).
-- Resolves `~/.local/share/opencode/opencode.db`, verifies the resolved path stays under `~/.local/share/opencode/` before opening (NFR "Path safety"), matching the resolve-and-startswith pattern at lines 376-383 and 470-481.
-- Opens with `sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)` — never opens read-write.
-- Returns `None` (not an exception) when: the DB file doesn't exist, the query returns zero rows, or any `sqlite3.Error`/`OSError` occurs.
-- On multiple in-window matches, selects the most recent `time_created` and logs a debug line naming the discarded candidate IDs.
-- Unit test with a temp SQLite file containing a `session` table (matching the real schema's column names from requirements §1) covering: no DB file, empty result, single match, multiple matches (tie-break verification), directory mismatch, time-window boundary (session just before `agent_created_at`, just after "now").
+- Line 44 reads `POST /api/autopilot/cost-entries`.
+- The string matches `index.ts:123`'s literal path and resolves against
+  `autopilot_api.py`'s router prefix (`/api/autopilot`) + route decorator
+  (`/cost-entries`).
+- `git diff` for this task touches only that one line.
 
-### Task 3 — Rewrite `OpenCodeCollector`
-**Blocks:** Task 4
-**Blocked by:** Task 1, Task 2
+### Task 2: Verify the extension loads and runs under a real `pi` install
+**Blocks:** none
+**Blocked by:** none (independent of Task 1 — different files, no shared state)
 
-Replace `cost_collection_service.py:263-323` with the class in §2.2.
-
-**Acceptance criteria:**
-- Constructor accepts `session_row_id: Optional[str] = None`.
-- `collect()` treats `checkpoint` as a 0/1 collected-flag, `session_file` as the `opencode.db` path — not a transcript.
-- Queries the `session` row by `id = self.session_row_id`, maps `cost`→`cost_usd`, `tokens_input`→`input_tokens`, `tokens_output`→`output_tokens`, `tokens_reasoning`→`reasoning_tokens`, `tokens_cache_read`→`cache_read_tokens`, `tokens_cache_write`→`cache_write_tokens`.
-- Parses `model` (JSON string) for `id`; falls back to the raw string if `json.loads` fails; falls back to `None` if the column is empty.
-- Returns `([], checkpoint)` unchanged when `checkpoint >= 1`, `session_row_id` is `None`, the row is missing, or `cost <= 0`.
-- Returns `([], 1)` when the row exists but cost is `<= 0` (matches existing `PiJsonlCollector`/`ClaudeCodeCollector` "skip zero-cost, still don't error" convention) — checkpoint still advances to 1 so a genuinely zero-cost session isn't re-queried every completion.
-- Never raises out of `collect()` — catches `sqlite3.Error` and logs.
-- Unit test with a temp SQLite `session` table: normal row, zero-cost row, missing row, malformed `model` JSON, `session_row_id=None`.
-
-### Task 4 — Wire the `collect_task_cost()` opencode branch
-**Blocks:** Task 5
-**Blocked by:** Task 2, Task 3
-
-Replace `cost_collection_service.py:482-485` per §2.3; add `opencode_session_row_id = None` initialization near line 450; pass it into `OpenCodeCollector(...)` at the collectors-dict construction (line 494-499); add `import sqlite3` to the top-level imports.
+- Install `pi`, run `scripts/install.sh`, confirm
+  `~/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js` builds and
+  loads without error on pi startup.
+- Run one real turn with `HEPHAESTUS_AGENT_ID`/`TASK_ID`/`WORKFLOW_ID` set
+  and confirm: the TUI status bar updates, and a `cost_entries` row is
+  created with `source="pi"` and a correct `cost_usd`.
+- If this environment isn't available anywhere in this pipeline run,
+  document that explicitly as an accepted risk (per requirements §10) —
+  do not fabricate a verification result and do not block the pipeline on
+  it.
 
 **Acceptance criteria:**
-- `cli_type == "opencode"` branch calls `_get_agent_cwd` then `_discover_opencode_session`, sets both `session_file` and `opencode_session_row_id` on success, leaves both `None` on any failure (falls through to the existing `if not session_file: ... return` guard — no new early-return path introduced).
-- `codex` branch and all other branches are untouched (byte-for-byte, aside from the shared `opencode_session_row_id = None` init line if placed adjacently).
-- Integration test: seed a fake `Agent(cli_type="opencode", created_at=...)`, `Task`, `Workflow(working_directory=...)`, and a temp `opencode.db` with a matching `session` row; call `collect_task_cost(task_id)`; assert a `CostEntry` row is written with `source="opencode"` and the expected `cost_usd`/token values, and a `SessionCostCheckpoint` row exists with `lines_processed=1`.
-- Integration test: call `collect_task_cost(task_id)` a second time for the same task/session; assert no second `CostEntry` row is written (checkpoint guard holds).
-- Integration test: no `opencode.db` present on the filesystem at all; assert `collect_task_cost` returns without raising and writes no `CostEntry`.
+- Either: a documented real `pi` session produced a `cost_entries` row as
+  described above, or: a documented statement that no environment with
+  `pi` installed was available to this pipeline, filed as an accepted risk.
+- No source code changes result from this task unless verification
+  surfaces an actual defect — in which case, stop and report the defect
+  rather than silently patching around it, since the requirements and
+  scope review both concluded the extension's logic is already correct.
 
-### Task 5 — Regression pass on existing collectors
-**Blocks:** none (final task)
-**Blocked by:** Task 4
+### Task 3: Regression check on existing collector tests
+**Blocks:** none
+**Blocked by:** Task 1 (run after, to confirm the doc-only change didn't
+touch anything — it shouldn't, since no `.py` file changes)
+
+- Run `pytest tests/test_cost_collection_service.py tests/test_cost_tracking.py`
+  and confirm both pass unchanged.
+- Do not introduce a JS/TS test framework for the extension (Section 2) —
+  none exists anywhere in this repo (`frontend/package.json` has no `test`
+  script either), and this is a 140-line extension with no logic change.
 
 **Acceptance criteria:**
-- Existing `pi` and `claude_code` collection tests still pass unmodified (targeted run: `pytest` on whatever test module(s) cover `cost_collection_service.py` — do not run the full suite).
-- Confirm the `collectors` dict change (constructing `OpenCodeCollector` with a kwarg instead of `OpenCodeCollector()`) doesn't break the `pi`/`claude_code`/`codex` entries, which remain no-arg constructions.
+- `tests/test_cost_collection_service.py` and `tests/test_cost_tracking.py`
+  pass with no modifications to their source or to the code they test.
 
----
+## 8. Non-Goals (carried from requirements, restated for development phase)
 
-## 6. Explicitly Out of Scope
-
-Per requirements §2/§6 and the design doc's Codex stub status:
-- Codex collection (`CodexStubCollector` untouched).
-- Any UI surfacing of OpenCode-specific data — `source="opencode"` is already a first-class value in every UI component.
-- `AutopilotProject.cli_tool` UI exposure (`ProjectSettingsModal.tsx`) — configuring OpenCode as a project's CLI is a separate, unrelated feature; this collector works regardless of how `cli_type` gets set.
-- OpenCode DB schema versioning/migration handling — graceful-failure-on-unexpected-shape only (NFR), no version-detection logic.
+- No changes to `PiJsonlCollector`, `ClaudeCodeCollector`, `CostEntry`
+  schema, `cost_derivation.py`, or budget enforcement.
+- No `session_id` field added anywhere (requirements §9 — deliberate,
+  already-justified deviation from design.md's literal text).
+- No new JS/TS test framework.
+- No OpenCode/Codex collector work.
