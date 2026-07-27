@@ -11,7 +11,7 @@
 // Pi extension API types (simplified)
 interface PiContext {
   ui: {
-    setStatus(message: string): void;
+    setStatus(key: string, text: string | undefined): void;
   };
   config: Record<string, any>;
 }
@@ -68,7 +68,7 @@ class HephaestusCostTracker {
     this.taskId = process.env.HEPHAESTUS_TASK_ID;
     this.workflowId = process.env.HEPHAESTUS_WORKFLOW_ID;
 
-    ctx.ui.setStatus('💰 Cost tracker active');
+    ctx.ui.setStatus('cost-tracker', '💰 Cost tracker active');
   }
 
   /**
@@ -87,7 +87,7 @@ class HephaestusCostTracker {
       this.sessionCost += costUsd;
 
       // Update TUI status
-      ctx.ui.setStatus(`💰 $${this.sessionCost.toFixed(2)}`);
+      ctx.ui.setStatus('cost-tracker', `💰 $${this.sessionCost.toFixed(2)}`);
 
       // Build cost entry
       const entry: CostEntry = {
