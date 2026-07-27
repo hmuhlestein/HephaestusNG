@@ -481,12 +481,15 @@ def _start_monitor(python: str) -> bool:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = open(log_dir / "monitor.log", "a")
     try:
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
         proc = subprocess.Popen(
             [python, str(HEPHAESTUS_DIR / "run_monitor.py")],
             cwd=str(HEPHAESTUS_DIR),
             stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
+            env=env,
             start_new_session=True,  # detach into own session — survives launcher/shell exit (else reaped by SIGKILL)
         )
         # Same reasoning as _start_backend above: give run_monitor.py's own
