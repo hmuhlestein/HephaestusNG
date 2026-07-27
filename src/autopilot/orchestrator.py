@@ -3156,14 +3156,16 @@ def _relink_features_to_workflows(design_id: str, logger: OrchestratorLogger) ->
 
 
 def _clean_stale_assigned_tasks(workflow_id: str, logger: OrchestratorLogger) -> None:
-    """Clean tasks that are 'assigned' or 'in_progress' to terminated agents.
+    """Clean tasks that are 'assigned' or 'in_progress' to terminated agents,
+    and pending/assigned tasks that belong to already-completed workflows.
 
     Called periodically from the polling loop to prevent tasks from hanging
     forever when agents crash or are killed.
     """
-    from src.core.database import Agent, Task, get_db
+    from src.core.database import Agent, Task, Workflow, get_db
 
     with get_db() as db:
+        # 1. Tasks assigned to terminated agents
         stale_tasks = (
             db.query(Task)
             .filter(
@@ -3186,6 +3188,25 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: OrchestratorLogger) ->
                 # retry below loses exactly the feedback it needs to fix.
                 if not task.failure_reason:
                     task.failure_reason = f"Agent {task.assigned_agent_id[:8]} terminated unexpectedly"
+                db.commit()
+
+        # 2. Pending/assigned tasks in already-completed workflows
+        workflow = db.query(Workflow).filter_by(id=workflow_id).first()
+        if workflow and workflow.status == "completed":
+            orphaned = (
+                db.query(Task)
+                .filter(
+                    Task.workflow_id == workflow_id,
+                    Task.status.in_(["pending", "assigned"]),
+                )
+                .all()
+            )
+            for task in orphaned:
+                logger.info(f"[ORPHAN-TASK] Task {task.id[:8]} ({task.phase_id}) in completed workflow — marking failed")
+                task.status = "failed"
+                task.failure_reason = "Orphaned: workflow already completed"
+                task.assigned_agent_id = None
+            if orphaned:
                 db.commit()
 
 
