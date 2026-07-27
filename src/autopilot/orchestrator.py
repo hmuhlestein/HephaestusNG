@@ -5292,6 +5292,15 @@ def _create_phase_task(
                         # via update_task_status, just fired synthetically.
                         return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
 
+            # deploy phase: skip entirely if DEPLOY.md doesn't exist
+            if phase_name == "deploy":
+                wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                if wf and wf.working_directory:
+                    deploy_md = Path(wf.working_directory) / "DEPLOY.md"
+                    if not deploy_md.exists():
+                        logger.info(f"[PHASE-TASK] deploy skipped — DEPLOY.md not found in {wf.working_directory}")
+                        return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
+
             # Check if phase already has an active task
             existing = (
                 db.query(Task)
