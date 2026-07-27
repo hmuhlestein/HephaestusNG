@@ -1,97 +1,79 @@
-# Forensics Report: OpenCode Cost Collector (des-91c8-opencode-collector)
+---
+type: forensics_report
+---
+
+# Forensics Report: Pi Cost Tracker Extension (des-91c8-pi-extension)
 
 **Date:** 2026-07-26
-**Workflow ID:** b0087459-85b3-4937-a50e-faee96194a7e
-**Feature:** OpenCode Cost Collector (feature/des-91c8/opencode-collector)
-**Parent Design:** Cost Tracking Design (DES-91c8)
-**Pipeline Status:** Completed cleanly through doc_review, 0 open blockers, ready for git_commit_push.
+**Workflow ID:** f20aaf3f-2997-4a5d-9fda-f41e0ab78382
+**Feature:** Pi Cost Tracker Extension (feature/des-91c8/pi-extension)
+**Pipeline status:** Completed cleanly through doc_review. All 12 phases present, 1 pass each except adversarial_review (2 runs: fail→fix→verify) and security_review (2 commits: initial pass under-rated a finding, second pass corrected it).
 
-## 0. Data sources and a known gap
+## Data quality caveat
 
-No `pipeline_metrics.json` or `phase_prompts/` directory exists scoped to this workflow_id — as prior sibling-feature forensics reports for this same parent design have also noted, both artifacts are keyed to the parent multi-feature design session, not to this sub-feature's own workflow_id, and this sub-feature's run never got its own copy. This is now a confirmed *recurring* pattern across at least 3 sibling runs (cost-ui, budget-enforcement, opencode-collector), not a one-off.
+No `pipeline_metrics.json`, `phase_prompts/`, or per-run feature folder scoped to this workflow_id exists anywhere under `.hephaestus/` — checked this worktree (`.hephaestus/features/pi-extension/` is empty) and the main repo's `.hephaestus/features/*_COST_TRACKING_DESIGN/features/pi-extension/` (contains only `scope.md`). `run_health.json` is also absent, so LIGHT/FULL MODE could not be selected via that signal — proceeded FULL MODE per the yaml's default when the file is missing. Analysis below is reconstructed from `git log --date=iso-strict` (main..HEAD, 12 commits, each with full agent self-reported detail in the commit body), `docs/` artifacts, and 2 sampled `.hephaestus/tmux/*.log` files, cross-checked against file mtimes. This is the same gap documented in the prior sibling forensics report (`des-91c8-cost-ui`, §"Data quality caveat") — recurring across runs, still unfixed.
 
-Substitute sources used instead, all giving minute-level resolution:
-- `git log --date=iso-strict main..HEAD` — 16 commits, full phase-prefixed commit messages.
-- `.hephaestus/tmux/*.transcript.log` and the matching `<phase>_<agentid>.log` snapshot files — mtimes and content confirm agent activity windows and rule out crash/retry loops for this run (checked for crash/traceback/rate-limit signatures; none found — the one apparent "unknown command" hit was UI chrome text in a `tmux` pane, not a real error).
-- `docs/*` phase artifacts on this branch (all correctly scoped to this feature per their own commit messages, having overwritten stale sibling-feature content).
+## 1. Commit-history → phase mapping
 
-## 1. Commit-history → phase/iteration mapping
-
-| Time (MDT) | Commit | Phase | Outcome |
+| Time | Commit | Phase | Outcome |
 |---|---|---|---|
-| 07:36:34 | `027bc70` | product_requirements (run 1) | Wrote requirements; resolved a stale design premise (OpenCode is no longer one-shot) via live code verification |
-| 07:39:29 | `1cff341` | scope_review (run 1) | **FAIL** — FR1 silently overrode the design doc's own explicit build/defer gate instead of surfacing the conflict |
-| 07:42:14 | `4b4cd75` | product_requirements (run 2, fix) | Reframed FR1 as a factual gate-check + escalated the proceed/defer call as a blocking decision for scope_review |
-| 07:43:42 | `3ee6077` | scope_review (run 2) | PASS — ruled PROCEED (feature was commissioned as its own workflow, overriding the design's generic gate) |
-| 22:48:14 | `4131509` | architecture_design | Clean, 1 run. 5 ordered tasks incl. a blocking live spike (task 1) |
-| 22:56:40 | `edd0031` | development (run 1) | Implemented per architecture; live-verified the spike finding (`opencode -s <id>` is resume-only) |
-| 23:07:26 | `cb9fbc5` | architectural_review (run 1) | 1 BLOCKER: checkpoint keyed by shared Hephaestus `session_id`, which OpenCode's non-resumable sessions invalidate. 1 FIX: sqlite3 connection leak. Traced the BLOCKER back to architecture_design's own §2.3 |
-| 23:16:25 | `adae90b` | development (run 2, fix) | Re-keyed checkpoint by `opencode_session_row_id`; fixed the leak; added a regression test proven to fail pre-fix (stash-verified) |
-| 23:22:18 | `b585446` | architectural_review (run 2, verify) | PASS — both findings confirmed fixed, 1 DEFER (theoretical URI encoding) left open as recommended |
-| 23:28:14 | `45fc706` | adversarial_review (run 1) | 1 BLOCKER: naive-datetime `.timestamp()` calls in `_discover_opencode_session()` are interpreted as local time, silently dropping all OpenCode costs on non-UTC hosts. Root cause traced to architecture.md's own formula; masked by an identically-buggy test fixture |
-| 23:33:41 | `af59ac8` | development (run 3, fix) | Attached `tzinfo=timezone.utc` before `.timestamp()`; fixed the same bug in the test fixture; added a TZ-independent regression test (stash-verified fails without fix) |
-| 23:35:38 | `9eda280` | adversarial_review (run 2, verify) | PASS — fix verified by actual test execution, not commit-message trust; ran the specific regression test standalone and confirmed it wasn't silently skipped |
-| 23:43:07 | `fa67b6f` | security_review | Clean, 1 run. 0 findings of any severity |
-| 00:26:38 | `6d9fbc1` | qa_validation | PASS, 1 run. 83/83 feature tests; cross-checked 42 pre-existing unrelated failures in the full suite are not caused by this diff |
-| 00:44:49 | `25b358f` | product_validation | PASS, 1 run. 5/5 FR met, agent_score 0.97; independently re-ran tests rather than trusting QA's number |
-| 00:49:34 | `c812b72` | doc_review | Clean, 1 run. Found and fixed 2 stale spots in architecture.md left over from before the two blocker fixes landed |
+| 01:01 | `b231bbe` | product_requirements | Clean, 1 run. Correctly identified this as an almost-no-op feature: 1 doc bug (README POST path) + 1 unverifiable item (no `pi` binary in sandbox) |
+| 01:04 | `dc2ba5d` | scope_review | PASS, 1 run |
+| 01:06 | `ec6dcd3` | architecture_design | Clean, 1 run |
+| 01:09 | `618804b` | development (run 1) | Fixed the one documented defect (README path) |
+| 01:11 | `6b1aeb8` | architectural_review | PASS, 0 blocker, 1 defer (pre-existing unrelated test import break, correctly left alone) |
+| 07:47 | `81917e2` | adversarial_review (run 1) | **2 BLOCKERs** found by extending scope past this feature's trivial 1-line diff into the pipeline the README describes (see §2) |
+| 07:55 | `2f9fc73` | development (run 2, fix) | Both BLOCKERs fixed in `cost_collection_service.py::collect_task_cost` |
+| 07:57 | `b9b679b` | adversarial_review (run 2, verify) | Confirmed fixed; found 1 new lower-severity WARNING introduced by the B-1 fix itself |
+| 08:06 | `0f677b3` | security_review (pass 1) | Rated the WARNING's residual gap (fake `source=pi` entry can suppress real cost tracking) as **Medium**, ticketed only |
+| 08:14 | `de8eaab` | security_review (pass 2) | Re-analyzed same finding, **escalated to High**, fixed in code + added regression test (see §2) |
+| 08:19 | `b76f92c` | qa_validation | Pass |
+| 08:22 | `1e22b8c` | product_validation | PASS, 3/3 FR (2 done, 1 correctly downgraded to accepted risk) |
+| 08:26 | `d40d7e8` | doc_review | No inaccuracies found; fixed stale artifacts (see §3) |
 
-**Elapsed wall-clock:** ~7 min for product_requirements+scope_review (07:36–07:43), then a gap until 22:48 (agent scheduling/queue gap, not phase work), then ~2h01m for architecture_design through doc_review (22:48–00:49).
+Wall-clock: 01:01→01:11 (requirements→architectural_review), gap, then 07:47→08:26 (adversarial_review→doc_review). Only 2 of 12 phase-commits were re-runs, both legitimate (blocker-fix loop; self-correction within security_review).
 
-## 2. Agent performance per phase
+## 2. What worked well
 
-- **product_requirements**: strong on verification (queried the live `opencode.db` schema, grepped the whole config tree for `cli_type: opencode` rather than trusting the design doc) but made a judgment call — quietly overriding the design's explicit defer condition — that should have been escalated instead of resolved unilaterally. Corrected on the very next run without re-prompting from a human.
-- **scope_review**: caught the FR1 issue precisely, and on re-review made the actual call (PROCEED) rather than bouncing it back again — correctly recognized that a workflow explicitly commissioned by name is out-of-band authorization overriding the design's default-defer stance.
-- **architecture_design**: designed a correct query-based approach but reproduced a real bug in its own spec (naive-datetime UTC handling), which propagated through development and wasn't caught until adversarial_review 3 phases later.
-- **development**: consistently strong — every fix commit includes a stash-verified regression test (revert fix → test fails; restore fix → test passes) and explicitly checks whether a fix altered previously-passing test expectations that had encoded the same bug (the `_ms()` fixture in run 3).
-- **architectural_review**: caught a real, non-obvious BLOCKER (checkpoint-key collision across non-resumable OpenCode sessions) that traces to its own earlier architecture_design output — good self-correction across phase identity.
-- **adversarial_review**: caught the TZ bug that both architecture_design and architectural_review missed, specifically because it thought to reproduce it against real non-UTC host behavior rather than just checking code-vs-spec compliance. On verification, re-ran the specific test standalone to rule out silent-skip false positives — good rigor.
-- **security_review, qa_validation, product_validation, doc_review**: all single-pass, all independently re-verified claims rather than trusting prior phases' self-reports (re-ran tests, re-diffed against merge-base, cross-checked doc claims against actual code).
+- **adversarial_review correctly widened scope beyond a 1-line diff.** The feature's own change was trivially correct; the phase instead adversarially re-examined the *pipeline the README documents* and found 2 real BLOCKERs (double-counting between the pi extension's real-time POST and the JSONL fallback tailer; silent whole-batch data loss on one bad entry) that pre-dated this feature but were in scope because the README's accuracy claims about that pipeline were the actual review surface. This is the review agent reasoning about *intent*, not just diff lines — worth preserving as-is.
+- **The unverifiable requirement (FR-2, "confirm pi actually loads the extension" — no `pi` binary available in this sandbox) was handled consistently and honestly across every downstream phase**: requirements flagged it as a gap, architecture and implementation_status both note the same constraint, product_validation explicitly downgrades it to an "accepted risk, not fabricated as done" rather than claiming false completion or silently dropping it. No phase inflated confidence on an item it couldn't actually test.
+- **security_review pass 2 self-corrected its own severity call** (Medium→High) via independent sub-agent verification rather than leaving a known-wrong Medium ticket in place — see finding below for the flip side of this.
 
-## 3. Stuck/crashed agents
+## 3. Findings
 
-None found for this workflow. All 19 tmux transcripts in the relevant time windows (07:36–07:43, 22:48–00:49) show normal Claude Code session activity with no crash, traceback, or rate-limit termination signatures. This run did not exhibit the Guardian-respawn-thrashing or crash-loop issues flagged in sibling forensics reports for other features under this same parent design.
+### 3.1 (Recurring, unfixed since prior report) Stale cross-feature docs still pollute the shared `docs/` tree
 
-## 4. Common issue pattern: design-doc bugs propagate past their own review gate
+**What happened:** `docs/security_report.md`, `docs/product_validation.md` (top-level, not `docs/product_validation/`), and other files from the sibling `feature/des-91c8-cost-ui` run remain in this worktree's `docs/` root, dated 2025-07-24, branch header literally reads `feature/des-91c8-cost-ui`. This run's actual artifacts correctly land in namespaced subdirectories (`docs/security_review/security_report.md`, `docs/product_validation/product_validation.md`, `docs/adversarial_review/`, `docs/architectural_review/`) — every phase in *this* run wrote to the right place. But nothing removed the old top-level files, and this very forensics phase had to overwrite a stale `docs/forensics_report.md` from `des-91c8-cost-ui` to write this one.
 
-Both real defects this run (checkpoint-keying, naive-datetime TZ) originated in `architecture_design`'s own spec, not in development's implementation of it. `architectural_review` and `adversarial_review` check the code against the spec's *intent*, not against the spec's *arithmetic/data-lifecycle correctness* — so a bug baked into the design doc's own formula survives architecture_design, development, and (in the TZ case) architectural_review, since none of those phases independently re-derive the formula against real data. Only adversarial_review's "assume it's broken, prove it" framing caught the TZ bug, and only because it happened to run on a non-UTC host.
+**Root cause:** Same as the prior report's §3.1 — `docs/` is a single directory shared across all sibling features in this design's worktree lineage; no pipeline step clears or archives non-current-feature files before a new sibling's pipeline starts.
 
-**Proposed change — `config/workflows/autopilot/architecture_design.yaml`:** add an explicit self-check step for any design that computes time windows, correlations, or ID matching against externally-owned data (i.e., a system this project doesn't control, like OpenCode's session table): *"If your design includes a time-window, timestamp-arithmetic, or ID-correlation formula, trace it through with one concrete worked example using real values (not variable names) before finalizing — specifically check timezone/epoch assumptions for any `datetime` object that isn't explicitly UTC-aware."* This is cheap (one extra worked example) and would have caught the TZ bug 3 phases earlier than adversarial_review did, at zero cost to development or review cycles.
+**Recommendation:** Unchanged from the prior report, now recurring a 4th time: add a pre-`product_requirements` step that archives or namespaces prior-feature `docs/` output before a new sibling feature pipeline begins writing. Documenting-and-hoping across every downstream phase is not converging on a fix.
 
-## 5. Prompt rewrite proposed
+### 3.2 security_review's first pass under-rated a finding it later called High
 
-**File:** `config/workflows/autopilot/product_requirements.yaml`, near STEP 3 (~line 159, "If the design doc specifies different technologies, note the conflict and flag it for the architect to resolve").
+**What happened:** Pass 1 (`0f677b3`) rated the "forged `source=pi` CostEntry can permanently suppress real cost/budget tracking for a task" finding as **Medium**, filed a ticket, did not fix. Pass 2 (`de8eaab`), same phase, re-analyzed the same finding using "independent sub-agent verification, confidence 8/10" and found `task_id`/`agent_id` are both enumerable via unauthenticated `GET /api/tasks` / `GET /api/agents`, making the attack deterministic rather than requiring a guess — clearing the bar for High. It then fixed it in-code with a regression test.
 
-**Before:** the yaml has no instruction covering what to do when the design doc contains its own explicit conditional build/defer gate (as DES-91c8 did at design.md:695–699) and the live-verified facts resolve that gate toward "defer," yet the phase was commissioned to build the feature anyway. The agent's first attempt at this (`1cff341`) resolved the conflict silently and wrongly; only scope_review's FAIL caught it, costing one full product_requirements + scope_review round-trip (~3 minutes, but would be more expensive on a longer phase).
+**Root cause:** Pass 1's severity judgment assessed the suppression mechanism but didn't check attacker-reachability (enumerability) of the two IDs the attack depends on before assigning impact.
 
-**After — add a new subsection:**
-```
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 3B: DESIGN-DOC CONDITIONAL GATES
-  ═══════════════════════════════════════════════════════════════════════
+**Recommendation:** Add to the security_review phase prompt: when rating severity for a finding that depends on guessing/matching an ID (task_id, agent_id, etc.), explicitly check whether that ID is enumerable via any existing unauthenticated or lightly-authenticated endpoint before assigning Medium — enumerable-precondition findings should default one severity tier higher than the same bug with a hard-to-guess precondition.
 
-  If the design doc states an explicit build/defer condition (e.g. "only
-  build this if X is true in the live system"), verify the condition
-  against the current codebase — do NOT just trust the design doc's
-  assumption. If your verification result conflicts with what this phase
-  was asked to do (e.g. the gate says defer, but you were commissioned
-  to build it), do NOT silently resolve the conflict either way. Report
-  the verified fact plainly in the requirements doc and flag the
-  conflict as an explicit BLOCKING decision for scope_review to rule on.
-```
+## 4. Prompt rewrites
 
-This would let the same one-line escalation happen on the *first* pass instead of requiring a scope_review FAIL to force it — saving one full product_requirements+scope_review cycle on any future feature whose design doc carries a similar conditional gate.
+**Phase:** security_review
 
-No other phase's prompt showed evidence of causing wasted work this run — security_review, qa_validation, product_validation, and doc_review all passed cleanly on their first attempt with well-scoped, accurate output.
+**Problem:** No `phase_prompts/` directory exists for this run (see data-quality caveat), so the actual prompt text couldn't be read or quoted verbatim. The behavior in §3.2 is inferred from the two-pass commit history, not a diffed prompt — treat this as circumstantial support, not a verified before/after.
 
-## 6. Tickets filed
+**Proposed addition** (to whatever severity-rating instructions exist in security_review.yaml):
+> Before finalizing severity for any finding whose exploit path depends on guessing or matching an identifier (user_id, task_id, agent_id, session token, etc.), check whether that identifier is enumerable via any existing endpoint — authenticated or not. If enumerable, the finding is at least one tier higher than the same defect with a cryptographically-hard-to-guess precondition.
 
-None. The one architecture-level pattern worth tracking (§4) is a design-review methodology gap, not a bug in shipped code, and doesn't warrant a code ticket — it's captured here and in memory for the next architecture_design run to internalize directly from the prompt change proposed in §4/§5.
+## 5. Patterns
 
-## 7. Summary
+- **Cross-feature `docs/` pollution** (§3.1) is now a 4-run pattern with a known, un-implemented fix. This is the single highest-leverage item across both forensics reports for this design.
+- **Severity re-assessment on second look caught a real gap** (§3.2) — the pipeline's willingness to revisit its own prior-pass conclusions is working, but the first pass shouldn't need a second pass to get enumerability right.
 
-- 16 commits across 12 pipeline phases; 3 phases required a fix-and-reverify loop (product_requirements/scope_review gate conflict, architectural_review checkpoint-keying blocker, adversarial_review TZ blocker) — all legitimate review catches, pipeline functioning as designed.
-- 0 crashed/stuck agents, 0 infra issues (unlike sibling features under the same parent design, which reported Guardian respawn-thrashing and QA crash loops).
-- 1 concrete prompt rewrite proposed (product_requirements.yaml, §5) that would prevent a recurrence of the gate-conflict round-trip.
-- 1 methodology gap identified (architecture_design doesn't verify its own time/correlation arithmetic against real data), with a proposed self-check addition (§4).
-- Recurring cross-run finding (now 3rd+ occurrence): `pipeline_metrics.json`/`phase_prompts/` are scoped to the parent design session, not per-feature workflow_id, leaving every sub-feature's forensics phase to reconstruct timing from git log + tmux mtimes. Worth an orchestrator-side fix if sub-feature workflows continue to be a supported pattern.
+## Summary
+
+- Highest-impact fix: implement the `docs/` namespacing/archival step (§3.1) — 4th consecutive run recommending this with no landed fix.
+- security_review: add an explicit enumerability check to severity rating (§3.2/§4) so first-pass ratings don't need self-correction.
+- adversarial_review's scope-widening-to-intent behavior and the pipeline's honest handling of the unverifiable FR-2 requirement are both working well — preserve as-is, no changes proposed.
+- No prompt-vs-outcome gaps found in product_requirements, scope_review, architecture_design, development, architectural_review, qa_validation, product_validation, or doc_review — all performed to spec for this run.

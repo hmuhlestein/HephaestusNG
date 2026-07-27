@@ -41,15 +41,17 @@ export HEPHAESTUS_WORKFLOW_ID=your-workflow-id
 1. On each LLM turn completion, the extension extracts cost data from `message.usage.cost.total`
 2. The cost is added to a running session total
 3. The TUI status bar is updated: `💰 $1.23`
-4. The cost entry is posted to Hephaestus API (`POST /cost-entries`)
+4. The cost entry is posted to Hephaestus API (`POST /api/autopilot/cost-entries`)
 5. Hephaestus derives and rolls up costs through the entity hierarchy
 
 ## Fallback Behavior
 
 If the extension is not loaded, Hephaestus falls back to JSONL tailing:
 - Costs are collected when tasks complete (not real-time)
-- `SessionCostCheckpoint` prevents double-counting
 - Same data accuracy, just delayed timing
+- If the extension already posted real-time costs for a task, the JSONL
+  fallback skips that task entirely rather than re-tailing and
+  double-recording the same turns
 
 ## Development
 

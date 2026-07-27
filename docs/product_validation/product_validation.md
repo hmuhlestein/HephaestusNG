@@ -1,121 +1,63 @@
 ---
 type: product_validation_result
-feature_id: des-91c8-opencode-collector
+feature_id: des-91c8-pi-extension
 verdict: PASS
 unmet_requirements: []
-agent_score: 0.97
-passed_tests: 83
-failed_tests: 0
-total_tests: 83
-pass_rate: 100.0
-requirements_met: 5
-requirements_total: 5
-blocker_count: 0
-regressions_found: false
-status: PASS
-recommendation: done
 ---
 
-# Product Validation Report: OpenCode Cost Collector
+# Product Validation Report: Pi Cost Tracker Extension (des-91c8-pi-extension)
 
-**Feature ID:** des-91c8-opencode-collector
-**Feature Name:** OpenCode Cost Collector
-**Validation Date:** 2026-07-26
-**Design Document:** `.hephaestus/design.md` — OpenCode section (lines 167-221, 540-577), Implementation Phase 6 (lines 693-706)
-**Requirements Document:** `docs/requirements_analysis.md`
-**Architecture Document:** `docs/architecture.md`
-**Scope Review:** commit `3ee6077` — ruled PROCEED on the design's build/defer gate (see §0 below)
-**QA Report:** `docs/qa_validation/qa_report.md` (PASS, 83/83 feature-scoped tests)
-**Security Report:** `docs/security_review/security_report.md` (PASS, 0 findings)
-**Verdict:** PASS
+## 1. Design Intent Re-Read
 
----
+`.hephaestus/design.md`'s "Pi Extension Collector" section (lines 621-647) describes a pi extension that hooks `turn_end`, captures `message.usage.cost.total` in real time, shows a running cost in the pi TUI, and POSTs each turn's cost to Hephaestus's API — as a real-time complement to (not replacement for) the JSONL-tailing fallback, with the two paths described as "complementary, not exclusive."
 
-## 0. Note on Superseded Prior Report
+That extension, its install/build wiring, and the API endpoint it posts to were all already implemented and merged before this feature's requirements phase began (`git log main..HEAD` was empty at that point — confirmed in `docs/requirements_analysis.md`). This feature's actual, narrower design intent (`docs/architecture.md`) was: fix one wrong line in `extensions/hephaestus-cost-tracker/README.md` (documented `POST /cost-entries`, real route is `POST /api/autopilot/cost-entries`), and verify — not re-implement — the existing collection pipeline.
 
-The report previously at this path validated a different, already-merged sibling feature, "Cost Tracking UI" (`des-91c8-cost-ui`). This branch, `feature/des-91c8/opencode-collector`, is a separate feature with its own requirements, architecture, and implementation. This report replaces the stale one.
+## 2. What Actually Happened (Scope Supersession, Documented and Justified)
 
-## 0.1 Design Gate — Resolved, Not Re-litigated Here
+Adversarial review, exercising the pipeline's "assume it's broken, prove it" mandate against the pre-existing `collect_task_cost` function that this feature's README documents, found two BLOCKER data-integrity bugs the design's own "complementary, not exclusive" claim did not actually hold for in code:
 
-The design document (`design.md:695-699`) states OpenCode collection work should stay deferred unless `cli_type: opencode` is live in `config/workflows/autopilot/`. `product_requirements` verified that condition is met (zero live usage) and escalated it as a blocking scope question rather than deciding unilaterally. `scope_review` (commit `3ee6077`) explicitly ruled **PROCEED**, on the grounds that this feature was commissioned as its own standalone workflow, which is out-of-band authorization overriding the design's generic anti-speculative-work gate. That is a scope decision already made by the correct phase; this report validates the resulting implementation against the requirements/architecture that followed from it, not the gate decision itself.
+- **B-1 (double-counting):** the real-time extension path and the JSONL fallback both wrote cost data unconditionally — every turn was recorded twice whenever the extension was active, directly contradicting the design's "complementary" framing and the README's now-corrected "prevents double-counting" claim.
+- **B-2 (batch loss):** a single bad `CostEntry` in a task's batch rolled back every entry already recorded in that batch, with no retry path — silent, permanent cost data loss.
 
----
+Per this pipeline's gate rules (open bug tickets must be resolved, not just filed), both were fixed in-branch rather than deferred, superseding `docs/architecture.md`'s original "README-only" scope boundary. I verified this supersession is real and justified, not scope creep dressed up as necessity: both bugs are genuine defects in code this feature's own deliverable (the README) documents, both have passing regression tests, and the fixes are narrowly targeted at exactly the two defects found — no unrelated refactoring rode along.
 
-## 1. Executive Summary
+Security review then found a High-severity consequence of the B-1 fix itself: the "does any `source=\"pi\"` entry exist for this task" check didn't verify the entry belonged to the task's own assigned agent, so a forged `CostEntry` under an unrelated `agent_id` (both `task_id` and `agent_id` are enumerable via existing unauthenticated `GET` endpoints) could permanently suppress a victim task's real cost collection. This was also fixed in-branch (`agent_id=agent.id` added to the filter) with a dedicated regression test, and the deeper systemic root cause (the POST endpoint not binding caller-supplied IDs to the authenticated identity) was correctly ticketed rather than silently absorbed into this feature's scope, since fixing it would require touching `autopilot_api.py`, outside this feature's file boundary.
 
-The feature has one job: make `collect_task_cost()`'s `opencode` branch (previously a dead `pass`) actually collect cost data, replacing a stale design assumption (OpenCode as one-shot, stdout-JSON-capturable) with the current reality (OpenCode launches with `-i`, a persistent session, whose cost/token totals live pre-aggregated in `~/.local/share/opencode/opencode.db`'s `session` table).
+## 3. Functional Requirements Verified Against Working Code
 
-The entire diff against the merge-base (`a71d84d`) is confined to one file, `src/services/cost_collection_service.py` (+147/-51 lines) — matching both the architecture doc's stated blast radius and NFR-1 ("no new tables/columns"). All 5 functional requirements (FR1-FR5) are implemented and independently re-verified against the code in this report:
+- **FR-1 (README POST path fix):** verified directly — `extensions/hephaestus-cost-tracker/README.md:44` now reads `POST /api/autopilot/cost-entries`, matching `index.ts:123` and the real FastAPI route (`/api/autopilot` prefix + `@router.post("/cost-entries")` in `autopilot_api.py:2144`). DONE.
+- **FR-2 (live pi-install verification):** correctly downgraded to an accepted, explicitly documented risk — no `pi` binary is available in this sandboxed worktree, a constraint noted consistently across `docs/requirements_analysis.md` §10, `docs/architecture.md` §6, and `docs/implementation_status.md` Task 2. Not fabricated as "done"; static inspection of `index.ts`'s `initialize(ctx)`/`turn_end(ctx, turn)` shape against pi's documented extension hooks found no inconsistency, which is the correct ceiling for what can be verified without the actual binary.
+- **FR-3 (regression check):** verified myself, independent of trusting the QA report's own count — ran `python -m pytest tests/test_cost_collection_service.py -p no:libtmux -q`: **24 passed, 0 failed**. The one pre-existing, unrelated `tests/test_cost_tracking.py` collection failure (`ImportError` on a function renamed in a prior merged feature) is correctly identified as present on `main` too, not a regression.
 
-- **FR1** (design gate check) — a requirements/scope decision, not code; resolved per §0.1.
-- **FR2** (correlate agent → OpenCode session row) — `_discover_opencode_session()` matches `session.directory` to the agent's cwd and `session.time_created` to a `[Agent.created_at, now]` window, tie-breaking on most-recent when multiple rows match.
-- **FR3** (replace stdout-JSON collector with a `session`-table query) — `OpenCodeCollector.collect()` rewritten to `SELECT cost, tokens_*, model FROM session WHERE id = ?` via read-only `sqlite3`, mapping columns straight onto `CostEntry` fields.
-- **FR4** (wire the dead branch) — the `cli_type == "opencode"` branch in `collect_task_cost()` now calls `_get_agent_cwd()` → `_discover_opencode_session()` → the rewritten collector, instead of `pass`.
-- **FR5** (checkpoint safety) — `SessionCostCheckpoint` is now keyed by the per-launch `session_row_id` for OpenCode (not the shared Hephaestus `session_id`, which can repeat across retries/shared roles for `pi`/Claude Code but never corresponds to the same `opencode.db` row twice).
+## 4. Non-Functional Requirements
 
-One BLOCKER was found and fixed during `adversarial_review` (naive-datetime `.timestamp()` silently misread as local time, which would have dropped 100% of collected costs on any host not set to UTC) — independently re-confirmed here as fixed (§4). No other blockers; `security_review` and `qa_validation` both passed clean.
+- **Performance:** no change — this feature touches only a per-task existence check (indexed query pattern already used elsewhere in the file) and a doc line; no new hot path introduced.
+- **Security:** the one High finding was fixed in code this pass (agent-ownership check), not just documented as accepted risk; the residual systemic gap (spoofable `X-Agent-ID` not bound to caller-supplied `task_id`/`agent_id`) is correctly ticketed (`ticket-5a75167a-27d3-4a9a-bb01-0409bd128cd7`) as out of this feature's file scope rather than either ignored or scope-crept into an endpoint rewrite. This is the right call: `autopilot_api.py` is untouched by this feature's diff, and expanding scope to fix it would itself be an unreviewed scope violation.
+- **No new test tooling:** confirmed no JS/TS test framework was introduced — consistent with the requirements doc's explicit NFR that this would be inconsistent with the rest of the repo (no test tooling exists for `frontend/` either).
 
----
+## 5. Integration With Existing System
 
-## 2. Functional Requirements Verification
+Traced the full call path and confirmed no breakage: `task_completion_service.py::collect_cost_on_completion` → `cost_collection_service.py::collect_task_cost` → `cost_derivation.py::record_cost` → DB rollup. `tests/test_task_completion_service.py` (47 tests) and `tests/test_budget_enforcement_integration.py` (13 tests) are reported passing in `docs/qa_validation/qa_report.md`, exercising the caller and the downstream budget-enforcement consumer respectively — both are unaffected-by-diff regression checks, not new coverage invented to look thorough.
 
-| Req | Design/Requirements Intent | Implementation | Status |
-|-----|---------------------------|-----------------|--------|
-| FR1 | Design's build/defer gate on live `cli_type: opencode` usage | Not code — a scope decision. Requirements correctly identified the gate condition as met and escalated; `scope_review` explicitly ruled PROCEED (commit `3ee6077`) | ✅ PASS (resolved upstream) |
-| FR2 | Correlate a completed task's agent to its OpenCode session row, with explicit zero/multiple-match handling | `_discover_opencode_session()` (`cost_collection_service.py:423-482`): matches `directory = cwd` and `time_created` in `[start_ms, end_ms]`, `ORDER BY time_created DESC`; zero matches → `None` (caller logs+skips); multiple matches → most recent used, rest logged as discarded | ✅ PASS |
-| FR3 | Replace stdout-JSON `OpenCodeCollector` with a `session`-table query | `OpenCodeCollector.collect()` (lines 264-343) now takes `session_row_id`, queries `cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, model` via read-only `sqlite3.connect(f"file:{...}?mode=ro", uri=True)`, maps directly onto `CostEntry` fields | ✅ PASS |
-| FR4 | Wire `collect_task_cost()`'s dead `opencode` branch | Branch at `cost_collection_service.py:559-566` now calls `_get_agent_cwd()` then `_discover_opencode_session()`, setting `session_file`/`opencode_session_row_id` for the collector dispatch below | ✅ PASS |
-| FR5 | Checkpointing keyed correctly so re-runs don't double-count and same-`session_id` reuse doesn't silently skip collection | `checkpoint_key = opencode_session_row_id if cli_type == "opencode" ... else session_id` (line 579); `OpenCodeCollector.collect()` itself also short-circuits on `checkpoint >= 1` | ✅ PASS |
+## 6. User Experience Flows
 
-All 5/5 functional requirements met.
+No user-facing UI in this feature's scope — the pi extension's own UX (TUI status bar cost display, `💰 $X.XX`) is unchanged by this diff (`index.ts` is untouched). The only user-facing artifact touched is the README a developer would read when installing/debugging the extension, which now describes the real endpoint and the real (fixed) fallback-skip behavior instead of a false claim.
 
----
+## 7. Edge Cases From Design Doc Confirmed Handled
 
-## 3. Non-Functional Requirements
+- **"Complementary, not exclusive" fallback behavior** (design.md lines 640-642): now actually true in code for the common case (extension active → fallback correctly skipped; extension inactive → fallback correctly runs), verified by `test_skips_jsonl_fallback_when_realtime_pi_entries_exist` and `test_jsonl_fallback_still_runs_when_no_realtime_entries_exist`.
+- **Forged/unrelated-agent entry does not suppress a victim task's real costs:** verified by `test_unrelated_agent_entry_does_not_suppress_fallback`.
+- **One bad entry in a batch does not discard the rest:** verified by `test_bad_entry_does_not_discard_rest_of_batch`.
+- **Residual edge case, correctly not silently ignored:** adversarial review's W-1 (a partial-session real-time POST failure — some turns' POSTs succeed, one fails — now causes the *entire* task's JSONL fallback to be skipped since the check is "any entry exists," not per-turn) is real, was surfaced honestly, assessed as lower severity than the bug it replaces, and left open rather than blocking the gate or being fixed with an out-of-scope schema change (`CostEntry` has no per-turn identifier today). This is the correct call for this pass, not a gap being hidden.
 
-| NFR | Requirement | Status | Evidence |
-|-----|-------------|--------|----------|
-| NFR-1 | No new tables/columns | ✅ PASS | `git diff --stat a71d84d..HEAD` touches only `cost_collection_service.py`; no `database.py` diff |
-| NFR-2 | Read-only access to `opencode.db` | ✅ PASS | Both DB reads use `sqlite3.connect(f"file:{path}?mode=ro", uri=True)` — no `INSERT`/`UPDATE`/`PRAGMA` writes |
-| NFR-3 | Path safety (resolved path must stay under `~/.local/share/opencode/`) | ✅ PASS | `_discover_opencode_session()` lines ~432-440 resolves the path and checks it starts with the resolved base dir before opening, matching the existing `pi`/Claude Code branches' pattern |
-| NFR-4 | Graceful absence (missing DB / no match) never raises into `collect_task_cost()`'s caller | ✅ PASS | `db_path.exists()` check returns `None` early; `sqlite3.Error` caught and logged, returns `None`/`(entries, checkpoint)` rather than propagating |
-| NFR-5 | No timer-based collection — triggered once at task completion | ✅ PASS | Only call site is `collect_task_cost()`, unchanged trigger point |
+## 8. Verdict
 
----
+**PASS.** All three requirements from `docs/requirements_analysis.md` are met — two fully done (FR-1, FR-3), one correctly downgraded to an explicit, non-fabricated accepted risk (FR-2) rather than either skipped silently or falsely claimed complete. Two BLOCKER-severity pre-existing bugs and one High-severity security finding, all found during this feature's own review chain, were fixed in-branch with passing regression tests rather than deferred past the gate. No unmet requirements.
 
-## 4. Test & Quality Evidence (independently re-run, not re-stated blindly)
+## 9. Recommendations for Human Reviewer
 
-Ran the feature-scoped suites myself: `pytest tests/test_cost_collection_service.py tests/test_cost_tracking.py -q` → **83 passed**, 0 failures — matches QA's reported total exactly.
-
-Independently re-verified the one BLOCKER fix carried forward from `adversarial_review` (B-1): `_discover_opencode_session()` (lines 456-457 per the QA report's line numbers) attaches `tzinfo=timezone.utc` to both `agent_created_at` and `datetime.utcnow()` before calling `.timestamp()` — confirmed present in the current diff (see the inline comment at `cost_collection_service.py` explaining exactly this naive-datetime hazard). Without this fix, any host not set to UTC would silently compute a shifted time window and drop 100% of OpenCode cost collection with no error. Fixed correctly.
-
-`security_review` (commit `fa67b6f`) reported 0 findings across path traversal, SQL injection, and untrusted-deserialization surfaces — independently spot-checked here: the two SQL queries in this diff (`SELECT ... FROM session WHERE id = ?` and `WHERE directory = ? AND time_created >= ? AND time_created <= ?`) both use parameterized placeholders, not string interpolation.
-
-`architectural_review` left one item (D-1) explicitly deferred, not a blocker: the `opencode.db` file URI isn't percent-encoded for literal `?`/`#` characters in a home directory path. This is a real, narrow edge case (a username containing `?` or `#`) correctly scoped out as theoretical rather than something this validation pass needs to re-litigate.
-
----
-
-## 5. Design-Intent Cross-Check
-
-Re-reading `design.md` lines 167-221 and 540-577 directly against the final diff (not just the requirements doc's paraphrase):
-
-- The design's original mechanism (stdout `--format json` capture, "no checkpoint needed") is **not** what got built — and correctly so, since `product_requirements` §0 established this premise is stale (OpenCode now launches with `-i`, a persistent session, invalidating one-shot stdout capture). The design's own §"SQLite DB read as fallback" is what was actually implemented, which the design itself anticipated as a valid alternative if the stdout path didn't pan out.
-- The design's Phase 6 gate text is honored procedurally: the gate was checked, found triggered, and explicitly escalated to `scope_review` rather than silently bypassed by any phase — including this one.
-- No scope creep: the diff is confined to the one file the architecture doc scoped it to. No `CostEntry`/`SessionCostCheckpoint` schema changes, no UI changes, no changes to `pi`/Claude Code collection paths.
-
----
-
-## 6. Verdict
-
-**PASS.** All 5 functional requirements and all 5 non-functional requirements are met and independently verified against both the design document and the code. Test suite is green (83/83, independently re-run), the one prior BLOCKER (B-1, naive-datetime timezone bug) is confirmed fixed, no regressions, no new blockers. The design's build/defer gate — correctly identified as triggered by `product_requirements` — was explicitly and properly resolved by `scope_review`, not silently overridden by any implementation phase.
-
----
-
-## 7. Deliverables
-
-- `docs/product_validation/product_validation.md` — this report
-- `docs/product_validation/product_validation.json` — structured pass/fail summary for the pipeline gate
-
----
-
-*Report generated: 2026-07-26*
+1. **No action required to merge this feature.** The scope supersession (README-only → README + two data-integrity fixes + one security fix) is well-documented, narrowly targeted, and each fix has a dedicated passing regression test — worth a quick skim of `docs/implementation_status.md` and `docs/security_review/security_report.md` to confirm you're comfortable with that supersession, but it does not need re-litigating from scratch.
+2. **Track `ticket-5a75167a-27d3-4a9a-bb01-0409bd128cd7`** (High priority, systemic `POST /api/autopilot/cost-entries` identity-binding gap) — it's correctly out of scope here but is the actual root cause behind this pass's High finding and deserves its own future feature/pass rather than falling off the radar.
+3. **FR-2 (live pi-install smoke test) is still genuinely unverified end-to-end** — if there's ever an environment with a real `pi` binary available to this pipeline, it would be worth spending 10 minutes confirming the extension actually loads and posts successfully, since that's the one claim in the whole feature that's verified only by static code reading, not execution.
+4. **W-1 (partial-session POST failure drops a fallback for the whole task)** is a reasonable, low-severity residual gap to leave open, but if pi extension usage becomes widespread and mid-session API restarts turn out to be non-rare in practice, revisit adding a per-turn identifier to `CostEntry` to make the fallback's coverage check granular instead of a per-task boolean.
