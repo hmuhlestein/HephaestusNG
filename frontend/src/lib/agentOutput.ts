@@ -6,6 +6,10 @@
 /** Remove ANSI SGR/cursor codes and OSC sequences, leaving plain text. */
 export function stripAnsiCodes(text: string): string {
   return text
+    // Expand tabs to 4-space stops (tmux default is 8, but 4 is more
+    // readable in a web UI and avoids the progressive-widening artifact
+    // where each indent level adds a full 8-space column).
+    .replace(/\t/g, '    ')
     .replace(/\x1b\[[?]?[0-9;]*[a-zA-Z]/g, '')
     .replace(/\x1b\][^\x07]*\x07/g, '');
 }
