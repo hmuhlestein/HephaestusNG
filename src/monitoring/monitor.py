@@ -1232,7 +1232,7 @@ class MonitoringLoop:
                 return
 
             last_nudged = self._nudged_mcp_disconnected.get(agent.id)
-            if last_nudged is not None and time.time() - last_nudged < 30:
+            if last_nudged is not None and time.time() - last_nudged < 45:
                 return
             self._nudged_mcp_disconnected[agent.id] = time.time()
 
