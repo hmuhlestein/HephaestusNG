@@ -3,8 +3,8 @@ default_thinking_level: low
 fallback_cli_tool: pi
 fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
 
-# Execution order by phase id. Ids match pipeline position (1-12).
-execution_order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+# Execution order by phase id. Ids match pipeline position (1-13).
+execution_order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
 
 session_roles:
   product_requirements: product-requirements
@@ -19,6 +19,7 @@ session_roles:
   doc_review: doc-reviewer
   git_commit_push: git
   forensics_analysis: forensics
+  deploy: deployer
 
 # Required output artifacts per phase — used as completion hard floors.
 # If a phase declares an output, update_task_status rejects 'done' when
@@ -37,6 +38,7 @@ required_output:
 optional_phases:
   - forensics_analysis
   - git_commit_push
+  - deploy
 
 orchestrator:
   type: evaluating
