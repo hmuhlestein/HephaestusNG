@@ -1210,6 +1210,9 @@ class MonitoringLoop:
             if not out:
                 return
             if not _MCP_DISCONNECTED_RE.search(_strip_sgr(out)):
+                # MCP reconnected — reset nudge count
+                if hasattr(self, "_mcp_disconnect_nudge_count"):
+                    self._mcp_disconnect_nudge_count.pop(agent.id, None)
                 return
 
             from src.interfaces.cli_interface import get_cli_agent
@@ -1233,10 +1236,46 @@ class MonitoringLoop:
                 return
             self._nudged_mcp_disconnected[agent.id] = time.time()
 
+            # Track nudge count — after 3 failed nudges, terminate the agent
+            # so the pipeline can retry with a fresh session.
+            if not hasattr(self, "_mcp_disconnect_nudge_count"):
+                self._mcp_disconnect_nudge_count = {}
+            count = self._mcp_disconnect_nudge_count.get(agent.id, 0) + 1
+            self._mcp_disconnect_nudge_count[agent.id] = count
+
+            if count > 3:
+                logger.warning(
+                    f"[MCP-DISCONNECTED] Agent {agent.id[:8]} ({agent.cli_type}) still disconnected "
+                    f"after {count} nudges — terminating so pipeline can retry"
+                )
+                # Reset count for this agent
+                self._mcp_disconnect_nudge_count.pop(agent.id, None)
+                self._nudged_mcp_disconnected.pop(agent.id, None)
+                await self.agent_manager.terminate_agent(agent.id)
+                # Reset assigned tasks to pending
+                with self.db_manager.session_scope() as session:
+                    from src.core.database import Task as _Task
+                    stuck_tasks = (
+                        session.query(_Task)
+                        .filter_by(assigned_agent_id=agent.id)
+                        .filter(_Task.status.in_(["assigned", "in_progress"]))
+                        .all()
+                    )
+                    for t in stuck_tasks:
+                        t.status = "pending"
+                        t.assigned_agent_id = None
+                        logger.info(
+                            f"[MCP-DISCONNECTED] Task {t.id[:8]} reset to pending"
+                        )
+                return True
+
             logger.warning(
                 f"[MCP-DISCONNECTED] Agent {agent.id[:8]} ({agent.cli_type}) has "
                 "0 connected MCP servers — nudging to reconnect"
             )
+            # Send Escape first to break any spinner/loop, then the message
+            await self.agent_manager.send_recovery_keystrokes(agent.id)
+            await asyncio.sleep(0.5)
             await self.agent_manager.send_message_to_agent(
                 agent.id,
                 "Your MCP connection to the hephaestus server is down (0 "
