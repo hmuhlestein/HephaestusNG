@@ -1888,3 +1888,101 @@ class TestProjectPathTraversal:
 
         resp = client.delete(f"/api/autopilot/projects/{pid}/designs/../../etc/passwd")
         assert resp.status_code in (400, 404)
+
+
+class TestCostEntryAgentBinding:
+    """ticket-5a75167a: POST /cost-entries authenticated a caller's identity
+    but never bound it to the entry being written -- a caller authenticated
+    as one real agent could supply a *different* agent_id in the body and
+    post a cost entry impersonating another agent's task. System/SDK
+    identities have no single agent to bind to (they post cost entries on
+    behalf of whichever agent/task they're servicing), so only a real
+    per-agent UUID caller is bound to its own authenticated identity."""
+
+    def _mock_cost_stack(self, monkeypatch):
+        from contextlib import contextmanager
+        from unittest.mock import MagicMock
+
+        import src.core.cost_derivation as cost_derivation_mod
+        import src.core.database as database_mod
+
+        recorded = {}
+
+        def fake_record_cost(**kwargs):
+            recorded.update(kwargs)
+            entry = MagicMock()
+            entry.id = "entry-1"
+            entry.cost_usd = kwargs["cost_usd"]
+            return entry
+
+        monkeypatch.setattr(cost_derivation_mod, "record_cost", fake_record_cost)
+
+        @contextmanager
+        def fake_get_db():
+            yield MagicMock()
+
+        monkeypatch.setattr(database_mod, "get_db", fake_get_db)
+        return recorded
+
+    def test_real_agent_cannot_claim_a_different_agent_id(self, client, monkeypatch):
+        import src.mcp.autopilot_api as api_mod
+
+        monkeypatch.setattr(
+            api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
+        )
+        self._mock_cost_stack(monkeypatch)
+
+        resp = client.post(
+            "/api/autopilot/cost-entries",
+            json={
+                "task_id": "someone-elses-task",
+                "agent_id": "someone-elses-agent",
+                "source": "pi",
+                "cost_usd": 0.01,
+            },
+            headers={"X-Agent-ID": "11111111-1111-1111-1111-111111111111"},
+        )
+        assert resp.status_code == 403
+
+    def test_real_agent_id_matching_header_is_allowed(self, client, monkeypatch):
+        import src.mcp.autopilot_api as api_mod
+
+        monkeypatch.setattr(
+            api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
+        )
+        recorded = self._mock_cost_stack(monkeypatch)
+
+        own_id = "11111111-1111-1111-1111-111111111111"
+        resp = client.post(
+            "/api/autopilot/cost-entries",
+            json={
+                "task_id": "my-task",
+                "agent_id": own_id,
+                "source": "pi",
+                "cost_usd": 0.01,
+            },
+            headers={"X-Agent-ID": own_id},
+        )
+        assert resp.status_code == 200
+        assert recorded["agent_id"] == own_id
+
+    def test_system_identity_may_post_on_behalf_of_any_agent(self, client, monkeypatch):
+        import src.mcp.autopilot_api as api_mod
+
+        monkeypatch.setattr(
+            api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
+        )
+        recorded = self._mock_cost_stack(monkeypatch)
+
+        resp = client.post(
+            "/api/autopilot/cost-entries",
+            json={
+                "task_id": "some-task",
+                "agent_id": "some-other-real-agent",
+                "source": "pi",
+                "cost_usd": 0.01,
+            },
+            headers={"X-Agent-ID": "orchestrator"},
+        )
+        assert resp.status_code == 200
+        assert recorded["agent_id"] == "some-other-real-agent"
