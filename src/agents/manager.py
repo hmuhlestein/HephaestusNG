@@ -2098,18 +2098,26 @@ class AgentManager:
 
             if not working_dir:
                 # Search in common locations using the session name
-                import glob
-                search_paths = []
-                if project_base:
-                    search_paths.append(project_base)
-                search_paths.append(str(Path.home()))
-
                 transcript_path = None
-                for base in search_paths:
-                    pattern = f"{base}/**/{CONTEXT_DIR_NAME}/tmux/{agent.tmux_session_name}.transcript.log"
-                    matches = glob.glob(pattern, recursive=True)
-                    if matches:
-                        transcript_path = Path(max(matches, key=lambda p: Path(p).stat().st_mtime))
+                search_bases = []
+                if project_base:
+                    search_bases.append(Path(project_base))
+                search_bases.append(Path.home() / ".hephaestus")
+
+                for base in search_bases:
+                    candidate = base / CONTEXT_DIR_NAME / "tmux" / f"{agent.tmux_session_name}.transcript.log"
+                    if candidate.exists():
+                        transcript_path = candidate
+                        break
+                    # Also check one level into .worktrees (worktree-local .hephaestus)
+                    if base.name == ".hephaestus":
+                        continue  # skip worktree scan for .hephaestus itself
+                    for wt_dir in base.glob(".worktrees/*"):
+                        candidate = wt_dir / CONTEXT_DIR_NAME / "tmux" / f"{agent.tmux_session_name}.transcript.log"
+                        if candidate.exists():
+                            transcript_path = candidate
+                            break
+                    if transcript_path:
                         break
 
                 if not transcript_path:
