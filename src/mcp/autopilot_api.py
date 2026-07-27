@@ -30,7 +30,11 @@ from src.core.constants import (
 )
 
 # Import authentication function from server module
-from src.mcp.server import _check_rate_limit, verify_agent_authentication
+from src.mcp.server import (
+    KNOWN_SYSTEM_AGENTS,
+    _check_rate_limit,
+    verify_agent_authentication,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2173,6 +2177,26 @@ async def create_cost_entry(
             status_code=429,
             detail="Rate limit exceeded. Maximum 60 cost entries per minute.",
         )
+
+    # SECURITY (ticket-5a75167a): verify_agent_authentication only checks
+    # that agent_id names a real/trusted caller -- it never binds that
+    # identity to the entry being written. A caller authenticated as one
+    # real agent could otherwise supply a *different* agent_id in the body
+    # and post a cost entry that impersonates another agent's task, which
+    # src/services/cost_collection_service.py's real-time-suppression logic
+    # (see ticket-9259f) treats as proof that task's own session reported in
+    # real time -- permanently hiding its real JSONL-derived cost. System/
+    # SDK identities (KNOWN_SYSTEM_AGENTS, sdk-*/mcp-* prefixes) have no
+    # single agent to bind to and post cost entries on behalf of whichever
+    # agent/task they're servicing, so only a real per-agent UUID identity
+    # is bound here.
+    if agent_id not in KNOWN_SYSTEM_AGENTS and not agent_id.startswith(("sdk-", "mcp-")):
+        if req.agent_id and req.agent_id != agent_id:
+            raise HTTPException(
+                status_code=403,
+                detail="agent_id does not match authenticated X-Agent-ID",
+            )
+        req.agent_id = agent_id
 
     from src.core.cost_derivation import record_cost
     from src.core.database import get_db
