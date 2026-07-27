@@ -694,7 +694,8 @@ class MonitoringLoop:
 
                                     stuck_task = (
                                         session.query(Task)
-                                        .filter_by(assigned_agent_id=agent.id, status="in_progress")
+                                        .filter_by(assigned_agent_id=agent.id)
+                                        .filter(Task.status.in_(["assigned", "in_progress"]))
                                         .first()
                                     )
                                     if stuck_task:
@@ -943,7 +944,8 @@ class MonitoringLoop:
 
                     stuck_task = (
                         session.query(_Task)
-                        .filter_by(assigned_agent_id=agent.id, status="in_progress")
+                        .filter_by(assigned_agent_id=agent.id)
+                        .filter(_Task.status.in_(["assigned", "in_progress"]))
                         .first()
                     )
                     if stuck_task:
