@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,28 @@ logger = logging.getLogger(__name__)
 # GUARDIAN_LLM_TIMEOUT) before the timeout pattern itself is treated as a stuck
 # signal, instead of silently returning the benign "aligned" default forever.
 GUARDIAN_TIMEOUT_ESCALATION_THRESHOLD = 3
+
+# Claude Code's session-reuse launch command (see cli_interface.py's
+# ClaudeCodeAgent.get_launch_command) tries --session-id then falls back to
+# --resume (or vice versa); whichever branch doesn't match the session's
+# actual state prints this exact rejection before the other branch runs and
+# succeeds. It's expected noise on any phase that reuses a session (see
+# session_roles in workflow.yaml), not a live problem -- but shown raw, the
+# Guardian LLM has read this as an unresolved issue and sent the agent a
+# fabricated "fix your session conflict" steering message. Stripped before
+# the LLM sees it; left untouched everywhere else (transcript log, the live
+# output viewer, detect_agent_exited/detect_garbled_output) since those are
+# either historical record or unrelated pattern checks.
+_BENIGN_SESSION_ERROR_RE = re.compile(
+    r"^Error: Session ID [0-9a-f-]+ is already in use\.?\s*$", re.MULTILINE
+)
+
+
+def _sanitize_tmux_output_for_llm(tmux_output: str) -> str:
+    return _BENIGN_SESSION_ERROR_RE.sub(
+        "[Hephaestus note: expected session-resume artifact, not a live error -- ignore]",
+        tmux_output,
+    )
 
 
 class SteeringType(Enum):
@@ -171,7 +194,7 @@ class Guardian:
             try:
                 analysis = await asyncio.wait_for(
                     self.llm_provider.analyze_agent_trajectory(
-                        agent_output=tmux_output,
+                        agent_output=_sanitize_tmux_output_for_llm(tmux_output),
                         accumulated_context=accumulated_context,
                         past_summaries=past_summaries,
                         task_info={

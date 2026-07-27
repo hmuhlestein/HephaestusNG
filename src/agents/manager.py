@@ -671,6 +671,7 @@ class AgentManager:
                 workflow_id=task.workflow_id,
                 phase_id=task.phase_id,
                 session_id=session_id,
+                working_directory=branch_path,
             )
 
             # Send launch command to tmux
@@ -1834,6 +1835,7 @@ class AgentManager:
                 phase_id=task.phase_id,
                 thinking_level=restart_thinking_level,
                 session_id=session_id,
+                working_directory=restart_wd,
             )
 
             pane = tmux_session.attached_window.attached_pane

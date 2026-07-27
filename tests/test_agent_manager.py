@@ -435,6 +435,50 @@ class TestCreateAgentForTask:
         _, call_kwargs = mock_cli.get_launch_command.call_args
         assert call_kwargs["model"] == "sonnet"
 
+    @pytest.mark.asyncio
+    async def test_passes_working_directory_to_launch_command(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Regression: get_launch_command needs the agent's actual worktree
+        path to check whether a reused session_id already has a stored
+        Claude Code session there (see ClaudeCodeAgent._claude_session_exists)
+        -- without it, every session-reuse launch always tries --session-id
+        first and eats a guaranteed "already in use" error before falling
+        back to --resume."""
+        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-agent",
+                "branch_name": "agent-test-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-claude"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+            mock_cli = MagicMock()
+            mock_cli.get_launch_command.return_value = ["claude", "--model", "sonnet"]
+            mock_cli.default_model = "sonnet"
+            mock_get_cli.return_value = mock_cli
+
+            await mock_agent_manager.create_agent_for_task(
+                task=sample_task,
+                enriched_data={"description": "Implement feature X"},
+                memories=[],
+                project_context="Test project context",
+                working_directory="/tmp/test-project",
+            )
+
+        _, call_kwargs = mock_cli.get_launch_command.call_args
+        assert call_kwargs["working_directory"] == "/tmp/test-project-agent"
+
 
 class TestCreateAgentForTaskMissingSharedWorktree:
     """Regression: a missing shared worktree used to either silently fork a
