@@ -1244,6 +1244,7 @@ class MonitoringLoop:
                 self._mcp_disconnect_nudge_count = {}
             count = self._mcp_disconnect_nudge_count.get(agent.id, 0) + 1
             self._mcp_disconnect_nudge_count[agent.id] = count
+            logger.debug(f"[MCP-DISCONNECTED] Agent {agent.id[:8]} nudge count: {count}")
 
             if count > 3:
                 logger.warning(
