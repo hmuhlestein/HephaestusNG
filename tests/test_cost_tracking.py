@@ -10,9 +10,9 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from src.autopilot.orchestrator import pause_project_workflows as _pause_project_workflows
 from src.core.cost_derivation import (
     _check_budget_enforcement,
-    _pause_project_workflows,
     check_budget_before_new_work,
     derive_design_cost,
     derive_feature_cost,
