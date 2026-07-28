@@ -107,23 +107,31 @@ class TaskCompletionService:
 
         # wf.working_directory missing here is not "the agent didn't write the
         # file" -- it's a worktree-tracking bug (the workflow's shared worktree
-        # got lost or was never recorded). Surface that distinctly instead of
-        # silently searching some other directory for the file: a fallback
-        # here would hide exactly the kind of bug that produced it (see the
-        # cleanup_all_stale_branches race fixed in worktree_manager.py, which
-        # this depended on staying fixed rather than being routed around).
+        # got lost or was never recorded). Try to recover from the agent's
+        # worktree record before giving up.
         if task.workflow_id and not (wf and wf.working_directory):
-            logger.error(
-                f"Task {task.id} (phase {phase.name}): workflow {task.workflow_id} "
-                "has no working_directory -- cannot verify output artifacts. "
-                "This indicates a worktree-tracking bug, not a missing agent output."
-            )
-            return {
-                "status": "failed",
-                "message": (
-                    f"Cannot verify output artifacts: workflow {task.workflow_id} has no recorded working_directory. This is a system error, not something to fix by re-doing the task -- flag it."
-                ),
-            }
+            # Attempt recovery: get working_directory from assigned agent's worktree
+            recovered = False
+            if task.assigned_agent_id:
+                from src.core.database import AgentWorktree
+                wt_record = session.query(AgentWorktree).filter_by(agent_id=task.assigned_agent_id).first()
+                if wt_record and wt_record.worktree_path and Path(wt_record.worktree_path).is_dir():
+                    if wf:
+                        wf.working_directory = wt_record.worktree_path
+                        logger.info(f"[TASK-COMPLETE] Recovered working_directory for workflow {task.workflow_id[:8]} from agent worktree: {wt_record.worktree_path}")
+                        recovered = True
+            if not recovered:
+                logger.error(
+                    f"Task {task.id} (phase {phase.name}): workflow {task.workflow_id} "
+                    "has no working_directory -- cannot verify output artifacts. "
+                    "This indicates a worktree-tracking bug, not a missing agent output."
+                )
+                return {
+                    "status": "failed",
+                    "message": (
+                        f"Cannot verify output artifacts: workflow {task.workflow_id} has no recorded working_directory. This is a system error, not something to fix by re-doing the task -- flag it."
+                    ),
+                }
 
         # Search the task's own project's feature folder, not whichever
         # project the process-wide singleton currently points at -- with
