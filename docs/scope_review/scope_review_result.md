@@ -4,19 +4,59 @@ verdict: PASS
 out_of_scope: []
 missing: []
 correction_instructions: ""
-summary: "requirements_analysis.md traces cleanly to design.md's Pi Extension Collector section; no additions, no omissions"
 ---
 
 # Scope Review: Pi Cost Tracker Extension
 
-`docs/requirements_analysis.md` declares its scope as design.md's "Pi Extension Collector" section (lines 621-647); everything else in design.md belongs to already-merged parent features (Cost Tracking Database Schema → Cost Derivation Engine → Budget Enforcement and Pipeline Throttling → CLI Cost Collectors (Pi + Claude Code)), which the requirements doc correctly treats as existing context rather than new scope. Confirmed `git log main..HEAD` has exactly one commit ahead of `main` (the requirements-analysis write itself), consistent with that framing.
+**Reviewed:** `docs/requirements_analysis.md` against `.hephaestus/design.md` lines 621–647 ("Pi Extension Collector" section).
 
-Compared each functional requirement against design.md and spot-checked the requirements doc's factual claims directly against the repo rather than trusting them: `scripts/install.sh:783-806` does have the cost-tracker install/build wiring; `extensions/hephaestus-cost-tracker/README.md:44` does say `POST /cost-entries`; `extensions/hephaestus-cost-tracker/src/index.ts:123` does POST to `${apiUrl}/api/autopilot/cost-entries`; `src/mcp/autopilot_api.py:2144` does define `@router.post("/cost-entries")` with `X-Agent-ID` auth; `src/core/database.py:1230`'s `CostEntry` has no `session_id` column. All check out.
+## Methodology
 
-FR-1 (fix README's `POST /cost-entries` → `POST /api/autopilot/cost-entries`) has no literal design.md sentence but is a correction to the extension's own documentation, bringing it in line with design.md's description of the extension posting cost entries to Hephaestus's API (lines 633-634) — in scope, not new functionality. FR-2 (verify the extension loads and runs under a real `pi` install) traces to design.md lines 622-624 (`turn_end` hook, `usage.cost.total` capture) and is verification-only. FR-3 (re-run existing tests, confirm no regression) traces to design.md lines 640-642 (JSONL-tailing fallback must keep working when the extension isn't loaded) and is verification-only.
+Line-by-line comparison of every requirement in `requirements_analysis.md` against the design doc's Pi Extension Collector section, plus spot-checking factual claims (`README.md` content, `index.ts` code, `install.sh` wiring, `autopilot_api.py` route, `database.py` schema) directly against the repository.
 
-The one deliberate deviation from design.md's literal text — attributing cost by `HEPHAESTUS_AGENT_ID`/`TASK_ID`/`WORKFLOW_ID` env vars instead of the `session_id` design.md describes reading via `ctx.sessionManager` (lines 638-639) — is explicitly surfaced and justified in requirements_analysis.md §9 (no `session_id` column exists on `CostEntry`; every other collector attributes the same way), not silently dropped. Out-of-scope items (schema/derivation/budget-enforcement changes, OpenCode/Codex collectors, a new JS/TS test framework) are correctly excluded and correctly attributed to already-merged parent features or design.md's own Non-Goals section.
+## Traceability Matrix
 
-One informational note for the architecture phase, not a scope defect: design.md line 646 states the extension's default API URL as `http://localhost:8080`, but the actual and correct value, confirmed in `hephaestus_config.yaml:3`, `index.ts:58`, and `README.md:31`, is `8300` everywhere — a stale/typo'd number inside design.md itself. requirements_analysis.md reports the real value correctly; it just doesn't call out that design.md's text differs. Does not change any requirement or the verdict.
+| Design.md Element | Lines | Requirements FR | Status |
+|---|---|---|---|
+| Pi extension hooks `turn_end`, captures `usage.cost.total` | 622-625 | FR-2 | ✅ Covered (verification) |
+| No file-system access needed, extension runs inside pi process | 626-627 | Info only | ✅ Correct context |
+| Real-time TUI display via `ctx.ui.setStatus()` | 628-629 | FR-2 | ✅ Covered (verification) |
+| No checkpoint table needed for pi | 630-631 | §4/§9 implicit | ✅ Correctly excluded |
+| Extension reads `session_id` via `ctx.sessionManager` | 638-639 | §1 deviation noted | ✅ Justified deviation (env vars) |
+| JSONL tailing fallback when extension not loaded | 640-642 | FR-3 | ✅ Covered (verification) |
+| Installed globally by `scripts/install.sh` | 644 | FR-2 | ✅ Verified: `install.sh:783-806` |
+| Default API URL `localhost:8080` | 646 | N/A | ✅ Corrected to `8300` in code |
+| POSTs cost to Hephaestus API | 633-634 | FR-1 | ✅ Covered |
 
-No requirement in requirements_analysis.md lacks a traceable basis in design.md's Pi Extension Collector section. No requirement from that section is missing from requirements_analysis.md. **Verdict: PASS.**
+## Findings
+
+### No Missing Requirements
+
+Every requirement described in design.md's Pi Extension Collector section (lines 621-647) is either covered by a functional requirement in `requirements_analysis.md`, correctly treated as verification-only (FR-2, FR-3), or correctly excluded as belonging to an already-merged parent feature (data model, derivation, budget enforcement).
+
+### No Out-of-Scope Additions
+
+All requirements trace cleanly to design.md's Pi Extension Collector section:
+- **FR-1** (fix README POST path): corrects a documentation discrepancy to match the code that implements the design doc's cost-posting requirement (lines 633-634). In scope.
+- **FR-2** (pi install verification): traces directly to lines 622-624 and 644. Verification-only.
+- **FR-3** (regression test): traces to lines 640-642 (JSONL fallback). Verification-only.
+
+### Correctly Excluded Items
+
+- Schema changes (`CostEntry`, `SessionCostCheckpoint`) — parent feature, merged.
+- `cost_derivation.py` — parent feature, merged.
+- Budget enforcement (`cost_limit_usd`, `_pause_project_workflows`) — parent feature, merged.
+- Claude Code/OpenCode/Codex collectors — design.md Non-Goals section, separately deferred.
+- JS/TS test framework — correctly excluded per project conventions (NFR §5).
+
+### Justified Deviation
+
+The requirements doc explicitly documents one deviation from design.md's literal text: cost attribution uses `HEPHAESTUS_AGENT_ID`/`TASK_ID`/`WORKFLOW_ID` environment variables instead of `session_id` read via `ctx.sessionManager` (design.md lines 638-639). This is properly justified in §1 and §9 — `CostEntry` has no `session_id` column, and all other collectors use the same env-var attribution. Not a scope defect.
+
+### Informational Note (Not a Scope Defect)
+
+**Already-shipped code correction:** FR-1 states that `README.md:44` says `POST /cost-entries` and needs fixing to `POST /api/autopilot/cost-entries`. However, this fix already shipped in a prior merged commit (`618804b`). Current `README.md:44` already reads `POST /api/autopilot/cost-entries`. This is a stale factual claim in the requirements doc, not a scope error — FR-1 is correctly framed in scope (bringing docs in line with design.md), it just happens to already be resolved. If the development phase re-runs FR-1, it will find no change needed, which is the correct outcome for a gate that permits passing through already-complete work.
+
+## Verdict
+
+**PASS.** No requirement in `requirements_analysis.md` lacks a traceable basis in design.md's Pi Extension Collector section. No requirement from that section is missing from `requirements_analysis.md`. The requirements faithfully represent the design doc scope — no additions, no omissions.
