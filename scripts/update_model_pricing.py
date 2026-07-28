@@ -17,56 +17,42 @@ from pathlib import Path
 
 # Anthropic's direct pricing (no OpenRouter markup) as of 2026-07-27
 # Source: https://docs.anthropic.com/en/docs/about-claude/models
-# Cache pricing formula: write_1h = 1.25x input, write_5m = 1.0x input, read = 0.1x input
+# Cache pricing: write_1h = 2x input, write_5m = 1.25x input, read = 0.1x input
 ANTHROPIC_DIRECT_PRICES = {
     "claude-opus-5": {
         "input": 5.0,
         "output": 25.0,
-        "cache_write_1h": 6.25,
-        "cache_write_5m": 5.0,
-        "cache_read": 0.50,
-    },
-    "claude-opus-4.5": {
-        "input": 5.0,
-        "output": 25.0,
-        "cache_write_1h": 6.25,
-        "cache_write_5m": 5.0,
+        "cache_write_1h": 10.0,
+        "cache_write_5m": 6.25,
         "cache_read": 0.50,
     },
     "claude-opus-4": {
         "input": 15.0,
         "output": 75.0,
-        "cache_write_1h": 18.75,
-        "cache_write_5m": 15.0,
+        "cache_write_1h": 30.0,
+        "cache_write_5m": 18.75,
         "cache_read": 1.50,
     },
     "claude-sonnet-5": {
         "input": 2.0,
         "output": 10.0,
-        "cache_write_1h": 2.50,
-        "cache_write_5m": 2.0,
+        "cache_write_1h": 4.0,
+        "cache_write_5m": 2.50,
         "cache_read": 0.20,
     },
     "claude-sonnet-4": {
         "input": 3.0,
         "output": 15.0,
-        "cache_write_1h": 3.75,
-        "cache_write_5m": 3.0,
+        "cache_write_1h": 6.0,
+        "cache_write_5m": 3.75,
         "cache_read": 0.30,
     },
     "claude-haiku-4.5": {
         "input": 1.0,
         "output": 5.0,
-        "cache_write_1h": 1.25,
-        "cache_write_5m": 1.0,
+        "cache_write_1h": 2.0,
+        "cache_write_5m": 1.25,
         "cache_read": 0.10,
-    },
-    "claude-3-haiku": {
-        "input": 0.25,
-        "output": 1.25,
-        "cache_write_1h": 0.31,
-        "cache_write_5m": 0.25,
-        "cache_read": 0.03,
     },
 }
 
@@ -101,8 +87,8 @@ def fetch_openrouter_prices():
                 continue
 
             # Estimate cache pricing (Anthropic's formula)
-            cache_write_1h = inp * 1.25
-            cache_write_5m = inp * 1.0
+            cache_write_1h = inp * 2.0
+            cache_write_5m = inp * 1.25
             cache_read = inp * 0.1
 
             prices[model_name] = {
