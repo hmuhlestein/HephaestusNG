@@ -85,6 +85,9 @@ _SPEND_LIMIT_RE = re.compile(
 # as TUI chrome for every other caller.
 _MCP_DISCONNECTED_RE = re.compile(r"MCP:\s*0/[1-9]\d*\s*servers", re.IGNORECASE)
 
+# LLM connection errors that indicate the agent can't reach the API
+_CONNECTION_ERROR_RE = re.compile(r"(?:Error:\s*(?:Connection error|Request timed out)|Retry failed after \d+ attempts:\s*Connection error)", re.IGNORECASE)
+
 # OpenRouter's exact 402 error phrasing when a key's credits/weekly limit
 # can't cover the requested max_tokens. Anchored to this specific phrase
 # (not a generic "credit"/"402" keyword match) to avoid false positives on
@@ -1297,6 +1300,60 @@ class MonitoringLoop:
             logger.warning(f"[MCP-DISCONNECTED] check failed for {agent.id[:8]}: {e}")
         return False
 
+    async def _detect_connection_errors(self, agent) -> bool:
+        """Detect persistent LLM connection errors and terminate the agent.
+
+        When the LLM API is unreachable (connection errors, timeouts), the
+        agent retries a few times then sits stuck. Detect this pattern and
+        terminate so the pipeline can retry with a fresh session.
+        """
+        try:
+            out = self.agent_manager.get_agent_output(agent.id, lines=20)
+            if not out:
+                return False
+            stripped = _strip_sgr(out)
+            if not _CONNECTION_ERROR_RE.search(stripped):
+                return False
+
+            # Check if we've already warned about this agent recently
+            if not hasattr(self, "_connection_error_warned"):
+                self._connection_error_warned = {}
+            last_warned = self._connection_error_warned.get(agent.id)
+            if last_warned and time.time() - last_warned < 120:
+                return False
+            self._connection_error_warned[agent.id] = time.time()
+
+            # Check if the error is persistent (more than 2 occurrences in the output)
+            error_count = len(_CONNECTION_ERROR_RE.findall(stripped))
+            if error_count < 2:
+                logger.info(f"[CONNECTION-ERROR] Agent {agent.id[:8]} has {error_count} connection error(s) — waiting for recovery")
+                return False
+
+            logger.warning(
+                f"[CONNECTION-ERROR] Agent {agent.id[:8]} ({agent.cli_type}) has "
+                f"{error_count} persistent connection errors — terminating so pipeline can retry"
+            )
+            self._connection_error_warned.pop(agent.id, None)
+            await self.agent_manager.terminate_agent(agent.id)
+
+            # Reset assigned tasks to pending
+            with self.db_manager.session_scope() as session:
+                from src.core.database import Task as _Task
+                stuck_tasks = (
+                    session.query(_Task)
+                    .filter_by(assigned_agent_id=agent.id)
+                    .filter(_Task.status.in_(["assigned", "in_progress"]))
+                    .all()
+                )
+                for t in stuck_tasks:
+                    t.status = "pending"
+                    t.assigned_agent_id = None
+                    logger.info(f"[CONNECTION-ERROR] Task {t.id[:8]} reset to pending")
+            return True
+        except Exception as e:
+            logger.warning(f"[CONNECTION-ERROR] check failed for {agent.id[:8]}: {e}")
+        return False
+
     async def _detect_bad_model_error(self, agent) -> bool:
         """Detect Claude Code's "issue with the selected model" rejection
         and fix it directly by sending `/model <config default>` as literal
@@ -1454,6 +1511,8 @@ class MonitoringLoop:
             if await self._detect_max_token_limit_error(agent):
                 mechanically_intervened.add(agent.id)
             if await self._detect_mcp_disconnected(agent):
+                mechanically_intervened.add(agent.id)
+            if await self._detect_connection_errors(agent):
                 mechanically_intervened.add(agent.id)
             if await self._detect_bad_model_error(agent):
                 mechanically_intervened.add(agent.id)
