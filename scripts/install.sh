@@ -472,7 +472,12 @@ else
     warn "pi not found — skipping cost tracker extension (install pi later and run: pi install $PREFIX/extensions/hephaestus-cost-tracker -l)"
 fi
 
-# ─── 11. Verify ───────────────────────────────────────────────────
+# ─── 11. Update Model Pricing ──────────────────────────────────────
+
+log "Updating model pricing from OpenRouter API..."
+python3 "$PREFIX/scripts/update_model_pricing.py" 2>/dev/null && ok "Model pricing updated" || warn "Could not update pricing (using defaults)"
+
+# ─── 12. Verify ───────────────────────────────────────────────────
 
 header "Installation complete"
 
