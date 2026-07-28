@@ -1020,6 +1020,12 @@ async def rerun_design(request: dict):
 
         db_manager = DatabaseManager()
         bm = WorktreeManager(db_manager)
+        # Without this, WorktreeManager operates on whatever project happens
+        # to be config.main_repo_path's current global default -- wrong
+        # project entirely once more than one project exists (see the other
+        # WorktreeManager(...).reload(...) call sites in orchestrator.py,
+        # which already do this for the same reason).
+        bm.reload(project)
         # Run cleanup in background thread to not block pipeline start
         import threading
 
@@ -4334,16 +4340,41 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
 
 
 @router.post("/cleanup-branches")
-async def cleanup_branches():
-    """Clean up all stale agent branches."""
-    from src.core.database import DatabaseManager
+async def cleanup_branches(project_path: Optional[str] = None):
+    """Clean up all stale agent branches.
+
+    project_path: which project's repo to sweep. Defaults to the active
+    project -- WorktreeManager otherwise operates on whatever project
+    happens to be config.main_repo_path's current global default, which is
+    wrong as soon as more than one project exists (same bug already fixed
+    for the other WorktreeManager(...) call sites -- see orchestrator.py).
+    """
+    from src.core.database import AutopilotProject, DatabaseManager, get_db
     from src.core.worktree_manager import WorktreeManager
 
     try:
+        if not project_path:
+            with get_db() as db:
+                active_id = _get_active_project_id()
+                proj = (
+                    db.query(AutopilotProject).filter_by(id=active_id).first()
+                    if active_id
+                    else None
+                )
+                if not proj:
+                    raise HTTPException(
+                        400,
+                        "project_path is required (no active project to default to)",
+                    )
+                project_path = proj.base_dir
+
         db_manager = DatabaseManager()
         branch_manager = WorktreeManager(db_manager)
+        branch_manager.reload(project_path)
         result = branch_manager.cleanup_all_stale_branches()
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to cleanup branches: {e}")
         raise HTTPException(500, str(e))
