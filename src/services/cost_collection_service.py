@@ -200,7 +200,8 @@ class ClaudeCodeCollector(CostCollector):
                         continue
 
                     # Only process assistant messages with usage data
-                    if data.get("type") != "message":
+                    # Claude Code uses type="assistant" (not type="message")
+                    if data.get("type") not in ("assistant", "message"):
                         continue
                     message = data.get("message", {})
                     if message.get("role") != "assistant":
@@ -219,8 +220,16 @@ class ClaudeCodeCollector(CostCollector):
 
                     # Calculate cost using price table
                     # Default to sonnet prices if model unknown
+                    # Normalize model name (e.g. claude-opus-4-8 -> claude-opus-4)
                     model = message.get("model", "claude-sonnet-4")
-                    prices = self.PRICES.get(model, self.PRICES["claude-sonnet-4"])
+                    # Try exact match first, then strip trailing version suffix
+                    prices = self.PRICES.get(model)
+                    if not prices:
+                        model_normalized = re.sub(r"-\d+$", "", model, count=1)
+                        if model_normalized != model:
+                            prices = self.PRICES.get(model_normalized)
+                    if not prices:
+                        prices = self.PRICES["claude-sonnet-4"]
 
                     cost_usd = (
                         input_tokens * prices["input"] / 1_000_000
@@ -495,9 +504,17 @@ def collect_task_cost(task_id: str) -> None:
                             logger.warning(f"Claude Code path escapes base directory: {resolved}")
                         else:
                             if claude_dir.exists():
-                                matches = list(claude_dir.glob(f"*_{session_id}.jsonl"))
-                                if matches:
-                                    session_file = matches[0]
+                                # Claude Code files are named {uuid}.jsonl where
+                                # uuid = uuid5(NAMESPACE_URL, session_id)
+                                session_uuid = _session_id_to_uuid(session_id)
+                                session_file_candidate = claude_dir / f"{session_uuid}.jsonl"
+                                if session_file_candidate.exists():
+                                    session_file = session_file_candidate
+                                else:
+                                    # Fallback: try glob pattern
+                                    matches = list(claude_dir.glob(f"*_{session_id}.jsonl"))
+                                    if matches:
+                                        session_file = matches[0]
                     except (OSError, ValueError):
                         pass
         elif cli_type == "opencode":
@@ -604,6 +621,15 @@ def _extract_session_id(agent: Any, task: Any) -> Optional[str]:
     # For now, return None and log
     logger.debug(f"Could not extract session ID from agent {agent.id[:8]} (tmux: {agent.tmux_session_name})")
     return None
+
+
+def _session_id_to_uuid(session_id: str) -> str:
+    """Derive the UUID that Claude Code uses as its session file name.
+
+    ClaudeCodeAgent.get_launch_command uses uuid5(NAMESPACE_URL, session_id)
+    to derive a valid UUID from the deterministic session ID.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, session_id))
 
 
 def _get_agent_cwd(db: Session, agent: Any, task: Any) -> Optional[str]:
