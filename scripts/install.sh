@@ -798,32 +798,6 @@ print('OK')
     rm -f "$PI_MCP_BACKUP" 2>/dev/null
     rm -f "$PI_AGENTS_DIR"/*.bak 2>/dev/null
 
-    # Install/update the real-time cost tracking extension
-    EXT_SRC_DIR="$PREFIX/extensions/hephaestus-cost-tracker"
-    EXT_DEST_DIR="$HOME/.pi/agent/extensions/hephaestus-cost-tracker"
-
-    if [ -d "$EXT_SRC_DIR" ]; then
-        log "Installing Hephaestus cost tracker extension..."
-        if command -v npm >/dev/null 2>&1; then
-            if ! rm -rf "$EXT_DEST_DIR" 2>/dev/null || ! mkdir -p "$EXT_DEST_DIR" 2>/dev/null || ! cp -r "$EXT_SRC_DIR"/* "$EXT_DEST_DIR/" 2>/dev/null; then
-                warn "Could not write to $EXT_DEST_DIR — skipping cost tracker extension"
-                warn "Cost data will still be collected via task-completion fallback"
-            else
-                if EXT_BUILD_OUTPUT=$(cd "$EXT_DEST_DIR" && npm install --silent 2>&1 && npm run build 2>&1); then
-                    ok "Cost tracker extension installed"
-                else
-                    warn "Cost tracker extension build failed — real-time cost tracking disabled"
-                    warn "Cost data will still be collected via task-completion fallback"
-                    echo "$EXT_BUILD_OUTPUT" | tail -6
-                fi
-            fi
-        else
-            warn "npm not found — skipping cost tracker extension (fallback collection still works)"
-        fi
-    else
-        warn "Extension source not found at $EXT_SRC_DIR — skipping"
-    fi
-
     log "Restart Pi after installation for MCP tools to take effect"
     log "pi-mcp-adapter reads from ~/.config/mcp/mcp.json automatically"
     
