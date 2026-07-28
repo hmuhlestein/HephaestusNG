@@ -2521,6 +2521,82 @@ def _cleanup_worktree(
         logger.warning(f"Failed to cleanup worktree: {e}")
 
 
+def sweep_completed_workflow_worktrees(logger: OrchestratorLogger) -> int:
+    """Remove worktrees left behind by workflows that reached 'completed'
+    status but never got their normal _cleanup_worktree() call to run --
+    e.g. the backend restarted between run_single_workflow returning
+    "completed" in _run_one_feature and that same call stack reaching its
+    _cleanup_worktree() a few lines later. Nothing else ever revisits a
+    workflow once it's "completed", so a worktree orphaned this way sits
+    forever until something (previously: only a manual /cleanup-branches
+    call, or a rerun of that exact design) happens to sweep it.
+
+    Deliberately narrower than WorktreeManager.cleanup_all_stale_branches():
+    only touches a worktree whose OWN workflow record unambiguously says
+    "done", one at a time via the same removal _cleanup_worktree already
+    uses for the normal completion path -- not a heuristic dirty/branch
+    sweep that can pull old, unrelated branches back into main (observed
+    live: doing that once already reintroduced files under .hephaestus/,
+    which must stay git-excluded, into main's history).
+
+    Returns the number of worktrees removed.
+    """
+    from src.core.database import DatabaseManager as DbManager
+    from src.core.database import Workflow
+    from src.core.simple_config import get_config
+
+    cfg = get_config()
+    db = DbManager(str(cfg.database_path))
+    removed = 0
+    try:
+        with db.session_scope() as session:
+            targets = [
+                (wf.id, wf.working_directory, wf.launch_params)
+                for wf in session.query(Workflow).filter(
+                    Workflow.status == "completed",
+                    Workflow.working_directory.isnot(None),
+                )
+                if wf.working_directory and ".worktrees/" in wf.working_directory
+            ]
+
+        for wf_id, working_directory, launch_params in targets:
+            worktree = Path(working_directory)
+            if not (worktree / ".git").exists():
+                continue  # already gone -- nothing to remove
+
+            lp = launch_params if isinstance(launch_params, dict) else {}
+            project_path_str = lp.get("project_path")
+            if not project_path_str:
+                logger.warning(
+                    f"[SWEEP] Workflow {wf_id[:8]} has an orphaned worktree "
+                    f"{worktree} but no launch_params.project_path to scope "
+                    "cleanup to -- skipping rather than guessing"
+                )
+                continue
+
+            try:
+                branch = _git.Repo(worktree).active_branch.name
+            except Exception:
+                branch = ""
+
+            logger.info(
+                f"[SWEEP] Cleaning up orphaned worktree for completed "
+                f"workflow {wf_id[:8]}: {worktree}"
+            )
+            _cleanup_worktree(worktree, branch, Path(project_path_str), logger)
+            removed += 1
+    except Exception as e:
+        logger.warning(f"[SWEEP] Failed to sweep completed-workflow worktrees: {e}")
+    finally:
+        session = getattr(db, "_session", None) or getattr(db, "session", None)
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+    return removed
+
+
 def _create_designs_folder(
     project_path: Path,
     design_entry: DesignEntry,

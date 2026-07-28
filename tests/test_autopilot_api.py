@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -1888,6 +1888,69 @@ class TestProjectPathTraversal:
 
         resp = client.delete(f"/api/autopilot/projects/{pid}/designs/../../etc/passwd")
         assert resp.status_code in (400, 404)
+
+
+class TestCleanupBranchesProjectScoping:
+    """POST /cleanup-branches used to construct WorktreeManager with no
+    .reload(), so it silently operated on whatever project happened to be
+    config.main_repo_path's current global default -- wrong project as
+    soon as more than one exists. Live impact: a real cleanup run swept
+    zero of ~25 stale worktrees sitting in a different project's repo,
+    with no error surfaced anywhere."""
+
+    def test_explicit_project_path_is_used(self, project_client, monkeypatch):
+        client, dirs = project_client
+        target = str(dirs["project_dir"])
+
+        with patch("src.core.worktree_manager.WorktreeManager") as MockWtMgr:
+            mock_instance = MockWtMgr.return_value
+            mock_instance.cleanup_all_stale_branches.return_value = {
+                "cleaned": 0,
+                "merged": 0,
+                "failed": 0,
+                "worktrees_cleaned": 0,
+                "branches": [],
+            }
+            resp = client.post(
+                "/api/autopilot/cleanup-branches",
+                params={"project_path": target},
+            )
+
+        assert resp.status_code == 200
+        mock_instance.reload.assert_called_once_with(target)
+
+    def test_falls_back_to_active_project_when_omitted(self, project_client):
+        client, dirs = project_client
+        target = str(dirs["project_dir"])
+
+        from src.core.database import AutopilotProject, get_db
+
+        with get_db() as db:
+            proj = AutopilotProject(
+                id="proj-active-1", name="Active", base_dir=target, is_active=True
+            )
+            db.add(proj)
+
+        with patch("src.core.worktree_manager.WorktreeManager") as MockWtMgr:
+            mock_instance = MockWtMgr.return_value
+            mock_instance.cleanup_all_stale_branches.return_value = {
+                "cleaned": 0,
+                "merged": 0,
+                "failed": 0,
+                "worktrees_cleaned": 0,
+                "branches": [],
+            }
+            resp = client.post("/api/autopilot/cleanup-branches")
+
+        assert resp.status_code == 200
+        mock_instance.reload.assert_called_once_with(target)
+
+    def test_no_project_path_and_no_active_project_is_rejected(self, project_client):
+        client, dirs = project_client
+
+        resp = client.post("/api/autopilot/cleanup-branches")
+
+        assert resp.status_code == 400
 
 
 class TestCostEntryAgentBinding:

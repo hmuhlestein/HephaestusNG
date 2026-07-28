@@ -984,6 +984,20 @@ async def startup_event():
     except Exception as e:
         logger.error(f"[RESUME] resume scan failed: {e}")
 
+    # Sweep worktrees for workflows that finished ("completed") but never
+    # got their normal post-completion cleanup call to run -- the same
+    # restart window _resume_interrupted_workflows exists to cover, just
+    # for the opposite case (the workflow finished, not that it was
+    # interrupted mid-flight).
+    try:
+        from src.autopilot.orchestrator import sweep_completed_workflow_worktrees
+
+        swept = sweep_completed_workflow_worktrees(logger)
+        if swept:
+            logger.info(f"[SWEEP] Cleaned up {swept} orphaned completed-workflow worktree(s)")
+    except Exception as e:
+        logger.error(f"[SWEEP] Completed-workflow worktree sweep failed: {e}")
+
     logger.info("Server started successfully")
 
 
