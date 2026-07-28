@@ -271,7 +271,10 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   // Collapse carriage returns (\r) first, then filter
   const processedOutput = useMemo(() => {
     if (!output) return '';
-    const lines = output.split('\n');
+    // Expand tabs to 4-space stops (tmux uses 8, but 4 is more readable
+    // in a web UI) before any other processing.
+    const expanded = output.replace(/\t/g, '    ');
+    const lines = expanded.split('\n');
     const collapsed: string[] = [];
     for (const line of lines) {
       if (line.includes('\r')) {

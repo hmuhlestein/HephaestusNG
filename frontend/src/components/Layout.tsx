@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Home, FileText, Bot, Database, GitBranch, Activity, Layers, Monitor, Compass, ListChecks, Menu, ChevronLeft, Ticket, Workflow, Rocket, Settings, Wifi } from 'lucide-react';
+import { Home, FileText, Bot, Database, GitBranch, Activity, Layers, Monitor, Compass, ListChecks, Menu, ChevronLeft, Ticket, Workflow, Rocket, Settings, Wifi, WifiOff } from 'lucide-react';
 import { useWebSocket } from '@/context/WebSocketContext';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -145,12 +145,16 @@ const Layout: React.FC = () => {
                 <span className="text-gray-800 font-medium">System Overview</span>
               </div>
               <div className="flex items-center space-x-2">
-                {isConnected && (
-                  <span className="flex items-center gap-1 text-xs text-green-600 bg-green-50 px-2 py-1 rounded">
-                    <Wifi className="w-3 h-3" />
-                    Live
+                <div className="flex items-center gap-1.5 px-2">
+                  {isConnected ? (
+                    <Wifi className="w-4 h-4 text-emerald-500" />
+                  ) : (
+                    <WifiOff className="w-4 h-4 text-red-400" />
+                  )}
+                  <span className={`text-xs font-medium ${isConnected ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {isConnected ? 'Connected' : 'Disconnected'}
                   </span>
-                )}
+                </div>
               </div>
             </div>
           </header>
