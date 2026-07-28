@@ -453,7 +453,26 @@ if [ "$SKIP_FRONTEND" = false ]; then
     fi
 fi
 
-# ─── 10. Verify ───────────────────────────────────────────────────
+# ─── 10. Pi Extension (Cost Tracker) ─────────────────────────────
+
+if command -v pi &>/dev/null; then
+    EXT_DIR="$PREFIX/extensions/hephaestus-cost-tracker"
+    if [ -d "$EXT_DIR" ]; then
+        log "Building pi cost tracker extension..."
+        cd "$EXT_DIR"
+        if [ ! -d "node_modules" ]; then
+            npm install --silent 2>/dev/null
+        fi
+        npx tsc 2>/dev/null && ok "Cost tracker extension built" || warn "Cost tracker build failed (npm/npx required)"
+        cd "$PREFIX"
+        log "Installing pi cost tracker extension..."
+        pi install "$EXT_DIR" -l --approve 2>/dev/null && ok "Cost tracker extension installed" || warn "pi extension install failed"
+    fi
+else
+    warn "pi not found — skipping cost tracker extension (install pi later and run: pi install $PREFIX/extensions/hephaestus-cost-tracker -l)"
+fi
+
+# ─── 11. Verify ───────────────────────────────────────────────────
 
 header "Installation complete"
 
