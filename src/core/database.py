@@ -2039,6 +2039,22 @@ class DatabaseManager:
                     pass  # Column already exists
                 conn.commit()
                 logger.info("Migrated phases fallback_cli_tool/fallback_cli_model columns")
+
+            # Populate fallback values from workflow config for existing phases
+            try:
+                from src.core.simple_config import get_config
+                cfg = get_config()
+                if cfg.default_fallback_cli_tool:
+                    with self.engine.connect() as conn:
+                        result = conn.execute(text(
+                            "UPDATE phases SET fallback_cli_tool = :tool, fallback_cli_model = :model "
+                            "WHERE fallback_cli_tool IS NULL OR fallback_cli_tool = ''"
+                        ), {"tool": cfg.default_fallback_cli_tool, "model": cfg.default_fallback_cli_model})
+                        conn.commit()
+                        if result.rowcount > 0:
+                            logger.info(f"Populated fallback for {result.rowcount} phases from global config")
+            except Exception as e:
+                logger.debug(f"Could not populate phase fallbacks: {e}")
         except Exception as e:
             logger.debug(f"Phases fallback columns migration (may already exist): {e}")
 
