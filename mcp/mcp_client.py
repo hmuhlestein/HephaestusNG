@@ -7,10 +7,37 @@ the filename, it's a generic MCP server usable by any compatible CLI agent
 -- not exclusive to Claude.
 """
 
+import atexit
+import logging
 import os
+from pathlib import Path
 
 import httpx
 from fastmcp import FastMCP
+
+# This process has no logging of its own -- if it dies (OOM kill, an
+# uncaught exception outside a tool's own try/except, the stdio pipe to
+# the parent CLI breaking), there is currently zero trace of it anywhere.
+# One instance of this process runs per live agent (spawned fresh by the
+# CLI per ~/.config/mcp/mcp.json), so the log file is scoped by PID/agent
+# to avoid concurrent instances interleaving into one file.
+_LOG_DIR = Path(os.path.expanduser("~/.hephaestus/logs/mcp_client"))
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_agent_id_for_log = os.environ.get("HEPHAESTUS_AGENT_ID", "")
+_log_name = f"{_agent_id_for_log[:8]}_{os.getpid()}.log" if _agent_id_for_log else f"pid{os.getpid()}.log"
+logger = logging.getLogger("hephaestus.mcp_client")
+logger.setLevel(logging.INFO)
+_file_handler = logging.FileHandler(_LOG_DIR / _log_name)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logger.addHandler(_file_handler)
+
+logger.info(
+    f"mcp_client.py starting: pid={os.getpid()} "
+    f"agent_id={os.environ.get('HEPHAESTUS_AGENT_ID', '<unset>')} "
+    f"task_id={os.environ.get('HEPHAESTUS_TASK_ID', '<unset>')} "
+    f"workflow_id={os.environ.get('HEPHAESTUS_WORKFLOW_ID', '<unset>')}"
+)
+atexit.register(lambda: logger.info(f"mcp_client.py exiting: pid={os.getpid()}"))
 
 # Initialize MCP client
 mcp = FastMCP("hephaestus-client")
@@ -343,6 +370,9 @@ async def _post_task_status(
     """Shared HTTP call + response formatting for update_task_status and
     complete_my_task -- the only difference between them is how task_id/
     agent_id get resolved before reaching here."""
+    logger.info(
+        f"_post_task_status CALL task_id={task_id} agent_id={agent_id} status={status}"
+    )
     if status == "done" and not summary.strip():
         return (
             "❌ Failed to complete task: summary is required when status='done' "
@@ -368,6 +398,10 @@ async def _post_task_status(
                 headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
                 timeout=10.0,
             )
+            logger.info(
+                f"_post_task_status RESPONSE task_id={task_id} "
+                f"status_code={response.status_code} body={response.text[:500]}"
+            )
 
             if response.status_code == 200:
                 result = response.json()
@@ -387,6 +421,9 @@ async def _post_task_status(
             else:
                 return f"❌ Failed to update task status: {response.text}"
     except Exception as e:
+        logger.exception(
+            f"_post_task_status EXCEPTION task_id={task_id} agent_id={agent_id} status={status}"
+        )
         return f"❌ Error updating task status: {str(e)}"
 
 
@@ -2033,4 +2070,12 @@ if __name__ == "__main__":
     print(
         "  - Hybrid search (default) combines semantic understanding + keyword precision"
     )
-    mcp.run()
+    try:
+        mcp.run()
+    except BaseException:
+        # Whatever kills the process (uncaught exception, KeyboardInterrupt,
+        # SystemExit) gets one last record here before it disappears --
+        # without this, a crash here is otherwise silent (see logger setup
+        # above for why that matters).
+        logger.exception("mcp.run() terminated with an exception")
+        raise
