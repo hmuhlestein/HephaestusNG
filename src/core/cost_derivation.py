@@ -288,6 +288,18 @@ def derive_project_cost(db: Session, project_id: str, write_back: bool = True) -
     return total
 
 
+def _pause_project_workflows(db: Session, project_id: str, paused_by: str, definition_ids: tuple = None) -> int:
+    """Thin wrapper around orchestrator.pause_project_workflows, imported
+    lazily to avoid a circular import (orchestrator.py imports from this
+    module too). Exists as a module-level name here -- rather than an
+    inline import inside _check_budget_enforcement -- so callers that only
+    need the pause behavior (e.g. budget-enforcement tests) don't have to
+    reach into src.autopilot.orchestrator directly."""
+    from src.autopilot.orchestrator import pause_project_workflows
+
+    return pause_project_workflows(db, project_id, paused_by=paused_by, definition_ids=definition_ids)
+
+
 def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
     """Check if project has exceeded its budget limit and pause if needed.
 
@@ -303,8 +315,7 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 
     # Over budget - pause active workflows
     logger.warning(f"[BUDGET] Project {project.id[:8]} over budget: ${project.cost_total_usd:.2f} >= ${project.cost_limit_usd:.2f}")
-    from src.autopilot.orchestrator import pause_project_workflows
-    pause_project_workflows(db, project.id, paused_by="budget")
+    _pause_project_workflows(db, project.id, paused_by="budget")
 
 
 def check_budget_before_new_work(db: Session, project_id: str) -> bool:
