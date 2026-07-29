@@ -335,7 +335,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                       // terminates every active agent/workflow system-wide,
                       // not just this design's -- confirm before firing since
                       // this icon is one click away, unlike the modal's button.
-                      if (confirm(`Rerun "${item.name}"? This restarts its pipeline from scratch and will also pause every other currently running pipeline.`)) {
+                      if (confirm(`Rerun "${item.name}"? This restarts its pipeline from scratch, deletes its existing worktree (any uncommitted work in it is lost), and will also pause every other currently running pipeline.`)) {
                         rerunDesignMutation.mutate(item.filename);
                       }
                     } else {
@@ -804,7 +804,7 @@ const FeatureRow: React.FC<{
 
   const runFeatureAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun' | 'delete') => {
     if (action === 'delete' && !confirm(
-      `Permanently delete "${feature.name}" (${feature.feature_key})? This removes its workflow, all its tasks, and its worktree. This cannot be undone.`
+      `Permanently delete "${feature.name}" (${feature.feature_key})? This removes its workflow, all its tasks, and its worktree -- any uncommitted work in it is lost. This cannot be undone.`
     )) {
       return;
     }

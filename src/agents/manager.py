@@ -1454,7 +1454,24 @@ class AgentManager:
                         f"{wip['commit_sha'][:8]} ({wip['files_changed']} file(s))"
                     )
             except Exception as e:
-                logger.debug(f"[TERMINATE] WIP commit skipped for {agent_id[:8]}: {e}")
+                # commit_changes -> _agent_repo requires an AgentBranch DB
+                # record keyed by agent_id -- only ever created for the
+                # legacy isolated-per-agent-worktree path (validators,
+                # diagnostic agents). Every normal phase agent in a feature
+                # pipeline runs against the SHARED feature worktree instead
+                # (create_agent_for_task's shared_worktree branch), so this
+                # raises for the common case, and previously the WIP-commit
+                # promise silently no-op'd here with nothing but a DEBUG
+                # log. That mattered once delete_feature/remove_project_design/
+                # rerun_design started force-removing worktrees right after
+                # terminating their agents -- uncommitted work was gone with
+                # no recovery. Fall back to committing directly in the
+                # worktree the agent's own current task says it was using.
+                logger.debug(
+                    f"[TERMINATE] WIP commit via agent-branch path skipped for "
+                    f"{agent_id[:8]}: {e} -- trying shared-worktree fallback"
+                )
+                self._commit_wip_in_shared_worktree(agent_id, agent.current_task_id)
 
             # Capture pane PIDs and final output BEFORE killing the tmux session
             pane_pids = []
@@ -1625,6 +1642,53 @@ class AgentManager:
             session.rollback()
         finally:
             session.close()
+
+    def _commit_wip_in_shared_worktree(self, agent_id: str, task_id: Optional[str]) -> None:
+        """WIP-preservation fallback for agents on a shared feature worktree
+        -- see the comment at its call site in terminate_agent for why
+        commit_changes/_agent_repo can't reach these. Resolves the worktree
+        via the agent's current task's workflow (the same working_directory
+        every phase agent on that workflow shares) and commits directly,
+        bypassing the AgentBranch/agent_worktrees machinery entirely. Best-
+        effort: logs and returns on any failure rather than blocking
+        termination on it.
+        """
+        if not task_id:
+            return
+        try:
+            from src.core.database import Workflow
+
+            session = self.db_manager.get_session()
+            try:
+                task = session.query(Task).filter_by(id=task_id).first()
+                working_directory = None
+                if task and task.workflow_id:
+                    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+                    if wf:
+                        working_directory = wf.working_directory
+            finally:
+                session.close()
+
+            if not working_directory or not Path(working_directory).exists():
+                return
+
+            import git as _git
+
+            repo = _git.Repo(working_directory)
+            repo.git.add("-A")
+            if not repo.is_dirty() and not repo.untracked_files:
+                return
+            repo.git.commit(
+                "-m", f"[Agent {agent_id}] [WIP] Auto-saved on terminate", "--no-verify"
+            )
+            logger.info(
+                f"[TERMINATE] Saved WIP for shared-worktree agent {agent_id[:8]} "
+                f"in {working_directory}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[TERMINATE] Shared-worktree WIP commit also failed for {agent_id[:8]}: {e}"
+            )
 
     async def restart_agent(self, agent_id: str, reason: str = ""):
         """Restart a stuck agent.

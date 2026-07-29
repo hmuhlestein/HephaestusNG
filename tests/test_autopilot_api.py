@@ -370,6 +370,68 @@ class TestQueueRerun:
         assert resp.status_code == 409, resp.text
         assert "proj-a" in resp.text
 
+    def test_rerun_cleans_up_old_worktree_before_returning(
+        self, project_client, monkeypatch, tmp_path
+    ):
+        """Regression: rerun deleted a design's Workflow rows (a "clean
+        slate") but never removed the worktree directory on disk.
+        _create_integration_worktree's per-design path is deterministic and
+        unchanged by rerun, and only creates fresh `if not wt_path.exists()`
+        -- so the next run silently reused the OLD worktree's stale commits
+        instead of actually starting over. This must synchronously clean up
+        the worktree as part of rerun, not rely on the best-effort
+        background branch sweep (Step 3), which races the orchestrator's
+        own worktree creation for the freshly-reset design."""
+        client, dirs = project_client
+        project_dir = dirs["project_dir"]
+        design_file = dirs["design_dir"] / "01-auth.md"
+
+        worktree = project_dir / ".worktrees" / "wt_feature-auth"
+        worktree.mkdir(parents=True)
+        (worktree / ".git").mkdir()
+
+        from src.core.database import Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-rerun-1", name="autopilot", phases_folder_path="/tmp",
+                    status="failed", definition_id="autopilot",
+                    working_directory=str(worktree),
+                    launch_params={
+                        "design_document": str(design_file),
+                        "project_path": str(project_dir),
+                    },
+                )
+            )
+
+        fake_service = Mock()
+        fake_service.running = False
+        fake_service.start = AsyncMock(return_value={"started": True})
+        fake_service.stop = AsyncMock(return_value={"stopped": True})
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-fixed"
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._get_or_create_project_id",
+            lambda project_path: "proj-fixed",
+        )
+
+        with patch("src.autopilot.orchestrator._cleanup_worktree") as mock_cleanup:
+            resp = client.post(
+                "/api/autopilot/queue/rerun",
+                json={"filename": "01-auth.md", "project_path": str(project_dir)},
+            )
+
+        assert resp.status_code == 200, resp.text
+        mock_cleanup.assert_called_once()
+        call_args = mock_cleanup.call_args[0]
+        assert call_args[0] == worktree
+        assert str(call_args[2]) == str(project_dir)
+
 
 # ── Caching ──────────────────────────────────────────────────────
 
