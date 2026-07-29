@@ -666,7 +666,7 @@ class PiAgent(CLIAgentInterface):
 
     display_name = "Pi"
     needs_chunked_delivery = True
-    default_model = "openrouter/xiaomi/mimo-v2.5-pro"
+    default_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
 
     def get_session_args(self, session_id: str) -> str:
         """Pi uses --session-id to resume or create a named session.

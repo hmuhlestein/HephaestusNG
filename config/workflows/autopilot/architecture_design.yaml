@@ -1,6 +1,10 @@
 id: 3
 name: architecture_design
 thinking_level: high
+cli_tool: claude
+cli_model: sonnet
+fallback_cli_tool: pi
+fallback_cli_model: Qwen3.6-27B-UD-Q4_K_XL.gguf
 description: |
   Create detailed technical architecture and task breakdown.
 

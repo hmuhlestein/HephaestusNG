@@ -1,6 +1,8 @@
 id: 1
 name: Feature Architect
 description: "Decomposes a design document into discrete, implementable features with clear boundaries and dependencies"
+cli_tool: claude
+cli_model: sonnet
 
 done_definitions:
   - ".hephaestus/features.json exists and contains valid JSON"
