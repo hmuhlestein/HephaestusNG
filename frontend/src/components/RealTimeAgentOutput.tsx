@@ -614,17 +614,22 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
           <div className="px-6 py-2 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-xs text-gray-500 dark:text-gray-400 flex justify-between items-center rounded-b-lg">
             <div className="flex items-center space-x-4">
               {/* Shows the AGENT is actively working, not just that the
-                  viewer's poll succeeded -- gated on agent.status so it
-                  stops once the agent goes idle/stuck/terminated, even
-                  though the viewer keeps polling successfully (it's just
-                  fetching unchanging content at that point). Tied to
-                  isConnected (not a per-request flag) so it stays steady
-                  instead of blipping on/off every ~1s poll. Fixed-width
-                  slot, always rendered, opacity-toggled so the stats
-                  beside it never shift. */}
+                  viewer's poll succeeded -- gated on currentStatus (the
+                  component's own 3s-polled status, same source StatusBadge
+                  below uses), not the agent prop directly, which can be
+                  stale if the parent doesn't refresh it (observed live:
+                  StatusBadge correctly showed "Not Running" while a
+                  spinner gated on the stale agent.status prop kept
+                  spinning). Stops once the agent goes idle/stuck/
+                  terminated, even though the viewer keeps polling
+                  successfully (it's just fetching unchanging content at
+                  that point). Tied to isConnected (not a per-request flag)
+                  so it stays steady instead of blipping on/off every ~1s
+                  poll. Fixed-width slot, always rendered, opacity-toggled
+                  so the stats beside it never shift. */}
               <RefreshCw
-                className={`w-3 h-3 animate-spin shrink-0 ${agent?.status === 'working' && isConnected && !isPaused && !isSelectionPaused ? 'opacity-100' : 'opacity-0'}`}
-                aria-hidden={!(agent?.status === 'working' && isConnected && !isPaused && !isSelectionPaused)}
+                className={`w-3 h-3 animate-spin shrink-0 ${currentStatus === 'working' && isConnected && !isPaused && !isSelectionPaused ? 'opacity-100' : 'opacity-0'}`}
+                aria-hidden={!(currentStatus === 'working' && isConnected && !isPaused && !isSelectionPaused)}
                 aria-label="Live"
               />
               {agent?.cli_type && (
