@@ -958,6 +958,25 @@ const TaskRow: React.FC<{
     if (agent) setTmuxAgent(agent);
   };
 
+  // Keep tmuxAgent's status fresh while the viewer is open -- it's only
+  // fetched once, on open, otherwise. Left stale, RealTimeAgentOutput
+  // keeps showing whatever status the agent had at that moment (e.g. its
+  // "Live" indicator staying on) even after the agent actually finished
+  // or was terminated -- the same bug Agents.tsx fixed for its own
+  // selectedAgent state.
+  useEffect(() => {
+    if (!tmuxAgent) return;
+    const interval = setInterval(async () => {
+      try {
+        const agent = await apiService.getAgent(tmuxAgent.id);
+        if (agent) setTmuxAgent(agent);
+      } catch {
+        // Keep showing the last known state on a transient fetch error.
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [tmuxAgent?.id]);
+
   // Once the task is finished, its own outcome is more useful than why it
   // was dispatched -- show completion_notes/failure_reason instead of
   // leaving the input-side goto_reason/phase_description up after the

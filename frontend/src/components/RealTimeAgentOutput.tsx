@@ -111,7 +111,6 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const {
     output,
     isLoading,
-    isFetching,
     error,
     isConnected,
     lastUpdateTime,
@@ -614,17 +613,25 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
           {/* Footer with stats */}
           <div className="px-6 py-2 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-xs text-gray-500 dark:text-gray-400 flex justify-between items-center rounded-b-lg">
             <div className="flex items-center space-x-4">
-              {/* Blips on each polling cycle so the viewer doesn't look
-                  frozen between visible output changes (see
-                  useRealTimeAgentOutput's isFetching). Fixed-width slot,
-                  always rendered, opacity-toggled -- conditionally
-                  mounting/unmounting the icon shifted the stats beside it
-                  left and right on every poll. */}
+              {/* Shows the AGENT is actively working, not just that the
+                  viewer's poll succeeded -- gated on agent.status so it
+                  stops once the agent goes idle/stuck/terminated, even
+                  though the viewer keeps polling successfully (it's just
+                  fetching unchanging content at that point). Tied to
+                  isConnected (not a per-request flag) so it stays steady
+                  instead of blipping on/off every ~1s poll. Fixed-width
+                  slot, always rendered, opacity-toggled so the stats
+                  beside it never shift. */}
               <RefreshCw
-                className={`w-3 h-3 animate-spin shrink-0 ${isFetching ? 'opacity-100' : 'opacity-0'}`}
-                aria-hidden={!isFetching}
+                className={`w-3 h-3 animate-spin shrink-0 ${agent?.status === 'working' && isConnected && !isPaused && !isSelectionPaused ? 'opacity-100' : 'opacity-0'}`}
+                aria-hidden={!(agent?.status === 'working' && isConnected && !isPaused && !isSelectionPaused)}
                 aria-label="Live"
               />
+              {agent?.cli_type && (
+                <span className="font-mono" title="CLI tool / model running this agent">
+                  {agent.cli_type}{agent.cli_model ? ` / ${agent.cli_model}` : ''}
+                </span>
+              )}
               <span>Lines: {output.split('\n').length}</span>
               <span>Characters: {output.length}</span>
               {searchTerm && (
