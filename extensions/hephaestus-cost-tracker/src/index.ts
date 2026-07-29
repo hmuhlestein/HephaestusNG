@@ -26,6 +26,15 @@ interface CostEntry {
 }
 
 export default function (pi: ExtensionAPI) {
+  // Disable entirely outside Hephaestus projects
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    if (!fs.existsSync(path.join(process.cwd(), '.hephaestus'))) return;
+  } catch {
+    return;
+  }
+
   const apiUrl = process.env.HEPHAESTUS_API_URL || 'http://localhost:8300';
   const agentId = process.env.HEPHAESTUS_AGENT_ID;
   const taskId = process.env.HEPHAESTUS_TASK_ID;
