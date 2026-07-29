@@ -1997,6 +1997,42 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
     return designs
 
 
+def _has_resumable_active_design(project_id: Optional[str]) -> bool:
+    """True if this project has an ACTIVE design with incomplete (not
+    completed/skipped) features already on file.
+
+    Used by run_continuous_pipeline's "workflow still active" gate to decide
+    whether an unrelated design's still-running workflow should actually
+    block picking up new work. It should only block a FRESH design's Phase 0
+    -- run_single_workflow's default pause_existing=True terminates every
+    other active workflow's agents project-wide (see its docstring), which
+    is destructive if another design's agents are still genuinely working.
+    Resuming an already-active design never reaches that path: run_phase0
+    skips straight past Phase 0 when Feature rows already exist (Tier 1,
+    see its docstring), and the feature dispatch that follows always passes
+    pause_existing=False. So a design in this state is always safe to
+    resume regardless of what else is active in the project.
+    """
+    try:
+        from src.core.database import AutopilotDesign, Feature, get_db
+
+        if not project_id:
+            return False
+        with get_db() as db:
+            active_designs = db.query(AutopilotDesign).filter_by(project_id=project_id, status="active").all()
+            for candidate in active_designs:
+                incomplete = (
+                    db.query(Feature)
+                    .filter(Feature.design_id == candidate.id, Feature.status.notin_(["completed", "skipped"]))
+                    .count()
+                )
+                if incomplete > 0:
+                    return True
+            return False
+    except Exception:
+        return False
+
+
 def pick_next_design(
     queue_dir: Path,
     processed_hashes: Set[str],
@@ -7900,7 +7936,7 @@ def run_continuous_pipeline(args) -> None:
                 try:
                     active_workflows = get_active_workflows(str(project_path), project_id=current_project_id)
                     still_blocking = _escalate_stale_active_workflows(active_workflows, active_workflow_abandoned_streak, logger)
-                    if still_blocking:
+                    if still_blocking and not _has_resumable_active_design(current_project_id):
                         wf_ids = [i[:8] for i in still_blocking]
                         logger.info(f"Workflow still active ({', '.join(wf_ids)}) - waiting before picking next design")
                         state.queue_status = {
@@ -7912,9 +7948,34 @@ def run_continuous_pipeline(args) -> None:
                         persistent_state.save(state, processed_hashes)
                         time.sleep(POLL_INTERVAL)
                         continue
+                    elif still_blocking:
+                        wf_ids = [i[:8] for i in still_blocking]
+                        logger.info(
+                            f"Workflow(s) still active ({', '.join(wf_ids)}) but another design has "
+                            "resumable ready features -- proceeding to pick_next_design instead of waiting"
+                        )
 
-                    # Also check previous workflow is fully complete (all phases done, branches merged)
-                    if state.current_workflow_id:
+                    # Also check previous workflow is fully complete (all phases done, branches merged).
+                    # Same reasoning as the still_blocking bypass above: skip this
+                    # entirely when another design already has resumable ready work
+                    # -- state.current_workflow_id tracks whichever design THIS
+                    # loop's own run_single_design call was last responsible for,
+                    # which is a different thing from "is the project's queue
+                    # allowed to make progress." Without this, a design left
+                    # tracked here from before a restart (still legitimately
+                    # in-progress, driven by its own agents independent of this
+                    # loop) blocks pick_next_design from ever running again, the
+                    # same way still_blocking did. Any genuine abandonment of
+                    # THIS workflow is already caught by _escalate_stale_active_
+                    # workflows above, which runs over the full project-wide
+                    # active-workflow list regardless of state.current_workflow_id.
+                    resumable_elsewhere = _has_resumable_active_design(current_project_id)
+                    if state.current_workflow_id and resumable_elsewhere:
+                        logger.info(
+                            f"Previous workflow {state.current_workflow_id[:8]} not re-checked this cycle "
+                            "-- another design has resumable ready features"
+                        )
+                    elif state.current_workflow_id:
                         # First check if workflow still exists in DB
                         try:
                             wf_check = get_workflow_status(state.current_workflow_id)
