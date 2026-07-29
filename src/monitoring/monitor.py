@@ -362,9 +362,9 @@ class IntelligentMonitor:
             message = f"""
 [HEPHAESTUS ASSISTANT]: Just checking in! You're working on task {agent.current_task_id}.
 If you're stuck or need help, remember you can:
-- Create sub-tasks using create_task
-- Save discoveries using save_memory
-- Update task status when done using update_task_status
+- Create sub-tasks using hephaestus_create_task
+- Save discoveries using hephaestus_save_memory
+- Update task status when done using hephaestus_update_task_status
 
 Current time: {datetime.utcnow().isoformat()}
 """
@@ -462,7 +462,7 @@ Previous approach issues:
 
 Please try a different approach, considering:
 - Break down the task into smaller steps
-- Use create_task for complex sub-tasks
+- Use hephaestus_create_task for complex sub-tasks
 - Save any discoveries or errors encountered
 """
 
@@ -914,7 +914,7 @@ class MonitoringLoop:
                         msg = (
                             "Your last tool call was aborted. Review what you have already "
                             "completed in this session. If the work is done, call "
-                            "update_task_status with status='done'. If you are genuinely "
+                            "hephaestus_update_task_status with status='done'. If you are genuinely "
                             f"blocked, call it with status='failed' and explain why.{mcp_note}"
                         )
                     elif _MAX_TOKEN_LIMIT_RE.search(_strip_sgr(sig)):
@@ -923,14 +923,14 @@ class MonitoringLoop:
                             "already succeeded — check what was actually written before "
                             "continuing. Break remaining work into smaller chunks: one file "
                             "read or one write per turn. If the task is done, call "
-                            "update_task_status with status='done'."
+                            "hephaestus_update_task_status with status='done'."
                             f"{mcp_note}"
                         )
                     else:
                         msg = (
                             "You appear stuck or looping. Stop, state your single next concrete "
                             f"action in one line, then do it. If blocked, save a memory and call "
-                            f"update_task_status.{mcp_note}"
+                            f"hephaestus_update_task_status.{mcp_note}"
                         )
                     await self.agent_manager.send_message_to_agent(agent.id, msg)
                     # Re-baseline st["sig"] to the pane AFTER our own nudge
@@ -1082,7 +1082,7 @@ class MonitoringLoop:
                 f"You are in a thought loop — the phrase {top_line[:60]!r} "
                 f"has appeared {top_count} times. STOP. Do not repeat that "
                 "reasoning again. Pick ONE concrete next step, execute it, "
-                "and if you are still blocked call update_task_status with "
+                "and if you are still blocked call hephaestus_update_task_status with "
                 "status='failed' and explain why.",
             )
             return True
@@ -1326,7 +1326,7 @@ class MonitoringLoop:
                 f"not a backend problem. {instructions} Once reconnected, "
                 "verify with `mcp status` that hephaestus is actually back, "
                 "then check specifically: have you already called "
-                f"complete_my_task for your CURRENT task_id ({agent.current_task_id or 'unknown -- call get_my_tasks first'}) "
+                f"hephaestus_complete_my_task for your CURRENT task_id ({agent.current_task_id or 'unknown -- call get_my_tasks first'}) "
                 "in THIS session? If not, call it now with your real "
                 "results — do not just say 'task already completed' and "
                 "stop. A resumed session can make you recall finishing a "
@@ -2659,7 +2659,7 @@ class MonitoringLoop:
                                 "session made you recall completing a DIFFERENT, "
                                 "earlier task, that is not this one and does not "
                                 "count. Check specifically: have you already called "
-                                f"complete_my_task for task_id {task.id} in this "
+                                f"hephaestus_complete_my_task for task_id {task.id} in this "
                                 "session? If not, do that now (verify your actual "
                                 "work against the current code first, don't assume "
                                 "an earlier task's fix covers this one). If you "

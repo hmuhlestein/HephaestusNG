@@ -146,7 +146,7 @@ The task belongs to **{phase_info["workflow_context"]["current_position"]}** in 
 You MUST evaluate whether the agent is following the Phase-specific instructions above.
 Common Phase instruction patterns:
 - "Create a Phase X task" → Check if agent created the task
-- "Mark task as done when finished" → Check if agent called update_task_status
+- "Mark task as done when finished" → Check if agent called hephaestus_update_task_status
 - "Search before creating" → Check if agent searched for duplicates
 - "Include TICKET: ticket-xxx in description" → Verify format
 

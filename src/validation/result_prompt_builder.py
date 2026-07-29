@@ -104,7 +104,7 @@ IMPORTANT NOTES:
 - Use the EXACT result_id provided: {result.id}
 - You have READ-ONLY access to the files
 - DO NOT modify any files
-- DO NOT use give_validation_review or update_task_status
+- DO NOT use give_validation_review or hephaestus_update_task_status
 - ONLY use submit_result_validation with the exact parameters shown above
 
 Begin now by reading the file at: {result.result_file_path}

@@ -67,7 +67,7 @@ Read the workflow goal carefully. What is the concrete deliverable? What does "s
 **MANDATORY**: Search qdrant for context before proceeding:
 
 ```python
-search_memory(query="[workflow goal keywords + stuck issue]", limit=10)
+hephaestus_search_memory(query="[workflow goal keywords + stuck issue]", limit=10)
 ```
 
 Look for: past workflow attempts, error patterns, implementation details, codebase learnings.
@@ -122,7 +122,7 @@ Common stuck scenarios:
 
 ```python
 # Template - ONLY use phase numbers from AVAILABLE WORKFLOW PHASES above!
-create_task(
+hephaestus_create_task(
     description="Specific task description",
     done_definition="Concrete completion criteria",
     phase_id=<VALID_PHASE_NUMBER>,  # ⚠️ From Step 5 mapping! Must exist in phases list!
@@ -143,7 +143,7 @@ create_task(
 ## ⚠️ CRITICAL CHECKLIST
 
 Before marking yourself done, verify:
-- [ ] Used `search_memory` to search memories (Step 2)
+- [ ] Used `hephaestus_search_memory` to search memories (Step 2)
 - [ ] Mapped gaps to phases in Step 5
 - [ ] Every phase_id is from AVAILABLE WORKFLOW PHASES (no made-up numbers!)
 - [ ] Tasks span multiple phases based on Step 5 mapping
@@ -157,23 +157,23 @@ Before marking yourself done, verify:
 **Scenario 1: Implementation failed → Go back to Phase 1**
 ```python
 # Step 5 mapping: Planning gap → Phase 1, Implementation gap → Phase 2
-create_task(description="...", phase_id=1, ...)  # From available phases
-create_task(description="...", phase_id=2, ...)  # From available phases
+hephaestus_create_task(description="...", phase_id=1, ...)  # From available phases
+hephaestus_create_task(description="...", phase_id=2, ...)  # From available phases
 ```
 
 **Scenario 2: Tests done but no evidence → Phase 4 (Documentation)**
 ```python
 # Step 5 mapping: Evidence gap → Phase 4 (Documentation)
-create_task(description="Compile evidence.md", phase_id=4, ...)
-create_task(description="Submit with submit_result()", phase_id=4, ...)
+hephaestus_create_task(description="Compile evidence.md", phase_id=4, ...)
+hephaestus_create_task(description="Submit with submit_result()", phase_id=4, ...)
 ```
 
 **Scenario 3: Multiple gaps**
 ```python
 # Step 5 mapping: Design gap → Phase 1, Code gap → Phase 2, Test gap → Phase 3
-create_task(description="...", phase_id=1, ...)  # Must be in available list
-create_task(description="...", phase_id=2, ...)  # Must be in available list
-create_task(description="...", phase_id=3, ...)  # Must be in available list
+hephaestus_create_task(description="...", phase_id=1, ...)  # Must be in available list
+hephaestus_create_task(description="...", phase_id=2, ...)  # Must be in available list
+hephaestus_create_task(description="...", phase_id=3, ...)  # Must be in available list
 ```
 
 ---
@@ -182,7 +182,7 @@ create_task(description="...", phase_id=3, ...)  # Must be in available list
 
 Follow all 6 steps in order:
 1. Understand Goal
-2. Search Memory (search_memory)
+2. Search Memory (hephaestus_search_memory)
 3. Analyze State
 4. Identify Gap
 5. **Map Gap to Phases** (verify phase numbers!)
@@ -191,7 +191,7 @@ Follow all 6 steps in order:
 When done creating tasks, mark yourself complete:
 
 ```python
-update_task_status(
+hephaestus_update_task_status(
     task_id="{task_id}",
     agent_id="{agent_id}",
     status="done",

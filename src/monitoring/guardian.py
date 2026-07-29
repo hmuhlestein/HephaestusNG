@@ -775,8 +775,8 @@ class Guardian:
             "steering_message": (
                 "You appear unresponsive — the monitoring system has been unable "
                 "to analyze your output for several minutes. If your task is "
-                "complete, call update_task_status now. If you are blocked, call "
-                "update_task_status with status='failed' and explain why."
+                "complete, call hephaestus_update_task_status now. If you are blocked, call "
+                "hephaestus_update_task_status with status='failed' and explain why."
             ),
             "accumulated_goal": "Unknown",
             "active_constraints": [],

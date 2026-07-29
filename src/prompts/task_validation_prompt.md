@@ -126,7 +126,7 @@ give_validation_review(
 - Modify any files or code
 - Execute code that changes state
 - Use `submit_result_validation` (that's for workflow results)
-- Use `update_task_status` (you're not working on the task)
+- Use `hephaestus_update_task_status` (you're not working on the task)
 - Re-implement the solution yourself
 - Create new tasks or assignments
 

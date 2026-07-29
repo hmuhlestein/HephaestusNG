@@ -19,7 +19,7 @@ done_definitions:
   - "Stuck/crashed agents identified with timestamps"
   - "Common issue patterns cataloged"
   - "Specific prompt rewrites proposed (with before/after text)"
-  - "Tickets created for actionable findings (skip and continue if create_ticket returns an error)"
+  - "Tickets created for actionable findings (skip and continue if hephaestus_create_ticket returns an error)"
   - "forensics_report.md created in Docs Path"
   - "Memory entries saved with feature name prefix in content"
   - "Task marked as done"
@@ -302,14 +302,14 @@ additional_notes: |
   STEP 7: CREATE TICKETS FOR FINDINGS (OPTIONAL — SKIP IF API FAILS)
   ═══════════════════════════════════════════════════════════════════════
 
-  IMPORTANT: Ticket creation is OPTIONAL. If create_ticket returns an error,
+  IMPORTANT: Ticket creation is OPTIONAL. If hephaestus_create_ticket returns an error,
   note "ticket creation failed — findings documented in forensics_report.md"
   and MOVE ON immediately to Step 8. Do NOT retry. Do NOT loop.
 
   For each actionable finding in your report, attempt to create a ticket:
 
   ```
-  create_ticket(
+  hephaestus_create_ticket(
     agent_id="<your agent id>",
     workflow_id="<your workflow id>",
     task_id="<your task id>",
