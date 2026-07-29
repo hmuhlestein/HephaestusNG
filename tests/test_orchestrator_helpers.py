@@ -834,6 +834,89 @@ class TestPickNextDesign:
             assert wf.design_id == "des-real-fail"
 
 
+class TestHasResumableActiveDesign:
+    """Regression: the 'workflow still active' gate in run_continuous_pipeline
+    used to block picking up ANY new work whenever any workflow was active
+    anywhere in the project, even one belonging to a completely unrelated
+    design. A design that's already active with ready, dependency-satisfied
+    features would then sit untouched indefinitely behind an unrelated
+    design's in-progress chain. _has_resumable_active_design lets the gate
+    tell the two cases apart -- resuming an active design is always safe
+    (Tier-1 Phase-0 skip + pause_existing=False), only a brand new design's
+    Phase 0 dispatch is destructive."""
+
+    def test_true_when_active_design_has_incomplete_features(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator import _has_resumable_active_design
+        from src.core.database import AutopilotDesign, Feature
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotDesign(
+                id="des-backend", project_id="proj-1", filename="d.md", name="Backend",
+                status="active",
+            )
+        )
+        session.add(
+            Feature(
+                id="feat-done", design_id="des-backend", feature_key="auth-fraud",
+                name="Auth", scope="s", status="completed",
+            )
+        )
+        session.add(
+            Feature(
+                id="feat-ready", design_id="des-backend", feature_key="credit-system",
+                name="Credit", scope="s", status="pending", depends_on=["auth-fraud"],
+            )
+        )
+        session.commit()
+        session.close()
+
+        assert _has_resumable_active_design("proj-1") is True
+
+    def test_false_when_no_active_design(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator import _has_resumable_active_design
+        from src.core.database import AutopilotDesign
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotDesign(
+                id="des-pending", project_id="proj-1", filename="d.md", name="D",
+                status="pending",
+            )
+        )
+        session.commit()
+        session.close()
+
+        assert _has_resumable_active_design("proj-1") is False
+
+    def test_false_when_active_design_has_no_incomplete_features(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator import _has_resumable_active_design
+        from src.core.database import AutopilotDesign, Feature
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotDesign(
+                id="des-done", project_id="proj-1", filename="d.md", name="D",
+                status="active",
+            )
+        )
+        session.add(
+            Feature(
+                id="feat-a", design_id="des-done", feature_key="a",
+                name="A", scope="s", status="completed",
+            )
+        )
+        session.commit()
+        session.close()
+
+        assert _has_resumable_active_design("proj-1") is False
+
+    def test_false_without_project_id(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator import _has_resumable_active_design
+
+        assert _has_resumable_active_design(None) is False
+
+
 class TestCreateFeatureFolder:
     def test_creates_folder(self, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger, create_feature_folder
