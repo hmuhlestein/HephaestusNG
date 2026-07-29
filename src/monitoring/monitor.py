@@ -1465,6 +1465,102 @@ class MonitoringLoop:
             logger.warning(f"[CREDIT-EXHAUSTED] check failed for {agent.id[:8]}: {e}")
         return False
 
+    #: How long an agent may show zero activity since its prompt was
+    #: delivered before _detect_agent_never_started gives up on it.
+    #: Deliberately shorter than _mechanical_recovery_for_agent's
+    #: frozen_seconds (300s): "never produced any output at all" is a
+    #: stronger signal than "was producing output, then stopped", and a
+    #: keystroke nudge can't help a request that never returned in the
+    #: first place -- there's nothing to interrupt a reply out of.
+    NEVER_STARTED_GRACE_SECONDS = 240
+
+    async def _detect_agent_never_started(self, agent) -> bool:
+        """Detect an agent whose initial prompt was delivered but that has
+        produced zero substantive output since -- Agent.last_activity
+        (only ever refreshed by a real output-signature change in
+        _mechanical_recovery_for_agent, an MCP tool call, or a successful
+        Guardian cycle) has stayed at its launch-time value the whole
+        time.
+
+        Unlike _mechanical_recovery_for_agent's frozen-output check, this
+        reads persisted Agent.launched_at/last_activity from the DB
+        instead of in-memory _stuck_state -- so it correctly identifies
+        an agent that's been silent since launch even on the very FIRST
+        monitoring cycle after a backend restart, when _stuck_state was
+        just wiped and hasn't had a chance to accumulate 300s of
+        observed frozen time yet. Observed live: a pi agent queued behind
+        several other concurrently-launched agents on the same local
+        model server sat at its initial "Begin now." banner with zero
+        output for 10+ minutes, un-nudgeable by Enter (confirmed manually
+        -- the process was blocked on the in-flight completion request,
+        not waiting on stdin), while _mechanical_recovery_for_agent
+        stayed silent because its own tracking had just been reset by an
+        unrelated restart minutes earlier.
+
+        Deliberately compares against launched_at, not created_at:
+        restart_agent refreshes launched_at (and last_activity) on every
+        restart but leaves created_at at the agent's original creation
+        time, which predates every restart. Comparing last_activity to
+        created_at would make (last_activity - created_at) always look
+        large for a restarted agent regardless of whether it's had any
+        real activity since THIS restart -- permanently disqualifying
+        every restarted agent from ever being caught by this check, the
+        exact scenario (a resumed "_r" session hanging again) this exists
+        to catch.
+
+        Terminates and resets the task to pending (same remedy as
+        _detect_connection_errors) rather than nudging -- nothing has
+        ever been received to nudge a reply out of.
+        """
+        try:
+            if agent.status != "working" or not agent.current_task_id:
+                return False
+            if not agent.launched_at or not agent.last_activity:
+                return False
+            # last_activity is stamped at launch-command-send time (see
+            # create_agent_for_task/restart_agent) and only moves forward
+            # from there on real activity -- if it's still within a few
+            # seconds of launched_at, nothing has happened since launch.
+            if (agent.last_activity - agent.launched_at).total_seconds() > 5:
+                return False
+            elapsed = (datetime.utcnow() - agent.last_activity).total_seconds()
+            if elapsed < self.NEVER_STARTED_GRACE_SECONDS:
+                return False
+
+            if not hasattr(self, "_never_started_handled"):
+                self._never_started_handled = set()
+            if agent.id in self._never_started_handled:
+                return False
+            self._never_started_handled.add(agent.id)
+
+            task_id = agent.current_task_id
+            logger.warning(
+                f"[NEVER-STARTED] Agent {agent.id[:8]} ({agent.cli_type}) produced "
+                f"no output {int(elapsed)}s after launch — terminating so pipeline can retry"
+            )
+            await self.agent_manager.terminate_agent(agent.id)
+
+            with self.db_manager.session_scope() as session:
+                from src.core.database import Task as _Task
+
+                stuck_task = (
+                    session.query(_Task)
+                    .filter_by(id=task_id)
+                    .filter(_Task.status.in_(["assigned", "in_progress"]))
+                    .first()
+                )
+                if stuck_task:
+                    stuck_task.status = "pending"
+                    stuck_task.assigned_agent_id = None
+                    stuck_task.failure_reason = None
+                    logger.info(
+                        f"[NEVER-STARTED] Task {stuck_task.id[:8]} reset to pending for retry"
+                    )
+            return True
+        except Exception as e:
+            logger.warning(f"[NEVER-STARTED] check failed for {agent.id[:8]}: {e}")
+        return False
+
     async def _monitoring_cycle(self):
         """Execute one monitoring cycle with trajectory monitoring."""
         logger.debug("Starting trajectory monitoring cycle")
@@ -1484,22 +1580,28 @@ class MonitoringLoop:
         agents = self.agent_manager.get_active_agents()
         logger.info(f"Trajectory monitoring {len(agents)} active agents")
 
-        # Phase 0: cheap mechanical recovery (no LLM). Seven complementary checks:
+        # Phase 0: cheap mechanical recovery (no LLM). Eight complementary checks:
         #   a) OpenRouter credits exhausted — pause workflow + terminate
         #      immediately, before any other check wastes a recovery attempt
         #      on an agent that's about to be torn down anyway
-        #   b) frozen output — same substantive 40-line sig for ≥5 min
-        #   c) repetition loop — output growing but same sentence repeats 5+ times
+        #   b) never started — zero output since launch, ≥4 min — terminate,
+        #      reset to pending; uses persisted Agent timestamps so it works
+        #      correctly even right after a restart, unlike (c) below
+        #   c) frozen output — same substantive 40-line sig for ≥5 min
+        #   d) repetition loop — output growing but same sentence repeats 5+ times
         #      in the last 80 lines (LLM cycling "Actually, let me try…")
-        #   d) pending rm confirmation — auto-deny immediately, don't wait for (b)
-        #   e) max output token limit hit — nudge immediately, don't wait for (b)
-        #   f) MCP server disconnected — nudge to `mcp connect`, don't wait for (b)
-        #   g) Claude Code rejected its launch model — fix directly with a
+        #   e) pending rm confirmation — auto-deny immediately, don't wait for (c)
+        #   f) max output token limit hit — nudge immediately, don't wait for (c)
+        #   g) MCP server disconnected — nudge to `mcp connect`, don't wait for (c)
+        #   h) Claude Code rejected its launch model — fix directly with a
         #      real `/model <x>` keystroke send, since the agent can't
         #      invoke that slash command itself
         mechanically_intervened = set()
         for agent in agents:
             if await self._detect_credit_exhausted(agent):
+                mechanically_intervened.add(agent.id)
+                continue
+            if await self._detect_agent_never_started(agent):
                 mechanically_intervened.add(agent.id)
                 continue
             if await self._mechanical_recovery_for_agent(agent):

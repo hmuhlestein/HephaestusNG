@@ -77,11 +77,15 @@ class TestPollStableTranscript:
         # an output line), the very last couple of lines shouldn't be
         # committed yet.
         state = agent_manager._pane_stability_cache[session_name]
-        assert state["committed"] == len(state["lines"]) - 2
+        assert state["committed"] == len(state["history"][-1]) - 2
 
-    def test_second_identical_poll_confirms_previously_held_back_lines(
+    def test_third_identical_poll_confirms_previously_held_back_lines(
         self, agent_manager, tmux_session, tmp_path
     ):
+        """3-poll confirmation (see _STABILITY_CONFIRMATIONS): a line must
+        be unchanged across 3 consecutive polls before it commits, not 2
+        -- so the withheld tail from the bootstrap poll shouldn't confirm
+        until the THIRD poll here (2 more agreeing polls after bootstrap)."""
         session_name, session = tmux_session
         pane = session.attached_window.attached_pane
         pane.send_keys("echo final-marker-line", enter=True)
@@ -91,13 +95,21 @@ class TestPollStableTranscript:
         agent_manager._poll_stable_transcript(session_name, clean_path)
         first_committed = agent_manager._pane_stability_cache[session_name]["committed"]
 
-        # Nothing changed in the pane -- a second poll should see the
-        # same content at the same positions and confirm (commit) the
-        # previously-withheld tail.
+        # Nothing changed in the pane -- one more agreeing poll still isn't
+        # enough (only 2 of the required 3 consecutive polls so far). Not
+        # asserting "final-marker-line not in ..." here -- the echoed
+        # COMMAND itself ("echo final-marker-line") already committed at
+        # bootstrap and contains that same substring; committed-count
+        # equality is the real signal that nothing new confirmed yet.
         agent_manager._poll_stable_transcript(session_name, clean_path)
         second_committed = agent_manager._pane_stability_cache[session_name]["committed"]
+        assert second_committed == first_committed
 
-        assert second_committed > first_committed
+        # Third agreeing poll -- now confirmed and committed.
+        agent_manager._poll_stable_transcript(session_name, clean_path)
+        third_committed = agent_manager._pane_stability_cache[session_name]["committed"]
+
+        assert third_committed > first_committed
         assert "final-marker-line" in clean_path.read_text()
 
     def test_still_changing_line_is_withheld_until_it_settles(
@@ -126,6 +138,62 @@ class TestPollStableTranscript:
         # -- tick-1 (now a stable, no-longer-changing line) should commit.
         agent_manager._poll_stable_transcript(session_name, clean_path)
         assert "tick-1" in clean_path.read_text()
+
+
+class TestStabilityConfirmationRace:
+    """Regression (live incident): 2-poll confirmation caught a real race
+    -- pi's TUI briefly reserves a blank placeholder line for a command's
+    output before streaming the real content in, and if that blank state
+    happened to persist across exactly 2 polls (bad timing, not rare over
+    a multi-hour session), the blank got permanently committed and the
+    real content that filled in a moment later was silently skipped
+    forever (append-only positions are never revisited). Observed live:
+    "All checks passed!" / "EXIT: 0" from a ruff run replaced by two
+    blank lines in the clean transcript, confirmed present in the raw
+    capture-pane output the whole time. Uses a mocked _capture_pane_lines
+    to deterministically reproduce the exact timing that a real tmux
+    session can only hit by chance."""
+
+    def test_blank_placeholder_matching_twice_is_not_committed_as_final(
+        self, agent_manager, tmp_path, monkeypatch
+    ):
+        session_name = "sess-race"
+        clean_path = tmp_path / f"{session_name}.clean.log"
+
+        bootstrap = ["prompt-1", "$ ruff check .", "blank-placeholder"]
+        monkeypatch.setattr(
+            agent_manager, "_capture_pane_lines", lambda _sn: bootstrap
+        )
+        agent_manager._poll_stable_transcript(session_name, clean_path)
+
+        # Two consecutive polls where the placeholder line hasn't been
+        # replaced by real output yet -- exactly what would have
+        # confirmed (wrongly) under the old 2-poll algorithm.
+        still_blank = ["prompt-1", "$ ruff check .", "blank-placeholder"]
+        monkeypatch.setattr(
+            agent_manager, "_capture_pane_lines", lambda _sn: still_blank
+        )
+        agent_manager._poll_stable_transcript(session_name, clean_path)
+        assert "blank-placeholder" not in clean_path.read_text()
+
+        # The real content streams in on the next poll, before a 3rd
+        # confirming poll of the blank ever happened -- proving the
+        # placeholder was never locked in.
+        real_content = ["prompt-1", "$ ruff check .", "All checks passed!"]
+        monkeypatch.setattr(
+            agent_manager, "_capture_pane_lines", lambda _sn: real_content
+        )
+        agent_manager._poll_stable_transcript(session_name, clean_path)
+        assert "blank-placeholder" not in clean_path.read_text()
+        assert "All checks passed!" not in clean_path.read_text()  # not yet 3x stable
+
+        # Two more agreeing polls -- now genuinely stable, commits the
+        # real content, never the placeholder.
+        agent_manager._poll_stable_transcript(session_name, clean_path)
+        agent_manager._poll_stable_transcript(session_name, clean_path)
+        content = clean_path.read_text()
+        assert "All checks passed!" in content
+        assert "blank-placeholder" not in content
 
 
 class TestPollStableTranscriptDiscontinuity:
@@ -215,7 +283,7 @@ class TestFlushStableTranscript:
         # Bootstrap withholds the last 2 lines pending confirmation --
         # committed must be strictly less than the full captured pane.
         state = agent_manager._pane_stability_cache[session_name]
-        assert state["committed"] < len(state["lines"])
+        assert state["committed"] < len(state["history"][-1])
 
         agent_manager._flush_stable_transcript(session_name, clean_path)
         content = clean_path.read_text()
@@ -223,7 +291,7 @@ class TestFlushStableTranscript:
         assert "flush-line-3" in content
         # Everything the bootstrap withheld (plus anything captured fresh
         # by flush's own final capture-pane call) must now be committed.
-        assert content.count("\n") >= len(state["lines"])
+        assert content.count("\n") >= len(state["history"][-1])
         assert session_name not in getattr(agent_manager, "_pane_stability_cache", {})
 
 
@@ -268,3 +336,60 @@ class TestGetAgentOutputUsesCleanTranscript:
         output = agent_manager.get_agent_output(agent_id, lines=100)
         assert "hello-from-clean-transcript" in output
         assert (tmp_path / ".hephaestus" / "tmux" / f"{session_name}.clean.log").exists()
+
+    def test_empty_clean_transcript_falls_back_to_live_capture_pane_not_raw(
+        self, agent_manager, db_manager, tmp_path, monkeypatch
+    ):
+        """Regression (live incident): when clean.log hasn't committed
+        anything yet -- a fresh session, or mid-stream on a long response
+        that hasn't settled anywhere -- get_agent_output used to fall
+        through to the RAW pipe-pane transcript, which re-shows every
+        intermediate \\r-redrawn state of a streaming line as its own
+        separate line (the exact duplication problem the clean transcript
+        exists to avoid). It must prefer a live, unprocessed
+        capture-pane snapshot (tmux's own correct rendering, just not yet
+        "confirmed stable") over the raw transcript instead."""
+        from src.core.database import Workflow
+
+        session_name = "sess-empty-clean"
+        task_id = str(uuid.uuid4())
+        agent_id = str(uuid.uuid4())
+        workflow_id = str(uuid.uuid4())
+        session_db = db_manager.get_session()
+        session_db.add(
+            Workflow(
+                id=workflow_id, name="t", phases_folder_path="/tmp",
+                status="active", definition_id="autopilot",
+                working_directory=str(tmp_path),
+            )
+        )
+        session_db.add(
+            Task(
+                id=task_id, workflow_id=workflow_id, raw_description="r",
+                done_definition="d", status="in_progress",
+            )
+        )
+        session_db.add(
+            Agent(
+                id=agent_id, system_prompt="p", status="working", cli_type="claude",
+                tmux_session_name=session_name, current_task_id=task_id,
+            )
+        )
+        session_db.commit()
+        session_db.close()
+
+        # _poll_stable_transcript withholds everything (clean.log stays
+        # empty/nonexistent) -- simulates a fresh session or an
+        # unsettled, still-streaming response.
+        monkeypatch.setattr(agent_manager, "_poll_stable_transcript", lambda *a, **k: None)
+        monkeypatch.setattr(
+            agent_manager, "_capture_pane_lines", lambda _sn: ["live-correctly-rendered-line"]
+        )
+        monkeypatch.setattr(
+            agent_manager, "_read_transcript_log", lambda *a, **k: "raw-duplicated-streaming-line\nraw-duplicated-streaming-line-longer"
+        )
+
+        output = agent_manager.get_agent_output(agent_id, lines=100)
+
+        assert "live-correctly-rendered-line" in output
+        assert "raw-duplicated-streaming-line" not in output

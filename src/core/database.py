@@ -162,6 +162,18 @@ class Agent(Base):
     # surviving termination.
     current_task_id = Column(String, ForeignKey("tasks.id"))
     last_activity = Column(DateTime, default=datetime.utcnow)
+    # Stamped at the start of the CURRENT attempt -- both
+    # create_agent_for_task and restart_agent set this to datetime.utcnow()
+    # at launch, unlike created_at (fixed at first creation, never touched
+    # by a restart) or last_activity (also stamped at launch, but then
+    # overwritten by real progress too -- so it alone can't distinguish
+    # "just launched, zero progress yet" from "made progress a while ago").
+    # monitor.py's _detect_agent_never_started compares last_activity
+    # against THIS field specifically so a restarted agent that hangs
+    # again is still caught -- comparing against created_at would always
+    # see restarted agents as "already had activity" since created_at
+    # predates every restart.
+    launched_at = Column(DateTime, nullable=True)
     health_check_failures = Column(Integer, default=0)
     restart_count = Column(Integer, default=0)  # Tracks restart attempts
     cli_model = Column(String, nullable=True)  # Per-agent model override
@@ -1644,6 +1656,18 @@ class DatabaseManager:
                 logger.info("Migrated agents.cli_model column")
         except Exception as e:
             logger.debug(f"agents.cli_model migration (may already exist): {e}")
+
+        # Add launched_at to agents table if missing
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE agents ADD COLUMN launched_at DATETIME"))
+                except sqlalchemy_exc.OperationalError:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated agents.launched_at column")
+        except Exception as e:
+            logger.debug(f"agents.launched_at migration (may already exist): {e}")
 
     def _migrate_feature_model_columns(self):
         """Add Feature model columns to autopilot_designs and workflows for existing databases.
