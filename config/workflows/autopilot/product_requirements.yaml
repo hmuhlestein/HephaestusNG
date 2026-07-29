@@ -81,7 +81,7 @@ additional_notes: |
       - features/*/docs/ (design docs for previous features)
 
   4. Search the vector database for existing knowledge:
-     NOTE: search_memory is OPTIONAL. Try it once — if it returns empty results
+     NOTE: hephaestus_search_memory is OPTIONAL. Try it once — if it returns empty results
      or errors, SKIP IT and proceed. Do NOT retry failed searches.
 
      ```python
@@ -224,10 +224,10 @@ additional_notes: |
   - ...
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: SAVE TO MEMORY (using save_memory MCP tool)
+  STEP 5: SAVE TO MEMORY (using hephaestus_save_memory MCP tool)
   ═══════════════════════════════════════════════════════════════════════
 
-  Save key findings to the vector database using save_memory().
+  Save key findings to the vector database using hephaestus_save_memory().
   Make ONE comprehensive call instead of multiple separate calls:
 
   ```python
@@ -271,7 +271,7 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
 
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
-  You MUST call the complete_my_task tool. The system CANNOT detect you finished
+  You MUST call the hephaestus_complete_my_task tool. The system CANNOT detect you finished
   without this call. The pipeline WILL get stuck.
 
   After writing all your output files, call:
