@@ -340,6 +340,7 @@ class FrontendAPI:
                     "id": agent.id,
                     "status": agent.status,
                     "cli_type": agent.cli_type,
+                    "cli_model": agent.cli_model,
                     "current_task_id": agent.current_task_id,
                     "tmux_session_name": agent.tmux_session_name,
                     "health_check_failures": agent.health_check_failures,
@@ -931,6 +932,7 @@ class FrontendAPI:
                         "id": agent.id,
                         "status": agent.status,
                         "cli_type": agent.cli_type,
+                        "cli_model": agent.cli_model,
                         "created_at": agent.created_at.isoformat() + "Z"
                         if agent.created_at
                         else None,
