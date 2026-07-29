@@ -1806,6 +1806,91 @@ class TestMechanicalRecovery:
         assert task.status == "failed"
         mock_agent_manager.terminate_agent.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_operation_aborted_nudge_echo_does_not_reset_recovery_counter(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: the nudge sent for "Operation aborted" gets echoed
+        into the pane by most CLIs, so the very next poll's signature
+        differs from the pre-nudge baseline purely because of our own
+        message -- not real agent progress. Left unbaselined, every nudge
+        reset st["recov"] back to 0 (the "output changed -> real progress"
+        branch), so max_recov was never actually reached and the agent sat
+        endlessly re-nudged instead of escalating after max_recov attempts.
+        Observed live: 5+ consecutive "Operation aborted" nudges for the
+        same agent."""
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.send_recovery_keystrokes = AsyncMock(return_value=True)
+
+        baseline = "Operation aborted\nAgent idle at prompt"
+        after_nudge_1 = "Operation aborted\nAgent idle at prompt\n[nudge 1 echoed here]"
+        after_nudge_2 = "Operation aborted\nAgent idle at prompt\n[nudge 2 echoed here]"
+        mock_agent_manager.get_agent_output.side_effect = [
+            baseline,       # call 1: sets initial baseline
+            baseline,       # call 2: sig-check, matches baseline -> frozen
+            after_nudge_1,  # call 2: post-nudge re-capture (this fix)
+            after_nudge_1,  # call 3: sig-check, matches re-baselined sig -> still frozen
+            after_nudge_2,  # call 3: post-nudge re-capture (this fix)
+        ]
+
+        # Call 1: sets baseline, no recovery yet.
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        assert make_monitoring_loop._stuck_state["a1"]["recov"] == 0
+
+        # Call 2: frozen for >= 30s -> first nudge.
+        make_monitoring_loop._stuck_state["a1"]["since"] = time.time() - 40
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        assert make_monitoring_loop._stuck_state["a1"]["recov"] == 1
+
+        # Call 3: the pane now shows the first nudge's own echo -- without
+        # the fix this reads as "output changed" and resets recov to 0.
+        make_monitoring_loop._stuck_state["a1"]["since"] = time.time() - 40
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        assert make_monitoring_loop._stuck_state["a1"]["recov"] == 2
+
+        assert mock_agent_manager.send_message_to_agent.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_operation_aborted_escalates_without_waiting_full_frozen_seconds(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: once max_recov nudges are exhausted via the fast 30s
+        abort_frozen path, escalation to fail+terminate used to require
+        frozen_for >= the FULL frozen_seconds (300s), measured from the
+        last nudge's since=now reset -- neither branch's condition was
+        satisfiable in between (recov >= max_recov blocks the nudge
+        branch; frozen_for was only ~30-40s, nowhere near 300s), so the
+        agent sat frozen and untouched for up to 5 more minutes after
+        exhausting recovery attempts."""
+        from contextlib import contextmanager
+
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        frozen_output = "Operation aborted\nAgent idle at prompt"
+        mock_agent_manager.get_agent_output.return_value = frozen_output
+
+        make_monitoring_loop._stuck_state = {}
+        make_monitoring_loop._stuck_state["a1"] = {
+            "sig": frozen_output,
+            "since": time.time() - 40,  # only 40s, nowhere near frozen_seconds=300
+            "recov": 2,  # already exhausted max_recov
+        }
+
+        session = Mock()
+        task = Mock(id="t1", status="in_progress")
+        session.query.return_value.filter_by.return_value.filter.return_value.first.return_value = task
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        assert task.status == "failed"
+        mock_agent_manager.terminate_agent.assert_called_once()
+
 
 class TestSessionLimitPause:
     """A session-limit rejection on an already-running agent (unlike
