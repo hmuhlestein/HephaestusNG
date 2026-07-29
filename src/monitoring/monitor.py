@@ -933,10 +933,47 @@ class MonitoringLoop:
                             f"update_task_status.{mcp_note}"
                         )
                     await self.agent_manager.send_message_to_agent(agent.id, msg)
+                    # Re-baseline st["sig"] to the pane AFTER our own nudge
+                    # lands, not before. The nudge text gets echoed into the
+                    # pane (most CLIs show sent messages in the transcript),
+                    # so the very next poll's sig almost always differs from
+                    # the pre-nudge baseline captured above -- purely from
+                    # our own message, not the agent doing anything. Left
+                    # unbaselined, that "changed" (line ~825) reads as real
+                    # progress and resets st["recov"] to 0 every single
+                    # cycle, so max_recov is never actually reached: the
+                    # agent sits frozen at the same "Operation aborted"
+                    # prompt while the nudge fires over and over, never
+                    # escalating to fail+terminate. Observed live: 5+
+                    # consecutive "Operation aborted" nudges for the same
+                    # agent well past max_recov=2. Best-effort -- if the
+                    # re-capture fails, fall through with the stale
+                    # baseline (matches this function's pre-existing
+                    # behavior before this fix).
+                    try:
+                        post_nudge_out = self.agent_manager.get_agent_output(agent.id, lines=40)
+                        if post_nudge_out:
+                            post_nudge_no_color = _strip_sgr(post_nudge_out)
+                            st["sig"] = "\n".join(
+                                ln
+                                for ln in post_nudge_no_color.splitlines()
+                                if not re.search(r"%/[\d.]+M|\$[\d.]+|MCP:|Took |[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣿]", ln)
+                            ).strip()
+                    except Exception:
+                        pass
                     return True
-            elif frozen_for >= frozen_seconds and st["recov"] >= max_recov:
+            elif (abort_frozen or frozen_for >= frozen_seconds) and st["recov"] >= max_recov:
                 # All recovery attempts exhausted and agent is still frozen.
-                # Fail the task so the monitor's retry-bound path handles it
+                # Mirrors the nudge-trigger condition above (abort_frozen or
+                # frozen_for >= frozen_seconds), not just frozen_seconds --
+                # without this, an "Operation aborted" agent that exhausts
+                # max_recov via the fast 30s abort_frozen path then has to
+                # sit frozen for the FULL frozen_seconds (300s, timed from
+                # the last nudge's since=now reset) before this branch would
+                # ever fire, since neither branch's condition was true in
+                # between: recov >= max_recov blocks the nudge branch, and
+                # frozen_for was only ~30s, not yet 300s. Fail the task so
+                # the monitor's retry-bound path handles it
                 # (MAX_PHASE_ATTEMPTS → impasse if exceeded). §9.4 / §11.2 fix #2.
                 logger.warning(
                     f"[MECH-RECOVERY] Agent {agent.id[:8]} frozen {int(frozen_for)}s after "
