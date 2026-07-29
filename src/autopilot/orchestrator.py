@@ -2847,6 +2847,87 @@ def _sync_stale_feature_statuses(logger: OrchestratorLogger) -> int:
     return repaired
 
 
+def _resync_pipeline_registry(logger: OrchestratorLogger, loop: "asyncio.AbstractEventLoop") -> int:
+    """Self-heal for a project whose persisted "was running" marker
+    (AutopilotService.enumerate_persisted_states) says its pipeline should
+    be running, but AutopilotServiceRegistry has no live entry for it --
+    the one-shot startup resume (_resume_interrupted_workflows) either
+    never ran for it or failed silently. See
+    docs/SAFE_RESTART_DESIGN.md §3.5.
+
+    Runs from the same generic, restart-safe background sweep as
+    _sync_stale_feature_statuses -- catches whatever the startup resume
+    missed, on an ongoing basis instead of only once at boot. Observed
+    live: several backend restarts in quick succession left a project's
+    pipeline dead (no crash, no error -- it just never got another turn to
+    pick up new work) while its own "is this project running" status
+    still read healthy, derived from an unrelated still-active workflow
+    rather than the pipeline loop itself.
+
+    AutopilotService.start() is async and spawns its own long-lived
+    background task (self._task) that must stay tied to the server's
+    persistent event loop, not a throwaway one -- asyncio.run(...) (this
+    module's usual sync-to-async bridge, see create_agent_for_task_direct)
+    would create and then immediately close a temporary loop, silently
+    orphaning that task the moment start() itself returns. Scheduling onto
+    the real loop via run_coroutine_threadsafe avoids that.
+    """
+    from src.autopilot.service import AutopilotService, get_registry
+
+    try:
+        persisted = AutopilotService.enumerate_persisted_states()
+    except Exception as e:
+        logger.warning(f"[PIPELINE-RESYNC] Could not enumerate persisted state: {e}")
+        return 0
+
+    registry = get_registry()
+    resumed = 0
+    for project_id, state in persisted:
+        project_path = state.get("project_path")
+        if not project_path:
+            continue
+
+        existing = registry.get(project_id)
+        if existing and existing.running:
+            continue  # already tracked and alive -- nothing to do
+
+        if _should_stop(project_id):
+            # A pause_for_restart() (or an explicit stop()) is already
+            # in-flight for this project -- its registry entry can look
+            # exactly like "should restart" here (running momentarily
+            # False, persisted marker deliberately left intact) while it's
+            # still mid-drain. Restarting it now would race the graceful
+            # pause itself. Let the NEXT sweep tick re-check once that
+            # settles, rather than force a restart mid-shutdown.
+            logger.debug(
+                f"[PIPELINE-RESYNC] Project {project_id[:8]}: stop already "
+                "in flight, skipping this tick"
+            )
+            continue
+
+        logger.warning(
+            f"[PIPELINE-RESYNC] Project {project_id[:8]}: persisted state "
+            "says running but no live pipeline found -- restarting"
+        )
+        try:
+            service = registry.get_or_create(project_id)
+            future = asyncio.run_coroutine_threadsafe(
+                service.start(
+                    project_path=project_path,
+                    design_queue=state.get("design_queue", ""),
+                    max_iterations=state.get("max_iterations", 10),
+                ),
+                loop,
+            )
+            future.result(timeout=30.0)
+            resumed += 1
+        except Exception as e:
+            logger.warning(
+                f"[PIPELINE-RESYNC] Failed to restart project {project_id[:8]}: {e}"
+            )
+    return resumed
+
+
 def _recover_abandoned_workflows_missing_worktree(logger: OrchestratorLogger) -> int:
     """Self-heal for a workflow that _escalate_stale_active_workflows marked
     "failed" as a false positive (its own message already hedges: "likely
@@ -7526,6 +7607,23 @@ def _should_stop(project_id: Optional[str]) -> bool:
     return False
 
 
+def _interruptible_sleep(seconds: int, project_id: Optional[str]) -> None:
+    """Sleep up to `seconds`, but return early if _should_stop(project_id)
+    flips during it. A plain time.sleep(seconds) here means a stop request
+    (including AutopilotService.pause_for_restart(), see
+    docs/SAFE_RESTART_DESIGN.md §3.3) is invisible to the loop for however
+    long the sleep already had left -- up to DESIGN_QUEUE_SCAN_INTERVAL
+    (60s) at the two call sites that use this. Checking every second
+    instead makes that latency ~1s regardless of where in the sleep the
+    stop request lands.
+    """
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if _should_stop(project_id):
+            return
+        time.sleep(max(0, min(1, deadline - time.time())))
+
+
 def _register_orchestrator_agent(log_dir: Path, cli_tool: str, logger: OrchestratorLogger) -> Optional[str]:
     """Register (or re-register, after a restart) the orchestrator's own
     Agent row, whose id becomes Task.created_by_agent_id for every task the
@@ -7937,7 +8035,7 @@ def run_continuous_pipeline(args) -> None:
                             }
                             logger.save_state(state)
                             persistent_state.save(state, processed_hashes)
-                            time.sleep(POLL_INTERVAL)
+                            _interruptible_sleep(POLL_INTERVAL, current_project_id)
                             continue
                         else:
                             logger.info(f"Previous workflow fully complete: {reason}")
@@ -7956,7 +8054,7 @@ def run_continuous_pipeline(args) -> None:
                     logger.save_state(state)
                     _update_orchestrator_status("idle")
                     persistent_state.save(state, processed_hashes)
-                    time.sleep(DESIGN_QUEUE_SCAN_INTERVAL)
+                    _interruptible_sleep(DESIGN_QUEUE_SCAN_INTERVAL, current_project_id)
                     continue
 
                 next_design.status = DesignStatus.IN_PROGRESS

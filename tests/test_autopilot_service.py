@@ -526,6 +526,27 @@ class TestRunningStatePersistence:
             await service.stop()
             assert service.load_persisted_state() is None
 
+    @pytest.mark.asyncio
+    async def test_pause_for_restart_keeps_persisted_state(self, service, tmp_path):
+        """Regression (docs/SAFE_RESTART_DESIGN.md §3.1): unlike stop(),
+        pause_for_restart() must NOT clear the persisted marker -- a
+        restart-triggered pause still needs _resume_interrupted_workflows
+        to auto-resume it on the next startup, unlike an explicit user
+        Stop which deliberately means "don't come back."."""
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".git").mkdir()
+
+        with patch.object(service, "_run_pipeline", new_callable=AsyncMock):
+            await service.start(str(project))
+            assert service.load_persisted_state() is not None
+
+            result = await service.pause_for_restart()
+
+            assert result["paused"] is True
+            assert service.load_persisted_state() is not None
+            assert service.running is False
+
     def test_load_persisted_state_when_absent(self, service):
         assert service.load_persisted_state() is None
 
