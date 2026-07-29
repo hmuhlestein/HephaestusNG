@@ -177,7 +177,7 @@ class AgentCommunicationService:
         """
         nudge_msg = (
             f"[PARENT NUDGE] {reason}. "
-            f"If you're done writing files, call update_task_status NOW. "
+            f"If you're done writing files, call hephaestus_update_task_status NOW. "
             f"Do NOT exit to the command line."
         )
         return self.send_message_to_child(parent_agent_id, child_agent_id, nudge_msg)

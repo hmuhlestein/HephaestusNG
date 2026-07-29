@@ -290,7 +290,7 @@ COMPLETION CRITERIA:
                                 + "\n\nFor each: fix the underlying issue, then call "
                                 'hephaestus_update_ticket_status(ticket_id="...", '
                                 'new_status="shipped") to mark '
-                                "it resolved. complete_my_task(status=\"done\") will be "
+                                "it resolved. hephaestus_complete_my_task(status=\"done\") will be "
                                 "REJECTED while any remain unresolved."
                             )
             except Exception as e:

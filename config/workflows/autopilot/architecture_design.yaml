@@ -112,7 +112,7 @@ additional_notes: |
   
   Also read the original design document to understand the overall vision.
   This context goes into architecture.md — the development agent reads it
-  from there (see STEP 5: do not call create_task to hand this to developers).
+  from there (see STEP 5: do not call hephaestus_create_task to hand this to developers).
   
   CRITICAL — CHECK EXISTING TEST FILES AND ESTABLISH FILE LAYOUT:
   Run: find . -name "test_*.py" -o -name "*_test.py" | head -20
@@ -295,7 +295,7 @@ additional_notes: |
   task2: {"parallel_group": "types"}     → can run with task1
   task3: {"parallel_group": "handlers"}  → waits for "types" group to finish
 
-  **Task structure with dependencies (document this per component, do not call create_task):**
+  **Task structure with dependencies (document this per component, do not call hephaestus_create_task):**
   ```
   Task: Implement [Component]
   Ticket: TICKET-001

@@ -140,7 +140,7 @@ This agent is operating within the context of the above workflow. All tasks and 
 
    ❌ **Phase says "Search before creating" but agent didn't search**:
    - This is `violating_constraints`
-   - Steering: "The phase requires you to search for existing tickets before creating new ones. Please use search_tickets() with hybrid search."
+   - Steering: "The phase requires you to search for existing tickets before creating new ones. Please use hephaestus_search_tickets() with hybrid search."
 
    ❌ **Phase says "Create Phase X task" but agent marked self as done without creating it**:
    - This is `drifting` - agent skipped required step
@@ -231,7 +231,7 @@ Don't just use the previous phase - actively analyze what the agent is doing RIG
    - Saying "let me test..." or "verifying..."
 
    **completed**:
-   - Called complete_my_task with status='done'
+   - Called hephaestus_complete_my_task with status='done'
    - No active work being done
    - Agent is idle with work finished
 
@@ -322,13 +322,13 @@ This means the agent gave their final response but hasn't continued work or upda
 
 **WHAT TO DO**:
 Look at the agent's current phase and done definition to determine the appropriate next action:
-- **If work appears complete** → Tell agent to mark it done using `complete_my_task` (no task_id needed)
+- **If work appears complete** → Tell agent to mark it done using `hephaestus_complete_my_task` (no task_id needed)
 - **If work is incomplete** → Tell agent to continue with the next logical step
 - **If in verification phase** → Remind agent to test, then update status
 - **If unclear** → Ask agent to assess whether to continue or mark task done
 
 **STEERING MESSAGE EXAMPLES FOR IDLE AGENTS**:
-- "You've completed the JWT authentication implementation. Please mark your task done using the complete_my_task tool (status='done') and provide a summary of what was implemented."
+- "You've completed the JWT authentication implementation. Please mark your task done using the hephaestus_complete_my_task tool (status='done') and provide a summary of what was implemented."
 - "You finished the exploration phase but haven't started implementation yet. Please proceed to implement the authentication endpoints as described in the task."
 - "You're in the verification phase - please run tests to verify your implementation, then update task status accordingly."
 - "It looks like you've paused after planning. Review the done definition and either continue with implementation or update your status if you believe the task is complete."
@@ -498,7 +498,7 @@ You MUST return valid JSON with this EXACT structure:
     "alignment_issues": [],
     "needs_steering": true,
     "steering_type": "idle",
-    "steering_recommendation": "You've completed the JWT authentication implementation and testing. The done definition has been met - you've implemented token generation, validation, and refresh logic, and verified it works correctly. Please mark your task done using the complete_my_task tool (status='done') with a summary of what was implemented.",
+    "steering_recommendation": "You've completed the JWT authentication implementation and testing. The done definition has been met - you've implemented token generation, validation, and refresh logic, and verified it works correctly. Please mark your task done using the hephaestus_complete_my_task tool (status='done') with a summary of what was implemented.",
     "trajectory_summary": "Successfully implemented and tested JWT authentication system, but agent is idle and hasn't updated task status despite work being complete"
 }}
 ```

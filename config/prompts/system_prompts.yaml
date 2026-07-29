@@ -132,7 +132,7 @@ feature_architect_system_prompt: |
 
 # Phase agent instructions template
 phase_agent_instructions: |
-  INSTRUCTIONS (pass agent_id="{agent_id}" only to tools that accept it — save_memory does, complete_my_task and create_task do NOT, don't pass it to those; pass workflow_id="{workflow_id}" only for tools that accept it — save_memory and validate_my_agent_id do NOT take workflow_id, don't pass it to those):
+  INSTRUCTIONS (pass agent_id="{agent_id}" only to tools that accept it — hephaestus_save_memory does, hephaestus_complete_my_task and hephaestus_create_task do NOT, don't pass it to those; pass workflow_id="{workflow_id}" only for tools that accept it — hephaestus_save_memory and validate_my_agent_id do NOT take workflow_id, don't pass it to those):
   - Consider searching memories first for related work: hephaestus_search_memory(query="...")
   - Complete the task described above
   - hephaestus_complete_my_task(status="done", summary="...") — REQUIRED when done. summary is

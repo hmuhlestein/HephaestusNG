@@ -263,7 +263,7 @@ additional_notes: |
   STEP 8: CREATE TICKETS FOR ISSUES FOUND
   ═══════════════════════════════════════════════════════════════════════
   
-  For EACH issue found (Critical, Major, Minor), create a ticket using create_ticket.
+  For EACH issue found (Critical, Major, Minor), create a ticket using hephaestus_create_ticket.
   
   TICKET TEMPLATE (copy this for each issue):
   
