@@ -529,6 +529,10 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                           {taskDetails.agent_info!.id.slice(0, 12)}...
                           <Copy className="w-3 h-3" />
                         </button>
+                        <span className="ml-2 text-xs font-mono text-gray-500 dark:text-gray-400">
+                          ({taskDetails.agent_info.cli_type}
+                          {taskDetails.agent_info.cli_model ? ` / ${taskDetails.agent_info.cli_model}` : ''})
+                        </span>
                       </div>
                     )}
                   </div>
@@ -1310,6 +1314,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
             status: taskDetails.agent_info.status as any,
             agent_type: 'phase',
             cli_type: taskDetails.agent_info.cli_type,
+            cli_model: taskDetails.agent_info.cli_model,
             current_task_id: taskDetails.id,
             tmux_session_name: null,
             health_check_failures: 0,
