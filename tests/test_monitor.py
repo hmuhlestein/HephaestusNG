@@ -2304,3 +2304,50 @@ class TestStuckTaskNudgeCap:
         task = session.query(Task).filter_by(id=task_id).first()
         assert task.status == "in_progress"
         session.close()
+
+
+class TestAutoRestartFlushesCleanTranscript:
+    """_auto_restart_agent kills a stuck agent's tmux session directly --
+    it bypasses terminate_agent's own clean-shutdown flush entirely, so
+    without its own final flush of the stability-tracked "clean"
+    transcript, this abrupt-kill path would lose everything not yet
+    confirmed stable (see AgentManager._flush_stable_transcript)."""
+
+    @pytest.mark.asyncio
+    async def test_flushes_before_killing_session(
+        self, make_monitoring_loop, mock_db, mock_agent_manager
+    ):
+        from contextlib import contextmanager
+        from pathlib import Path
+
+        agent = Agent(id="agent-1", tmux_session_name="agent_agent-1", status="working")
+        fake_dir = Path("/tmp/fake-transcript-dir")
+
+        call_order = []
+        mock_agent_manager._resolve_tmux_transcript_dir = Mock(
+            return_value=fake_dir, side_effect=lambda *a, **k: (call_order.append("flush"), fake_dir)[1]
+        )
+        mock_agent_manager._flush_stable_transcript = Mock()
+        mock_agent_manager.tmux_server.kill_session = Mock(
+            side_effect=lambda *a, **k: call_order.append("kill")
+        )
+
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = None
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+
+        await make_monitoring_loop._auto_restart_agent(agent)
+
+        mock_agent_manager._resolve_tmux_transcript_dir.assert_called_once_with(agent)
+        mock_agent_manager._flush_stable_transcript.assert_called_once_with(
+            "agent_agent-1", fake_dir / "agent_agent-1.clean.log"
+        )
+        assert call_order == ["flush", "kill"], (
+            "the clean transcript must be flushed before the session is "
+            "killed -- capture-pane can't see anything once it's gone"
+        )

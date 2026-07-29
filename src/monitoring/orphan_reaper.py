@@ -177,6 +177,36 @@ class OrphanSessionReaper:
             killed_count = 0
             for session_name in orphaned_sessions:
                 try:
+                    # Final flush of the stability-tracked "clean"
+                    # transcript before the session (and its scrollback)
+                    # disappears -- this kill path bypasses
+                    # terminate_agent's own clean-shutdown flush entirely.
+                    # These sessions have no active Agent row by definition
+                    # (that's why they're "orphaned"), so look up whatever
+                    # Agent row this session name last belonged to (any
+                    # status) rather than requiring a live one.
+                    try:
+                        db_session = self.db_manager.get_session()
+                        try:
+                            from src.core.database import Agent as _Agent
+
+                            last_agent = (
+                                db_session.query(_Agent)
+                                .filter_by(tmux_session_name=session_name)
+                                .first()
+                            )
+                        finally:
+                            db_session.close()
+                        if last_agent:
+                            transcript_dir = self.agent_manager._resolve_tmux_transcript_dir(last_agent)
+                            if transcript_dir:
+                                self.agent_manager._flush_stable_transcript(
+                                    session_name,
+                                    transcript_dir / f"{session_name}.clean.log",
+                                )
+                    except Exception as e:
+                        logger.debug(f"[STABLE-TRANSCRIPT] Final flush before reap failed: {e}")
+
                     # Find and kill the session
                     for tmux_sess in self.agent_manager.tmux_server.sessions:
                         if tmux_sess.name == session_name:
