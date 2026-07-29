@@ -730,6 +730,7 @@ class AgentManager:
                 tmux_session_name=session_name,
                 current_task_id=task.id,
                 last_activity=datetime.utcnow(),
+                launched_at=datetime.utcnow(),
                 health_check_failures=0,
                 agent_type=agent_type,
             ))
@@ -1992,6 +1993,7 @@ class AgentManager:
             agent.status = "working"
             agent.health_check_failures = 0
             agent.last_activity = datetime.utcnow()
+            agent.launched_at = datetime.utcnow()
 
             # Log restart
             log_entry = AgentLog(
@@ -2143,23 +2145,32 @@ class AgentManager:
                         clean_lines = clean_lines[-lines:]
                     return "\n".join(clean_lines)
 
-            # Fall back to the raw pipe-pane transcript (has ANSI colors)
-            # if the clean transcript couldn't produce anything yet (e.g.
-            # first poll withheld everything, or the session just started).
-            transcript_output = self._read_transcript_log(agent, lines)
-            if transcript_output:
-                return transcript_output
-
-            # Last resort: an unprocessed capture-pane snapshot.
-            logger.debug(
-                f"Attempting to access tmux session: {agent.tmux_session_name}"
-            )
+            # Fall back to an unprocessed capture-pane snapshot if the clean
+            # transcript couldn't produce anything yet (e.g. the whole
+            # session is still within the first couple of confirmation
+            # polls, or it's mid-stream on a long response that hasn't
+            # settled anywhere yet). This is tmux's own correctly-emulated
+            # rendering -- just not yet "confirmed stable" enough to
+            # persist -- so it's still a faithful snapshot, unlike the raw
+            # pipe-pane transcript below. Observed live: a long streaming
+            # response with nothing committed to clean.log yet fell
+            # through to the raw transcript, which re-shows every
+            # intermediate \r-redrawn state as its own line -- the exact
+            # duplication problem the clean transcript exists to avoid.
             current_lines = self._capture_pane_lines(agent.tmux_session_name)
-            if current_lines is None:
-                logger.warning(f"Tmux session {agent.tmux_session_name} not found")
-                return ""
-            text = "\n".join(current_lines)
-            return text
+            if current_lines is not None:
+                if lines > 0:
+                    current_lines = current_lines[-lines:]
+                return "\n".join(current_lines)
+
+            # Last resort: the raw pipe-pane transcript (has ANSI colors),
+            # only reached if even a live capture-pane snapshot failed
+            # (e.g. the tmux session itself is gone).
+            logger.debug(
+                f"capture-pane unavailable for {agent.tmux_session_name}, "
+                "falling back to raw transcript"
+            )
+            return self._read_transcript_log(agent, lines)
 
         except Exception as e:
             logger.error(f"Failed to get agent output for {agent_id}: {e}")
@@ -2548,15 +2559,33 @@ class AgentManager:
         except Exception as e:
             logger.warning(f"[STABLE-TRANSCRIPT] Failed to append to {path}: {e}")
 
+    #: Number of consecutive polls a line must be unchanged at the same
+    #: position before it's committed. 2 (the original value) caught a
+    #: real race: pi's TUI briefly reserves blank placeholder lines for a
+    #: command's output before streaming the real content in, and if that
+    #: blank state happened to persist across exactly 2 polls (~1-2s of
+    #: bad timing -- not rare over a multi-hour session), the blank got
+    #: permanently committed and the real content that filled in a moment
+    #: later was silently skipped forever, since committed positions are
+    #: append-only and never revisited. Observed live: "All checks
+    #: passed!" / "EXIT: 0" from a ruff run replaced by two blank lines in
+    #: the clean transcript, confirmed present in the raw capture-pane
+    #: output the whole time. Requiring one more confirmation makes
+    #: catching that exact timing three times in a row far less likely,
+    #: at the cost of one extra poll (~1s) of latency before new content
+    #: appears.
+    _STABILITY_CONFIRMATIONS = 3
+
     def _poll_stable_transcript(self, session_name: str, clean_path: Path) -> None:
         """Append whatever's newly stable since the last poll to
         clean_path, using tmux's own capture-pane instead of raw pty
         bytes. "Stable" = identical content at the same position across
-        two consecutive polls of this method -- a line still being
-        actively redrawn (a spinner with a live elapsed-time counter, a
-        long response streaming in) simply never stabilizes until the
-        underlying operation finishes, so it's correctly withheld rather
-        than shown as corrupted partial-overwrite text.
+        _STABILITY_CONFIRMATIONS consecutive polls of this method -- a
+        line still being actively redrawn (a spinner with a live
+        elapsed-time counter, a long response streaming in) simply never
+        stabilizes until the underlying operation finishes, so it's
+        correctly withheld rather than shown as corrupted partial-
+        overwrite text.
 
         Why not just re-strip raw pipe-pane bytes harder: cursor-
         positioning escapes (jump back, overwrite part of a line) can't
@@ -2570,9 +2599,9 @@ class AgentManager:
         capture-pane -S - returns the FULL currently-remembered history
         (bounded by the session's history-limit, 1000) every call, always
         from the same starting point -- so comparing this poll's lines to
-        the previous poll's lines position-for-position is valid without
-        a scrolling-alignment problem, as long as total output hasn't
-        exceeded history-limit between two polls (an interactive agent
+        earlier polls' lines position-for-position is valid without a
+        scrolling-alignment problem, as long as total output hasn't
+        exceeded history-limit between polls (an interactive agent
         session polled every few seconds never gets close).
         """
         current_lines = self._capture_pane_lines(session_name)
@@ -2591,13 +2620,14 @@ class AgentManager:
             committed = max(0, len(current_lines) - 2)
             self._append_lines(clean_path, current_lines[:committed])
             self._pane_stability_cache[session_name] = {
-                "lines": current_lines,
+                "history": [current_lines],
                 "committed": committed,
             }
             return
 
-        last_lines = state["lines"]
+        history = state["history"]
         committed = state["committed"]
+        last_lines = history[-1]
 
         if last_lines and current_lines[:1] != last_lines[:1]:
             # Discontinuity: the capture window's start point shifted --
@@ -2629,7 +2659,7 @@ class AgentManager:
                     f"{session_name} -- re-anchored, no content re-appended"
                 )
                 self._pane_stability_cache[session_name] = {
-                    "lines": current_lines,
+                    "history": [current_lines],
                     "committed": resume_at,
                 }
                 return
@@ -2640,23 +2670,29 @@ class AgentManager:
             )
             self._append_lines(clean_path, current_lines)
             self._pane_stability_cache[session_name] = {
-                "lines": current_lines,
+                "history": [current_lines],
                 "committed": len(current_lines),
             }
             return
 
-        stable_upto = 0
-        for a, b in zip(last_lines, current_lines):
-            if a != b:
-                break
-            stable_upto += 1
+        # Require agreement across the last _STABILITY_CONFIRMATIONS polls
+        # (this one plus recent history), not just the immediately
+        # preceding one -- see _STABILITY_CONFIRMATIONS' docstring.
+        recent = history[-(self._STABILITY_CONFIRMATIONS - 1):] + [current_lines]
+        stable_upto = committed
+        if len(recent) >= self._STABILITY_CONFIRMATIONS:
+            for i in range(committed, len(current_lines)):
+                if any(i >= len(poll) or poll[i] != current_lines[i] for poll in recent):
+                    break
+                stable_upto += 1
 
         if stable_upto > committed:
             self._append_lines(clean_path, current_lines[committed:stable_upto])
             committed = stable_upto
 
+        history = (history + [current_lines])[-(self._STABILITY_CONFIRMATIONS - 1):]
         self._pane_stability_cache[session_name] = {
-            "lines": current_lines,
+            "history": history,
             "committed": committed,
         }
 
@@ -2664,7 +2700,7 @@ class AgentManager:
         """Final, unconditional flush -- call right before killing a
         session on the normal terminate_agent path. Nothing will change
         after this point, so commit everything still pending regardless
-        of the usual two-poll confirmation.
+        of the usual multi-poll confirmation.
 
         Note: unlike the raw pipe-pane .transcript.log (which keeps
         capturing in real time independent of how the session dies, per
@@ -2683,9 +2719,9 @@ class AgentManager:
             self._append_lines(clean_path, current_lines[committed:])
         elif state:
             # Session already gone -- flush whatever was cached, even
-            # though never independently confirmed stable twice. Strictly
+            # though never independently confirmed stable. Strictly
             # better than losing it.
-            self._append_lines(clean_path, state["lines"][state["committed"]:])
+            self._append_lines(clean_path, state["history"][-1][state["committed"]:])
 
     def _get_orchestrator_output(self, agent, lines: int) -> str:
         """Return the orchestrator's run log as human-readable text."""
