@@ -5,6 +5,11 @@ interface AgentOutputData {
   output: string;
   timestamp: string;
   isLoading: boolean;
+  // True for the duration of each poll's request, unlike isLoading (which
+  // only ever fires once, on the very first fetch) -- lets the UI show a
+  // small "still active" indicator on every polling cycle, not just the
+  // initial load.
+  isFetching: boolean;
   error: string | null;
   isConnected: boolean;
   lastUpdateTime: Date | null;
@@ -32,6 +37,7 @@ export const useRealTimeAgentOutput = (
     output: '',
     timestamp: '',
     isLoading: false,
+    isFetching: false,
     error: null,
     isConnected: false,
     lastUpdateTime: null,
@@ -49,10 +55,13 @@ export const useRealTimeAgentOutput = (
     }
 
     try {
-      // Only show loading spinner on initial load, not every poll
-      if (!lastOutputRef.current) {
-        setData(prev => ({ ...prev, isLoading: true, error: null }));
-      }
+      // Only show the initial-load spinner on the very first fetch, but
+      // mark isFetching on every poll -- that's the "still active" signal.
+      setData(prev => ({
+        ...prev,
+        isFetching: true,
+        ...(!lastOutputRef.current ? { isLoading: true, error: null } : {}),
+      }));
 
       const result = await apiService.getAgentOutput(agentId, lines);
 
@@ -63,13 +72,17 @@ export const useRealTimeAgentOutput = (
       lastOutputRef.current = result.output;
 
       // Don't update state while user is selecting text (preserves selection)
-      if (pauseUpdatesRef.current) return;
+      if (pauseUpdatesRef.current) {
+        setData(prev => ({ ...prev, isFetching: false }));
+        return;
+      }
 
       setData(prev => ({
         ...prev,
         output: result.output,
         timestamp: result.timestamp,
         isLoading: false,
+        isFetching: false,
         isConnected: true,
         lastUpdateTime: hasChanged ? new Date() : prev.lastUpdateTime,
         error: null,
@@ -85,6 +98,7 @@ export const useRealTimeAgentOutput = (
       setData(prev => ({
         ...prev,
         isLoading: false,
+        isFetching: false,
         isConnected: retryCountRef.current < maxRetries,
         error: retryCountRef.current >= maxRetries ?
           'Failed to connect to agent output' : null,

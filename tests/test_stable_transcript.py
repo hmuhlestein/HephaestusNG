@@ -128,6 +128,80 @@ class TestPollStableTranscript:
         assert "tick-1" in clean_path.read_text()
 
 
+class TestPollStableTranscriptDiscontinuity:
+    """Regression: once a long-running session's total scrollback exceeds
+    tmux's history-limit, capture-pane's window start shifts (the oldest
+    lines fall off the top) -- detected here as the first line differing
+    between polls. The original discontinuity handling treated any such
+    shift as total loss and re-appended the ENTIRE current window,
+    duplicating everything already committed in earlier polls every time
+    a long session crossed this boundary. Uses a mocked _capture_pane_lines
+    (not a real tmux session) since manufacturing 1000+ real scrollback
+    lines to trigger this organically would be slow and flaky -- the fix
+    operates purely on the returned line lists, so this is a faithful,
+    fast substitute."""
+
+    def test_partial_scroll_reanchors_without_reappending_committed_content(
+        self, agent_manager, tmp_path, monkeypatch
+    ):
+        session_name = "sess-scroll"
+        clean_path = tmp_path / f"{session_name}.clean.log"
+
+        first_window = [f"line-{i}" for i in range(10)]
+        monkeypatch.setattr(
+            agent_manager, "_capture_pane_lines", lambda _sn: first_window
+        )
+        agent_manager._poll_stable_transcript(session_name, clean_path)
+        committed_before = agent_manager._pane_stability_cache[session_name]["committed"]
+        assert committed_before > 0
+        content_before = clean_path.read_text()
+
+        # Simulate the oldest 3 lines scrolling off the top (history-limit
+        # exceeded) -- the window shifts, so position 0 no longer matches,
+        # but line-9 (the last line of the previous window) is still
+        # present, just at a different index.
+        scrolled_window = [f"line-{i}" for i in range(3, 10)] + ["line-10", "line-11"]
+        monkeypatch.setattr(
+            agent_manager, "_capture_pane_lines", lambda _sn: scrolled_window
+        )
+        agent_manager._poll_stable_transcript(session_name, clean_path)
+
+        content_after = clean_path.read_text()
+        # Nothing already committed before the scroll should be written
+        # again -- the file must only ever grow by content, not duplicate.
+        assert content_after == content_before
+        for already_committed_line in first_window[:committed_before]:
+            assert content_after.count(already_committed_line) == 1
+
+    def test_scroll_past_last_committed_line_falls_back_to_full_reset(
+        self, agent_manager, tmp_path, monkeypatch
+    ):
+        """If the anchor itself has scrolled out of the window entirely
+        (more output arrived in one interval than history-limit allows),
+        there's nothing to re-anchor on -- the original reset-and-dump-
+        everything behavior is the correct, if rare, fallback."""
+        session_name = "sess-scroll-2"
+        clean_path = tmp_path / f"{session_name}.clean.log"
+
+        first_window = [f"line-{i}" for i in range(5)]
+        monkeypatch.setattr(
+            agent_manager, "_capture_pane_lines", lambda _sn: first_window
+        )
+        agent_manager._poll_stable_transcript(session_name, clean_path)
+
+        # Entirely disjoint window -- none of the previous lines appear.
+        disjoint_window = [f"unrelated-{i}" for i in range(5)]
+        monkeypatch.setattr(
+            agent_manager, "_capture_pane_lines", lambda _sn: disjoint_window
+        )
+        agent_manager._poll_stable_transcript(session_name, clean_path)
+
+        content = clean_path.read_text()
+        assert "unrelated-0" in content
+        state = agent_manager._pane_stability_cache[session_name]
+        assert state["committed"] == len(disjoint_window)
+
+
 class TestFlushStableTranscript:
     def test_flush_commits_everything_unconditionally(self, agent_manager, tmux_session, tmp_path):
         session_name, session = tmux_session
