@@ -1976,6 +1976,20 @@ class MonitoringLoop:
         """Kill a stuck agent's tmux session and mark it for restart."""
         try:
             if agent.tmux_session_name:
+                # Final flush of the stability-tracked "clean" transcript
+                # before the session (and its scrollback) disappears --
+                # this kill path bypasses terminate_agent's own clean-
+                # shutdown flush entirely, see AgentManager._flush_stable_transcript.
+                try:
+                    transcript_dir = self.agent_manager._resolve_tmux_transcript_dir(agent)
+                    if transcript_dir:
+                        self.agent_manager._flush_stable_transcript(
+                            agent.tmux_session_name,
+                            transcript_dir / f"{agent.tmux_session_name}.clean.log",
+                        )
+                except Exception as e:
+                    logger.debug(f"[STABLE-TRANSCRIPT] Final flush before auto-restart failed: {e}")
+
                 self.agent_manager.tmux_server.kill_session(agent.tmux_session_name)
                 logger.info(f"Killed tmux session {agent.tmux_session_name}")
 
