@@ -1017,14 +1017,121 @@ async def startup_event():
     logger.info("Server started successfully")
 
 
+async def _notify_agents_of_restart(project_id: str) -> int:
+    """Best-effort checkpoint nudge to every working phase agent in this
+    project, sent right before pausing its pipeline for a restart -- see
+    docs/SAFE_RESTART_DESIGN.md §3.4.
+
+    Not a guarantee: tmux text injection can't interrupt an agent
+    synchronously blocked on its own LLM call. This only helps an agent
+    that's between turns notice before its session goes quiet, and
+    encourages the save_memory-as-you-go habit the system prompt already
+    asks for.
+    """
+    from src.core.database import Agent, Task, Workflow
+
+    agent_ids: list = []
+    try:
+        with server_state.db_manager.session_scope() as session:
+            wf_ids = [
+                w.id
+                for w in session.query(Workflow).filter_by(project_id=project_id).all()
+            ]
+            if not wf_ids:
+                return 0
+            task_ids = [
+                t.id
+                for t in session.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()
+            ]
+            agent_ids = [
+                a.id
+                for a in session.query(Agent)
+                .filter(Agent.status == "working", Agent.current_task_id.in_(task_ids))
+                .all()
+            ]
+    except Exception as e:
+        logger.warning(
+            f"[SAFE-RESTART] Could not enumerate agents to notify for "
+            f"project {project_id[:8]}: {e}"
+        )
+        return 0
+
+    notified = 0
+    for agent_id in agent_ids:
+        try:
+            await server_state.agent_manager.send_message_to_agent(
+                agent_id,
+                "A backend restart is happening shortly. If you're mid-edit, "
+                "finish this atomic step (don't start a new multi-file change). "
+                "Call hephaestus_save_memory now with anything you don't want "
+                "to lose -- your session will resume automatically afterward.",
+            )
+            notified += 1
+        except Exception as e:
+            logger.debug(f"[SAFE-RESTART] Could not notify agent {agent_id[:8]}: {e}")
+    return notified
+
+
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown."""
     logger.info("Shutting down Hephaestus MCP Server...")
 
-    # Stop background queue processor
-    logger.info("Stopping background queue processor...")
+    # Set this FIRST, before pausing pipelines below -- it's what stops
+    # background_phase_advancement_sweep (server_state.shutdown_event.set()
+    # further down is this same event) from starting a NEW tick, including
+    # its _resync_pipeline_registry self-heal check (SAFE_RESTART_DESIGN.md
+    # §3.5). Without this ordering, that sweep can keep ticking for the
+    # entire pause_for_restart() drain window below (up to 45s) and race
+    # it: a project mid-pause has its persisted "was running" marker still
+    # intact (deliberately, for auto-resume) but its registry entry
+    # momentarily not-running, which is exactly _resync_pipeline_registry's
+    # own trigger condition -- it could try to restart a pipeline that's
+    # still in the middle of winding down. Doesn't fully close the window
+    # (a tick already in flight at this exact instant could still race),
+    # narrowed further by _resync_pipeline_registry checking _should_stop()
+    # itself before restarting anything (orchestrator.py).
     server_state.shutdown_event.set()
+
+    # Pause every running project's autopilot pipeline gracefully, instead
+    # of letting asyncio hard-cancel it when the event loop closes later in
+    # this shutdown -- see docs/SAFE_RESTART_DESIGN.md §3.1/§3.2. Notify
+    # in-flight agents first (best-effort), then pause: an agent mid-step
+    # benefits most from knowing a restart is coming before its session
+    # goes quiet, not after. pause_for_restart() (unlike stop()) keeps the
+    # persisted "was running" marker intact, so _resume_interrupted_workflows
+    # still auto-resumes each project on the next startup.
+    try:
+        from src.autopilot.service import get_registry
+
+        running_services = get_registry().running()
+        if running_services:
+            logger.info(
+                f"[SAFE-RESTART] Pausing {len(running_services)} running "
+                "autopilot pipeline(s) for restart..."
+            )
+            for service in running_services:
+                try:
+                    notified = await _notify_agents_of_restart(service.project_id)
+                    if notified:
+                        logger.info(
+                            f"[SAFE-RESTART] Notified {notified} agent(s) "
+                            f"in project {service.project_id[:8]}"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"[SAFE-RESTART] Failed to notify agents for project "
+                        f"{service.project_id[:8]}: {e}"
+                    )
+            await asyncio.gather(
+                *(service.pause_for_restart() for service in running_services),
+                return_exceptions=True,
+            )
+    except Exception as e:
+        logger.error(f"[SAFE-RESTART] Graceful pipeline pause failed: {e}")
+
+    # Stop background queue processor (shutdown_event already set above)
+    logger.info("Stopping background queue processor...")
     if server_state.background_queue_processor_task:
         try:
             await asyncio.wait_for(server_state.background_queue_processor_task, timeout=5.0)
@@ -1426,7 +1533,7 @@ async def background_phase_advancement_sweep():
     while not server_state.shutdown_event.is_set():
         try:
             await asyncio.wait_for(
-                loop.run_in_executor(None, _run_phase_advancement_sweep_once, sweep_logger),
+                loop.run_in_executor(None, _run_phase_advancement_sweep_once, sweep_logger, loop),
                 timeout=120.0,
             )
         except asyncio.TimeoutError:
@@ -1444,16 +1551,25 @@ async def background_phase_advancement_sweep():
     logger.info("Background phase advancement sweep stopped")
 
 
-def _run_phase_advancement_sweep_once(sweep_logger) -> None:
+def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     """Synchronous body of one background_phase_advancement_sweep tick --
     see that function's docstring for why this runs in a thread executor
-    rather than inline on the event loop."""
+    rather than inline on the event loop.
+
+    loop: the server's persistent event loop, passed through from
+    background_phase_advancement_sweep -- needed by
+    _resync_pipeline_registry to schedule AutopilotService.start() back
+    onto it (see that function's docstring for why asyncio.run(...) can't
+    be used here). Optional/defaulted so direct test calls that don't
+    exercise the pipeline-resync path don't need to fake one up.
+    """
     from src.autopilot.orchestrator import (
         _advance_phases,
         _clean_stale_assigned_tasks,
         _maybe_resolve_arbitration,
         _recover_abandoned_workflows_missing_worktree,
         _recover_abandoned_workflows_with_completed_phase,
+        _resync_pipeline_registry,
         _retry_exhausted_paused_workflows,
         _retry_failed_tasks,
         _sync_stale_feature_statuses,
@@ -1466,6 +1582,12 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
         _sync_stale_feature_statuses(sweep_logger)
     except Exception as e:
         logger.error(f"[PHASE-SWEEP] Feature-status sync error: {e}")
+
+    if loop is not None:
+        try:
+            _resync_pipeline_registry(sweep_logger, loop)
+        except Exception as e:
+            logger.error(f"[PHASE-SWEEP] Pipeline-registry resync error: {e}")
 
     # Runs before the active/paused workflow snapshot below, so a workflow
     # this just resumed is included in this same tick's per-workflow loop

@@ -287,6 +287,52 @@ class AutopilotService:
             "designs_failed": self._designs_failed,
         }
 
+    async def pause_for_restart(self) -> Dict[str, Any]:
+        """Pause the pipeline for a backend restart -- same stop-signal and
+        bounded-wait-then-cancel mechanics as stop(), but deliberately does
+        NOT call clear_persisted_state(). stop() clears it because an
+        explicit user Stop means "don't auto-resume"; a restart means the
+        opposite -- _resume_interrupted_workflows must still find the
+        persisted "was running" marker on the next startup. See
+        docs/SAFE_RESTART_DESIGN.md §3.1.
+
+        Longer timeout than stop()'s 10s: there's no impatient CLI caller
+        waiting on this one (it runs from shutdown_event(), not a user
+        command), and run_continuous_pipeline's loop can be mid a blocking
+        dispatch sequence (e.g. the ~25s "waiting for pi agent to
+        initialize" step) that doesn't check _should_stop() at all, on top
+        of the interruptible-sleep polling interval itself -- 10s risked
+        almost always hitting the cancel fallback instead of the clean
+        exit path this exists to give the loop a chance to reach.
+        """
+        if not self.running:
+            return {"paused": True, "message": "Pipeline was not running"}
+
+        self._stop_event.set()
+        self._running = False
+
+        if self._task:
+            try:
+                await asyncio.wait_for(self._task, timeout=45.0)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[PAUSE-FOR-RESTART] Project {self.project_id}: pipeline "
+                    "did not exit cleanly within 45s, cancelling"
+                )
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
+
+        elapsed = int(time.time() - self._start_time) if self._start_time else 0
+        logger.info(
+            f"[PAUSE-FOR-RESTART] Project {self.project_id}: paused after "
+            f"{elapsed}s, persisted state kept for auto-resume"
+        )
+
+        return {"paused": True, "elapsed_seconds": elapsed}
+
     def status(self) -> Dict[str, Any]:
         """Get current pipeline status.
 

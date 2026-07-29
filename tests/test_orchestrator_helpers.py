@@ -1,5 +1,6 @@
 """Tests for autopilot/orchestrator.py — pure utilities + detection functions."""
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -3482,6 +3483,194 @@ class TestSyncStaleFeatureStatuses:
             assert feat.workflow_id == "wf-done"
             assert feat.status == "completed"
             assert feat.completed_at is not None
+
+
+class TestInterruptibleSleep:
+    """docs/SAFE_RESTART_DESIGN.md §3.3: run_continuous_pipeline's loop used
+    a plain time.sleep(N) at its two longest waits, making a stop request
+    (including AutopilotService.pause_for_restart()) invisible to the loop
+    for up to DESIGN_QUEUE_SCAN_INTERVAL (60s) if it landed mid-sleep."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_stop_events(self):
+        from src.autopilot import orchestrator
+
+        orchestrator._stop_events.clear()
+        yield
+        orchestrator._stop_events.clear()
+
+    def test_returns_promptly_once_should_stop_flips(self):
+        import asyncio
+        import threading
+        import time as time_module
+
+        from src.autopilot import orchestrator
+        from src.autopilot.orchestrator import _interruptible_sleep
+
+        event = asyncio.Event()
+        orchestrator._stop_events["proj-a"] = event
+
+        def _flip_after_delay():
+            time_module.sleep(0.3)
+            event.set()
+
+        threading.Thread(target=_flip_after_delay, daemon=True).start()
+
+        start = time_module.time()
+        _interruptible_sleep(30, "proj-a")
+        elapsed = time_module.time() - start
+
+        assert elapsed < 2  # nowhere near the full 30s requested
+
+    def test_sleeps_the_full_duration_when_never_asked_to_stop(self):
+        import time as time_module
+
+        from src.autopilot.orchestrator import _interruptible_sleep
+
+        start = time_module.time()
+        _interruptible_sleep(1, "proj-never-registered")
+        elapsed = time_module.time() - start
+
+        assert elapsed >= 0.9
+
+
+class TestResyncPipelineRegistry:
+    """docs/SAFE_RESTART_DESIGN.md §3.5: a project whose persisted state
+    says its pipeline should be running, but AutopilotServiceRegistry has
+    no live entry for it, has fallen through the one-shot startup resume
+    -- restart it from the periodic background sweep instead of leaving it
+    silently idle."""
+
+    @pytest.mark.asyncio
+    async def test_restarts_a_project_with_no_live_registry_entry(self):
+        from unittest.mock import AsyncMock
+
+        from src.autopilot.orchestrator import _resync_pipeline_registry
+
+        persisted = [
+            ("proj-a", {"project_path": "/tmp/proj-a", "design_queue": "", "max_iterations": 7}),
+        ]
+        mock_service = Mock()
+        mock_service.start = AsyncMock(return_value={"started": True})
+        mock_registry = Mock()
+        mock_registry.get.return_value = None
+        mock_registry.get_or_create.return_value = mock_service
+
+        with patch(
+            "src.autopilot.service.AutopilotService.enumerate_persisted_states",
+            return_value=persisted,
+        ), patch("src.autopilot.service.get_registry", return_value=mock_registry):
+            loop = asyncio.get_running_loop()
+            resumed = await loop.run_in_executor(
+                None, _resync_pipeline_registry, MagicMock(), loop
+            )
+
+        assert resumed == 1
+        mock_registry.get_or_create.assert_called_once_with("proj-a")
+        mock_service.start.assert_called_once_with(
+            project_path="/tmp/proj-a", design_queue="", max_iterations=7
+        )
+
+    @pytest.mark.asyncio
+    async def test_leaves_an_already_running_project_alone(self):
+        from unittest.mock import AsyncMock
+
+        from src.autopilot.orchestrator import _resync_pipeline_registry
+
+        persisted = [
+            ("proj-a", {"project_path": "/tmp/proj-a"}),
+        ]
+        already_running = Mock()
+        already_running.running = True
+        mock_registry = Mock()
+        mock_registry.get.return_value = already_running
+        mock_registry.get_or_create = Mock(side_effect=AssertionError("must not be called"))
+
+        with patch(
+            "src.autopilot.service.AutopilotService.enumerate_persisted_states",
+            return_value=persisted,
+        ), patch("src.autopilot.service.get_registry", return_value=mock_registry):
+            loop = asyncio.get_running_loop()
+            resumed = await loop.run_in_executor(
+                None, _resync_pipeline_registry, MagicMock(), loop
+            )
+
+        assert resumed == 0
+        mock_registry.get_or_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_restarts_a_project_whose_registry_entry_exists_but_isnt_running(self):
+        """Not just "no entry at all" -- a stale, non-running entry left
+        over from a prior pause must also be restarted."""
+        from unittest.mock import AsyncMock
+
+        from src.autopilot.orchestrator import _resync_pipeline_registry
+
+        persisted = [
+            ("proj-a", {"project_path": "/tmp/proj-a"}),
+        ]
+        stale_entry = Mock()
+        stale_entry.running = False
+        mock_service = Mock()
+        mock_service.start = AsyncMock(return_value={"started": True})
+        mock_registry = Mock()
+        mock_registry.get.return_value = stale_entry
+        mock_registry.get_or_create.return_value = mock_service
+
+        with patch(
+            "src.autopilot.service.AutopilotService.enumerate_persisted_states",
+            return_value=persisted,
+        ), patch("src.autopilot.service.get_registry", return_value=mock_registry):
+            loop = asyncio.get_running_loop()
+            resumed = await loop.run_in_executor(
+                None, _resync_pipeline_registry, MagicMock(), loop
+            )
+
+        assert resumed == 1
+        mock_service.start.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_skips_a_project_with_a_stop_already_in_flight(self):
+        """Regression: a project mid pause_for_restart() (or an explicit
+        stop()) looks identical to "should restart" here -- registry entry
+        momentarily not-running, persisted marker deliberately left intact
+        -- for as long as the pause takes to actually finish (up to 45s).
+        Restarting it from this sweep would race the graceful pause
+        itself. _should_stop(project_id) (the same signal
+        pause_for_restart()/stop() set) must prevent that."""
+        from unittest.mock import AsyncMock
+
+        from src.autopilot import orchestrator
+        from src.autopilot.orchestrator import _resync_pipeline_registry
+
+        orchestrator._stop_events.clear()
+        try:
+            stop_event = asyncio.Event()
+            stop_event.set()
+            orchestrator._stop_events["proj-a"] = stop_event
+
+            persisted = [
+                ("proj-a", {"project_path": "/tmp/proj-a"}),
+            ]
+            stale_entry = Mock()
+            stale_entry.running = False
+            mock_registry = Mock()
+            mock_registry.get.return_value = stale_entry
+            mock_registry.get_or_create = Mock(side_effect=AssertionError("must not be called"))
+
+            with patch(
+                "src.autopilot.service.AutopilotService.enumerate_persisted_states",
+                return_value=persisted,
+            ), patch("src.autopilot.service.get_registry", return_value=mock_registry):
+                loop = asyncio.get_running_loop()
+                resumed = await loop.run_in_executor(
+                    None, _resync_pipeline_registry, MagicMock(), loop
+                )
+
+            assert resumed == 0
+            mock_registry.get_or_create.assert_not_called()
+        finally:
+            orchestrator._stop_events.clear()
 
 
 class TestRecoverAbandonedWorkflowsMissingWorktree:
