@@ -2600,14 +2600,43 @@ class AgentManager:
         committed = state["committed"]
 
         if last_lines and current_lines[:1] != last_lines[:1]:
-            # Discontinuity: the capture window's start point shifted,
-            # meaning more than history-limit lines of new output arrived
-            # since the last poll -- well beyond what an interactively
-            # polled session produces in one interval. Flush what we can
-            # and reset rather than silently misaligning positions.
+            # Discontinuity: the capture window's start point shifted --
+            # the common cause is the pane's total scrollback exceeding
+            # tmux's history-limit (1000 lines) partway through a
+            # long-running session, scrolling some already-committed lines
+            # off the top rather than replacing the window wholesale.
+            # Blindly appending the full current_lines here (as an earlier
+            # version did) re-writes everything already committed in prior
+            # polls, duplicating large stretches of transcript every time
+            # a long session crosses this boundary. Anchor on the last
+            # line we know we already committed and resume from just past
+            # it instead -- only fall back to a full reset if that anchor
+            # has scrolled out of the window entirely (more than
+            # history-limit lines of new output in one poll interval,
+            # which a full reset-and-dump is the correct, if rare,
+            # response to).
+            anchor = last_lines[committed - 1] if committed > 0 else None
+            resume_at = None
+            if anchor is not None:
+                for i in range(len(current_lines) - 1, -1, -1):
+                    if current_lines[i] == anchor:
+                        resume_at = i + 1
+                        break
+
+            if resume_at is not None:
+                logger.info(
+                    f"[STABLE-TRANSCRIPT] Capture window scrolled for "
+                    f"{session_name} -- re-anchored, no content re-appended"
+                )
+                self._pane_stability_cache[session_name] = {
+                    "lines": current_lines,
+                    "committed": resume_at,
+                }
+                return
+
             logger.warning(
                 f"[STABLE-TRANSCRIPT] Capture window discontinuity for "
-                f"{session_name} -- resetting stability tracking"
+                f"{session_name} -- anchor not found, resetting stability tracking"
             )
             self._append_lines(clean_path, current_lines)
             self._pane_stability_cache[session_name] = {
