@@ -947,6 +947,7 @@ async def rerun_design(request: dict):
         from src.core.database import (
             AgentResult,
             BoardConfig,
+            CostEntry,
             DiagnosticRun,
             Memory,
             PhaseExecution,
@@ -982,12 +983,18 @@ async def rerun_design(request: dict):
                     db.query(AgentResult).filter(AgentResult.task_id.in_(task_ids)).delete(synchronize_session=False)
                     db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
                     db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    # CostEntry.task_id/workflow_id are also enforced FKs -- a
+                    # workflow that ever recorded real LLM cost (the common
+                    # case now that cost tracking exists) would otherwise
+                    # fail this delete with an IntegrityError.
+                    db.query(CostEntry).filter(CostEntry.task_id.in_(task_ids)).delete(synchronize_session=False)
 
                 # Delete workflow-level dependents
                 db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(WorkflowResult).filter(WorkflowResult.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(BoardConfig).filter(BoardConfig.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(Ticket).filter(Ticket.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                db.query(CostEntry).filter(CostEntry.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Delete phase executions
                 db.query(PhaseExecution).filter(PhaseExecution.workflow_execution_id.in_(wf_ids)).delete(synchronize_session=False)
@@ -2736,6 +2743,7 @@ async def remove_project_design(project_id: str, filename: str):
         AutopilotDesign,
         AutopilotProject,
         BoardConfig,
+        CostEntry,
         DiagnosticRun,
         Feature,
         Memory,
@@ -2751,6 +2759,7 @@ async def remove_project_design(project_id: str, filename: str):
 
     # Delete DB record first, then file (atomic rollback if file delete fails)
     found = False
+    worktrees_to_clean: List[Tuple[str, dict]] = []
     with get_db() as db:
         proj = db.query(AutopilotProject).get(project_id)
         if not proj:
@@ -2822,15 +2831,33 @@ async def remove_project_design(project_id: str, filename: str):
                     db.query(AgentResult).filter(AgentResult.task_id.in_(task_ids)).delete(synchronize_session=False)
                     db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
                     db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    # CostEntry.task_id/workflow_id are also enforced FKs -- a
+                    # workflow that ever recorded real LLM cost (the common
+                    # case now that cost tracking exists) would otherwise
+                    # fail this delete with an IntegrityError.
+                    db.query(CostEntry).filter(CostEntry.task_id.in_(task_ids)).delete(synchronize_session=False)
 
                 # Delete workflow-level dependents
                 db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(WorkflowResult).filter(WorkflowResult.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(BoardConfig).filter(BoardConfig.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(Ticket).filter(Ticket.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                db.query(CostEntry).filter(CostEntry.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Delete phase executions
                 db.query(PhaseExecution).filter(PhaseExecution.workflow_execution_id.in_(wf_ids)).delete(synchronize_session=False)
+
+                # Collect worktree info before the Workflow rows are gone --
+                # otherwise these directories orphan permanently: they're
+                # deterministic per-feature paths (_create_integration_worktree),
+                # and nothing else will ever find them once the DB row
+                # pointing at one no longer exists -- not even the startup
+                # completion-worktree sweep, which only looks at "completed"
+                # workflows.
+                for wf in db.query(Workflow).filter(Workflow.id.in_(wf_ids)).all():
+                    if wf.working_directory and ".worktrees/" in wf.working_directory:
+                        lp = wf.launch_params if isinstance(wf.launch_params, dict) else {}
+                        worktrees_to_clean.append((wf.working_directory, lp))
 
                 # Delete tasks
                 db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
@@ -2844,6 +2871,32 @@ async def remove_project_design(project_id: str, filename: str):
             # Delete the design itself
             db.delete(d)
             found = True
+
+    # Best-effort worktree cleanup, now that the DB transaction above has
+    # committed -- not fatal if any single one can't be resolved.
+    for working_directory, launch_params in worktrees_to_clean:
+        try:
+            wt_path = Path(working_directory)
+            if not (wt_path / ".git").exists():
+                continue
+            project_path_str = launch_params.get("project_path")
+            if not project_path_str:
+                logger.warning(
+                    f"[DELETE-DESIGN] {wt_path} has no launch_params.project_path "
+                    "to scope cleanup to -- left in place"
+                )
+                continue
+            import git as _git
+
+            from src.autopilot.orchestrator import _cleanup_worktree
+
+            try:
+                branch = _git.Repo(wt_path).active_branch.name
+            except Exception:
+                branch = ""
+            _cleanup_worktree(wt_path, branch, Path(project_path_str), logger)
+        except Exception as e:
+            logger.warning(f"[DELETE-DESIGN] Failed to clean up worktree {working_directory}: {e}")
 
     design_dir = _get_design_queue_dir(base_dir)
     filepath = _safe_path(str(design_dir), filename)
@@ -3531,6 +3584,135 @@ async def resume_feature(feature_id: str):
         "success": True,
         "message": f"Resumed feature {feature_name} — restarting {len(to_restart)} task(s)",
     }
+
+
+@router.delete("/features/{feature_id}")
+async def delete_feature(feature_id: str):
+    """Permanently delete a feature: terminate any agent still working its
+    tasks, remove its worktree (if any), and delete the feature, its
+    workflow, and every dependent record. For an old/stuck feature run
+    that has no path back to "done" and just clutters the queue -- mirrors
+    rerun_design's own cleanup (Step 2b above), scoped to one feature
+    instead of an entire design.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.app_context import get_app_state
+    from src.core.database import (
+        AgentResult,
+        BoardConfig,
+        CostEntry,
+        DiagnosticRun,
+        Feature,
+        Memory,
+        PhaseExecution,
+        Task,
+        TaskPromptOverride,
+        Ticket,
+        ValidationReview,
+        Workflow,
+        WorkflowResult,
+        get_db,
+    )
+
+    with get_db() as db:
+        feature = db.query(Feature).filter_by(id=feature_id).first()
+        if not feature:
+            raise HTTPException(status_code=404, detail="Feature not found")
+
+        workflow_id = feature.workflow_id
+        working_directory = None
+        launch_params: dict = {}
+        agent_ids_to_terminate: List[str] = []
+        if workflow_id:
+            wf = db.query(Workflow).filter_by(id=workflow_id).first()
+            if wf:
+                working_directory = wf.working_directory
+                launch_params = wf.launch_params if isinstance(wf.launch_params, dict) else {}
+            agent_ids_to_terminate = [
+                t.assigned_agent_id
+                for t in db.query(Task).filter(
+                    Task.workflow_id == workflow_id,
+                    Task.assigned_agent_id.isnot(None),
+                )
+                if t.assigned_agent_id
+            ]
+
+    # Terminate before deleting: Agent.current_task_id is a foreign key
+    # (foreign_keys=ON) and terminate_agent is what clears it, same
+    # reasoning as the single-task DELETE endpoint (server.py).
+    if agent_ids_to_terminate:
+        server_state = get_app_state()
+        for agent_id in agent_ids_to_terminate:
+            await server_state.agent_manager.terminate_agent(agent_id)
+
+    try:
+        with get_db() as db:
+            feature = db.query(Feature).filter_by(id=feature_id).first()
+            if not feature:
+                raise HTTPException(status_code=404, detail="Feature not found")
+
+            if workflow_id:
+                task_ids = [t.id for t in db.query(Task).filter(Task.workflow_id == workflow_id).all()]
+                if task_ids:
+                    db.query(TaskPromptOverride).filter(TaskPromptOverride.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(ValidationReview).filter(ValidationReview.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(AgentResult).filter(AgentResult.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    # CostEntry.task_id/workflow_id are also enforced FKs -- a
+                    # feature that ever recorded real LLM cost (the common
+                    # case, not the exception) would otherwise fail to delete.
+                    db.query(CostEntry).filter(CostEntry.task_id.in_(task_ids)).delete(synchronize_session=False)
+
+                db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id == workflow_id).delete(synchronize_session=False)
+                db.query(WorkflowResult).filter(WorkflowResult.workflow_id == workflow_id).delete(synchronize_session=False)
+                db.query(BoardConfig).filter(BoardConfig.workflow_id == workflow_id).delete(synchronize_session=False)
+                db.query(Ticket).filter(Ticket.workflow_id == workflow_id).delete(synchronize_session=False)
+                db.query(CostEntry).filter(CostEntry.workflow_id == workflow_id).delete(synchronize_session=False)
+                db.query(PhaseExecution).filter(PhaseExecution.workflow_execution_id == workflow_id).delete(synchronize_session=False)
+                db.query(Task).filter(Task.workflow_id == workflow_id).delete(synchronize_session=False)
+                db.query(Workflow).filter_by(id=workflow_id).delete(synchronize_session=False)
+
+            db.delete(feature)
+    except IntegrityError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete feature {feature_id}: other records still reference it -- {e}",
+        )
+
+    # Best-effort worktree cleanup. Not fatal if it can't be resolved --
+    # the startup sweep (sweep_completed_workflow_worktrees) only catches
+    # "completed" workflows, and this Workflow row is now gone entirely,
+    # so this is the one chance to reclaim the directory.
+    if working_directory and ".worktrees/" in working_directory:
+        try:
+            wt_path = Path(working_directory)
+            if (wt_path / ".git").exists():
+                project_path_str = launch_params.get("project_path")
+                if project_path_str:
+                    import git as _git
+
+                    from src.autopilot.orchestrator import _cleanup_worktree
+
+                    try:
+                        branch = _git.Repo(wt_path).active_branch.name
+                    except Exception:
+                        branch = ""
+                    # _cleanup_worktree only calls .info/.warning -- this
+                    # module's own logger satisfies that without needing
+                    # OrchestratorLogger's real log-file machinery here.
+                    _cleanup_worktree(wt_path, branch, Path(project_path_str), logger)
+                else:
+                    logger.warning(
+                        f"[DELETE-FEATURE] {feature_id}'s worktree {wt_path} has no "
+                        "launch_params.project_path to scope cleanup to -- left in place"
+                    )
+        except Exception as e:
+            logger.warning(f"[DELETE-FEATURE] Failed to clean up worktree for {feature_id}: {e}")
+
+    _invalidate("queue", "features", "status")
+    return {"success": True, "feature_id": feature_id}
 
 
 async def _spawn_agent_for_task(task_id: str, phase_id: Optional[str]) -> None:

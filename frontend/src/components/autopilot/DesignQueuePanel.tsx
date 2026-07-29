@@ -458,16 +458,18 @@ interface RowActionIconsProps {
   canStop?: boolean;
   canResume?: boolean;
   canRerun?: boolean;
+  canDelete?: boolean;
   onPause?: () => void;
   onStop?: () => void;
   onResume?: () => void;
   onRerun?: () => void;
-  pending?: { pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean };
+  onDelete?: () => void;
+  pending?: { pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean; delete?: boolean };
   size?: 'sm' | 'md';
 }
 
 const RowActionIcons: React.FC<RowActionIconsProps> = ({
-  canPause, canStop, canResume, canRerun, onPause, onStop, onResume, onRerun, pending = {}, size = 'md',
+  canPause, canStop, canResume, canRerun, canDelete, onPause, onStop, onResume, onRerun, onDelete, pending = {}, size = 'md',
 }) => {
   const iconCls = size === 'sm' ? 'w-3.5 h-3.5' : 'w-4 h-4';
   const btnCls = size === 'sm' ? 'p-1 rounded' : 'p-2 rounded-lg';
@@ -485,6 +487,7 @@ const RowActionIcons: React.FC<RowActionIconsProps> = ({
     { key: 'stop', enabled: canStop, isPending: pending.stop, onClick: onStop, icon: <Square className={iconCls} />, hoverColor: 'hover:bg-red-50 hover:text-red-600', title: 'Stop' },
     { key: 'resume', enabled: canResume, isPending: pending.resume, onClick: onResume, icon: <Play className={iconCls} />, hoverColor: 'hover:bg-green-50 hover:text-green-600', title: 'Resume' },
     { key: 'rerun', enabled: canRerun, isPending: pending.rerun, onClick: onRerun, icon: <RotateCcw className={iconCls} />, hoverColor: 'hover:bg-violet-50 hover:text-violet-600', title: 'Rerun' },
+    { key: 'delete', enabled: canDelete, isPending: pending.delete, onClick: onDelete, icon: <Trash2 className={iconCls} />, hoverColor: 'hover:bg-red-50 hover:text-red-600', title: 'Delete task' },
   ];
 
   return (
@@ -786,7 +789,7 @@ const FeatureRow: React.FC<{
     }
     return false;
   });
-  const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean }>({});
+  const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean; delete?: boolean }>({});
   const tasks = feature.tasks || [];
   const doneCount = tasks.filter((t: any) => t.status === 'done').length;
   const activeCount = tasks.filter((t: any) => ['in_progress', 'assigned'].includes(t.status)).length;
@@ -799,7 +802,12 @@ const FeatureRow: React.FC<{
   const isRealFeature = !feature.id.startsWith('phase0-') && !feature.id.startsWith('placeholder-');
   const hasWorkflow = !!feature.workflow_id;
 
-  const runFeatureAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun') => {
+  const runFeatureAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun' | 'delete') => {
+    if (action === 'delete' && !confirm(
+      `Permanently delete "${feature.name}" (${feature.feature_key})? This removes its workflow, all its tasks, and its worktree. This cannot be undone.`
+    )) {
+      return;
+    }
     setActionPending((p) => ({ ...p, [action]: true }));
     try {
       if (action === 'pause') {
@@ -814,10 +822,15 @@ const FeatureRow: React.FC<{
         // No true "restart this feature from scratch" endpoint exists yet;
         // recover non-destructively continues from the last committed phase.
         await apiService.recoverWorkflow(feature.workflow_id);
+      } else if (action === 'delete') {
+        await apiService.deleteFeature(feature.id);
       }
       onFeatureUpdate?.();
-    } catch (err) {
+    } catch (err: any) {
       console.error(`Feature ${action} failed:`, err);
+      if (action === 'delete') {
+        toast.error(err?.response?.data?.detail || 'Failed to delete feature');
+      }
     } finally {
       setActionPending((p) => ({ ...p, [action]: false }));
     }
@@ -885,10 +898,12 @@ const FeatureRow: React.FC<{
             canStop={hasWorkflow && (feature.status === 'active' || feature.status === 'paused')}
             canResume={hasWorkflow && (feature.status === 'paused' || feature.status === 'failed')}
             canRerun={hasWorkflow}
+            canDelete={isRealFeature}
             onPause={() => runFeatureAction('pause')}
             onStop={() => runFeatureAction('stop')}
             onResume={() => runFeatureAction('resume')}
             onRerun={() => runFeatureAction('rerun')}
+            onDelete={() => runFeatureAction('delete')}
             pending={actionPending}
           />
           <button
@@ -933,7 +948,7 @@ const TaskRow: React.FC<{
   onTaskClick: (taskId: string) => void;
   onTaskUpdate?: () => void;
 }> = ({ task, onTaskClick, onTaskUpdate }) => {
-  const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean }>({});
+  const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean; delete?: boolean }>({});
   const [tmuxAgent, setTmuxAgent] = useState<Agent | null>(null);
 
   const openTmuxView = async (e: React.MouseEvent) => {
@@ -965,7 +980,12 @@ const TaskRow: React.FC<{
     .replace(/\s*\n+\s*/g, ' ')
     .trim();
 
-  const runTaskAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun') => {
+  const runTaskAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun' | 'delete') => {
+    if (action === 'delete' && !confirm(
+      `Permanently delete this task${task.phase_name ? ` (${task.phase_name})` : ''}? This removes it entirely -- it will not be resumable, and any assigned agent will be stopped.`
+    )) {
+      return;
+    }
     setActionPending((p) => ({ ...p, [action]: true }));
     try {
       if (action === 'pause') {
@@ -979,10 +999,15 @@ const TaskRow: React.FC<{
         // Same underlying action (reset + spawn a fresh agent) -- Resume
         // applies to a paused ('blocked') task, Rerun to a done/failed one.
         await apiService.restartTask(task.id);
+      } else if (action === 'delete') {
+        await apiService.deleteTask(task.id);
       }
       onTaskUpdate?.();
-    } catch (err) {
+    } catch (err: any) {
       console.error(`Task ${action} failed:`, err);
+      if (action === 'delete') {
+        toast.error(err?.response?.data?.detail || 'Failed to delete task');
+      }
     } finally {
       setActionPending((p) => ({ ...p, [action]: false }));
     }
@@ -1053,10 +1078,12 @@ const TaskRow: React.FC<{
         canStop={activeStatuses.includes(task.status)}
         canResume={task.status === 'blocked'}
         canRerun={task.status === 'done' || task.status === 'failed'}
+        canDelete
         onPause={() => runTaskAction('pause')}
         onStop={() => runTaskAction('stop')}
         onResume={() => runTaskAction('resume')}
         onRerun={() => runTaskAction('rerun')}
+        onDelete={() => runTaskAction('delete')}
         pending={actionPending}
       />
       {tmuxAgent && (

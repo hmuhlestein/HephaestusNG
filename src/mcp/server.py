@@ -2763,6 +2763,98 @@ async def cancel_task_endpoint(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/api/tasks/{task_id}")
+async def delete_task_endpoint(task_id: str):
+    """Permanently delete a single task and its dependent records.
+
+    Unlike pause/cancel (which only apply to pending/queued/in-progress
+    tasks and leave the row in place), this removes the task outright in
+    any status -- for the specific case of an old, stuck task (e.g. a
+    stale run's task sitting 'blocked' or 'in_progress' with a long-dead
+    agent) that just clutters the queue view with no path to actually
+    disappear otherwise.
+    """
+    logger.info(f"Delete request for task {task_id}")
+
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.database import (
+        AgentResult,
+        CostEntry,
+        Memory,
+        TaskPromptOverride,
+        Ticket,
+        ValidationReview,
+        resolve_project_for_workflow,
+    )
+
+    try:
+        session = server_state.db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            agent_id = task.assigned_agent_id
+            deleted_workflow_id = task.workflow_id
+        finally:
+            session.close()
+
+        # Terminate the assigned agent first (if any) -- terminate_agent
+        # itself clears Agent.current_task_id, which this task's own FK
+        # deletion below would otherwise violate (foreign_keys=ON).
+        if agent_id:
+            await server_state.agent_manager.terminate_agent(agent_id)
+
+        session = server_state.db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            # Same dependent-record set rerun_design's own task cleanup
+            # deletes for the same reason (FK constraints are enforced).
+            session.query(TaskPromptOverride).filter_by(task_id=task_id).delete(synchronize_session=False)
+            session.query(ValidationReview).filter_by(task_id=task_id).delete(synchronize_session=False)
+            session.query(AgentResult).filter_by(task_id=task_id).delete(synchronize_session=False)
+            session.query(Memory).filter_by(related_task_id=task_id).delete(synchronize_session=False)
+            session.query(Ticket).filter_by(task_id=task_id).delete(synchronize_session=False)
+            # CostEntry.task_id is also an enforced FK -- any task that ever
+            # recorded real LLM cost (increasingly the common case, not the
+            # exception) would otherwise fail to delete with an IntegrityError.
+            session.query(CostEntry).filter_by(task_id=task_id).delete(synchronize_session=False)
+
+            session.delete(task)
+            session.commit()
+        except IntegrityError as e:
+            session.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cannot delete task {task_id}: other records still reference it "
+                    f"(e.g. a subtask or diagnostic run) -- {e}"
+                ),
+            )
+        finally:
+            session.close()
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(deleted_workflow_id)
+        await server_state.broadcast_update(
+            {"type": "task_deleted", "task_id": task_id},
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
+        )
+
+        logger.info(f"Task {task_id} deleted")
+        return {"success": True, "task_id": task_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/cancel_queued_task")
 async def cancel_queued_task_endpoint(
     task_id: str = Body(..., embed=True),
