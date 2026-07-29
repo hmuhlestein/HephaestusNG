@@ -4,6 +4,8 @@ name: feature_review
 # score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
 spec_gate: true
 thinking_level: high
+cli_tool: claude
+cli_model: sonnet
 description: |
   Adversarially review the Feature Architect's decomposition against the original
   design document. You are a fresh reviewer, not the architect who wrote the

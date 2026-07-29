@@ -693,6 +693,46 @@ async def _resume_interrupted_workflows(
         session.close()
 
 
+def _build_phase_dict(phase) -> dict:
+    """Serialize a source sdk.models.Phase into the dict form stored in
+    WorkflowDefinition.phases_config, refreshed from YAML at every startup."""
+    phase_dict = {
+        "id": phase.id,
+        "name": phase.name,
+        "description": phase.description,
+        "done_definitions": phase.done_definitions,
+        "working_directory": phase.working_directory,
+    }
+    if phase.additional_notes:
+        phase_dict["additional_notes"] = phase.additional_notes
+    if phase.outputs:
+        phase_dict["outputs"] = phase.outputs
+    if phase.next_steps:
+        phase_dict["next_steps"] = phase.next_steps
+    # NOTE: `phase.validation` is NOT carried through here even
+    # though phase_manager.py reads phase_config.get("validation")
+    # when building Phase DB rows -- a pre-existing gap (not
+    # introduced by self_review below) that's why validation has
+    # never actually fired for any phase despite the plumbing
+    # existing. Not fixed here — out of scope for self_review,
+    # flagging so it isn't mistaken for "already working."
+    if phase.self_review:
+        phase_dict["self_review"] = phase.self_review
+    if phase.cli_tool:
+        phase_dict["cli_tool"] = phase.cli_tool
+    if phase.cli_model:
+        phase_dict["cli_model"] = phase.cli_model
+    if phase.fallback_cli_tool:
+        phase_dict["fallback_cli_tool"] = phase.fallback_cli_tool
+    if phase.fallback_cli_model:
+        phase_dict["fallback_cli_model"] = phase.fallback_cli_model
+    if phase.glm_api_token_env:
+        phase_dict["glm_api_token_env"] = phase.glm_api_token_env
+    if phase.thinking_level:
+        phase_dict["thinking_level"] = phase.thinking_level
+    return phase_dict
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize server on startup."""
@@ -821,31 +861,7 @@ async def startup_event():
         with server_state.db_manager.get_session() as session:
             for defn in all_definitions:
                 # Build phases_config from source
-                phases_config = []
-                for phase in defn.phases:
-                    phase_dict = {
-                        "id": phase.id,
-                        "name": phase.name,
-                        "description": phase.description,
-                        "done_definitions": phase.done_definitions,
-                        "working_directory": phase.working_directory,
-                    }
-                    if phase.additional_notes:
-                        phase_dict["additional_notes"] = phase.additional_notes
-                    if phase.outputs:
-                        phase_dict["outputs"] = phase.outputs
-                    if phase.next_steps:
-                        phase_dict["next_steps"] = phase.next_steps
-                    # NOTE: `phase.validation` is NOT carried through here even
-                    # though phase_manager.py reads phase_config.get("validation")
-                    # when building Phase DB rows -- a pre-existing gap (not
-                    # introduced by self_review below) that's why validation has
-                    # never actually fired for any phase despite the plumbing
-                    # existing. Not fixed here — out of scope for self_review,
-                    # flagging so it isn't mistaken for "already working."
-                    if phase.self_review:
-                        phase_dict["self_review"] = phase.self_review
-                    phases_config.append(phase_dict)
+                phases_config = [_build_phase_dict(phase) for phase in defn.phases]
 
                 workflow_config = {
                     "has_result": defn.config.has_result,

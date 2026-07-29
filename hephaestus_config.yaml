@@ -72,10 +72,10 @@ llm:
       max_tokens: 2000
       reasoning_effort: low
 agents:
-  default_cli_tool: claude
-  cli_model: sonnet
-  default_fallback_cli_tool: pi
-  default_fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
+  default_cli_tool: pi
+  cli_model: Qwen3.6-27B-UD-Q4_K_XL.gguf
+  default_fallback_cli_tool: claude
+  default_fallback_cli_model: sonnet
   tmux_session_prefix: agent
   health_check_interval: 60
   max_health_failures: 3

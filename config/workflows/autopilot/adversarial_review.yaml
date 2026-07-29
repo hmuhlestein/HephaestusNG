@@ -5,8 +5,9 @@ name: adversarial_review
 spec_gate: true
 thinking_level: high
 cli_tool: claude
+cli_model: sonnet
 fallback_cli_tool: pi
-fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
+fallback_cli_model: Qwen3.6-27B-UD-Q4_K_XL.gguf
 description: |
   Assume the code is broken. Prove it.
 

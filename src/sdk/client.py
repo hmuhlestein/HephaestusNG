@@ -501,6 +501,10 @@ class HephaestusSDK:
                     phase_dict["cli_tool"] = phase.cli_tool
                 if phase.cli_model:
                     phase_dict["cli_model"] = phase.cli_model
+                if phase.fallback_cli_tool:
+                    phase_dict["fallback_cli_tool"] = phase.fallback_cli_tool
+                if phase.fallback_cli_model:
+                    phase_dict["fallback_cli_model"] = phase.fallback_cli_model
                 if phase.glm_api_token_env:
                     phase_dict["glm_api_token_env"] = phase.glm_api_token_env
                 if getattr(phase, "thinking_level", None):

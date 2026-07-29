@@ -195,6 +195,7 @@ class WorkflowOrchestrator:
         "doc_review": 10,
         "forensics_analysis": 11,
         "git_commit_push": 12,
+        "deploy": 13,
     }
 
     def __init__(
