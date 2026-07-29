@@ -616,10 +616,15 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
             <div className="flex items-center space-x-4">
               {/* Blips on each polling cycle so the viewer doesn't look
                   frozen between visible output changes (see
-                  useRealTimeAgentOutput's isFetching). */}
-              {isFetching && (
-                <RefreshCw className="w-3 h-3 animate-spin" aria-label="Live" />
-              )}
+                  useRealTimeAgentOutput's isFetching). Fixed-width slot,
+                  always rendered, opacity-toggled -- conditionally
+                  mounting/unmounting the icon shifted the stats beside it
+                  left and right on every poll. */}
+              <RefreshCw
+                className={`w-3 h-3 animate-spin shrink-0 ${isFetching ? 'opacity-100' : 'opacity-0'}`}
+                aria-hidden={!isFetching}
+                aria-label="Live"
+              />
               <span>Lines: {output.split('\n').length}</span>
               <span>Characters: {output.length}</span>
               {searchTerm && (
