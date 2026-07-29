@@ -360,15 +360,25 @@ async def search_memory(
 
         formatted_results = []
         for r in results:
+            # Both vector store backends (turbovec_store.py, vector_store.py's
+            # Qdrant wrapper) already normalize their results to
+            # {"id", "score", "content", "metadata": {...}} -- neither has a
+            # "payload" key. Reading r.get("payload", {}) here always
+            # returned an empty dict, silently dropping content/memory_type
+            # from every single result regardless of backend. Observed live:
+            # hephaestus_search_memory correctly reported "Found 10
+            # memories" but rendered every one as "- []" (empty
+            # memory_type, empty content).
+            metadata = r.get("metadata", {})
             formatted_results.append(
                 {
                     "id": r.get("id", ""),
-                    "content": r.get("payload", {}).get("content", ""),
-                    "memory_type": r.get("payload", {}).get("memory_type", ""),
+                    "content": r.get("content", ""),
+                    "memory_type": metadata.get("memory_type", ""),
                     "score": r.get("score", 0),
                     "metadata": {
                         k: v
-                        for k, v in r.get("payload", {}).items()
+                        for k, v in metadata.items()
                         if k not in ("content", "memory_id", "timestamp")
                     },
                 }
