@@ -3434,6 +3434,55 @@ class TestSyncStaleFeatureStatuses:
             assert feat.workflow_id is None
             assert feat.completed_at is None
 
+    def test_relinks_orphaned_feature_before_syncing_status(self, orch_db_env):
+        """Regression (live incident): a feature whose workflow completed
+        without Feature.workflow_id ever being written stays workflow_id=
+        None forever once its design's pipeline has fully finished --
+        nothing is left to trigger the design re-walk that normally calls
+        _relink_features_to_workflows, and the stale-status join above
+        can't see it either (it requires a linked Workflow row). Must
+        relink from the matching workflow's launch_params first, then sync
+        status in the same tick."""
+        from src.autopilot.orchestrator import _sync_stale_feature_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Workflow(
+                    id="wf-done",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    definition_id="autopilot",
+                    design_id="design-1",
+                    launch_params={"feature_id": "feat-a"},
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1",
+                    design_id="design-1",
+                    feature_key="feat-a",
+                    name="Feature A",
+                    scope="s",
+                    status="active",
+                    workflow_id=None,
+                )
+            )
+
+        repaired = _sync_stale_feature_statuses(MagicMock())
+
+        assert repaired == 1
+        with orch_db_env.session_scope() as session:
+            feat = session.query(Feature).filter_by(id="feature-row-1").first()
+            assert feat.workflow_id == "wf-done"
+            assert feat.status == "completed"
+            assert feat.completed_at is not None
+
 
 class TestRecoverAbandonedWorkflowsMissingWorktree:
     """_recover_abandoned_workflows_missing_worktree: automated recovery for

@@ -2053,18 +2053,32 @@ def pick_next_design(
                 f"pick_next_design: searching project '{project.name}' ({project.id[:8]})"
             )
 
-            # Get next pending design ordered by ordinal
-            design = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).first()
+            # Resume support: prioritize a design that already finished
+            # Phase 0 (status moved to "active") but still has incomplete
+            # features over starting a brand new "pending" design. A design
+            # in this state was checked FIRST here, before finishing this
+            # loop looked at "pending" designs at all -- but the "pending"
+            # query below always ran unconditionally FIRST, so any pending
+            # design (however low-priority) always won, silently starting
+            # a whole new design's Phase 0 while an active design sat with
+            # unblocked, ready-to-run features it would never be given a
+            # turn to finish. Observed live: a feature whose only blocking
+            # dependency had just completed stayed unstarted indefinitely
+            # because a second, unrelated design was next in queue-order.
+            #
+            # Snapshot the pending list BEFORE the active-design loop below
+            # runs -- that loop can itself reset a design back to "pending"
+            # (candidate.status = "pending", to retry after a failed
+            # workflow), and a design reset like that must wait for a
+            # FRESH pick_next_design call to be eligible, not be picked
+            # right back up by the pending-fallback query at the bottom of
+            # this same call as if it had been queued all along.
+            pending_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
 
-            if design:
-                logger.info(f"pick_next_design: found pending design '{design.name}' ({design.id[:8]})")
-
-            if design is None:
-                # Resume support: a design that already finished Phase 0
-                # (status moved to "active") but was stopped mid-feature-
-                # pipeline is invisible to the "pending" query above.
-                active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
-                logger.info(f"pick_next_design: no pending designs, found {len(active_designs)} active design(s)")
+            design = None
+            active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
+            if active_designs:
+                logger.info(f"pick_next_design: found {len(active_designs)} active design(s), checking for incomplete work before considering pending designs")
                 for candidate in active_designs:
                     incomplete = (
                         db.query(Feature)
@@ -2165,7 +2179,16 @@ def pick_next_design(
                         db.commit()
                         logger.info(f"Design {candidate.name} has all features completed/skipped — marking done")
 
-                if design is None:
+            if design is None:
+                # No active design has resumable work -- safe to start the
+                # next design that was already pending before this call
+                # (the snapshot taken above, not a fresh query -- see its
+                # comment for why a design the loop above just reset to
+                # "pending" must not be picked up here).
+                design = pending_designs[0] if pending_designs else None
+                if design:
+                    logger.info(f"pick_next_design: found pending design '{design.name}' ({design.id[:8]})")
+                else:
                     logger.info("pick_next_design: no designs to process")
 
             if design:
@@ -2764,6 +2787,29 @@ def _sync_stale_feature_statuses(logger: OrchestratorLogger) -> int:
     from src.core.database import Feature, Workflow, get_db
 
     repaired = 0
+
+    # Re-link any feature whose workflow link was never written (see
+    # _relink_features_to_workflows). That function normally runs as a side
+    # effect of _run_one_feature/run_single_design re-walking the design --
+    # but a design whose pipeline has already fully finished has nothing
+    # left to trigger a re-walk, so a feature whose workflow completed
+    # without the link ever being written stays workflow_id=None forever.
+    # The stale-status join below can't see it either (it requires a
+    # linked Workflow row), so without this pass the feature is invisible
+    # to every self-heal path and its status sticks indefinitely. Observed
+    # live: a feature's workflow reached "completed" but Feature.workflow_id
+    # was never set, leaving Feature.status stuck "active" across restarts.
+    with get_db() as db:
+        orphaned_design_ids = {
+            design_id
+            for (design_id,) in db.query(Feature.design_id)
+            .filter(Feature.workflow_id.is_(None))
+            .distinct()
+            .all()
+        }
+    for design_id in orphaned_design_ids:
+        _relink_features_to_workflows(design_id, logger)
+
     with get_db() as db:
         # Feature has a linked workflow that completed. Deliberately NOT
         # also inferring completion for workflow_id-less features from
