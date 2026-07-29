@@ -1055,27 +1055,45 @@ class AgentManager:
             # Strip terminal control sequences but keep ANSI color codes.
             # Keep: SGR color sequences (\x1b[...m) and \r (for spinner collapsing)
             # Strip: everything else aggressively
-            _ansi_strip = (
-                r"BEGIN{$|=1} "  # Autoflush -- see comment below.
-                r"s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL
-                r"s/\x1b\][^\x1b]*\x1b\\//g; "  # OSC with ST (single backslash)
-                r"s/\x1b\[[?]?[0-9;]*[^0-9;m]//g; "  # All CSI/DEC except m (color)
-                r"s/\x1b[()][A-Za-z0-9]//g; "  # Charset selection
-                r"s/\x1b[^\x1b\x5b\x5d]//g; "  # Any other bare ESC sequences
+            # Perl fully block-buffers STDOUT whenever it isn't a TTY (true
+            # here -- redirected to transcript_path via `>>`), so a plain
+            # `perl -pe '...'` sits on every byte pipe-pane feeds it until
+            # the buffer fills or perl exits. Two fixes needed, not one:
+            #
+            # 1. $|=1 (autoflush) handles the OUTPUT side -- without it,
+            #    even a perl that has processed a line won't push it to
+            #    disk promptly.
+            # 2. sysread() in an explicit loop, not -pe's implicit
+            #    while(<>){...}, handles the INPUT side -- -pe reads one
+            #    "line" (up to $/, "\n" by default) before there's anything
+            #    to flush at all. Modern TUIs (Claude Code's included)
+            #    redraw mostly via \r + cursor-positioning escapes, not
+            #    literal "\n". Confirmed live: a transcript sat frozen at
+            #    exactly the byte offset of the launch command's own
+            #    trailing newline for an agent's entire multi-minute run,
+            #    while tmux capture-pane on the same live session showed
+            #    extensive fresh output the whole time -- $|=1 alone (a
+            #    prior fix) never got the chance to flush anything because
+            #    perl was still blocked waiting for a "\n" that wasn't
+            #    coming. sysread(STDIN, $buf, 65536) returns as soon as
+            #    ANY data is available on the pipe (a true short read),
+            #    exactly like tmux's own pipe-pane delivery, so each
+            #    sysread pairs with an immediate print+flush of whatever
+            #    arrived. A multi-byte escape sequence split across two
+            #    reads won't be matched by either substitution pass and
+            #    survives unstripped in the transcript -- a rare cosmetic
+            #    imperfection, not a functional blocker, unlike minutes of
+            #    frozen scrollback.
+            _pty_filter = (
+                r"$|=1; while (sysread(STDIN, my $buf, 65536)) { "
+                r"$buf =~ s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL
+                r"$buf =~ s/\x1b\][^\x1b]*\x1b\\//g; "  # OSC with ST (single backslash)
+                r"$buf =~ s/\x1b\[[?]?[0-9;]*[^0-9;m]//g; "  # All CSI/DEC except m (color)
+                r"$buf =~ s/\x1b[()][A-Za-z0-9]//g; "  # Charset selection
+                r"$buf =~ s/\x1b[^\x1b\x5b\x5d]//g; "  # Any other bare ESC sequences
+                r"print $buf; }"
             )
-            # Perl fully block-buffers STDOUT whenever it isn't a TTY --
-            # true here since it's redirected to transcript_path via `>>` --
-            # so without BEGIN{$|=1} (autoflush) every byte pipe-pane feeds
-            # perl sits in an internal buffer and only actually reaches disk
-            # in unpredictable chunks, flushing fully only when the buffer
-            # fills or perl exits (i.e. when the tmux session is killed at
-            # agent termination). Observed live: a live agent's transcript
-            # file sat at 0 bytes on disk while the agent was actively
-            # producing output the whole time, then jumped to its full size
-            # the instant it terminated -- making all the scrollback the
-            # user had just watched scroll by unreadable (nothing to scroll
-            # back to) until the agent finished.
-            pipe_cmd = f"perl -pe {shlex.quote(_ansi_strip)} >> {shlex.quote(str(transcript_path))}"
+            pipe_cmd = f"perl -e {shlex.quote(_pty_filter)} >> {shlex.quote(str(transcript_path))}"
             session.attached_window.attached_pane.cmd("pipe-pane", "-o", pipe_cmd)
         except Exception as e:
             logger.warning(f"Failed to enable pipe-pane transcript logging: {e}")

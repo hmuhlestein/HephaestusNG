@@ -161,13 +161,18 @@ class TestCreateAgentForTask:
     ):
         """Regression: perl fully block-buffers its STDOUT whenever it isn't
         a TTY (true here -- pipe-pane redirects it to transcript_path via
-        `>>`), so without BEGIN{$|=1} every byte pipe-pane feeds perl sat in
-        an internal buffer and only reached disk in unpredictable chunks,
-        flushing fully only when the buffer filled or perl exited (i.e. when
-        the tmux session was killed at agent termination). Observed live: a
-        live agent's transcript file sat at 0 bytes while the agent was
-        actively producing output the whole time, making all the scrollback
-        the user had just watched scroll by unreadable until it finished."""
+        `>>`), so without $|=1 every byte pipe-pane feeds perl sat in an
+        internal buffer and only reached disk in unpredictable chunks.
+        $|=1 alone still wasn't enough: a plain `perl -pe '...'` also has
+        to finish reading one INPUT "line" (up to "\\n") before there's
+        anything to flush, and modern TUIs (Claude Code's included) redraw
+        mostly via \\r + cursor-positioning escapes, not literal "\\n" --
+        confirmed live, a transcript sat frozen at the byte offset of the
+        launch command's own trailing newline for an agent's entire
+        multi-minute run while tmux capture-pane on the same live session
+        showed extensive fresh output the whole time. sysread() in an
+        explicit loop (not -pe's implicit while(<>)) fixes the input side
+        too: it returns as soon as ANY data is available on the pipe."""
         mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-agent",
@@ -208,7 +213,8 @@ class TestCreateAgentForTask:
         assert len(pipe_pane_calls) == 1
         pipe_cmd = pipe_pane_calls[0].args[-1]
         assert "perl" in pipe_cmd
-        assert "BEGIN{$|=1}" in pipe_cmd
+        assert "$|=1" in pipe_cmd
+        assert "sysread" in pipe_cmd
 
     @pytest.mark.asyncio
     async def test_session_id_uses_feature_model_launch_params(
