@@ -176,7 +176,7 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
-  You MUST call the complete_my_task tool. The system CANNOT detect you finished
+  You MUST call the hephaestus_complete_my_task tool. The system CANNOT detect you finished
   without this call. The pipeline WILL get stuck.
   
   After all git operations complete, call:
