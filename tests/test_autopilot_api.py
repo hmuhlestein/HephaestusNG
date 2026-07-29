@@ -1561,6 +1561,46 @@ class TestProjectDesigns:
             )
             assert remaining == []
 
+    def test_remove_design_with_cost_history_does_not_500(self, project_client):
+        """Regression: CostEntry.task_id/workflow_id are enforced foreign
+        keys (PRAGMA foreign_keys=ON) that this cleanup never deleted --
+        removing a design whose workflow/tasks had ever recorded real LLM
+        cost (the common case, not the exception, now that cost tracking
+        exists) raised an unhandled IntegrityError instead of succeeding."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, CostEntry, Task, Workflow, get_db
+
+        with get_db() as db:
+            design = db.query(AutopilotDesign).filter_by(project_id=pid, filename="01-auth.md").first()
+            db.add(
+                Workflow(
+                    id="wf-cost-1", name="autopilot", phases_folder_path="/tmp",
+                    status="failed", definition_id="autopilot", design_id=design.id,
+                )
+            )
+            db.add(
+                Task(
+                    id="task-cost-1", workflow_id="wf-cost-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="failed",
+                )
+            )
+            db.add(
+                CostEntry(
+                    id="cost-1", task_id="task-cost-1", workflow_id="wf-cost-1",
+                    source="pi", cost_usd=0.05,
+                )
+            )
+            db.commit()
+
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/01-auth.md")
+        assert resp.status_code == 200, resp.text
+
+        with get_db() as db:
+            assert db.query(Workflow).filter_by(id="wf-cost-1").first() is None
+            assert db.query(CostEntry).filter_by(id="cost-1").first() is None
+
     def test_design_status_surfaces_failure_reason(self, project_client):
         """Regression: AutopilotDesign had no column to store *why* a design
         failed -- orchestrator.py's run_phase0 always passed error=... to
@@ -2049,3 +2089,149 @@ class TestCostEntryAgentBinding:
         )
         assert resp.status_code == 200
         assert recorded["agent_id"] == "some-other-real-agent"
+
+
+class TestDeleteFeature:
+    """DELETE /features/{feature_id}: an old/stuck feature (dead-end
+    workflow, no path back to "done") had no way to actually disappear
+    from the queue -- pause/stop/resume/rerun all assume the work is still
+    salvageable. This removes the feature, its workflow, its tasks, and
+    dependent records outright."""
+
+    def test_deletes_feature_with_no_workflow(self, project_client):
+        client, dirs = project_client
+        from src.core.database import Feature, get_db
+
+        with get_db() as db:
+            db.add(
+                Feature(
+                    id="feat-1", design_id="does-not-matter", feature_key="x",
+                    name="X", scope="s", status="pending",
+                )
+            )
+
+        resp = client.delete("/api/autopilot/features/feat-1")
+        assert resp.status_code == 200
+        assert resp.json() == {"success": True, "feature_id": "feat-1"}
+
+        with get_db() as db:
+            assert db.query(Feature).filter_by(id="feat-1").first() is None
+
+    def test_deletes_feature_workflow_and_tasks(self, project_client):
+        client, dirs = project_client
+        from src.core.database import Feature, Task, Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-del-1", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                )
+            )
+            db.add(
+                Feature(
+                    id="feat-2", design_id="does-not-matter", feature_key="y",
+                    name="Y", scope="s", status="active", workflow_id="wf-del-1",
+                )
+            )
+            db.add(
+                Task(
+                    id="task-del-1", workflow_id="wf-del-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="pending",
+                )
+            )
+
+        resp = client.delete("/api/autopilot/features/feat-2")
+        assert resp.status_code == 200
+
+        with get_db() as db:
+            assert db.query(Feature).filter_by(id="feat-2").first() is None
+            assert db.query(Workflow).filter_by(id="wf-del-1").first() is None
+            assert db.query(Task).filter_by(id="task-del-1").first() is None
+
+    def test_deletes_feature_with_cost_history(self, project_client):
+        """CostEntry.task_id/workflow_id are also enforced FKs -- a feature
+        that ever recorded real LLM cost (the common case, not the
+        exception, now that cost tracking exists) would otherwise fail to
+        delete with an IntegrityError."""
+        client, dirs = project_client
+        from src.core.database import CostEntry, Feature, Task, Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-del-cost", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                )
+            )
+            db.add(
+                Feature(
+                    id="feat-cost", design_id="does-not-matter", feature_key="c",
+                    name="C", scope="s", status="active", workflow_id="wf-del-cost",
+                )
+            )
+            db.add(
+                Task(
+                    id="task-del-cost", workflow_id="wf-del-cost", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="done",
+                )
+            )
+            db.add(
+                CostEntry(
+                    id="cost-del-1", task_id="task-del-cost", workflow_id="wf-del-cost",
+                    source="pi", cost_usd=0.05,
+                )
+            )
+
+        resp = client.delete("/api/autopilot/features/feat-cost")
+        assert resp.status_code == 200, resp.text
+
+        with get_db() as db:
+            assert db.query(Feature).filter_by(id="feat-cost").first() is None
+            assert db.query(CostEntry).filter_by(id="cost-del-1").first() is None
+
+    def test_terminates_assigned_agent_before_deleting(self, project_client, monkeypatch):
+        client, dirs = project_client
+        from src.core.database import Agent, Feature, Task, Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-del-2", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                )
+            )
+            db.add(
+                Feature(
+                    id="feat-3", design_id="does-not-matter", feature_key="z",
+                    name="Z", scope="s", status="active", workflow_id="wf-del-2",
+                )
+            )
+            db.add(
+                Agent(id="agent-del-1", system_prompt="p", status="working", cli_type="claude")
+            )
+            db.add(
+                Task(
+                    id="task-del-2", workflow_id="wf-del-2", phase_id="phase-1",
+                    raw_description="r", done_definition="d",
+                    status="in_progress", assigned_agent_id="agent-del-1",
+                )
+            )
+
+        mock_state = Mock()
+        mock_state.agent_manager.terminate_agent = AsyncMock()
+        monkeypatch.setattr(
+            "src.core.app_context.get_app_state", lambda: mock_state
+        )
+
+        resp = client.delete("/api/autopilot/features/feat-3")
+        assert resp.status_code == 200
+        mock_state.agent_manager.terminate_agent.assert_awaited_once_with("agent-del-1")
+
+        with get_db() as db:
+            assert db.query(Feature).filter_by(id="feat-3").first() is None
+
+    def test_missing_feature_returns_404(self, project_client):
+        client, dirs = project_client
+        resp = client.delete("/api/autopilot/features/does-not-exist")
+        assert resp.status_code == 404

@@ -397,6 +397,11 @@ export const apiService = {
     return data;
   },
 
+  deleteTask: async (taskId: string): Promise<{ success: boolean; task_id: string }> => {
+    const { data } = await api.delete(`/tasks/${encodeURIComponent(taskId)}`);
+    return data;
+  },
+
   // Ticket Tracking System Endpoints
 
   createTicket: async (
@@ -829,6 +834,11 @@ export const apiService = {
 
   resumeFeature: async (featureId: string): Promise<any> => {
     const { data } = await api.post(`/autopilot/features/${encodeURIComponent(featureId)}/resume`);
+    return data;
+  },
+
+  deleteFeature: async (featureId: string): Promise<{ success: boolean; feature_id: string }> => {
+    const { data } = await api.delete(`/autopilot/features/${encodeURIComponent(featureId)}`);
     return data;
   },
 
