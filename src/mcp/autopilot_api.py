@@ -957,6 +957,7 @@ async def rerun_design(request: dict):
             WorkflowResult,
         )
 
+        worktrees_to_clean: List[Tuple[str, dict]] = []
         with get_db() as db:
             matching_wfs = (
                 db.query(Workflow)
@@ -999,6 +1000,20 @@ async def rerun_design(request: dict):
                 # Delete phase executions
                 db.query(PhaseExecution).filter(PhaseExecution.workflow_execution_id.in_(wf_ids)).delete(synchronize_session=False)
 
+                # Collect worktree info before the Workflow rows are gone.
+                # Without this, _create_integration_worktree's deterministic
+                # per-design path (design_id-derived, unchanged by rerun)
+                # finds the OLD worktree still sitting there and reuses it
+                # as-is (it only creates fresh `if not wt_path.exists()`) --
+                # "rerun" would silently continue from stale commits instead
+                # of actually starting over. Step 2 above already terminated
+                # every active agent and paused every active workflow, so
+                # nothing is still writing to these worktrees by this point.
+                for wf in db.query(Workflow).filter(Workflow.id.in_(wf_ids)).all():
+                    if wf.working_directory and ".worktrees/" in wf.working_directory:
+                        lp = wf.launch_params if isinstance(wf.launch_params, dict) else {}
+                        worktrees_to_clean.append((wf.working_directory, lp))
+
                 # Delete tasks
                 db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
@@ -1017,6 +1032,32 @@ async def rerun_design(request: dict):
 
             db.commit()
             logger.info(f"[RERUN] Cleaned up {len(wf_ids)} workflows and features for {filename}")
+
+        # Best-effort worktree cleanup, now that the DB transaction above
+        # has committed -- not fatal if any single one can't be resolved.
+        for working_directory, launch_params in worktrees_to_clean:
+            try:
+                wt_path = Path(working_directory)
+                if not (wt_path / ".git").exists():
+                    continue
+                project_path_str = launch_params.get("project_path")
+                if not project_path_str:
+                    logger.warning(
+                        f"[RERUN] {wt_path} has no launch_params.project_path "
+                        "to scope cleanup to -- left in place"
+                    )
+                    continue
+                import git as _git
+
+                from src.autopilot.orchestrator import _cleanup_worktree
+
+                try:
+                    branch = _git.Repo(wt_path).active_branch.name
+                except Exception:
+                    branch = ""
+                _cleanup_worktree(wt_path, branch, Path(project_path_str), logger)
+            except Exception as e:
+                logger.warning(f"[RERUN] Failed to clean up worktree {working_directory}: {e}")
     except Exception as e:
         logger.error(f"Error cleaning up design state for rerun: {e}")
 

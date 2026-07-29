@@ -350,14 +350,14 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                   </Button>
                   <Button
                     onClick={() => {
-                      if (confirm(`Rerun "${filename}"? This restarts its pipeline from scratch and will also pause every other currently running pipeline.`)) {
+                      if (confirm(`Rerun "${filename}"? This restarts its pipeline from scratch, deletes its existing worktree (any uncommitted work in it is lost), and will also pause every other currently running pipeline.`)) {
                         rerunMutation.mutate();
                       }
                     }}
                     disabled={rerunMutation.isPending}
                     variant="outline"
                     className="text-violet-600 border-violet-200 hover:bg-violet-50"
-                    title="Restart this design's pipeline from scratch and pause every other running pipeline"
+                    title="Restart this design's pipeline from scratch (deletes its worktree, discarding uncommitted work) and pause every other running pipeline"
                   >
                     {rerunMutation.isPending ? (
                       <Loader2 className="w-4 h-4 mr-1 animate-spin" />

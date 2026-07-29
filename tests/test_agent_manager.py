@@ -1089,6 +1089,64 @@ class TestTerminateAgent:
         # Verify tmux session was killed
         mock_agent_manager.tmux_server.has_session.return_value = False
 
+    @pytest.mark.asyncio
+    async def test_falls_back_to_shared_worktree_commit_when_no_agent_branch_record(
+        self, mock_agent_manager, db_manager, tmp_path
+    ):
+        """Regression: commit_changes -> _agent_repo requires an AgentBranch
+        DB record keyed by agent_id, which only ever exists for the legacy
+        isolated-per-agent-worktree path. Every normal phase agent runs
+        against a SHARED feature worktree instead (no AgentBranch record),
+        so terminate_agent's "preserve uncommitted work" promise silently
+        no-op'd for the common case -- the ValueError was caught and only
+        logged at DEBUG. That mattered once delete_feature/
+        remove_project_design/rerun_design started force-removing worktrees
+        right after terminating their agents: uncommitted work was gone
+        with no recovery. terminate_agent must fall back to committing
+        directly in the worktree the agent's own current task was using.
+        """
+        from git import Repo
+
+        repo_dir = tmp_path / "shared-worktree"
+        repo_dir.mkdir()
+        repo = Repo.init(repo_dir)
+        (repo_dir / "README.md").write_text("# init\n")
+        repo.index.add(["README.md"])
+        repo.index.commit("Initial commit")
+
+        # Uncommitted WIP the agent supposedly left behind.
+        (repo_dir / "wip.py").write_text("# work in progress\n")
+        assert repo.is_dirty(untracked_files=True)
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-shared-1", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                    working_directory=str(repo_dir),
+                )
+            )
+            session.add(
+                Task(
+                    id="task-shared-1", workflow_id="wf-shared-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="in_progress",
+                )
+            )
+            session.add(
+                Agent(
+                    id="agent-shared-1", system_prompt="Test", status="working",
+                    cli_type="claude", current_task_id="task-shared-1",
+                )
+            )
+
+        await mock_agent_manager.terminate_agent("agent-shared-1")
+
+        assert not repo.is_dirty(untracked_files=True), (
+            "uncommitted work in the shared worktree must be committed, "
+            "not silently left for a later force-remove to destroy"
+        )
+        assert "wip.py" in repo.head.commit.stats.files
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
