@@ -3572,7 +3572,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "get_task_status",
+                "name": "hephaestus_get_task_status",
                 "description": "Get status of tasks, optionally filtered by agent_id or workflow_id",
                 "input_schema": {
                     "type": "object",
@@ -4769,7 +4769,7 @@ _MCP_TOOLS: Dict[str, Any] = {
     "hephaestus_create_task": _tool_create_task,
     "hephaestus_save_memory": _tool_save_memory,
     "hephaestus_search_memory": _tool_search_memory,
-    "get_task_status": _tool_get_task_status,
+    "hephaestus_get_task_status": _tool_get_task_status,
     "hephaestus_update_task_status": _tool_update_task_status,
     "hephaestus_complete_my_task": _tool_complete_my_task,
     "hephaestus_create_ticket": _tool_create_ticket,
