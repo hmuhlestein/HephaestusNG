@@ -162,7 +162,7 @@ Description: {result.get("enriched_description", description)[:100]}..."""
         return f"❌ Error creating task: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_get_tasks")
 async def get_tasks(status: str = "all") -> str:
     """List tasks in Hephaestus.
 
