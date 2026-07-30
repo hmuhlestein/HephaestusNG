@@ -341,26 +341,6 @@ class TestMultiProviderLLM:
             mock_client.generate_embedding.assert_called_once_with("test text")
 
     @pytest.mark.asyncio
-    async def test_analyze_agent_state(self, mock_client, tmp_path):
-        """Test agent state analysis."""
-        config_file = tmp_path / "test.yaml"
-        config_file.write_text("llm: {}")
-
-        with patch(
-            "src.interfaces.multi_provider_llm.LangChainLLMClient",
-            return_value=mock_client,
-        ):
-            llm = MultiProviderLLM(str(config_file))
-
-            result = await llm.analyze_agent_state(
-                "agent output", {"task": "info"}, "project context"
-            )
-
-            assert result["state"] == "healthy"
-            assert result["decision"] == "continue"
-            mock_client.analyze_agent_state.assert_called_once()
-
-    @pytest.mark.asyncio
     async def test_generate_agent_prompt_forwards_phase_name(self, mock_client, tmp_path):
         """Regression: MultiProviderLLM.generate_agent_prompt's signature had
         drifted from its caller (agents/manager.py always passes

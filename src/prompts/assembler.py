@@ -36,6 +36,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
+from src.prompts.loader import get_prompt
+
 # ── Template variable detection ─────────────────────────────────────────────
 
 _VAR_RE = re.compile(r"\{(\w+)\}")
@@ -309,51 +311,14 @@ class PromptAssembler:
             description or "You are an AI agent in the Hephaestus orchestration system."
         )
 
-        return f"""{identity}
-
-═══ PRE-LOADED CONTEXT ═══
-Top 10 relevant memories (use heph_search_memory for more):
-{memory_context}
-
-PROJECT:
-{project_context or "(no project context loaded)"}
-
-═══ AVAILABLE TOOLS ═══
-
-Hephaestus MCP (task management):
-• heph_create_task - Create sub-tasks (MUST set parent_task_id="{task_id or "unknown"}")
-• heph_update_task_status - Mark done/failed when complete (REQUIRED)
-• heph_save_memory - Save discoveries for other agents
-• spawn_agent - Spawn a specialized Hephaestus subagent (see below)
-
-Memory search:
-• heph_search_memory - Search agent memories semantically
-  Use when: encountering errors, needing implementation details, finding related work
-  Example: heph_search_memory("PostgreSQL connection timeout solutions")
-  Note: Pre-loaded context covers most needs; search for specifics
-
-═══ SUBAGENT SPAWNING ═══
-To delegate specialized work, use spawn_agent:
-
-• spawn_agent(agent_name="hephaestus-development", task="implement X", workflow_id="your-workflow-id")
-• spawn_agent(agent_name="hephaestus-architecture-design", task="design Y", workflow_id="your-workflow-id")
-• spawn_agent(agent_name="hephaestus-adversarial-review", task="review Z", workflow_id="your-workflow-id")
-
-Available agents: hephaestus-product-requirements, hephaestus-architecture-design,
-hephaestus-development, hephaestus-adversarial-review, hephaestus-doc-review,
-hephaestus-security-review, hephaestus-qa-validation, hephaestus-product-validation,
-hephaestus-git-commit-push, hephaestus-forensics-analysis
-
-Note: workflow_id is required for task creation. Use your current workflow_id.
-
-═══ WORKFLOW ═══
-1. Work on your task using pre-loaded context
-2. Use heph_search_memory if you need specific information (errors, patterns, implementations)
-3. Save important discoveries via heph_save_memory (error fixes, decisions, warnings)
-4. Spawn subagents for specialized work (architecture, development, review, etc.)
-5. Call heph_update_task_status when done (status='done') or failed (status='failed')
-
-IDs: Agent={agent_id or "unknown"} | Task={task_id or "unknown"} | Phase={phase_id or "unknown"}"""
+        return get_prompt("assembler_system_prompt", {
+            "identity": identity,
+            "memory_context": memory_context,
+            "project_context": project_context or "(no project context loaded)",
+            "task_id": task_id or "unknown",
+            "agent_id": agent_id or "unknown",
+            "phase_id": phase_id or "unknown",
+        })
 
     def _build_user_prompt(
         self,

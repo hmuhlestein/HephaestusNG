@@ -328,3 +328,247 @@ open_tickets_section: |-
   {ticket_lines}
 
   For each: fix the underlying issue, then call heph_update_ticket_status(ticket_id="...", new_status="shipped") to mark it resolved. heph_complete_my_task(status="done") will be REJECTED while any remain unresolved.
+
+# One-shot self-review checklist sent back to an agent that just called
+# update_task_status(done) on a phase with self_review.enabled
+# (src/mcp/server.py, see docs/GAP_CHECK_SELF_LOOP_DESIGN.md). Concrete and
+# checkable by design, not an open-ended "find your own gaps" -- makes a
+# no-op pass (nothing changed, same completion_notes) easy to spot later
+# against the before/after diff.
+# Task description for a "repair agent" -- SDK-level orchestration agent
+# dispatched by src/mcp/autopilot_api.py's _run_repair to fix a stalled
+# workflow. Calls create_task/create_agent_for_task/get_task_status/
+# get_agent_output as internal SDK methods, not MCP tools -- no heph_
+# prefix here, unlike the phase-agent prompts above.
+repair_agent_instructions: |-
+  REPAIR AGENT: Design '{filename}' needs systematic repair.
+
+  CRITICAL RULE: The design document is the SOURCE OF TRUTH. Do NOT modify it.
+  If implementation differs from design, fix the implementation to match the design.
+  If you cannot resolve a discrepancy or need to deviate from the design,
+  send an inbox message to the human for approval using the message tool.
+  Only deviate from the design with explicit human approval.
+
+  Workflow {wf_id_short} status: {reason}
+  Completed: {done_count} | Failed: {failed_count} | Pending: {pending_count} | In Progress: {in_progress_count}
+
+  Tasks:
+  {task_summary}
+
+  YOUR JOB:
+  1. Read the design doc at {design_doc_path} (READ ONLY - do not modify)
+  2. Check what has been completed so far in the feature folder
+  3. Identify what's blocking progress
+  4. You have FULL AUTHORITY to:
+     - Create tasks and spawn agents via create_task + create_agent_for_task
+     - Merge branches via MCP tools
+     - Fix code to match design (NOT the other way around)
+  5. For EACH failed task:
+     a. Read the error and understand why it failed
+     b. Determine: can it be retried? does it need rework? is it blocked?
+     c. If retryable: reset to pending, spawn agent to relaunch
+     d. If needs rework: create new task with corrected instructions, spawn agent
+     e. If blocked: document the blocker and move on
+     f. MONITOR: after spawning, check get_task_status until done or failed
+  6. For EACH pending task:
+     a. Check if dependencies are met (depends_on tasks are done)
+     b. If dependencies met: spawn agent via create_agent_for_task
+     c. If not met: skip and come back later
+     d. MONITOR: check status after spawning
+  7. For EACH in_progress task:
+     a. Check agent output via get_agent_output
+     b. If stuck (no progress): nudge agent or terminate and respawn
+     c. If progressing: let it continue
+  8. MERGE: after all tasks complete, merge branches to main
+  9. WRITE repair_report.md summarizing actions taken
+  10. Mark your task done when ALL tasks are resolved
+
+# LLM-analysis prompts built by src/interfaces/langchain_llm_client.py
+# (LangChainLLMClient) -- sent to the LLM for design-complexity
+# classification, task enrichment, and ticket-clarification arbitration
+# (fallback path only; the primary template is src/prompts/ticket_clarification_prompt.md).
+classify_complexity: |-
+  Rate the IMPLEMENTATION complexity of the software design below as exactly one word: low, medium, or high.
+  - low: a single small module/function or trivial utility (e.g. a calculator, a parser)
+  - medium: a handful of components working together
+  - high: a real multi-service / multi-subsystem system
+
+  DESIGN:
+  {design_text}
+
+  Answer with ONE word only (low, medium, or high):
+
+task_enrichment: |-
+  Given this task request, analyze and enrich it with clear specifications.
+
+  Task: {task_description}
+  Done Definition: {done_definition}
+  Context: {context}{phase_context_section}
+
+  Generate a JSON response with:
+  1. "enriched_description": A clear, unambiguous task description
+  2. "completion_criteria": Specific, measurable completion criteria (list)
+  3. "agent_prompt": A focused system prompt for the agent executing this task
+  4. "required_capabilities": List of required capabilities (e.g., "file_editing", "code_analysis")
+  5. "estimated_complexity": Integer 1-10 indicating task complexity
+
+  Ensure the enriched description is actionable and the completion criteria are specific and verifiable.{phase_context_hint}
+
+fallback_ticket_clarification: |-
+  You are a ticket clarification arbitrator. An agent has encountered a conflict or ambiguity in their ticket requirements.
+
+  TICKET: {ticket_id}
+  TITLE: {ticket_title}
+  DESCRIPTION: {ticket_description}
+
+  CONFLICT DESCRIBED BY AGENT:
+  {conflict_description}
+
+  ADDITIONAL CONTEXT:
+  {context}
+
+  POTENTIAL SOLUTIONS AGENT IS CONSIDERING:
+  {solutions_text}
+
+  Provide a clear, detailed resolution in markdown format that includes:
+  1. Analysis of the conflict
+  2. Evaluation of the proposed solutions
+  3. Your recommended resolution with rationale
+  4. Specific ticket updates needed
+  5. Specific file changes needed
+  6. What the agent should avoid
+
+  Be decisive and provide actionable guidance to prevent the agent from creating infinite tasks.
+
+# Fragments interpolated by src/monitoring/prompt_loader.py's PromptLoader
+# into its .md templates (guardian_trajectory_analysis.md,
+# conductor_system_analysis.md, task_validation_prompt.md) -- these feed
+# the {last_message_marker_section}/{phase_context}/{workflows_breakdown}/
+# {previous_feedback_section}/{iteration_guidance} placeholders.
+guardian_marker_section: |-
+  In the previous monitoring cycle, Claude's last message contained: `{last_message_marker}`
+
+  **Use this to identify what's NEW** in the current agent output:
+  - Everything BEFORE this marker was already analyzed
+  - Everything AFTER this marker is new activity
+  - Focus your trajectory analysis on the NEW parts
+  - Still review full context for accumulated understanding
+
+guardian_phase_section: |-
+  **THIS AGENT IS WORKING IN A PHASED WORKFLOW**
+
+  The task belongs to **{workflow_position}** in the workflow.
+
+  ### Phase {phase_number}: {phase_name}
+
+  **Phase Description**:
+  {phase_description}
+
+  **Phase Done Definitions** (What this phase must accomplish):
+  {done_definitions}
+
+  **Phase-Specific Instructions** (Agent MUST follow these):
+  {additional_notes}
+
+  **Expected Outputs from This Phase**:
+  {outputs}
+
+  **What Happens After This Phase**:
+  {next_steps}
+
+  **Workflow Context**:
+  - Total Phases: {total_phases}
+  - All Phases: {all_phase_names}
+  - Workflow: {workflow_name}
+
+  ⚠️ **CRITICAL FOR TRAJECTORY ANALYSIS** ⚠️
+
+  You MUST evaluate whether the agent is following the Phase-specific instructions above.
+  Common Phase instruction patterns:
+  - "Create a Phase X task" → Check if agent created the task
+  - "Mark task as done when finished" → Check if agent called heph_update_task_status
+  - "Search before creating" → Check if agent searched for duplicates
+  - "Include TICKET: ticket-xxx in description" → Verify format
+
+  If agent is NOT following phase instructions → needs_steering: true
+
+conductor_workflow_breakdown_entry: |-
+  ### Workflow: {workflow_id}
+  **Description**: {description}
+  **Definition**: {definition_name}
+  **Active Agents**: {agent_ids}
+  **Current Phases**: {phases}
+  **Task Status**: {task_summary}
+
+task_validation_previous_feedback: |-
+  ### Previous Validation Feedback (Iteration {previous_iteration}):
+  ```
+  {previous_feedback}
+  ```
+  Please verify that the previous issues have been addressed.
+
+# System prompt built by src/prompts/assembler.py's PromptAssembler
+# (_build_system_prompt) -- preview/diff-only, used by the frontend prompt
+# editor UI, not the live agent-dispatch path (that's
+# src/agents/prompt_builder.py + phase_agent_instructions above). Has a
+# companion TypeScript port (frontend/src/lib/promptAssember.ts) that was
+# already meaningfully diverged (different tool names, static placeholder
+# values) before this migration -- left as-is rather than building new
+# cross-stack plumbing to sync illustrative-only preview text.
+assembler_system_prompt: |-
+  {identity}
+
+  ═══ PRE-LOADED CONTEXT ═══
+  Top 10 relevant memories (use heph_search_memory for more):
+  {memory_context}
+
+  PROJECT:
+  {project_context}
+
+  ═══ AVAILABLE TOOLS ═══
+
+  Hephaestus MCP (task management):
+  • heph_create_task - Create sub-tasks (MUST set parent_task_id="{task_id}")
+  • heph_update_task_status - Mark done/failed when complete (REQUIRED)
+  • heph_save_memory - Save discoveries for other agents
+  • spawn_agent - Spawn a specialized Hephaestus subagent (see below)
+
+  Memory search:
+  • heph_search_memory - Search agent memories semantically
+    Use when: encountering errors, needing implementation details, finding related work
+    Example: heph_search_memory("PostgreSQL connection timeout solutions")
+    Note: Pre-loaded context covers most needs; search for specifics
+
+  ═══ SUBAGENT SPAWNING ═══
+  To delegate specialized work, use spawn_agent:
+
+  • spawn_agent(agent_name="hephaestus-development", task="implement X", workflow_id="your-workflow-id")
+  • spawn_agent(agent_name="hephaestus-architecture-design", task="design Y", workflow_id="your-workflow-id")
+  • spawn_agent(agent_name="hephaestus-adversarial-review", task="review Z", workflow_id="your-workflow-id")
+
+  Available agents: hephaestus-product-requirements, hephaestus-architecture-design,
+  hephaestus-development, hephaestus-adversarial-review, hephaestus-doc-review,
+  hephaestus-security-review, hephaestus-qa-validation, hephaestus-product-validation,
+  hephaestus-git-commit-push, hephaestus-forensics-analysis
+
+  Note: workflow_id is required for task creation. Use your current workflow_id.
+
+  ═══ WORKFLOW ═══
+  1. Work on your task using pre-loaded context
+  2. Use heph_search_memory if you need specific information (errors, patterns, implementations)
+  3. Save important discoveries via heph_save_memory (error fixes, decisions, warnings)
+  4. Spawn subagents for specialized work (architecture, development, review, etc.)
+  5. Call heph_update_task_status when done (status='done') or failed (status='failed')
+
+  IDs: Agent={agent_id} | Task={task_id} | Phase={phase_id}
+
+self_review_checklist: |
+  Before this is actually done, re-check your own work:
+  - Re-read the design/requirements — is every requirement implemented?
+  - Edge cases and error handling — anything unhandled?
+  - Tests exist for new code, and they pass?
+  - Any TODOs, stubs, or dead code left behind?
+
+  Fix anything real you find, then call heph_update_task_status
+  with status="done" again — record what you changed (if anything) in the
+  summary.

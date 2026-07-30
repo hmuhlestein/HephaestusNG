@@ -35,6 +35,7 @@ from src.mcp.server import (
     _check_rate_limit,
     verify_agent_authentication,
 )
+from src.prompts.loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -1244,47 +1245,17 @@ def spawn_repair_review_agent(wf_id: str, filename: str, project: Path, reason: 
             desc = (t.get("enriched_description") or t.get("raw_description") or "")[:80]
             task_summary.append(f"  IN_PROGRESS: {t.get('id', '')[:8]} - {desc}")
 
-        review_instructions = f"""REPAIR AGENT: Design '{filename}' needs systematic repair.
-
-CRITICAL RULE: The design document is the SOURCE OF TRUTH. Do NOT modify it.
-If implementation differs from design, fix the implementation to match the design.
-If you cannot resolve a discrepancy or need to deviate from the design,
-send an inbox message to the human for approval using the message tool.
-Only deviate from the design with explicit human approval.
-
-Workflow {wf_id[:8]} status: {reason}
-Completed: {len(done_tasks)} | Failed: {len(failed_tasks)} | Pending: {len(pending_tasks)} | In Progress: {len(in_progress_tasks)}
-
-Tasks:
-{chr(10).join(task_summary) if task_summary else "No tasks found"}
-
-YOUR JOB:
-1. Read the design doc at {project / DESIGN_CONTEXT_SUBDIR / filename} (READ ONLY - do not modify)
-2. Check what has been completed so far in the feature folder
-3. Identify what's blocking progress
-4. You have FULL AUTHORITY to:
-   - Create tasks and spawn agents via create_task + create_agent_for_task
-   - Merge branches via MCP tools
-   - Fix code to match design (NOT the other way around)
-5. For EACH failed task:
-   a. Read the error and understand why it failed
-   b. Determine: can it be retried? does it need rework? is it blocked?
-   c. If retryable: reset to pending, spawn agent to relaunch
-   d. If needs rework: create new task with corrected instructions, spawn agent
-   e. If blocked: document the blocker and move on
-   f. MONITOR: after spawning, check get_task_status until done or failed
-6. For EACH pending task:
-   a. Check if dependencies are met (depends_on tasks are done)
-   b. If dependencies met: spawn agent via create_agent_for_task
-   c. If not met: skip and come back later
-   d. MONITOR: check status after spawning
-7. For EACH in_progress task:
-   a. Check agent output via get_agent_output
-   b. If stuck (no progress): nudge agent or terminate and respawn
-   c. If progressing: let it continue
-8. MERGE: after all tasks complete, merge branches to main
-9. WRITE repair_report.md summarizing actions taken
-10. Mark your task done when ALL tasks are resolved"""
+        review_instructions = get_prompt("repair_agent_instructions", {
+            "filename": filename,
+            "wf_id_short": wf_id[:8],
+            "reason": reason,
+            "done_count": len(done_tasks),
+            "failed_count": len(failed_tasks),
+            "pending_count": len(pending_tasks),
+            "in_progress_count": len(in_progress_tasks),
+            "task_summary": chr(10).join(task_summary) if task_summary else "No tasks found",
+            "design_doc_path": project / DESIGN_CONTEXT_SUBDIR / filename,
+        })
 
         # Create the task
         logger.info(f"[REPAIR-AGENT] Creating task for workflow {wf_id[:8]}")

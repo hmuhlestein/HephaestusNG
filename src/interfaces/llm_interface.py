@@ -54,30 +54,6 @@ class LLMProviderInterface(ABC):
         pass
 
     @abstractmethod
-    async def analyze_agent_state(
-        self,
-        agent_output: str,
-        task_info: Dict[str, Any],
-        project_context: str,
-    ) -> Dict[str, Any]:
-        """Analyze agent state for monitoring decisions.
-
-        Args:
-            agent_output: Recent output from agent's tmux session
-            task_info: Current task information
-            project_context: Project-wide context
-
-        Returns:
-            Dictionary containing:
-                - state: Agent state (healthy/stuck_waiting/stuck_error/stuck_confused/unrecoverable)
-                - decision: Action to take (continue/nudge/answer/restart/recreate)
-                - message: Message to send if nudge/answer
-                - reasoning: Brief explanation
-                - confidence: Confidence score (0-1)
-        """
-        pass
-
-    @abstractmethod
     async def generate_agent_prompt(
         self,
         task: Dict[str, Any],
@@ -170,33 +146,6 @@ class LLMProviderInterface(ABC):
                 - coherence_score: System coherence score (0-1)
                 - termination_recommendations: Agents to terminate
                 - coordination_needs: Resource coordination requirements
-        """
-        pass
-
-    @abstractmethod
-    async def review_qa_report(
-        self,
-        qa_report: str,
-        prd_content: str,
-        phase_intent: str,
-        spec: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Review a QA report against PRD and phase intent.
-
-        Args:
-            qa_report: The QA report content (HTML or markdown)
-            prd_content: The PRD (Product Requirements Document) content
-            phase_intent: Description of what the phase was supposed to accomplish
-            spec: Acceptance criteria (max_failed_tests, required_pass_rate, etc.)
-
-        Returns:
-            Dictionary containing:
-                - up_to_spec: Whether output meets requirements (bool)
-                - pass_rate: Percentage of tests passed
-                - failed_count: Number of failed tests
-                - critical_issues: List of critical issues found
-                - reasoning: Explanation of the verdict
-                - recommendations: List of improvements needed
         """
         pass
 
@@ -312,71 +261,6 @@ Ensure the enriched description is actionable and the completion criteria are sp
             logger.error(f"Failed to generate embedding: {e}")
             # Return zero vector as fallback (3072 for text-embedding-3-large)
             return [0.0] * 3072
-
-    async def analyze_agent_state(
-        self,
-        agent_output: str,
-        task_info: Dict[str, Any],
-        project_context: str,
-    ) -> Dict[str, Any]:
-        """Analyze agent state using GPT."""
-        prompt = f"""Analyze this AI agent's current state and decide on the appropriate action.
-
-AGENT OUTPUT (Last 200 lines):
-```
-{agent_output}
-```
-
-TASK INFO:
-- Description: {task_info.get("description", "Unknown")}
-- Completion Criteria: {task_info.get("done_definition", "Unknown")}
-- Time on Task: {task_info.get("time_elapsed", 0)} minutes
-
-PROJECT CONTEXT:
-{project_context}
-
-Based on the agent's output, determine:
-1. Agent state: healthy/stuck_waiting/stuck_error/stuck_confused/unrecoverable
-2. Decision: continue/nudge/answer/restart/recreate
-3. If nudge/answer, what message would help?
-4. Brief reasoning for the decision
-5. Confidence level (0-1)
-
-Return as JSON with keys: state, decision, message, reasoning, confidence"""
-
-        try:
-            # Build kwargs based on model type
-            kwargs = {
-                "model": self.model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are an AI agent monitoring expert.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                "response_format": {"type": "json_object"},
-            }
-
-            # Use max_completion_tokens for newer models, max_tokens for older ones
-            if "gpt-4o" in self.model or "gpt-5" in self.model or "o1" in self.model:
-                kwargs["max_completion_tokens"] = 16000
-            else:
-                kwargs["max_tokens"] = 16000
-
-            response = await self.client.chat.completions.create(**kwargs)
-
-            return json.loads(response.choices[0].message.content)
-
-        except Exception as e:
-            logger.error(f"Failed to analyze agent state: {e}")
-            return {
-                "state": "healthy",
-                "decision": "continue",
-                "message": "",
-                "reasoning": "Analysis failed, assuming healthy",
-                "confidence": 0.3,
-            }
 
     async def generate_agent_prompt(
         self,
@@ -538,47 +422,6 @@ Return as JSON with keys: state, decision, message, reasoning, confidence"""
                     return fallback.model_dump()
                 await asyncio.sleep(1)  # Brief delay before retry
 
-    async def review_qa_report(
-        self,
-        qa_report: str,
-        prd_content: str,
-        phase_intent: str,
-        spec: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Review a QA report against PRD and phase intent."""
-        prompt = f"""You are a QA reviewer evaluating whether a project's output meets its requirements.
-
-## PRD
-{prd_content[:4000]}
-
-## Phase Intent
-{phase_intent}
-
-## Acceptance Criteria
-{json.dumps(spec, indent=2)}
-
-## QA Report
-{qa_report[:6000]}
-
-Based on the QA report, evaluate whether this output meets the PRD requirements.
-Respond with JSON: {{"up_to_spec": true/false, "pass_rate": float, "failed_count": int,
-"critical_issues": [], "reasoning": "string", "recommendations": []}}
-"""
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a senior QA engineer."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.3,
-                response_format={"type": "json_object"},
-            )
-            return json.loads(response.choices[0].message.content)
-        except Exception as e:
-            logger.error(f"review_qa_report failed: {e}")
-            return {"up_to_spec": False, "reasoning": f"LLM review failed: {e}"}
-
     def get_model_name(self) -> str:
         """Get model name."""
         return self.model
@@ -661,23 +504,6 @@ Make the description actionable and criteria verifiable."""
         # In production, you'd want to use a dedicated embedding service
         return [0.0] * 1536
 
-    async def analyze_agent_state(
-        self,
-        agent_output: str,
-        task_info: Dict[str, Any],
-        project_context: str,
-    ) -> Dict[str, Any]:
-        """Analyze agent state using Claude."""
-        # Similar implementation to OpenAI
-        # Implementation details omitted for brevity
-        return {
-            "state": "healthy",
-            "decision": "continue",
-            "message": "",
-            "reasoning": "Default response",
-            "confidence": 0.5,
-        }
-
     async def generate_agent_prompt(
         self,
         task: Dict[str, Any],
@@ -751,32 +577,6 @@ Make the description actionable and criteria verifiable."""
             "coordination_needs": [],
             "system_summary": "Using default coherence analysis",
         }
-
-    async def review_qa_report(
-        self,
-        qa_report: str,
-        prd_content: str,
-        phase_intent: str,
-        spec: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Review a QA report against PRD and phase intent."""
-        try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=2000,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f'Review this QA report against PRD. Report: {qa_report[:4000]} PRD: {prd_content[:2000]} Phase: {phase_intent} Respond with JSON: {{"up_to_spec": true/false, "pass_rate": float, "failed_count": int, "critical_issues": [], "reasoning": "string", "recommendations": []}}',
-                    }
-                ],
-            )
-            import json
-
-            return json.loads(response.content[0].text)
-        except Exception as e:
-            logger.error(f"review_qa_report failed: {e}")
-            return {"up_to_spec": False, "reasoning": f"LLM review failed: {e}"}
 
     def get_model_name(self) -> str:
         """Get model name."""

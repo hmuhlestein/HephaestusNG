@@ -201,112 +201,6 @@ async def test_task_enrichment():
     return True
 
 
-@pytest.mark.skipif(not _has_openai_key(), reason="No OpenAI API key")
-async def test_agent_state_analysis():
-    """Test agent state analysis."""
-    print("\n🧪 Testing Agent State Analysis...")
-
-    config = Config()
-    llm_provider = OpenAIProvider(
-        api_key=config.openai_api_key,
-        model=config.llm_model,
-        embedding_model=config.embedding_model,
-    )
-
-    test_scenarios = [
-        {
-            "output": """
-Installing dependencies...
-npm install
-added 234 packages in 12.3s
-Running tests...
-✓ All tests passed (42 passing)
-Building application...
-Build successful!
-            """,
-            "task": {"description": "Set up development environment"},
-            "expected_state": "healthy",
-        },
-        {
-            "output": """
-Error: Cannot find module 'express'
-Error: Cannot find module 'express'
-Error: Cannot find module 'express'
-npm install
-npm install
-npm install
-            """,
-            "task": {"description": "Start the server"},
-            "expected_state": "stuck_error",
-        },
-        {
-            "output": """
-Waiting for user input...
-Please enter your choice:
->
->
->
-            """,
-            "task": {"description": "Automated testing"},
-            "expected_state": "stuck_waiting",
-        },
-    ]
-
-    for i, scenario in enumerate(test_scenarios, 1):
-        try:
-            print(f"\n   Scenario {i}: Expected state = {scenario['expected_state']}")
-
-            result = await llm_provider.analyze_agent_state(
-                agent_output=scenario["output"],
-                task_info=scenario["task"],
-                project_context="Testing environment",
-            )
-
-            # Validate response structure
-            assert isinstance(result, dict), "Result should be a dictionary"
-
-            required_keys = ["state", "decision", "message", "reasoning", "confidence"]
-            for key in required_keys:
-                assert key in result, f"Missing required key: {key}"
-
-            # Validate data types
-            assert result["state"] in [
-                "healthy",
-                "stuck_waiting",
-                "stuck_error",
-                "stuck_confused",
-                "unrecoverable",
-            ]
-            assert result["decision"] in [
-                "continue",
-                "nudge",
-                "answer",
-                "restart",
-                "recreate",
-            ]
-            assert isinstance(result["confidence"], (int, float))
-            assert 0 <= result["confidence"] <= 1
-
-            print(f"      Detected: {result['state']}")
-            print(f"      Decision: {result['decision']}")
-            print(f"      Confidence: {result['confidence']:.2f}")
-            print(f"      Reasoning: {result['reasoning'][:80]}...")
-
-            if result["state"] == scenario["expected_state"]:
-                print("      ✅ Correct state detection")
-            else:
-                print(
-                    "      ⚠️  Different state detected (model interpretation may vary)"
-                )
-
-        except Exception as e:
-            print(f"      ❌ Failed: {e}")
-            # Continue testing even if one fails
-            print("      ⚠️  Continuing with next scenario")
-
-    print("\n✅ Agent state analysis tests completed!")
-    return True
-
 
 @pytest.mark.skipif(not _has_openai_key(), reason="No OpenAI API key")
 async def test_agent_prompt_generation():
@@ -440,7 +334,6 @@ async def run_all_tests():
     # Run tests
     results.append(await test_embedding_generation())
     results.append(await test_task_enrichment())
-    results.append(await test_agent_state_analysis())
     results.append(await test_agent_prompt_generation())
     results.append(await test_error_handling())
 

@@ -19,7 +19,7 @@ from langchain_openai import (
 )
 from pydantic import BaseModel
 
-from src.prompts.loader import get_base_system_prompt
+from src.prompts.loader import get_base_system_prompt, get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -407,15 +407,9 @@ class LangChainLLMClient:
             model = self._get_model_for_component(ComponentType.TASK_ENRICHMENT)
             if model is None:
                 return "medium"
-            prompt = (
-                "Rate the IMPLEMENTATION complexity of the software design below as exactly "
-                "one word: low, medium, or high.\n"
-                "- low: a single small module/function or trivial utility (e.g. a calculator, a parser)\n"
-                "- medium: a handful of components working together\n"
-                "- high: a real multi-service / multi-subsystem system\n\n"
-                f"DESIGN:\n{(design_text or '')[:4000]}\n\n"
-                "Answer with ONE word only (low, medium, or high):"
-            )
+            prompt = get_prompt("classify_complexity", {
+                "design_text": (design_text or "")[:4000],
+            })
             resp = await self._invoke_and_record(
                 model,
                 [
@@ -569,46 +563,6 @@ class LangChainLLMClient:
             logger.error(f"❌ [LLM CALL] generate_embedding failed | Provider: openai | Model: {self.config.embedding_model} | Error: {e}")
             # Return zero vector as fallback
             return [0.0] * 1536
-
-    async def analyze_agent_state(
-        self,
-        agent_output: str,
-        task_info: Dict[str, Any],
-        project_context: str,
-        task_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Analyze agent state for monitoring decisions.
-
-        Args:
-            agent_output: Recent output from agent
-            task_info: Current task information
-            project_context: Project-wide context
-
-        Returns:
-            Dictionary with state analysis
-        """
-        model = self._get_model_for_component(ComponentType.AGENT_MONITORING)
-        if not model:
-            return self._default_agent_state()
-
-        prompt = self._build_agent_state_prompt(agent_output, task_info, project_context)
-
-        messages = [
-            SystemMessage(content="You are an AI agent monitoring expert."),
-            HumanMessage(content=prompt),
-        ]
-
-        try:
-            response = await self._invoke_and_record(model, messages, component="agent_state_analysis", task_id=task_id)
-            parser = JsonOutputParser()
-            result = parser.parse(response.content)
-
-            logger.debug(f"Agent state analyzed using {self.config.model_assignments['agent_monitoring'].model}")
-            return result
-
-        except Exception as e:
-            logger.error(f"Failed to analyze agent state: {e}")
-            return self._default_agent_state()
 
     async def generate_agent_prompt(
         self,
@@ -775,98 +729,6 @@ class LangChainLLMClient:
                     return self._default_coherence_analysis()
                 await asyncio.sleep(1)
 
-    async def review_qa_report(
-        self,
-        qa_report: str,
-        prd_content: str,
-        phase_intent: str,
-        spec: Dict[str, Any],
-        task_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Review a QA report against PRD and phase intent.
-
-        Args:
-            qa_report: The QA report content (HTML or markdown)
-            prd_content: The PRD content
-            phase_intent: What the phase was supposed to accomplish
-            spec: Acceptance criteria (max_failed_tests, required_pass_rate, etc.)
-
-        Returns:
-            Dictionary with verdict, reasoning, and recommendations
-        """
-        assignment = self.config.model_assignments.get("conductor_analysis")
-        logger.info(f"🔵 [LLM CALL] Conductor review_qa_report | Provider: {assignment.provider} | Model: {assignment.model}")
-
-        model = self._get_model_for_component(ComponentType.CONDUCTOR_ANALYSIS)
-        if not model:
-            logger.warning("⚠️ [LLM CALL] No model available for conductor_analysis, using fallback")
-            return {"up_to_spec": False, "reasoning": "No LLM available for review"}
-
-        prompt = f"""You are a QA reviewer evaluating whether a project's output meets its requirements.
-
-## PRD (Product Requirements Document)
-{prd_content[:4000]}
-
-## Phase Intent
-{phase_intent}
-
-## Acceptance Criteria
-{json.dumps(spec, indent=2)}
-
-## QA Report
-{qa_report[:6000]}
-
----
-
-Based on the QA report above, evaluate whether this output meets the PRD requirements and phase intent.
-
-Respond with a JSON object containing:
-{{
-    "up_to_spec": true/false,
-    "pass_rate": 85.5,
-    "failed_count": 2,
-    "critical_issues": ["list of critical issues found"],
-    "reasoning": "Detailed explanation of your verdict - what meets spec and what doesn't",
-    "recommendations": ["list of specific improvements needed to meet spec"]
-}}
-
-Be strict but fair. The output must actually satisfy the PRD's goals, not just have passing tests.
-Consider:
-1. Does the code implement what the PRD describes?
-2. Are the tests comprehensive enough to verify the requirements?
-3. Are there any critical bugs or security issues?
-4. Does the documentation accurately describe the system?
-"""
-
-        messages = [
-            SystemMessage(content="You are a senior QA engineer reviewing project output against requirements. Be thorough and critical."),
-            HumanMessage(content=prompt),
-        ]
-
-        # Same unbounded-hang risk as analyze_system_coherence above -- this also
-        # runs inside MonitoringLoop's shared cycle (via conductor.py), so a
-        # slow/over-streaming model must never be allowed to block indefinitely.
-        for attempt in range(3):
-            try:
-                response = await asyncio.wait_for(
-                    self._invoke_and_record(model, messages, component="conductor_review_qa", task_id=task_id),
-                    timeout=CONDUCTOR_LLM_TIMEOUT,
-                )
-
-                # Parse the response as structured output
-                parser = JsonOutputParser()
-                result = parser.parse(response.content)
-
-                logger.info(f"✅ [LLM CALL] Conductor review_qa_report completed | up_to_spec={result.get('up_to_spec')} | Provider: {assignment.provider} | Model: {assignment.model}")
-                return result
-
-            except Exception as e:
-                logger.error(f"❌ [LLM CALL] Conductor review_qa_report failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}")
-                if attempt == 2:
-                    logger.warning("⚠️ [LLM CALL] Conductor review_qa_report exhausted retries, using fallback")
-                    return {"up_to_spec": False, "reasoning": f"LLM review failed: {e}"}
-                await asyncio.sleep(1)
-
     def get_model_name(self, component: ComponentType) -> str:
         """Get the name of the model being used for a component.
 
@@ -893,33 +755,16 @@ Consider:
         phase_context: Optional[str] = None,
     ) -> str:
         """Build prompt for task enrichment."""
-        prompt = f"""Given this task request, analyze and enrich it with clear specifications.
-
-Task: {task_description}
-Done Definition: {done_definition}
-Context: {" ".join(context[:10])}"""
-
-        if phase_context:
-            prompt += f"""
-
-Phase Context:
-{phase_context}"""
-
-        prompt += """
-
-Generate a JSON response with:
-1. "enriched_description": A clear, unambiguous task description
-2. "completion_criteria": Specific, measurable completion criteria (list)
-3. "agent_prompt": A focused system prompt for the agent executing this task
-4. "required_capabilities": List of required capabilities (e.g., "file_editing", "code_analysis")
-5. "estimated_complexity": Integer 1-10 indicating task complexity
-
-Ensure the enriched description is actionable and the completion criteria are specific and verifiable."""
-
-        if phase_context:
-            prompt += "\nConsider the phase context when determining complexity and requirements."
-
-        return prompt
+        return get_prompt("task_enrichment", {
+            "task_description": task_description,
+            "done_definition": done_definition,
+            "context": " ".join(context[:10]),
+            "phase_context_section": f"\n\nPhase Context:\n{phase_context}" if phase_context else "",
+            "phase_context_hint": (
+                "\nConsider the phase context when determining complexity and requirements."
+                if phase_context else ""
+            ),
+        })
 
     def _build_ticket_clarification_prompt(
         self,
@@ -1008,56 +853,14 @@ Ensure the enriched description is actionable and the completion criteria are sp
         """Fallback prompt when template is unavailable."""
         solutions_text = "\n".join([f"{i + 1}. {sol}" for i, sol in enumerate(potential_solutions)]) if potential_solutions else "No solutions provided"
 
-        return f"""You are a ticket clarification arbitrator. An agent has encountered a conflict or ambiguity in their ticket requirements.
-
-TICKET: {ticket_id}
-TITLE: {ticket_details.get("title", "Unknown")}
-DESCRIPTION: {ticket_details.get("description", "No description")}
-
-CONFLICT DESCRIBED BY AGENT:
-{conflict_description}
-
-ADDITIONAL CONTEXT:
-{context if context else "None provided"}
-
-POTENTIAL SOLUTIONS AGENT IS CONSIDERING:
-{solutions_text}
-
-Provide a clear, detailed resolution in markdown format that includes:
-1. Analysis of the conflict
-2. Evaluation of the proposed solutions
-3. Your recommended resolution with rationale
-4. Specific ticket updates needed
-5. Specific file changes needed
-6. What the agent should avoid
-
-Be decisive and provide actionable guidance to prevent the agent from creating infinite tasks."""
-
-    def _build_agent_state_prompt(self, agent_output: str, task_info: Dict[str, Any], project_context: str) -> str:
-        """Build prompt for agent state analysis."""
-        return f"""Analyze this AI agent's current state and decide on the appropriate action.
-
-AGENT OUTPUT (Last 200 lines):
-```
-{agent_output}
-```
-
-TASK INFO:
-- Description: {task_info.get("description", "Unknown")}
-- Completion Criteria: {task_info.get("done_definition", "Unknown")}
-- Time on Task: {task_info.get("time_elapsed", 0)} minutes
-
-PROJECT CONTEXT:
-{project_context}
-
-Based on the agent's output, determine:
-1. Agent state: healthy/stuck_waiting/stuck_error/stuck_confused/unrecoverable
-2. Decision: continue/nudge/answer/restart/recreate
-3. If nudge/answer, what message would help?
-4. Brief reasoning for the decision
-5. Confidence level (0-1)
-
-Return as JSON with keys: state, decision, message, reasoning, confidence"""
+        return get_prompt("fallback_ticket_clarification", {
+            "ticket_id": ticket_id,
+            "ticket_title": ticket_details.get("title", "Unknown"),
+            "ticket_description": ticket_details.get("description", "No description"),
+            "conflict_description": conflict_description,
+            "context": context if context else "None provided",
+            "solutions_text": solutions_text,
+        })
 
     # Default/fallback methods
     def _default_task_enrichment(self, task_description: str, done_definition: str) -> Dict[str, Any]:
@@ -1068,16 +871,6 @@ Return as JSON with keys: state, decision, message, reasoning, confidence"""
             "agent_prompt": f"Complete this task: {task_description}",
             "required_capabilities": ["general"],
             "estimated_complexity": 5,
-        }
-
-    def _default_agent_state(self) -> Dict[str, Any]:
-        """Default agent state when model unavailable."""
-        return {
-            "state": "healthy",
-            "decision": "continue",
-            "message": "",
-            "reasoning": "Analysis unavailable, assuming healthy",
-            "confidence": 0.3,
         }
 
     def _default_agent_prompt(self, task: Dict[str, Any], memories: List[Dict[str, Any]], project_context: str) -> str:
