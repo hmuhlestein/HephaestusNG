@@ -19,17 +19,17 @@ description: |
   The developer will fix based on your report.
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
-  - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write ONE file, architectural_review_report.md, to ./docs/architectural_review/ —
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
+  - Write ONE file, architectural_review_report.md, to ./.hephaestus/architectural_review/ —
     a YAML frontmatter block (blocker_count/fix_count/defer_count, the gate
     input) followed by the full BLOCKER/FIX/DEFER findings report.
-  - Use exactly that subdirectory name (./docs/architectural_review/) — the
+  - Use exactly that subdirectory name (./.hephaestus/architectural_review/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
 done_definitions:
-  - "./docs/architecture.md reviewed and design rationale understood"
-  - "./docs/requirements_analysis.md reviewed and requirements verified"
+  - "./.hephaestus/architecture.md reviewed and design rationale understood"
+  - "./.hephaestus/requirements_analysis.md reviewed and requirements verified"
   - "All implemented code reviewed against architecture"
   - "Component boundaries verified"
   - "Interface contracts verified"
@@ -68,15 +68,15 @@ additional_notes: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
-  - ALL docs/reports go in "Docs Path:".
+  - ALL docs/reports go in "Artifacts Path".
   - Do NOT edit any source code or tests. Your only output is the report.
   - Your task description contains the exact paths — copy them exactly.
   
   Read:
-  - Your task description for "Docs Path:" and "Project Path:" locations
+  - Your task description for "Artifacts Path" and "Project Path" locations
   - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
-  - architecture.md (from Docs Path) - YOUR design decisions, component structure, interfaces
-  - requirements_analysis.md (from Docs Path) - What the system should do
+  - architecture.md (from Artifacts Path) - YOUR design decisions, component structure, interfaces
+  - requirements_analysis.md (from Artifacts Path) - What the system should do
   - Your goal: Did the implementation (in Project Path) match the ORIGINAL DESIGN?
 
   SCOPE CHECK (do this before anything else):

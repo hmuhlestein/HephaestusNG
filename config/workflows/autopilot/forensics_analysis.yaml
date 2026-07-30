@@ -60,15 +60,15 @@ additional_notes: |
   Two separate source trees, two separate purposes:
 
   PHASE ARTIFACTS (requirements, architecture, reports, QA results):
-    Read from: ./docs/ (your worktree-relative path — this is where agents wrote them)
-    Example: ./docs/requirements_analysis.md, ./docs/qa_validation/qa_report.md
+    Read from: ./.hephaestus/ (your worktree-relative path — this is where agents wrote them)
+    Example: ./.hephaestus/requirements_analysis.md, ./.hephaestus/qa_validation/qa_report.md
 
   PHASE PROMPTS (the YAML files that instructed each agent):
     Read from: <Docs Path (absolute)>/phase_prompts/
     Example: $DOCS_ABS/phase_prompts/development.yaml
 
   FORENSICS REPORT (your output):
-    Write to: ./docs/forensics_report.md  ← this gets committed to git
+    Write to: ./.hephaestus/forensics_report.md  ← this gets committed to git
     Also copy to: <Docs Path (absolute)>/forensics_report.md  ← for the feature record
 
   PIPELINE METRICS:
@@ -82,7 +82,7 @@ additional_notes: |
   ```bash
   DOCS_ABS="<value of 'Docs Path (absolute)' from your task description>"
   echo "DOCS_ABS=$DOCS_ABS"
-  ls ./docs/ && echo "worktree docs OK"
+  ls ./.hephaestus/ && echo "worktree hephaestus OK"
   ls "$DOCS_ABS/phase_prompts/" && echo "phase prompts OK"
   ```
   Do NOT search for other feature folders. Do NOT use paths from previous runs.
@@ -151,16 +151,16 @@ additional_notes: |
   STEP 3: READ ALL PHASE OUTPUTS
   ═══════════════════════════════════════════════════════════════════════
 
-  Read each artifact from YOUR WORKTREE'S ./docs/ — agents wrote their outputs
+  Read each artifact from YOUR WORKTREE'S ./.hephaestus/ — agents wrote their outputs
   there, and those files are still present:
-  - ./docs/requirements_analysis.md
-  - ./docs/architecture.md
-  - ./docs/review_report.md
-  - ./docs/doc_review_report.md
-  - ./docs/security_report.md
-  - ./docs/qa_report.md
-  - ./docs/product_validation.md
-  - ./docs/scope_review_result.md
+  - ./.hephaestus/requirements_analysis.md
+  - ./.hephaestus/architecture.md
+  - ./.hephaestus/review_report.md
+  - ./.hephaestus/doc_review_report.md
+  - ./.hephaestus/security_report.md
+  - ./.hephaestus/qa_report.md
+  - ./.hephaestus/product_validation.md
+  - ./.hephaestus/scope_review_result.md
 
   Also read the original design document at ./.hephaestus/design.md.
 
@@ -263,7 +263,7 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
 
   Write forensics_report.md to TWO locations:
-  1. ./docs/forensics_report.md  (worktree — gets committed to git, primary)
+  1. ./.hephaestus/forensics_report.md  (worktree — gets committed to git, primary)
   2. <Docs Path (absolute)>/forensics_report.md  (feature folder record)
 
   Write the worktree copy first.

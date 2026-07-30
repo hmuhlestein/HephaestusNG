@@ -17,12 +17,12 @@ description: |
   and produces a validation report for human review.
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
-  - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write ONE file, product_validation.md, to ./docs/product_validation/ — a
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
+  - Write ONE file, product_validation.md, to ./.hephaestus/product_validation/ — a
     YAML frontmatter block (structured verdict + unmet_requirements, the
     gate input) followed by the full narrative report, in a single file.
-  - Use exactly that subdirectory name (./docs/product_validation/) — the
+  - Use exactly that subdirectory name (./.hephaestus/product_validation/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
 done_definitions:
@@ -58,11 +58,11 @@ additional_notes: |
   
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
-  - ALL docs/reports go in "Docs Path:" (product_validation.md, etc.).
-  - Code goes in "Project Path:" (src/, tests/, etc.).
+  - ALL docs/reports go in "Artifacts Path" (product_validation.md, etc.).
+  - Code goes in "Project Path" (src/, tests/, etc.).
   - Your task description contains the exact paths — copy them exactly.
   
   Read the original design document again from ./.hephaestus/design.md.
@@ -186,7 +186,7 @@ additional_notes: |
   return to architecture) followed immediately by the full narrative
   report from the steps above.
 
-  Prepend this frontmatter block to the very top of ./docs/product_validation/product_validation.md,
+  Prepend this frontmatter block to the very top of ./.hephaestus/product_validation/product_validation.md,
   with EXACTLY this schema (type first, then a closing `---`, then the
   narrative report immediately after):
 

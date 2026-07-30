@@ -1069,25 +1069,22 @@ def read_okf_report(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Read a phase's OKF report (frontmatter + body) an agent wrote.
 
-    Agents write to ./docs/ (merged from their worktree to <project>/docs/);
-    fall back to the project root. Does NOT iterate worktrees (too slow for
-    per-turn calls — the merge should bring files to <project>/docs/).
+    Agents write to ./.hephaestus/ (git-excluded, never merged to main).
+    Does NOT iterate worktrees (too slow for per-turn calls).
 
     subdir: if given, this phase's real (sole, not a fallback) output
-    location isn't docs/ at all -- e.g. feature_review writes to
-    .hephaestus/, like its sibling Feature Architect, since Phase 0's
-    artifacts are internal orchestration state, not a git-tracked project
-    deliverable. Reads ONLY from working_directory/subdir/filename in that
-    case; does not also try docs/ or root.
+    location is working_directory/subdir/filename. Reads ONLY from that
+    path; does not try other locations.
 
     phase_name: each gated phase's task description tells it the ONE
-    sanctioned subdirectory of docs/ to write to -- docs/<phase_name>/, see
-    each gated phase's CRITICAL PATH RULE -- so this is checked first, not
-    guessed at: iterating every subdirectory that happens to contain a
-    same-named file risks picking up a stale file left behind by an earlier
-    retry/goto pass of this same phase, since filesystem iteration order
-    isn't "most recent." Root docs/ and the project root remain as fallback
-    locations for older agent behavior.
+    sanctioned subdirectory of .hephaestus/ to write to --
+    .hephaestus/<phase_name>/, see each gated phase's CRITICAL PATH RULE
+    -- so this is checked first, not guessed at: iterating every
+    subdirectory that happens to contain a same-named file risks picking
+    up a stale file left behind by an earlier retry/goto pass of this
+    same phase, since filesystem iteration order isn't "most recent."
+    The project root remains as a fallback location for older agent
+    behavior.
 
     Returns (frontmatter, body) -- either or both None if the file is
     missing or has no parseable frontmatter block (see okf_markdown.read_okf).
@@ -1098,8 +1095,8 @@ def read_okf_report(
     else:
         candidates = []
         if phase_name:
-            candidates.append(base / "docs" / phase_name / filename)
-        candidates += [base / "docs" / filename, base / filename]
+            candidates.append(base / ".hephaestus" / phase_name / filename)
+        candidates += [base / filename]
     for candidate in candidates:
         if candidate.exists():
             parsed = read_okf(candidate)

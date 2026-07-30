@@ -18,12 +18,12 @@ description: |
   polymorphism must be used over conditionals, and complex logic must be pushed down.
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
-  - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write ONE file, adversarial_review_report.md, to ./docs/adversarial_review/ —
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
+  - Write ONE file, adversarial_review_report.md, to ./.hephaestus/adversarial_review/ —
     a YAML frontmatter block (blocker_count/warning_count/nit_count, the
     gate input) followed by the full BLOCKER/WARNING/NIT findings report.
-  - Use exactly that subdirectory name (./docs/adversarial_review/) — the
+  - Use exactly that subdirectory name (./.hephaestus/adversarial_review/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
 done_definitions:
@@ -66,8 +66,8 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
 
   CRITICAL PATH RULE: Your current working directory IS the project root.
-  - Read all inputs from ./.hephaestus/ and the docs/ folder.
-  - Write adversarial_review_report.md to the "Docs Path:" in your task.
+  - Read all inputs from ./.hephaestus/ and the .hephaestus/ folder.
+  - Write adversarial_review_report.md to the "Artifacts Path" in your task.
   - Do NOT edit any source code or tests. Your only output is the report.
     The developer will fix based on your findings.
 

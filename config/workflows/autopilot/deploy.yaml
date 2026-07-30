@@ -19,9 +19,9 @@ description: |
   deployment instructions were found — this is not a failure.
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
-  - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write ONE file, deploy_report.md, to ./docs/deploy/.
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
+  - Write ONE file, deploy_report.md, to ./.hephaestus/deploy/.
   - Use exactly that subdirectory name — the pipeline only looks for that exact name.
 
 done_definitions:
@@ -123,7 +123,7 @@ additional_notes: |
   STEP 5: CREATE DEPLOY REPORT
   ═══════════════════════════════════════════════════════════════════════
 
-  Write ./docs/deploy/deploy_report.md with:
+  Write ./.hephaestus/deploy/deploy_report.md with:
 
   ```markdown
   ---

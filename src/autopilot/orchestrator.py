@@ -3708,7 +3708,7 @@ def _sweep_stray_files(
     docs_dir: Path,
     logger: OrchestratorLogger,
 ) -> None:
-    """Move known ephemeral report files from project root into feature docs.
+    """Move known ephemeral report files from project root into feature .hephaestus/.
 
     Only files whose lowercased name appears in _SWEEP_REPORT_NAMES are
     eligible — source files, design docs, scripts, and anything else in
@@ -3719,15 +3719,15 @@ def _sweep_stray_files(
 
     docs_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── known report files written to ./docs/ by agents ────────────
-    proj_docs = project_path / _REPORT_SUBDIR
-    if proj_docs.is_dir() and proj_docs.resolve() != docs_dir.resolve():
-        for f in proj_docs.iterdir():
+    # ── known report files written to ./.hephaestus/ by agents ────────
+    proj_hephaestus = project_path / _REPORT_SUBDIR
+    if proj_hephaestus.is_dir() and proj_hephaestus.resolve() != docs_dir.resolve():
+        for f in proj_hephaestus.iterdir():
             if f.is_file() and f.name.lower() in _SWEEP_REPORT_NAMES:
                 dest = docs_dir / f.name
                 if not dest.exists():
                     shutil.copy2(str(f), str(dest))
-                    logger.info(f"Copied report: docs/{f.name} -> features/.../docs/")
+                    logger.info(f"Copied report: .hephaestus/{f.name} -> features/.../docs/")
 
     # ── known report files accidentally written to project root ─────
     for f in project_path.iterdir():
@@ -3752,19 +3752,19 @@ def _sweep_stray_files(
             logger.info(f"Moved feature file: {f.name} -> features/.../docs/")
 
 
-_REPORT_SUBDIR = "docs"
+_REPORT_SUBDIR = ".hephaestus"
 
 
 def _report_path(project_path: Path, filename: str) -> Path:
     """Locate a report an agent wrote.
 
-    Under worktree isolation agents write reports to ./docs/ (relative to their
-    worktree), which merges to <project>/docs/. Prefer that location; fall back
-    to the project root. Does NOT iterate worktrees (too slow for per-turn calls).
+    Under worktree isolation agents write reports to ./.hephaestus/ (relative
+    to their worktree), which is git-excluded. Fall back to the project root.
+    Does NOT iterate worktrees (too slow for per-turn calls).
     """
-    in_docs = project_path / _REPORT_SUBDIR / filename
-    if in_docs.exists():
-        return in_docs
+    in_hephaestus = project_path / _REPORT_SUBDIR / filename
+    if in_hephaestus.exists():
+        return in_hephaestus
     return project_path / filename
 
 
@@ -3782,7 +3782,10 @@ def collect_report_summaries(project_path: Path) -> Dict[str, str]:
     }
 
     for key, filename in report_files.items():
-        filepath = project_path / filename
+        # First check .hephaestus/ (where agents write), then project root
+        filepath = project_path / ".hephaestus" / filename
+        if not filepath.exists():
+            filepath = project_path / filename
         if filepath.exists():
             try:
                 content = filepath.read_text()
@@ -4973,7 +4976,7 @@ change case): {phase_list_text}
 
 WHAT TO DO:
 1. Read whatever evidence is relevant -- the latest gate output file(s) in
-   ./docs/ (e.g. qa_report.md, adversarial_review_report.md,
+   ./.hephaestus/ (e.g. qa_report.md, adversarial_review_report.md,
    security_report.md -- whichever exist for this workflow; each starts
    with a YAML frontmatter block giving its structured verdict/counts,
    followed by the full narrative report), and the phase's own recent
@@ -7516,8 +7519,8 @@ def _archive_and_cleanup(
 ) -> None:
     """Copy phase artifacts to the permanent designs folder, then remove the worktree.
 
-    Copies docs/*.md, *.json, *.html from the shared worktree into
-    designs_folder/docs/ so artifacts survive worktree removal.
+    Copies .hephaestus/*.md, *.json, *.html from the shared worktree into
+    designs_folder/.hephaestus/ so artifacts survive worktree removal.
     Then removes the linked worktree via `git worktree remove`.
     """
     import shutil
