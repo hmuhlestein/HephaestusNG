@@ -2297,3 +2297,67 @@ class TestDeleteFeature:
         client, dirs = project_client
         resp = client.delete("/api/autopilot/features/does-not-exist")
         assert resp.status_code == 404
+
+
+# ── stop_pipeline ─────────────────────────────────────────────────
+
+
+@pytest.fixture
+def stop_pipeline_client(tmp_path, monkeypatch):
+    """Real DB with one is_active AutopilotProject, wired to a fake
+    AutopilotService so stop_pipeline never needs a real running pipeline."""
+    db_path = str(tmp_path / "test.db")
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", db_path)
+
+    from src.core.database import AutopilotProject, DatabaseManager
+
+    db_manager = DatabaseManager(db_path)
+    db_manager.create_tables()
+
+    with db_manager.session_scope() as session:
+        session.add(
+            AutopilotProject(id="proj-stop", name="proj-stop", base_dir=str(tmp_path), is_active=True)
+        )
+
+    fake_service = Mock()
+    fake_service.stop = AsyncMock(return_value={"stopped": True})
+    monkeypatch.setattr(
+        "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+    )
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.mcp.autopilot_api import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    import src.mcp.autopilot_api as api_mod
+
+    api_mod._cache.clear()
+    yield client
+    api_mod._cache.clear()
+
+
+class TestStopPipelineDeactivatesProject:
+    """Regression: stop_pipeline's is_active-clearing step referenced
+    AutopilotProject without importing it in this function's scope --
+    a bare NameError on every call, caught and swallowed by the broad
+    except Exception below it. Since get_db()'s context manager rolls
+    back on any exception raised inside the `with` block, this didn't
+    just skip clearing is_active -- it rolled back pause_project_workflows'
+    changes too, silently, on every single stop_pipeline call."""
+
+    def test_deactivates_the_stopped_project(self, stop_pipeline_client):
+        from src.core.database import AutopilotProject, get_db
+
+        resp = stop_pipeline_client.post(
+            "/api/autopilot/stop", params={"project_id": "proj-stop"}
+        )
+        assert resp.status_code == 200, resp.text
+
+        with get_db() as db:
+            proj = db.query(AutopilotProject).filter_by(id="proj-stop").first()
+            assert proj.is_active is False

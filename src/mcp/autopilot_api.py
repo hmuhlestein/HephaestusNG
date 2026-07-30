@@ -4475,7 +4475,7 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
         project_id: If provided, only stop workflows for this project
     """
     from src.autopilot.service import get_autopilot_service, get_registry
-    from src.core.database import get_db
+    from src.core.database import AutopilotProject, get_db
 
     # Stop the service(s) (this stops the pipeline task). With project_id,
     # stop just that project's service; without one, preserve the old
