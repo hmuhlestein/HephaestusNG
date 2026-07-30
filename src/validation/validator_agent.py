@@ -10,60 +10,8 @@ from sqlalchemy.orm import Session
 from src.agents.manager import AgentManager
 from src.core.database import DatabaseManager, Phase, Task
 from src.core.worktree_manager import WorktreeManager
-from src.validation.prompt_builder import ValidationPromptBuilder
 
 logger = logging.getLogger(__name__)
-
-
-def build_validator_prompt(
-    task: Task,
-    phase: Phase,
-    commit_sha: str,
-    workspace_changes: Dict[str, Any],
-    agent_claims: str,
-    iteration: int,
-    validator_agent_id: str,
-) -> str:
-    """Build a prompt for the validator agent.
-
-    Args:
-        task: Task being validated
-        phase: Phase configuration
-        commit_sha: Commit to validate
-        workspace_changes: Changes made by agent
-        agent_claims: Agent's result claims
-        iteration: Validation iteration number
-        validator_agent_id: ID of the validator agent
-
-    Returns:
-        Complete validator prompt
-    """
-    builder = ValidationPromptBuilder()
-
-    # Convert task to dict for prompt builder
-    task_dict = {
-        "id": task.id,
-        "raw_description": task.raw_description,
-        "enriched_description": task.enriched_description,
-        "done_definition": task.done_definition,
-    }
-
-    # Get phase validation config
-    phase_validation = phase.validation if phase else None
-
-    # Get previous feedback if this is not the first iteration
-    previous_feedback = task.last_validation_feedback if iteration > 1 else None
-
-    return builder.build_prompt(
-        task=task_dict,
-        phase_validation=phase_validation,
-        commit_sha=commit_sha,
-        workspace_changes=workspace_changes,
-        agent_claims=agent_claims,
-        iteration=iteration,
-        previous_feedback=previous_feedback,
-        validator_agent_id=validator_agent_id,
-    )
 
 
 async def spawn_validator_agent(
@@ -146,7 +94,7 @@ async def spawn_validator_agent(
                 id=validation_task_id,
                 raw_description=f"Validate task completion: {task.raw_description}",
                 enriched_description=f"Validate the work completed by agent {original_agent_id} for task {target_id}",
-                done_definition="Review task completion and provide validation feedback using give_validation_review",
+                done_definition="Review task completion and provide validation feedback using hephaestus_give_validation_review",
                 status="assigned",
                 priority="high",
                 assigned_agent_id=validator_agent_id,
@@ -189,7 +137,7 @@ async def spawn_validator_agent(
                 id=validation_task_id,
                 raw_description=f"Validate result submission for workflow: {workflow.name}",
                 enriched_description=f"Validate the result submitted by agent {original_agent_id} for workflow {workflow_id}",
-                done_definition="Review and validate the submitted result against workflow criteria using submit_result_validation",
+                done_definition="Review and validate the submitted result against workflow criteria using hephaestus_submit_result_validation",
                 status="assigned",
                 priority="high",
                 assigned_agent_id=validator_agent_id,
@@ -228,81 +176,6 @@ async def spawn_validator_agent(
             f"Spawned {validation_type} validator agent {validator_agent_id} for {target_id}"
         )
         return validator_agent_id
-
-
-async def spawn_validator_tmux_session(
-    agent_id: str, working_directory: str, prompt: str, read_only: bool = True
-) -> None:
-    """Spawn a tmux session for validator agent.
-
-    Args:
-        agent_id: Validator agent ID
-        working_directory: Working directory for agent
-        prompt: Agent prompt
-        read_only: Whether agent has read-only access
-    """
-    import libtmux
-
-    from src.interfaces.cli_interface import get_cli_agent
-
-    session_name = f"agent_{agent_id}"
-
-    try:
-        # Use libtmux to create and manage the session
-        tmux_server = libtmux.Server()
-
-        # Kill existing session if it exists
-        if tmux_server.has_session(session_name):
-            tmux_server.kill_session(session_name)
-
-        # Create new tmux session
-        tmux_session = tmux_server.new_session(
-            session_name=session_name,
-            window_name="validator",
-            start_directory=working_directory,
-        )
-
-        # Get the pane
-        pane = tmux_session.attached_window.attached_pane
-
-        # If read-only, show indicator (optional)
-        if read_only:
-            pane.send_keys(
-                "echo 'READ-ONLY MODE: Validator agent starting...'", enter=True
-            )
-            await asyncio.sleep(1)
-
-        # Get CLI agent (use 'claude' for validators)
-        cli_agent = get_cli_agent("claude")
-
-        # Generate launch command with minimal system prompt (like normal agents)
-        launch_command = cli_agent.get_launch_command(
-            system_prompt="You are a validation agent for the Hephaestus system.",
-            task_id=agent_id,
-        )
-
-        # Launch Claude Code
-        pane.send_keys(launch_command, enter=True)
-
-        logger.info(f"Launched Claude Code for validator agent {agent_id}")
-
-        # Wait for Claude to initialize (same as normal agents)
-        await asyncio.sleep(8)
-
-        # Send the validation prompt as an initial message
-        formatted_message = cli_agent.format_message(prompt)
-        pane.send_keys(formatted_message)
-
-        # Wait a moment then send Enter to submit the message
-        await asyncio.sleep(1)
-        pane.send_keys("", enter=True)  # Send Enter to submit
-
-        logger.info(f"Sent validation prompt to validator agent {agent_id}")
-        logger.debug(f"Validator prompt preview:\n{prompt[:500]}...")
-
-    except Exception as e:
-        logger.error(f"Failed to create validator tmux session: {e}")
-        raise
 
 
 def get_agent_results(task_id: str, session: Session) -> str:
