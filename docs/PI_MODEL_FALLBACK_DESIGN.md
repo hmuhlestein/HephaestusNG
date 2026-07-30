@@ -241,6 +241,61 @@ That persistence interacts with two things that needed fixing once added:
 A confirmed switch, by contrast, leaves both `Agent.cli_model` and the
 one-shot set alone — no automatic switch-back (see below).
 
+### Extended to the secondary/fallback CLI (implemented)
+
+`default_fallback_cli_tool: claude` (`hephaestus_config.yaml`) is itself a
+primary agent from this mechanism's point of view — if pi hits a session
+limit and gets terminated+relaunched under claude (the existing
+`monitor.py:255-395` path), that claude agent can equally sit frozen too
+long and benefit from the same in-place switch. Two gate bugs had to be
+fixed to make that actually reachable, not just add a Claude-specific
+keystroke sequence:
+
+- **`_detect_cli_model_fallback` read a single global
+  `config.cli_model_fallback`.** That value (`mimo-v2.5-pro`, a picker
+  search text) is pi's own vocabulary — Claude Code's `/model` doesn't
+  recognize it, and more to the point, hardcoding one shared config value
+  across every CLI is wrong in general (each CLI's valid model strings are
+  its own namespace). Replaced with polymorphic
+  `CLIAgentInterface.fallback_model(config)` — `PiAgent` reads
+  `config.cli_model_fallback`, `ClaudeCodeAgent` reads the new
+  `config.secondary_cli_model_fallback` (named for its *role* — "whichever
+  CLI serves as the fallback tier" — not the literal CLI product, matching
+  `default_fallback_cli_tool`'s own naming; default `sonnet`... though note
+  every claude-dispatched phase in this repo's own workflow YAMLs already
+  sets `cli_model: sonnet` as its primary, so with the shipped default this
+  particular fallback is presently a same-model no-op for claude — a
+  different value should be picked once there's a real escalation tier to
+  fall back to).
+- **The "already off default model" gate compared against pi's global
+  default unconditionally.** `agent.cli_model != config.cli_model` is only
+  the right comparison when `agent.cli_type == config.default_cli_tool`
+  (pi) — for any other CLI, `config.cli_model` is meaningless (it's not
+  claude's baseline). A claude agent's `cli_model` (typically `sonnet`, set
+  per-phase) would never equal `"Qwen3.6-27B-UD-Q4_K_XL.gguf"`, so the gate
+  silently excluded every claude agent regardless of whether
+  `model_fallback_keystrokes` was implemented for it. Fixed to compare
+  against `cli_agent.default_model` (the per-CLI class attribute) whenever
+  `agent.cli_type` isn't the primary `default_cli_tool` — mirroring
+  `manager.py`'s own `global_model` resolution for the identical reason.
+
+`ClaudeCodeAgent.model_fallback_keystrokes` reuses the one-line `/model
+<name>` syntax already confirmed working in `_detect_bad_model_error` (no
+picker step, unlike pi) — see that method's own related fix below.
+`ClaudeCodeAgent.model_fallback_confirmed` is deliberately left
+unimplemented (inherits the base class `None`): there's no confirmed
+evidence of what Claude Code echoes after a successful `/model` switch, so
+guessing a regex risks a false verdict either way — `_verify_cli_model_fallback`
+correctly treats `None` as "can't verify, skip silently" rather than
+fabricating a check.
+
+**Related fix in `_detect_bad_model_error` (Claude-only, pre-existing,
+unrelated code path but the identical bug):** it computed its own recovery
+model as `getattr(config, "cli_model", None) or "sonnet"` — the same
+pi-specific global, sent to Claude via `/model` on a bad-model rejection.
+Now reads `config.secondary_cli_model_fallback` (falling back to `"sonnet"`
+same as before if unset), for the same reason as the gate fix above.
+
 ## What This Does Not Do
 
 - **No automatic switch-back.** Once an agent falls back to
@@ -278,6 +333,15 @@ one-shot set alone — no automatic switch-back (see below).
   period stays pending with no warning; unconfirmed past the grace period
   warns, logs, clears the one-shot set (retry re-enabled), and reverts
   `Agent.cli_model` back to the original. All git-stash-verified.
+- Unit: a CLI genuinely without support (`opencode`, base-class defaults)
+  stays a no-op regardless of freeze duration.
+- Unit: claude, as the secondary/fallback CLI, gets its own fallback via
+  `config.secondary_cli_model_fallback` and isn't blocked by the
+  pi-specific gate — the gate fix is exercised through the real
+  `get_cli_agent("claude")` resolution, not mocked.
+- Unit: `_detect_bad_model_error` (the pre-existing, unrelated Claude-only
+  path) reads `config.secondary_cli_model_fallback`, falling back to
+  `"sonnet"` when unset.
 - Manual/live: watch one real frozen pi agent switch over on this repo's own
   self-hosted pipeline, confirm the transcript shows `Model:
   xiaomi/mimo-v2.5-pro`, an `AgentLog` row exists for the switch, and the
@@ -289,3 +353,8 @@ one-shot set alone — no automatic switch-back (see below).
    under `frozen_seconds=300` so this preempts the generic nudge/fail path)
    is a guess. What's an actual observed typical queue wait on this
    deployment's local slot? Worth tuning once there's real data.
+2. **`secondary_cli_model_fallback: sonnet`** — as shipped, this is a
+   same-model no-op for every claude-dispatched phase in this repo's own
+   workflow YAMLs (all already primary on `sonnet`). Needs a real
+   escalation target (e.g. `opus`) once claude's own freeze behavior is
+   observed live and there's a concrete "next tier" to fall back to.
