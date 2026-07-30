@@ -629,6 +629,26 @@ class TestBudgetEnforcement:
         assert sample_workflow.status == "paused"
         assert sample_workflow.paused_by == "budget"
 
+    def test_budget_enforcement_frees_the_projects_concurrency_slot(self, db_session, sample_project, sample_workflow):
+        """Regression: a budget-paused project must free its concurrency
+        slot the same way a user-stopped one does (stop_pipeline,
+        autopilot_api.py) -- otherwise it keeps occupying a slot with no
+        agents running, and the UI still shows it as Active."""
+        sample_project.is_active = True
+        sample_project.cost_limit_usd = 1.0
+        sample_workflow.status = "active"
+        db_session.commit()
+
+        sample_project.cost_total_usd = 1.50
+        db_session.commit()
+
+        _check_budget_enforcement(db_session, sample_project)
+
+        # Not db_session.refresh() -- neither _check_budget_enforcement nor
+        # its callers commit, and refresh() re-reads from the DB, discarding
+        # the still-pending in-memory change instead of reflecting it.
+        assert sample_project.is_active is False
+
 
 class TestMigration:
     """Test that migrations work correctly."""

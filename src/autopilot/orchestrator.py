@@ -413,9 +413,19 @@ def _get_or_create_project_id(project_path: str) -> str:
         # user-paused workflows would also skip them here, leaving a
         # workflow permanently stuck even after the user explicitly hits
         # play again.
-        resumed = db.query(Workflow).filter(Workflow.project_id == proj.id, Workflow.paused_by == "user").update({Workflow.status: "active", Workflow.paused_by: None})
-        if resumed:
-            logger.info(f"Resumed {resumed} user-paused workflow(s) for '{proj.name}'")
+        #
+        # Gated on proj.is_active actually being True (either already was,
+        # or was just set above): background_phase_advancement_sweep
+        # (server.py) scopes its work to is_active projects only. Flipping
+        # a workflow back to "active" while is_active stayed False (cap
+        # reached above) would leave it permanently invisible to that
+        # sweep -- it looks like it's running but nothing ever advances
+        # it. Leave it paused instead; the next successful activation
+        # (this function running again with room under the cap) resumes it.
+        if proj.is_active:
+            resumed = db.query(Workflow).filter(Workflow.project_id == proj.id, Workflow.paused_by == "user").update({Workflow.status: "active", Workflow.paused_by: None})
+            if resumed:
+                logger.info(f"Resumed {resumed} user-paused workflow(s) for '{proj.name}'")
 
         db.commit()
         return proj.id

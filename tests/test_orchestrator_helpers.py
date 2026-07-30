@@ -5057,6 +5057,63 @@ class TestGetOrCreateProjectId:
             assert proj_b.is_active is True
             assert proj_c.is_active is False
 
+    def test_does_not_resume_paused_workflows_when_cap_reached(
+        self, orch_db_env, tmp_path, monkeypatch
+    ):
+        """Regression: when the cap blocks reactivation, this function used
+        to still unconditionally flip the project's user-paused workflows
+        back to status="active" -- but background_phase_advancement_sweep
+        (server.py) only ever looks at workflows belonging to is_active
+        projects. A workflow left "active" on a project that failed to
+        reactivate is invisible to that sweep forever: it looks like it's
+        running but nothing ever advances it."""
+        from unittest.mock import MagicMock
+
+        from src.autopilot.orchestrator import _get_or_create_project_id
+        from src.core.database import AutopilotProject, Workflow
+
+        mock_config = MagicMock()
+        mock_config.max_concurrent_projects = 2
+        monkeypatch.setattr(
+            "src.core.simple_config.get_config", lambda: mock_config
+        )
+
+        project_a = tmp_path / "project-a"
+        project_a.mkdir()
+        project_b = tmp_path / "project-b"
+        project_b.mkdir()
+        project_c = tmp_path / "project-c"
+        project_c.mkdir()
+
+        id_a = _get_or_create_project_id(str(project_a))
+        id_b = _get_or_create_project_id(str(project_b))
+
+        # project_c already exists (was active and running before), but is
+        # currently paused and inactive -- simulates a project stopped via
+        # /autopilot/stop, whose slot was then taken by a or b.
+        with orch_db_env.session_scope() as session:
+            proj_c = AutopilotProject(
+                id="proj-c", name="project-c", base_dir=str(project_c.resolve()),
+                is_active=False,
+            )
+            session.add(proj_c)
+            session.add(
+                Workflow(
+                    id="wf-c", project_id="proj-c", definition_id="autopilot",
+                    name="t", phases_folder_path="/tmp",
+                    status="paused", paused_by="user",
+                )
+            )
+
+        _get_or_create_project_id(str(project_c))
+
+        with orch_db_env.session_scope() as session:
+            proj_c = session.query(AutopilotProject).filter_by(id="proj-c").first()
+            wf_c = session.query(Workflow).filter_by(id="wf-c").first()
+            assert proj_c.is_active is False
+            assert wf_c.status == "paused"
+            assert wf_c.paused_by == "user"
+
     def test_concurrent_insert_race_recovers_instead_of_raising(
         self, orch_db_env, tmp_path
     ):

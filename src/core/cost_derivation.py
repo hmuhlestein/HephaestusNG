@@ -316,6 +316,11 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
     # Over budget - pause active workflows
     logger.warning(f"[BUDGET] Project {project.id[:8]} over budget: ${project.cost_total_usd:.2f} >= ${project.cost_limit_usd:.2f}")
     _pause_project_workflows(db, project.id, paused_by="budget")
+    # Free the project's concurrency slot, matching stop_pipeline's user-stop
+    # path (autopilot_api.py) -- otherwise a budget-paused project keeps
+    # occupying a slot with no agents running, and the UI still shows it as
+    # Active.
+    project.is_active = False
 
 
 def check_budget_before_new_work(db: Session, project_id: str) -> bool:
