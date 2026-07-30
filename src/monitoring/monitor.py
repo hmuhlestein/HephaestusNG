@@ -621,9 +621,14 @@ class MonitoringLoop:
         running something else (including a prior switch here) is left
         alone.
 
-        One-shot per agent (self._switched_to_fallback_model) -- a standing
-        decision for the rest of the agent's task, not a repeatable nudge.
-        No automatic switch-back (v1; see the design doc's Open Questions).
+        One-shot per agent (self._switched_to_fallback_model) once the switch
+        is confirmed -- a standing decision for the rest of the agent's
+        task, not a repeatable nudge. _verify_cli_model_fallback clears this
+        agent from that set again if the switch is never confirmed, so a
+        failed attempt (e.g. a picker timing miss) doesn't permanently
+        forfeit this agent's only chance at recovery. No automatic
+        switch-back once confirmed (v1; see the design doc's Open
+        Questions).
         """
         try:
             fallback = getattr(self.config, "cli_model_fallback", None)
@@ -653,18 +658,35 @@ class MonitoringLoop:
                 f"[CLI-MODEL-FALLBACK] Agent {agent.id[:8]} ({agent.cli_type}) frozen "
                 f"{int(frozen_for)}s — switching to fallback model '{fallback}'"
             )
-            self._log_agent_event(
-                agent.id,
-                "cli_model_fallback",
-                f"Frozen {int(frozen_for)}s on '{original_model}' — switched "
-                f"in-place to fallback model '{fallback}'",
-                {
-                    "task_id": agent.current_task_id,
-                    "from_model": original_model,
-                    "to_model": fallback,
-                    "frozen_seconds": int(frozen_for),
-                },
-            )
+            # Persist the switch to Agent.cli_model, not just the in-memory
+            # one-shot set -- agent.cli_model is surfaced directly in API
+            # responses (mcp/api.py, mcp/autopilot_api.py) for UI display,
+            # and get_active_agents() re-fetches a fresh row every cycle, so
+            # leaving it stale would show the wrong "current model" for this
+            # agent from here on, not just for one cycle.
+            try:
+                with self.db_manager.session_scope() as session:
+                    agent_row = session.query(Agent).filter_by(id=agent.id).first()
+                    if agent_row:
+                        agent_row.cli_model = fallback
+                    self._log_agent_event(
+                        agent.id,
+                        "cli_model_fallback",
+                        f"Frozen {int(frozen_for)}s on '{original_model}' — switched "
+                        f"in-place to fallback model '{fallback}'",
+                        {
+                            "task_id": agent.current_task_id,
+                            "from_model": original_model,
+                            "to_model": fallback,
+                            "frozen_seconds": int(frozen_for),
+                        },
+                        session=session,
+                    )
+            except Exception as persist_err:
+                logger.warning(
+                    f"[CLI-MODEL-FALLBACK] Failed to persist cli_model update "
+                    f"for {agent.id[:8]}: {persist_err}"
+                )
             for text, wait_after in keystrokes:
                 await self.agent_manager.send_message_to_agent(agent.id, text)
                 if wait_after:
@@ -672,7 +694,7 @@ class MonitoringLoop:
             self._stuck_state.pop(agent.id, None)
             if not hasattr(self, "_pending_fallback_verification"):
                 self._pending_fallback_verification = {}
-            self._pending_fallback_verification[agent.id] = (fallback, time.time())
+            self._pending_fallback_verification[agent.id] = (fallback, original_model, time.time())
             return True
         except Exception as e:
             logger.warning(f"[CLI-MODEL-FALLBACK] check failed for {agent.id[:8]}: {e}")
@@ -682,18 +704,26 @@ class MonitoringLoop:
         """Best-effort follow-up to _detect_cli_model_fallback: on a later
         cycle, check whether the model switch it sent actually landed, per
         CLIAgentInterface.model_fallback_confirmed (polymorphic -- e.g.
-        pi's "Model: <provider>/<name>" echo). Not blocking and doesn't
-        retry the switch itself (it already used its one shot) -- just
-        surfaces whether the CLI interaction didn't land as expected (wrong
-        search text, picker didn't open in time, etc.) instead of leaving
-        that silent. Logged to AgentLog either way so the outcome is
-        attached to the agent/task record, not just process logs.
+        pi's "Model: <provider>/<name>" echo). Not blocking -- surfaces
+        whether the CLI interaction didn't land as expected (wrong search
+        text, picker didn't open in time, etc.) instead of leaving that
+        silent. Logged to AgentLog either way so the outcome is attached to
+        the agent/task record, not just process logs.
+
+        An unconfirmed switch also clears the agent from
+        _switched_to_fallback_model: the one-shot restriction is meant to
+        stop a *successful* switch from being re-sent, not to permanently
+        strand an agent that we have direct evidence never actually
+        switched -- without this, a single failed picker interaction (e.g.
+        a transient timing miss) would forfeit this agent's only chance at
+        recovery for the rest of its task, even if it later freezes again
+        on the still-unswitched original model.
         """
         pending = getattr(self, "_pending_fallback_verification", {})
         entry = pending.get(agent.id)
         if not entry:
             return
-        model, switched_at = entry
+        model, original_model, switched_at = entry
         try:
             confirmed = get_cli_agent(agent.cli_type).model_fallback_confirmed(
                 self.agent_manager.get_agent_output(agent.id, lines=40) or "", model
@@ -725,10 +755,27 @@ class MonitoringLoop:
                 self._log_agent_event(
                     agent.id, "cli_model_fallback_unconfirmed",
                     f"Switch to fallback model '{model}' not confirmed after "
-                    f"{int(time.time() - switched_at)}s",
+                    f"{int(time.time() - switched_at)}s -- reverting recorded "
+                    f"cli_model to '{original_model}'",
                     {"task_id": agent.current_task_id, "model": model},
                 )
+                # Revert the optimistic DB write from _detect_cli_model_fallback
+                # -- otherwise its own gate (agent.cli_model != config.cli_model)
+                # would see this agent as already switched and block the retry
+                # this branch just re-enabled, even though the switch never
+                # actually confirmed.
+                try:
+                    with self.db_manager.session_scope() as session:
+                        agent_row = session.query(Agent).filter_by(id=agent.id).first()
+                        if agent_row:
+                            agent_row.cli_model = original_model
+                except Exception as revert_err:
+                    logger.warning(
+                        f"[CLI-MODEL-FALLBACK] Failed to revert cli_model for "
+                        f"{agent.id[:8]}: {revert_err}"
+                    )
                 pending.pop(agent.id, None)
+                getattr(self, "_switched_to_fallback_model", set()).discard(agent.id)
         except Exception as e:
             logger.warning(f"[CLI-MODEL-FALLBACK] verify failed for {agent.id[:8]}: {e}")
             pending.pop(agent.id, None)

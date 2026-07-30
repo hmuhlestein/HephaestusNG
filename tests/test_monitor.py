@@ -1076,6 +1076,33 @@ class TestDetectCliModelFallback:
         assert logged.details["to_model"] == "mimo-v2.5-pro"
         assert logged.details["task_id"] == "t1"
 
+    @pytest.mark.asyncio
+    async def test_persists_the_switch_to_agent_cli_model(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: agent.cli_model is surfaced directly in API responses
+        (mcp/api.py, mcp/autopilot_api.py) for UI display, and
+        get_active_agents() re-fetches a fresh row every cycle -- switching
+        the model in the CLI session without also updating the DB column
+        would leave every later cycle (and the UI) showing the stale
+        original model as "the agent's current model" indefinitely."""
+        from contextlib import contextmanager
+
+        agent_row = Mock(cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf")
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = agent_row
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+
+        await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert agent_row.cli_model == "mimo-v2.5-pro"
+
 
 class TestVerifyCliModelFallback:
     """Regression: _detect_cli_model_fallback's switch was fire-and-forget --
@@ -1100,7 +1127,7 @@ class TestVerifyCliModelFallback:
         agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = "anything"
         make_monitoring_loop._pending_fallback_verification = {
-            "a1": ("sonnet", time.time())
+            "a1": ("sonnet", "opus", time.time())
         }
 
         await make_monitoring_loop._verify_cli_model_fallback(agent)
@@ -1123,7 +1150,7 @@ class TestVerifyCliModelFallback:
         agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = "Model: xiaomi/mimo-v2.5-pro"
         make_monitoring_loop._pending_fallback_verification = {
-            "a1": ("mimo-v2.5-pro", time.time())
+            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time())
         }
 
         await make_monitoring_loop._verify_cli_model_fallback(agent)
@@ -1140,7 +1167,7 @@ class TestVerifyCliModelFallback:
         agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = "still on the old model"
         make_monitoring_loop._pending_fallback_verification = {
-            "a1": ("mimo-v2.5-pro", time.time())  # just switched
+            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time())  # just switched
         }
 
         await make_monitoring_loop._verify_cli_model_fallback(agent)
@@ -1165,7 +1192,7 @@ class TestVerifyCliModelFallback:
         agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = "still on the old model"
         make_monitoring_loop._pending_fallback_verification = {
-            "a1": ("mimo-v2.5-pro", time.time() - 200)  # past 2x120s grace
+            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time() - 200)  # past 2x120s grace
         }
 
         await make_monitoring_loop._verify_cli_model_fallback(agent)
@@ -1173,6 +1200,67 @@ class TestVerifyCliModelFallback:
         assert "a1" not in make_monitoring_loop._pending_fallback_verification
         logged = session.add.call_args[0][0]
         assert logged.log_type == "cli_model_fallback_unconfirmed"
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_past_grace_period_allows_a_retry(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: a failed picker interaction (never confirmed) must
+        not permanently strand the agent -- clearing it from
+        _switched_to_fallback_model lets _detect_cli_model_fallback try
+        again if it freezes again on the still-unswitched original model.
+        A successfully *confirmed* switch, by contrast, keeps the agent in
+        that set forever (no automatic switch-back)."""
+        from contextlib import contextmanager
+
+        agent_row = Mock(cli_model="mimo-v2.5-pro")  # the optimistic write from _detect_cli_model_fallback
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = agent_row
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        make_monitoring_loop.config.monitoring_interval_seconds = 60
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "still on the old model"
+        make_monitoring_loop._switched_to_fallback_model = {"a1"}
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time() - 200)
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" not in make_monitoring_loop._switched_to_fallback_model
+        # The optimistic write must be reverted -- otherwise the retry this
+        # just re-enabled would immediately be blocked by
+        # _detect_cli_model_fallback's own "already off default model" gate.
+        assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+
+    @pytest.mark.asyncio
+    async def test_confirmed_switch_does_not_clear_the_one_shot_set(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        from contextlib import contextmanager
+
+        session = Mock()
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "Model: xiaomi/mimo-v2.5-pro"
+        make_monitoring_loop._switched_to_fallback_model = {"a1"}
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time())
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" in make_monitoring_loop._switched_to_fallback_model
 
 
 # ── _update_agent_health_from_trajectory ─────────────────────────
