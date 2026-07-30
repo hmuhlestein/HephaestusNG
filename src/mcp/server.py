@@ -3456,9 +3456,9 @@ async def root():
             "auth": {"type": "none", "required": False},
         },
         "endpoints": [
-            "/create_task",
-            "/update_task_status",
-            "/save_memory",
+            "/hephaestus_create_task",
+            "/hephaestus_update_task_status",
+            "/hephaestus_save_memory",
             "/agent_status",
             "/task_progress",
             "/health",
@@ -3477,7 +3477,7 @@ async def list_tools():
     return {
         "tools": [
             {
-                "name": "create_task",
+                "name": "hephaestus_create_task",
                 "description": "Create a new task for an autonomous agent",
                 "input_schema": {
                     "type": "object",
@@ -3533,7 +3533,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "save_memory",
+                "name": "hephaestus_save_memory",
                 "description": "Save a memory to the knowledge base",
                 "input_schema": {
                     "type": "object",
@@ -3546,7 +3546,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "search_memory",
+                "name": "hephaestus_search_memory",
                 "description": "Search the knowledge base for relevant memories using semantic search",
                 "input_schema": {
                     "type": "object",
@@ -3584,7 +3584,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "update_task_status",
+                "name": "hephaestus_update_task_status",
                 "description": "Update the status of a task (done, failed, etc.)",
                 "input_schema": {
                     "type": "object",
@@ -3622,13 +3622,13 @@ async def list_tools():
                 },
             },
             {
-                "name": "complete_my_task",
+                "name": "hephaestus_complete_my_task",
                 "description": (
                     "Mark YOUR OWN currently-assigned task done or failed -- "
                     "no task_id needed, the server already knows which task "
                     "you're working on. Use this instead of "
-                    "update_task_status for the normal case of finishing "
-                    "your own work; update_task_status still exists for the "
+                    "hephaestus_update_task_status for the normal case of finishing "
+                    "your own work; hephaestus_update_task_status still exists for the "
                     "rare case of updating a task that isn't your current one."
                 ),
                 "input_schema": {
@@ -3667,7 +3667,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "create_ticket",
+                "name": "hephaestus_create_ticket",
                 "description": "Create a new ticket in the Kanban board",
                 "input_schema": {
                     "type": "object",
@@ -3714,7 +3714,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "search_tickets",
+                "name": "hephaestus_search_tickets",
                 "description": "Search for existing tickets by title or tags",
                 "input_schema": {
                     "type": "object",
@@ -3734,7 +3734,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "update_ticket_status",
+                "name": "hephaestus_update_ticket_status",
                 "description": "Update the status of a ticket",
                 "input_schema": {
                     "type": "object",
@@ -3749,7 +3749,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "broadcast_message",
+                "name": "hephaestus_broadcast_message",
                 "description": "Send a message to ALL active agents",
                 "input_schema": {
                     "type": "object",
@@ -3767,7 +3767,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "send_message",
+                "name": "hephaestus_send_message",
                 "description": "Send a direct message to a specific agent",
                 "input_schema": {
                     "type": "object",
@@ -4766,17 +4766,17 @@ async def _tool_complete_my_task(arguments: Dict[str, Any]):
 # _handle_devtools_tool/_DEVTOOLS_TOOLS since they share a different shape:
 # a browser-session precondition and per-tool required-args).
 _MCP_TOOLS: Dict[str, Any] = {
-    "create_task": _tool_create_task,
-    "save_memory": _tool_save_memory,
-    "search_memory": _tool_search_memory,
+    "hephaestus_create_task": _tool_create_task,
+    "hephaestus_save_memory": _tool_save_memory,
+    "hephaestus_search_memory": _tool_search_memory,
     "get_task_status": _tool_get_task_status,
-    "update_task_status": _tool_update_task_status,
-    "complete_my_task": _tool_complete_my_task,
-    "create_ticket": _tool_create_ticket,
-    "search_tickets": _tool_search_tickets,
-    "update_ticket_status": _tool_update_ticket_status,
-    "broadcast_message": _tool_broadcast_message,
-    "send_message": _tool_send_message,
+    "hephaestus_update_task_status": _tool_update_task_status,
+    "hephaestus_complete_my_task": _tool_complete_my_task,
+    "hephaestus_create_ticket": _tool_create_ticket,
+    "hephaestus_search_tickets": _tool_search_tickets,
+    "hephaestus_update_ticket_status": _tool_update_ticket_status,
+    "hephaestus_broadcast_message": _tool_broadcast_message,
+    "hephaestus_send_message": _tool_send_message,
 }
 
 
