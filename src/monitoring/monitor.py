@@ -616,12 +616,14 @@ class MonitoringLoop:
         rather than a second, independent signature comparison -- it already
         computes and updates that state for every agent, every cycle.
 
-        Opt-in per CLI via its own fallback_model(config) (e.g. PiAgent
-        reads config.cli_model_fallback, ClaudeCodeAgent reads
-        config.secondary_cli_model_fallback) -- unset disables this for that CLI.
-        Only for agents still on their CLI's own baseline default model --
-        one already running something else (including a prior switch here,
-        or a deliberate phase-level override) is left alone.
+        Opt-in via fallback_model(config, is_primary) -- resolved by ROLE,
+        not by which CLI product this is (config.cli_model_fallback for
+        whichever CLI is currently primary, config.secondary_cli_model_fallback
+        for whichever is the secondary/fallback tier) -- unset disables this
+        for that role. Only for agents still on their CLI's own baseline
+        default model -- one already running something else (including a
+        prior switch here, or a deliberate phase-level override) is left
+        alone.
 
         One-shot per agent (self._switched_to_fallback_model) once the switch
         is confirmed -- a standing decision for the rest of the agent's
@@ -634,24 +636,32 @@ class MonitoringLoop:
         """
         try:
             cli_agent = get_cli_agent(agent.cli_type)
-            fallback = cli_agent.fallback_model(self.config)
+            # Whether this agent's cli_type IS the currently-configured
+            # primary (config.default_cli_tool) -- reused by both
+            # fallback_model (which of the two role-keyed config values to
+            # read) and the baseline-default gate below, so that swapping
+            # default_cli_tool/default_fallback_cli_tool (e.g. running
+            # Claude as primary against a local model, pi as the fallback
+            # tier) doesn't silently keep either check pinned to the old
+            # role.
+            is_primary = agent.cli_type == getattr(self.config, "default_cli_tool", None)
+            fallback = cli_agent.fallback_model(self.config, is_primary)
             if not fallback:
                 return False
             keystrokes = cli_agent.model_fallback_keystrokes(fallback)
             if not keystrokes:
                 return False
             # This CLI's own baseline default -- config.cli_model only
-            # applies when this agent's cli_type IS the global
-            # default_cli_tool (see manager.py's identical global_model
-            # resolution); any other CLI's baseline is its own
-            # default_model class attribute. Comparing against the wrong
-            # baseline would either never match a non-default CLI's agents
-            # (leaving them permanently ineligible) or match a deliberate
-            # phase-level override that isn't actually "stuck on the
-            # default" at all.
+            # applies when this agent IS the primary (see manager.py's
+            # identical global_model resolution); a secondary-tier CLI's
+            # baseline is its own default_model class attribute. Comparing
+            # against the wrong baseline would either never match a
+            # non-primary CLI's agents (leaving them permanently
+            # ineligible) or match a deliberate phase-level override that
+            # isn't actually "stuck on the default" at all.
             default_for_cli = (
                 getattr(self.config, "cli_model", None)
-                if agent.cli_type == getattr(self.config, "default_cli_tool", None)
+                if is_primary
                 else cli_agent.default_model
             )
             if agent.cli_model != default_for_cli:
