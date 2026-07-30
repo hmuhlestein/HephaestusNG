@@ -291,9 +291,6 @@ class TestMultiProviderLLM:
             }
         )
         client.generate_embedding = AsyncMock(return_value=[0.1] * 1536)
-        client.analyze_agent_state = AsyncMock(
-            return_value={"state": "healthy", "decision": "continue"}
-        )
         client.analyze_agent_trajectory = AsyncMock(
             return_value={"trajectory_aligned": True, "alignment_score": 0.8}
         )
