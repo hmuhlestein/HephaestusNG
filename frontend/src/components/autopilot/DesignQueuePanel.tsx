@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
@@ -951,11 +951,16 @@ const TaskRow: React.FC<{
   const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean; delete?: boolean }>({});
   const [tmuxAgent, setTmuxAgent] = useState<Agent | null>(null);
 
+  const tmuxViewerOpenRef = useRef(false);
+
   const openTmuxView = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!task.agent_id) return;
     const agent = await apiService.getAgent(task.agent_id);
-    if (agent) setTmuxAgent(agent);
+    if (agent) {
+      tmuxViewerOpenRef.current = true;
+      setTmuxAgent(agent);
+    }
   };
 
   // Keep tmuxAgent's status fresh while the viewer is open -- it's only
@@ -969,7 +974,11 @@ const TaskRow: React.FC<{
     const interval = setInterval(async () => {
       try {
         const agent = await apiService.getAgent(tmuxAgent.id);
-        if (agent) setTmuxAgent(agent);
+        // Guard: if the viewer was closed while the fetch was in-flight,
+        // don't reopen it. Without this, a close→fetch→resolve race
+        // sets tmuxAgent back to a value, re-rendering the viewer in a
+        // disconnected state.
+        if (agent && tmuxViewerOpenRef.current) setTmuxAgent(agent);
       } catch {
         // Keep showing the last known state on a transient fetch error.
       }
@@ -1106,7 +1115,7 @@ const TaskRow: React.FC<{
         pending={actionPending}
       />
       {tmuxAgent && (
-        <RealTimeAgentOutput agent={tmuxAgent} onClose={() => setTmuxAgent(null)} fallbackPhaseName={task.phase_name} />
+        <RealTimeAgentOutput agent={tmuxAgent} onClose={() => { tmuxViewerOpenRef.current = false; setTmuxAgent(null); }} fallbackPhaseName={task.phase_name} />
       )}
     </div>
   );
