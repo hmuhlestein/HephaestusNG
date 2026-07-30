@@ -66,7 +66,7 @@ def health_check() -> str:
         return f"❌ Cannot connect to Hephaestus server: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_create_task")
 async def create_task(
     description: str,
     done_definition: str,
@@ -200,7 +200,7 @@ async def get_tasks(status: str = "all") -> str:
         return f"❌ Error getting tasks: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_save_memory")
 async def save_memory(
     content: str,
     agent_id: str = None,
@@ -255,7 +255,7 @@ async def save_memory(
         return f"❌ Error saving memory: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_search_memory")
 async def search_memory(
     query: str,
     agent_id: str = None,
@@ -306,7 +306,7 @@ async def search_memory(
         return f"❌ Error searching memory: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_update_task_status")
 async def update_task_status(
     task_id: str = None,
     agent_id: str = None,
@@ -427,7 +427,7 @@ async def _post_task_status(
         return f"❌ Error updating task status: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_complete_my_task")
 async def complete_my_task(
     status: str = None,
     summary: str = "",
@@ -472,7 +472,7 @@ async def complete_my_task(
     return await _post_task_status(task_id, agent_id, status, summary, failure_reason, key_learnings)
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_give_validation_review")
 async def give_validation_review(
     task_id: str = None,
     validator_agent_id: str = None,
@@ -535,7 +535,7 @@ Iteration: {result.get("iteration", "N/A")}"""
         return f"❌ Error submitting validation review: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_validate_my_agent_id")
 async def validate_my_agent_id(
     agent_id: str = None, workflow_id: str = None, task_id: str = None
 ) -> str:
@@ -610,7 +610,7 @@ async def get_agent_status() -> str:
         return f"❌ Error getting agent status: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_submit_result")
 async def submit_result(
     markdown_file_path: str,
     agent_id: str = None,
@@ -668,7 +668,7 @@ Message: {result.get("message", "")}"""
         return f"❌ Error submitting result: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_submit_result_validation")
 async def submit_result_validation(
     result_id: str, validation_passed: bool, feedback: str, evidence: list = None
 ) -> str:
@@ -763,7 +763,7 @@ async def get_workflow_results(workflow_id: str = None) -> str:
         return f"❌ Error getting workflow results: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_broadcast_message")
 async def broadcast_message(message: str, sender_agent_id: str = None) -> str:
     """Broadcast a message to all active agents in the system.
 
@@ -812,7 +812,7 @@ async def broadcast_message(message: str, sender_agent_id: str = None) -> str:
         return f"❌ Error broadcasting message: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_send_message")
 async def send_message(
     message: str, sender_agent_id: str = None, recipient_agent_id: str = None
 ) -> str:
@@ -873,7 +873,7 @@ async def send_message(
 # ==================== TICKET TRACKING SYSTEM TOOLS ====================
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_create_ticket")
 async def create_ticket(
     title: str,
     description: str,
@@ -1049,7 +1049,7 @@ Message: {result.get("message", "")}"""
         return f"❌ Error updating ticket: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_update_ticket_status")
 async def change_ticket_status(
     ticket_id: str,
     new_status: str,
@@ -1149,7 +1149,7 @@ async def add_ticket_comment(
         return f"❌ Error adding comment: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_search_tickets")
 async def search_tickets(
     query: str,
     agent_id: str = None,
@@ -1889,7 +1889,7 @@ Stats:
         return f"Error getting workflow execution: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="hephaestus_spawn_agent")
 async def spawn_agent(
     agent_name: str,
     task: str,
