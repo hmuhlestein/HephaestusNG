@@ -338,7 +338,14 @@ launch_template:
     - Technology constraints
 
     ### STEP 3: Create Requirements Document
-    Write requirements_analysis.md in ./docs/ (create the directory if needed)
+    Write requirements_analysis.md in ./docs/ (create the directory if needed).
+    The file MUST start with this OKF frontmatter block:
+    ```
+    ---
+    type: product_requirements_report
+    ---
+    ```
+    Then the report content immediately after.
 
     ### STEP 4: Save to Memory
     Save key decisions and project context.
