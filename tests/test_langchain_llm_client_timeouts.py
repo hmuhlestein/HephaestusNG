@@ -1,15 +1,15 @@
 """Regression tests for Conductor LLM-call timeouts in LangChainLLMClient.
 
-analyze_system_coherence and review_qa_report both run inside
-MonitoringLoop's single shared cycle (via conductor.py). Before this fix,
-neither bounded its model.ainvoke() call with a timeout -- a slow/
-over-streaming model (mimo can stream a reasoning trace for minutes and
-still fail to parse) could block the call indefinitely, freezing the
-entire monitoring loop's heartbeat and every agent's auto-recovery, not
-just this one call. Observed live: monitor_heartbeat stopped updating for
-20+ minutes after analyze_system_coherence hung on its final retry
-attempt. Each call must bound every attempt with asyncio.wait_for and fall
-back on timeout, same as Guardian's GUARDIAN_LLM_TIMEOUT (guardian.py).
+analyze_system_coherence runs inside MonitoringLoop's single shared cycle
+(via conductor.py). Before this fix, it didn't bound its model.ainvoke()
+call with a timeout -- a slow/over-streaming model (mimo can stream a
+reasoning trace for minutes and still fail to parse) could block the call
+indefinitely, freezing the entire monitoring loop's heartbeat and every
+agent's auto-recovery, not just this one call. Observed live:
+monitor_heartbeat stopped updating for 20+ minutes after
+analyze_system_coherence hung on its final retry attempt. Each call must
+bound every attempt with asyncio.wait_for and fall back on timeout, same
+as Guardian's GUARDIAN_LLM_TIMEOUT (guardian.py).
 """
 
 import asyncio
@@ -81,26 +81,3 @@ class TestConductorTimeouts:
         )
 
         assert result == client._default_coherence_analysis()
-
-    @pytest.mark.asyncio
-    async def test_review_qa_report_times_out_instead_of_hanging(
-        self, client, monkeypatch
-    ):
-        monkeypatch.setattr(
-            "src.interfaces.langchain_llm_client.CONDUCTOR_LLM_TIMEOUT", 0.05
-        )
-        hanging_model = Mock()
-        hanging_model.ainvoke = _hang
-        client._get_model_for_component = Mock(return_value=hanging_model)
-
-        result = await asyncio.wait_for(
-            client.review_qa_report(
-                qa_report="report",
-                prd_content="prd",
-                phase_intent="intent",
-                spec={},
-            ),
-            timeout=5,
-        )
-
-        assert result["up_to_spec"] is False

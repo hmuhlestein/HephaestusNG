@@ -53,6 +53,7 @@ from src.mcp.tickets_api import router as tickets_router
 from src.memory.rag import RAGSystem
 from src.memory.store_factory import VectorStoreProtocol, create_vector_store
 from src.phases import PhaseManager
+from src.prompts.loader import get_prompt
 from src.services.embedding_service import EmbeddingService
 from src.services.queue_service import QueueService
 from src.services.result_validator_service import ResultValidatorService
@@ -66,17 +67,7 @@ logger = logging.getLogger(__name__)
 # Concrete and checkable by design, not an open-ended "find your own gaps" —
 # makes a no-op pass (nothing changed, same completion_notes) easy to spot
 # later against the before/after diff.
-SELF_REVIEW_CHECKLIST_PROMPT = """
-Before this is actually done, re-check your own work:
-- Re-read the design/requirements — is every requirement implemented?
-- Edge cases and error handling — anything unhandled?
-- Tests exist for new code, and they pass?
-- Any TODOs, stubs, or dead code left behind?
-
-Fix anything real you find, then call hephaestus_update_task_status
-with status="done" again — record what you changed (if anything) in the
-summary.
-"""
+SELF_REVIEW_CHECKLIST_PROMPT = "\n" + get_prompt("self_review_checklist")
 
 
 def _resolve_worktree_path(session, task) -> Optional[str]:
