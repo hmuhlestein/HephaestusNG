@@ -7288,6 +7288,23 @@ def run_feature_pipelines(
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    # Statuses _run_one_feature/run_single_workflow can return that do NOT
+    # mean the feature actually reached a resolved state -- "interrupted"
+    # (an explicit stop/quit/KeyboardInterrupt) and "timeout" (this poll
+    # loop's own wall-clock budget expired, reset fresh on every resume --
+    # see run_single_workflow's start_time) both mean "we stopped watching,"
+    # not "this feature is done." Unlike "failed"/"skipped"/"hard_error"
+    # (genuine, if bad, resolutions -- see the comment below on why those
+    # don't block dependents), advancing to a later dependency layer after
+    # one of these is exactly how a still-in-progress dependency's
+    # dependents can start early: observed live, a feature whose dependency
+    # was still genuinely running (its own workflow status was "active", it
+    # simply hadn't finished within this walk's 2-hour polling window) had
+    # its dependent feature dispatched immediately after the dependency's
+    # run_single_workflow call returned "timeout".
+    NON_TERMINAL_STATUSES = {"interrupted", "timeout"}
+    halted_early = False
+
     for group in execution_groups:
         # Every feature in the group is attempted -- a failed dependency no
         # longer auto-skips its dependents. Skipping was a one-shot,
@@ -7320,6 +7337,8 @@ def run_feature_pipelines(
                 project_id,
             )
             feature_results[feature_key] = status
+            if status in NON_TERMINAL_STATUSES:
+                halted_early = True
         else:
             # Multiple parallel features - use ThreadPoolExecutor
             logger.info(f"Running {len(features_to_run)} features in parallel")
@@ -7347,9 +7366,27 @@ def run_feature_pipelines(
                     try:
                         status = future.result()
                         feature_results[feature_key] = status
+                        if status in NON_TERMINAL_STATUSES:
+                            halted_early = True
                     except Exception as e:
                         logger.error(f"Feature {feature_key} failed: {e}")
                         feature_results[feature_key] = "failed"
+
+        # Stop before starting the next dependency layer -- a non-terminal
+        # result means at least one feature in this layer may still be
+        # genuinely in progress (or a stop was explicitly requested), so its
+        # dependents in later layers must not be dispatched yet. The next
+        # walk of this same design (background_phase_advancement_sweep's
+        # resume, or the continuous pipeline's own re-pick) will re-resolve
+        # execution_groups fresh and correctly re-encounter this layer
+        # before ever reaching the ones after it.
+        if halted_early:
+            logger.info(
+                "Halting feature pipeline walk early: a feature in this "
+                "layer did not reach a resolved status (interrupted/timeout) "
+                "-- not dispatching later dependency layers this walk."
+            )
+            break
 
     # Log summary
     logger.info("Feature pipeline results:")
