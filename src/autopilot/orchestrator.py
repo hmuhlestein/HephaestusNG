@@ -5479,7 +5479,7 @@ def _cap_out_review_phase(
         )
         return None
 
-    docs_dir = Path(workflow.working_directory) / "docs" / phase.name
+    docs_dir = Path(workflow.working_directory) / ".hephaestus" / phase.name
     docs_dir.mkdir(parents=True, exist_ok=True)
 
     history = get_review_findings_history(workflow_id, phase.name)
@@ -7192,14 +7192,27 @@ def _run_one_feature(
         # Update feature status
         _update_feature_status(feature_id, design_entry.db_id, final_status, logger=logger)
 
-        # Sweep artifacts to permanent record
-        docs_dir = worktree / "docs"
+        # Sweep artifacts to permanent record. Phase reports now live under
+        # .hephaestus/ (git-excluded) -- some flat at the top level
+        # (requirements_analysis.md, architecture.md), some one level down
+        # in a phase subdirectory (qa_validation/qa_report.md,
+        # adversarial_review/adversarial_review_report.md, etc., per each
+        # gated phase's CRITICAL PATH RULE) -- so this must recurse, not
+        # just iterate the top level like the old flat docs/ layout needed.
+        # Excludes tmux/ (transcript logs), features/ (Phase 0 internal
+        # state), and scratch/ (agent scratch space) -- none of those are
+        # phase-report artifacts.
+        docs_dir = worktree / ".hephaestus"
+        _sweep_excluded_dirs = {"tmux", "features", "scratch"}
         if docs_dir.exists():
-            for f in docs_dir.iterdir():
-                if f.is_file():
-                    dest = feature_record_path / f.name
-                    if not dest.exists():
-                        shutil.copy2(f, dest)
+            for f in docs_dir.rglob("*"):
+                if not f.is_file():
+                    continue
+                if f.relative_to(docs_dir).parts[0] in _sweep_excluded_dirs:
+                    continue
+                dest = feature_record_path / f.name
+                if not dest.exists():
+                    shutil.copy2(f, dest)
 
         if wf_status == "completed":
             # Only clean up the worktree once the feature's pipeline has
@@ -7535,16 +7548,26 @@ def _archive_and_cleanup(
     worktree = project_path
     repo_root = worktree.parent.parent  # .worktrees/ -> project root
 
-    # Copy docs
-    worktree_docs = worktree / "docs"
-    dest_docs = designs_folder / "docs"
+    # Copy docs. Recurse, not iterate the top level -- some phase reports
+    # sit flat at .hephaestus/<file> (requirements_analysis.md,
+    # architecture.md), others one level down in a phase subdirectory
+    # (qa_validation/qa_report.md, per each gated phase's CRITICAL PATH
+    # RULE). Excludes tmux/ (transcript logs), features/ (Phase 0 internal
+    # state), and scratch/ (agent scratch space) -- not phase-report
+    # artifacts.
+    worktree_docs = worktree / ".hephaestus"
+    dest_docs = designs_folder / ".hephaestus"
+    _archive_excluded_dirs = {"tmux", "features", "scratch"}
     if worktree_docs.exists():
         dest_docs.mkdir(parents=True, exist_ok=True)
-        for f in worktree_docs.iterdir():
-            if f.is_file():
-                dest = dest_docs / f.name
-                if not dest.exists():
-                    shutil.copy2(f, dest)
+        for f in worktree_docs.rglob("*"):
+            if not f.is_file():
+                continue
+            if f.relative_to(worktree_docs).parts[0] in _archive_excluded_dirs:
+                continue
+            dest = dest_docs / f.name
+            if not dest.exists():
+                shutil.copy2(f, dest)
         logger.info(f"Artifacts archived to {dest_docs}")
 
     # Remove the linked worktree

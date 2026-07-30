@@ -122,7 +122,7 @@ class TestVerifyOutputArtifact:
 
     def test_rejects_when_workflow_has_no_working_directory(self):
         phase = Mock(name="development", id="phase-1")
-        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1", assigned_agent_id=None)
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory=None)
@@ -137,13 +137,14 @@ class TestVerifyOutputArtifact:
 
     def test_finds_output_in_phase_scoped_subdirectory(self, tmp_path):
         """Regression: agents are now told to write to the one sanctioned
-        docs/<phase.name>/ subdirectory (see each gated phase's CRITICAL
-        PATH RULE) -- this must be checked, not just flat docs/."""
+        .hephaestus/<phase.name>/ subdirectory (see each gated phase's
+        CRITICAL PATH RULE) -- this must be checked, not just flat
+        .hephaestus/."""
         phase = Mock(name="qa_validation", id="phase-1")
         phase.name = "qa_validation"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
-        sub = tmp_path / "docs" / "qa_validation"
+        sub = tmp_path / ".hephaestus" / "qa_validation"
         sub.mkdir(parents=True)
         (sub / "qa_report.md").write_text("---\ntype: qa_validation_result\n---\n\n# QA Report")
 
@@ -162,14 +163,14 @@ class TestVerifyOutputArtifact:
 
     def test_does_not_find_a_different_phases_subdirectory_output(self, tmp_path):
         """Regression: the old fallback searched EVERY subdirectory of
-        docs/ for a same-named file -- a leftover file from a DIFFERENT
-        feature or an earlier retry pass must not count as proof THIS
-        phase's own agent produced its required output."""
+        .hephaestus/ for a same-named file -- a leftover file from a
+        DIFFERENT feature or an earlier retry pass must not count as proof
+        THIS phase's own agent produced its required output."""
         phase = Mock(name="qa_validation", id="phase-1")
         phase.name = "qa_validation"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
-        other = tmp_path / "docs" / "some_other_feature"
+        other = tmp_path / ".hephaestus" / "some_other_feature"
         other.mkdir(parents=True)
         (other / "qa_report.md").write_text("# stale report from elsewhere")
 
@@ -256,7 +257,7 @@ class TestVerifyOutputArtifact:
         phase.name = "product_validation"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
-        sub = tmp_path / "docs" / "product_validation"
+        sub = tmp_path / ".hephaestus" / "product_validation"
         sub.mkdir(parents=True)
         (sub / "product_validation.md").write_text("no frontmatter block here")
 
@@ -281,7 +282,7 @@ class TestVerifyOutputArtifact:
         phase.name = "product_validation"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
-        sub = tmp_path / "docs" / "product_validation"
+        sub = tmp_path / ".hephaestus" / "product_validation"
         sub.mkdir(parents=True)
         (sub / "product_validation.md").write_text(
             "---\ntype: product_validation_result\nverdict: PASS\n---\n\n# Report"
@@ -392,9 +393,7 @@ class TestVerifyOutputSurvivedCommit:
         phase.name = "development"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1", status="done")
 
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        (docs / "output.md").write_text("content")
+        (tmp_path / "output.md").write_text("content")
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
@@ -458,7 +457,7 @@ class TestVerifyGateResultSchema:
         phase.name = "qa_validation"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
-        sub = tmp_path / "docs" / "qa_validation"
+        sub = tmp_path / ".hephaestus" / "qa_validation"
         sub.mkdir(parents=True)
         (sub / "qa_report.md").write_text(
             "---\n"
@@ -490,7 +489,7 @@ class TestVerifyGateResultSchema:
         phase.name = "qa_validation"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
-        sub = tmp_path / "docs" / "qa_validation"
+        sub = tmp_path / ".hephaestus" / "qa_validation"
         sub.mkdir(parents=True)
         (sub / "qa_report.md").write_text(
             "---\n"

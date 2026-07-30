@@ -371,14 +371,6 @@ def _okf(frontmatter_yaml: str, body: str = "# Report\n") -> str:
 
 
 class TestReadOkfReport:
-    def test_reads_from_docs(self, tmp_path):
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        (docs / "qa_report.md").write_text(_okf("passed: true"))
-        result, body = read_okf_report(tmp_path, "qa_report.md")
-        assert result == {"passed": True}
-        assert body == "# Report\n"
-
     def test_reads_from_root(self, tmp_path):
         (tmp_path / "qa_report.md").write_text(_okf("passed: true"))
         result, _ = read_okf_report(tmp_path, "qa_report.md")
@@ -397,34 +389,34 @@ class TestReadOkfReport:
 
     def test_reads_from_phase_scoped_subdirectory(self, tmp_path):
         """Regression: agents are now told to write to the one sanctioned
-        docs/<phase_name>/ subdirectory (see each gated phase's CRITICAL
-        PATH RULE) -- this must be checked, not just flat docs/."""
-        sub = tmp_path / "docs" / "qa_validation"
+        .hephaestus/<phase_name>/ subdirectory (see each gated phase's
+        CRITICAL PATH RULE) -- this must be checked before the root
+        fallback."""
+        sub = tmp_path / ".hephaestus" / "qa_validation"
         sub.mkdir(parents=True)
         (sub / "qa_report.md").write_text(_okf("passed: true"))
         result, _ = read_okf_report(tmp_path, "qa_report.md", phase_name="qa_validation")
         assert result == {"passed": True}
 
-    def test_phase_scoped_subdirectory_wins_over_stale_flat_docs_file(self, tmp_path):
+    def test_phase_scoped_subdirectory_wins_over_stale_root_file(self, tmp_path):
         """The phase-scoped location is the canonical one an agent was
-        actually told to use -- it must win over a stale file sitting flat
-        in docs/ from an earlier attempt, not the other way around."""
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        (docs / "qa_report.md").write_text(_okf("passed: false\nstale: true"))
-        sub = docs / "qa_validation"
-        sub.mkdir()
+        actually told to use -- it must win over a stale file sitting at
+        the project root from an earlier attempt, not the other way
+        around."""
+        (tmp_path / "qa_report.md").write_text(_okf("passed: false\nstale: true"))
+        sub = tmp_path / ".hephaestus" / "qa_validation"
+        sub.mkdir(parents=True)
         (sub / "qa_report.md").write_text(_okf("passed: true\nstale: false"))
 
         result, _ = read_okf_report(tmp_path, "qa_report.md", phase_name="qa_validation")
         assert result == {"passed": True, "stale": False}
 
     def test_no_phase_name_does_not_search_other_subdirectories(self, tmp_path):
-        """Regression: the old fallback searched EVERY subdirectory of
-        docs/ for a same-named file, which could silently pick up a
-        DIFFERENT feature's (or an unrelated phase's) file. Without a
-        phase_name, only flat docs/ and root are checked -- no guessing."""
-        docs = tmp_path / "docs"
+        """Regression: without a phase_name, only the project root is
+        checked -- no guessing across .hephaestus/ subdirectories that
+        could silently pick up a DIFFERENT feature's (or an unrelated
+        phase's) file."""
+        docs = tmp_path / ".hephaestus"
         docs.mkdir()
         other = docs / "some_other_feature"
         other.mkdir()
@@ -445,8 +437,8 @@ class TestBuildPhaseOutput:
         assert result["score"] == 0.5  # no result → default dev band
 
     def test_qa_validation_with_result(self, tmp_path):
-        docs = tmp_path / "docs"
-        docs.mkdir()
+        docs = tmp_path / ".hephaestus" / "qa_validation"
+        docs.mkdir(parents=True)
         (docs / "qa_report.md").write_text(_okf(
             "type: qa_validation_result\n"
             "failed_tests: 0\n"
@@ -470,8 +462,8 @@ class TestBuildPhaseOutput:
         assert result["score"] == 0.4  # no result → conservative fallback
 
     def test_adversarial_review_with_blockers(self, tmp_path):
-        docs = tmp_path / "docs"
-        docs.mkdir()
+        docs = tmp_path / ".hephaestus" / "adversarial_review"
+        docs.mkdir(parents=True)
         (docs / "adversarial_review_report.md").write_text(_okf(
             "type: adversarial_review_result\n"
             "blocker_count: 6\n"
@@ -480,10 +472,12 @@ class TestBuildPhaseOutput:
         ))
         result = build_phase_output("adversarial_review", tmp_path)
         assert result["score"] < 0.6
+        assert result["spec_gate"]["blocker_count"] == 6
+        assert "result_missing" not in result["spec_gate"]
 
     def test_architectural_review_with_blockers(self, tmp_path):
-        docs = tmp_path / "docs"
-        docs.mkdir()
+        docs = tmp_path / ".hephaestus" / "architectural_review"
+        docs.mkdir(parents=True)
         (docs / "architectural_review_report.md").write_text(_okf(
             "type: architectural_review_result\n"
             "blocker_count: 2\n"
@@ -492,6 +486,8 @@ class TestBuildPhaseOutput:
         ))
         result = build_phase_output("architectural_review", tmp_path)
         assert result["score"] < 0.6
+        assert result["spec_gate"]["blocker_count"] == 2
+        assert "result_missing" not in result["spec_gate"]
 
     def test_feature_review_no_result(self, tmp_path):
         result = build_phase_output("feature_review", tmp_path)

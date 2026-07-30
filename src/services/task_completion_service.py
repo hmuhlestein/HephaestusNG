@@ -115,7 +115,7 @@ class TaskCompletionService:
             if task.assigned_agent_id:
                 from src.core.database import AgentWorktree
                 wt_record = session.query(AgentWorktree).filter_by(agent_id=task.assigned_agent_id).first()
-                if wt_record and wt_record.worktree_path and Path(wt_record.worktree_path).is_dir():
+                if wt_record and wt_record.worktree_path and _Path(wt_record.worktree_path).is_dir():
                     if wf:
                         wf.working_directory = wt_record.worktree_path
                         logger.info(f"[TASK-COMPLETE] Recovered working_directory for workflow {task.workflow_id[:8]} from agent worktree: {wt_record.worktree_path}")
@@ -157,20 +157,19 @@ class TaskCompletionService:
             # above is treated as an error).
             if wf and wf.working_directory:
                 for candidate in [
-                    # docs/<phase.name>/ is the one sanctioned subdirectory
-                    # this phase's own CRITICAL PATH RULE tells it to write
-                    # to -- checked first, not guessed at: iterating every
-                    # subdirectory of docs/ risked treating a DIFFERENT
-                    # feature's (or an earlier retry pass's) leftover file
-                    # as proof this task's own agent produced its required
-                    # output.
-                    _Path(wf.working_directory) / "docs" / phase.name / declared_output,
-                    _Path(wf.working_directory) / "docs" / declared_output,
+                    # .hephaestus/<phase.name>/ is the one sanctioned
+                    # subdirectory this phase's own CRITICAL PATH RULE tells
+                    # it to write to -- checked first, not guessed at:
+                    # iterating every subdirectory of .hephaestus/ risked
+                    # treating a DIFFERENT feature's (or an earlier retry
+                    # pass's) leftover file as proof this task's own agent
+                    # produced its required output.
+                    _Path(wf.working_directory) / CONTEXT_DIR_NAME / phase.name / declared_output,
                     _Path(wf.working_directory) / declared_output,
                     # Some phases (e.g. Phase 0's Feature Architect) write
                     # their declared output to the git-excluded .hephaestus/
                     # dir as an internal orchestration artifact rather than
-                    # a docs/ deliverable.
+                    # a phase-scoped deliverable.
                     _Path(wf.working_directory) / CONTEXT_DIR_NAME / declared_output,
                 ]:
                     if candidate.exists():
@@ -457,7 +456,9 @@ class TaskCompletionService:
         if not wf or not wf.working_directory:
             return 0
 
-        report_path = _Path(wf.working_directory) / "docs" / "forensics_report.md"
+        from src.core.constants import CONTEXT_DIR_NAME
+
+        report_path = _Path(wf.working_directory) / CONTEXT_DIR_NAME / "forensics_report.md"
         if not report_path.exists():
             return 0
 
@@ -798,8 +799,7 @@ class TaskCompletionService:
         for declared_output in required_files:
             found = False
             for candidate in [
-                _Path(wf.working_directory) / "docs" / phase.name / declared_output,
-                _Path(wf.working_directory) / "docs" / declared_output,
+                _Path(wf.working_directory) / CONTEXT_DIR_NAME / phase.name / declared_output,
                 _Path(wf.working_directory) / declared_output,
                 _Path(wf.working_directory) / CONTEXT_DIR_NAME / declared_output,
             ]:

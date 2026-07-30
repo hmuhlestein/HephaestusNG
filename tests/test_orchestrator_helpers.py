@@ -2476,14 +2476,77 @@ class TestSweepStrayFiles:
         docs = feature / "docs"
         docs.mkdir()
 
-        # Create report in project docs/ dir
-        proj_docs = tmp_path / "docs"
+        # Create report in project .hephaestus/ dir (where agents write --
+        # _REPORT_SUBDIR, see 5f26488's docs/ -> .hephaestus/ migration)
+        proj_docs = tmp_path / ".hephaestus"
         proj_docs.mkdir()
         (proj_docs / "qa_report.md").write_text("# QA Report")
 
         with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
             _sweep_stray_files(tmp_path, feature, docs, logger)
         assert (docs / "qa_report.md").exists()
+
+
+class TestArchiveAndCleanup:
+    """Regression: 5f26488 moved agent artifacts from docs/ to .hephaestus/
+    and updated this function's docstring to say so, but left the actual
+    code reading/writing "docs" -- a docstring/code mismatch, and a real
+    bug: artifacts written to the new .hephaestus/ location were never
+    archived to the permanent designs_folder record at all."""
+
+    def test_archives_flat_and_phase_scoped_reports_from_hephaestus(self, tmp_path):
+        from src.autopilot.orchestrator import DesignEntry, OrchestratorLogger, _archive_and_cleanup
+
+        project_path = tmp_path / "project"
+        (project_path / ".hephaestus" / "qa_validation").mkdir(parents=True)
+        (project_path / ".hephaestus" / "architecture.md").write_text("# Architecture")
+        (project_path / ".hephaestus" / "qa_validation" / "qa_report.md").write_text("# QA")
+
+        designs_folder = tmp_path / "designs_folder"
+        designs_folder.mkdir()
+
+        design_entry = DesignEntry(
+            path=tmp_path / "design.md", name="d", content_hash="h",
+            project_path=project_path,
+        )
+
+        _archive_and_cleanup(design_entry, designs_folder, OrchestratorLogger(tmp_path / "logs"))
+
+        assert (designs_folder / ".hephaestus" / "architecture.md").exists()
+        assert (designs_folder / ".hephaestus" / "qa_report.md").exists()
+
+    def test_excludes_tmux_features_and_scratch_directories(self, tmp_path):
+        """tmux/ (transcript logs), features/ (Phase 0 internal state), and
+        scratch/ (agent scratch space) are not phase-report artifacts and
+        must not get swept into the permanent record."""
+        from src.autopilot.orchestrator import DesignEntry, OrchestratorLogger, _archive_and_cleanup
+
+        project_path = tmp_path / "project"
+        hephaestus = project_path / ".hephaestus"
+        (hephaestus / "tmux").mkdir(parents=True)
+        (hephaestus / "tmux" / "agent_x.transcript.log").write_text("log")
+        (hephaestus / "features" / "some-feature").mkdir(parents=True)
+        (hephaestus / "features" / "some-feature" / "scope.md").write_text("scope")
+        (hephaestus / "scratch").mkdir(parents=True)
+        (hephaestus / "scratch" / "notes.md").write_text("notes")
+        (hephaestus / "requirements_analysis.md").write_text("# Requirements")
+
+        designs_folder = tmp_path / "designs_folder"
+        designs_folder.mkdir()
+
+        design_entry = DesignEntry(
+            path=tmp_path / "design.md", name="d", content_hash="h",
+            project_path=project_path,
+        )
+
+        _archive_and_cleanup(design_entry, designs_folder, OrchestratorLogger(tmp_path / "logs"))
+
+        dest = designs_folder / ".hephaestus"
+        assert (dest / "requirements_analysis.md").exists()
+        assert not (dest / "agent_x.transcript.log").exists()
+        assert not (dest / "scope.md").exists()
+        assert not (dest / "notes.md").exists()
+
 
 class TestCheckApiCredits:
     @patch("src.autopilot.orchestrator.get_tasks")
@@ -5366,7 +5429,7 @@ class TestCreatePhaseTaskReviewCap:
             count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
             assert count == 3
 
-        result_md = tmp_path / "docs" / "architectural_review" / "architectural_review_report.md"
+        result_md = tmp_path / ".hephaestus" / "architectural_review" / "architectural_review_report.md"
         assert result_md.exists()
         from src.autopilot.okf_markdown import read_okf
 
@@ -5415,7 +5478,7 @@ class TestCreatePhaseTaskReviewCap:
             count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
             assert count == 4
 
-        notice = tmp_path / "docs" / "security_review" / "security_review_capped_notice.md"
+        notice = tmp_path / ".hephaestus" / "security_review" / "security_review_capped_notice.md"
         assert notice.exists()
         assert "capped after 4 runs" in notice.read_text()
 
@@ -5532,7 +5595,7 @@ class TestCreatePhaseTaskReviewCap:
 
         assert result is True
         mock_fire.assert_called_once()
-        report = tmp_path / "docs" / "adversarial_review" / "adversarial_review_report.md"
+        report = tmp_path / ".hephaestus" / "adversarial_review" / "adversarial_review_report.md"
         assert report.exists()
         text = report.read_text()
         assert "capped after 3 runs" in text

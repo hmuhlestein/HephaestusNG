@@ -234,8 +234,8 @@ class TestGateResultSchemaFloor:
 
     def test_incompatible_qa_shape_is_rejected_not_500(self, test_db, test_client, tmp_path):
         task_id, agent_id = _seed_qa_validation(test_db, tmp_path)
-        docs = tmp_path / "docs"
-        docs.mkdir()
+        docs = tmp_path / ".hephaestus" / "qa_validation"
+        docs.mkdir(parents=True)
         (docs / "qa_report.md").write_text(
             "---\n"
             "overall_status: PASS\n"
@@ -264,8 +264,8 @@ class TestGateResultSchemaFloor:
 
     def test_documented_qa_shape_still_succeeds(self, test_db, test_client, tmp_path):
         task_id, agent_id = _seed_qa_validation(test_db, tmp_path)
-        docs = tmp_path / "docs"
-        docs.mkdir()
+        docs = tmp_path / ".hephaestus" / "qa_validation"
+        docs.mkdir(parents=True)
         (docs / "qa_report.md").write_text(
             "---\n"
             "type: qa_validation_result\n"

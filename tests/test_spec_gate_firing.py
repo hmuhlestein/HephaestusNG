@@ -24,8 +24,8 @@ class TestSpecGateFiring:
         from src.autopilot.spec import build_phase_output
 
         # Create a failing qa_report.md
-        docs = tmp_path / "docs"
-        docs.mkdir()
+        docs = tmp_path / ".hephaestus" / "qa_validation"
+        docs.mkdir(parents=True)
         qa_result = {
             "failed_tests": 5,
             "passed_tests": 45,
@@ -49,8 +49,8 @@ class TestSpecGateFiring:
         from src.autopilot.spec import build_phase_output
 
         # Create a qa_report.md with critical issues (architecture band)
-        docs = tmp_path / "docs"
-        docs.mkdir()
+        docs = tmp_path / ".hephaestus" / "qa_validation"
+        docs.mkdir(parents=True)
         qa_result = {
             "failed_tests": 0,
             "passed_tests": 50,
@@ -72,8 +72,8 @@ class TestSpecGateFiring:
         from src.autopilot.spec import build_phase_output
 
         # Create a passing qa_report.md
-        docs = tmp_path / "docs"
-        docs.mkdir()
+        docs = tmp_path / ".hephaestus" / "qa_validation"
+        docs.mkdir(parents=True)
         qa_result = {
             "failed_tests": 0,
             "passed_tests": 50,

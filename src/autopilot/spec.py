@@ -1182,9 +1182,11 @@ def consume_gate_artifacts(phase_name: str, working_directory: Any) -> list:
     pipeline back to development again, in a loop, burning one goto per
     cycle until max_total_gotos would have force-failed the workflow.
 
-    The files are safe to delete: task completion commits docs/ to the
-    worktree's git history before the gate fires (commit_and_link_ticket),
-    so nothing is lost.
+    The files are safe to delete: they're the agent's own gate-result
+    report, regenerated fresh on the phase's next run -- not a record
+    anything else depends on keeping. .hephaestus/ is git-excluded (never
+    committed), so there's no history copy either way; that's fine, since
+    forcing regeneration is the whole point of deleting them.
 
     Returns the paths actually deleted.
     """
@@ -1194,16 +1196,20 @@ def consume_gate_artifacts(phase_name: str, working_directory: Any) -> list:
     candidates_for = (
         (lambda f: (base / subdir / f,))
         if subdir
-        else (lambda f: (base / "docs" / f, base / f))
+        else (lambda f: (base / f,))
     )
     for filename in GATE_RESULT_ARTIFACTS.get(phase_name, ()):
-        # docs/<phase_name>/ is the one sanctioned subdirectory name this
-        # phase's own CRITICAL PATH RULE tells it to use, checked first --
-        # not a search: iterating every subdirectory of docs/ risked
-        # deleting a DIFFERENT feature's (or an earlier retry pass's)
-        # still-needed result file.
+        # .hephaestus/<phase_name>/ is the one sanctioned subdirectory name
+        # this phase's own CRITICAL PATH RULE tells it to use, checked
+        # first -- not a search: iterating every subdirectory of
+        # .hephaestus/ risked deleting a DIFFERENT feature's (or an earlier
+        # retry pass's) still-needed result file. Must mirror
+        # read_okf_report's candidate order exactly -- that's what actually
+        # decides which file the gate reads, so a stale file this function
+        # doesn't know to delete resurrects the exact stale-result loop
+        # this function exists to prevent.
         candidates = (
-            [base / "docs" / phase_name / filename] if not subdir else []
+            [base / ".hephaestus" / phase_name / filename] if not subdir else []
         ) + list(candidates_for(filename))
         for candidate in candidates:
             if candidate.exists():

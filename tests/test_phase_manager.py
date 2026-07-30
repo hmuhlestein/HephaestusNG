@@ -628,8 +628,8 @@ class TestEvaluationGotoConsumesGateArtifacts:
         from src.core.database import Phase, PhaseExecution, Workflow
         from src.phases.phase_manager import PhaseManager
 
-        docs = tmp_path / "docs"
-        docs.mkdir()
+        docs = tmp_path / ".hephaestus" / "adversarial_review"
+        docs.mkdir(parents=True)
         (docs / "adversarial_review_report.md").write_text(
             "---\ntype: adversarial_review_result\nblocker_count: 4\n---\n\n# stale report"
         )
@@ -697,8 +697,8 @@ class TestForceGotoConsumesGateArtifacts:
         from src.core.database import Phase, PhaseExecution, Workflow
         from src.phases.phase_manager import PhaseManager
 
-        docs = tmp_path / "docs"
-        docs.mkdir()
+        docs = tmp_path / ".hephaestus" / "qa_validation"
+        docs.mkdir(parents=True)
         (docs / "qa_report.md").write_text(
             "---\ntype: qa_validation_result\nfailed_tests: 3\n---\n\n# stale report"
         )
@@ -743,6 +743,97 @@ class TestForceGotoConsumesGateArtifacts:
         assert result["action"] == "goto"
         assert result["target_phase"] == "architecture_design"
         assert not (docs / "qa_report.md").exists()
+
+
+class TestPopulateFeatureFolder:
+    """Regression: _populate_feature_folder swept the worktree's docs/ for
+    production artifacts to archive into the features gallery -- but agents
+    write their reports to .hephaestus/ now (see the docs/ -> .hephaestus/
+    migration), so the sweep silently archived nothing."""
+
+    @pytest.fixture
+    def real_db(self, tmp_path):
+        from src.core.database import DatabaseManager as _DBM
+
+        db = _DBM(str(tmp_path / "test.db"))
+        db.create_tables()
+        return db
+
+    def test_sweeps_hephaestus_not_docs(self, real_db, tmp_path):
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        wt = tmp_path / "project"
+        (wt / ".hephaestus" / "qa_validation").mkdir(parents=True)
+        (wt / ".hephaestus" / "architecture.md").write_text("# Architecture")
+        (wt / ".hephaestus" / "qa_validation" / "qa_report.md").write_text("# QA")
+        (wt / ".hephaestus" / "feature_report.html").write_text("<html></html>")
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1", name="my_feature", phases_folder_path="/tmp",
+                    status="active", working_directory=str(wt),
+                )
+            )
+
+        pm = PhaseManager(db_manager=real_db)
+        pm.workflow_id = "wf-1"
+
+        session = real_db.get_session()
+        try:
+            workflow = session.query(Workflow).filter_by(id="wf-1").first()
+            pm._populate_feature_folder(session, workflow)
+        finally:
+            session.close()
+
+        feature_dirs = list((wt / ".hephaestus" / "features").iterdir())
+        assert len(feature_dirs) == 1
+        feature_dir = feature_dirs[0]
+        assert (feature_dir / "docs" / "architecture.md").exists()
+        assert (feature_dir / "docs" / "qa_validation" / "qa_report.md").exists()
+        assert (feature_dir / "feature_report.html").exists()
+
+    def test_excludes_tmux_features_and_scratch_directories(self, real_db, tmp_path):
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        wt = tmp_path / "project"
+        (wt / ".hephaestus" / "tmux").mkdir(parents=True)
+        (wt / ".hephaestus" / "tmux" / "agent.transcript.log").write_text("log")
+        (wt / ".hephaestus" / "features" / "some-feature").mkdir(parents=True)
+        (wt / ".hephaestus" / "features" / "some-feature" / "scope.md").write_text("# Scope")
+        (wt / ".hephaestus" / "scratch").mkdir(parents=True)
+        (wt / ".hephaestus" / "scratch" / "notes.md").write_text("# Notes")
+        (wt / ".hephaestus" / "requirements_analysis.md").write_text("# Requirements")
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1", name="my_feature", phases_folder_path="/tmp",
+                    status="active", working_directory=str(wt),
+                )
+            )
+
+        pm = PhaseManager(db_manager=real_db)
+        pm.workflow_id = "wf-1"
+
+        session = real_db.get_session()
+        try:
+            workflow = session.query(Workflow).filter_by(id="wf-1").first()
+            pm._populate_feature_folder(session, workflow)
+        finally:
+            session.close()
+
+        feature_dir = next(
+            d for d in (wt / ".hephaestus" / "features").iterdir()
+            if "my_feature" in d.name
+        )
+        copied = list((feature_dir / "docs").rglob("*"))
+        copied_names = {f.name for f in copied if f.is_file()}
+        # pipeline_metrics.json is always written by _populate_feature_folder
+        # itself (step 5), independent of the .hephaestus/ sweep under test.
+        assert copied_names == {"requirements_analysis.md", "pipeline_metrics.json"}
 
 
 class TestGetOrchestratorPhaseOrderMap:

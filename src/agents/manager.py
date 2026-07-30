@@ -570,7 +570,7 @@ class AgentManager:
                                 cands += [
                                     wd / CONTEXT_DIR_NAME / "design.md",
                                     wd / CONTEXT_DIR_NAME / "design_document.md",
-                                    wd / "docs" / "requirements_analysis.md",
+                                    wd / CONTEXT_DIR_NAME / "requirements_analysis.md",
                                 ]
                                 for _p in cands:
                                     if _p.is_file():

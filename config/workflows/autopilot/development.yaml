@@ -44,7 +44,7 @@ additional_notes: |
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
-  - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
+  - Do NOT use absolute paths outside your working directory.
   - ALL implementation code goes in "Project Path" (src/, tests/, etc.).
   - ALL docs/reports go in "Artifacts Path" — not the project root.
   - Your task description contains the exact paths — copy them exactly.
