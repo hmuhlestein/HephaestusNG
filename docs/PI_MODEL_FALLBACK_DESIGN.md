@@ -256,28 +256,31 @@ keystroke sequence:
   search text) is pi's own vocabulary — Claude Code's `/model` doesn't
   recognize it, and more to the point, hardcoding one shared config value
   across every CLI is wrong in general (each CLI's valid model strings are
-  its own namespace). Replaced with polymorphic
-  `CLIAgentInterface.fallback_model(config)` — `PiAgent` reads
-  `config.cli_model_fallback`, `ClaudeCodeAgent` reads the new
-  `config.secondary_cli_model_fallback` (named for its *role* — "whichever
-  CLI serves as the fallback tier" — not the literal CLI product, matching
-  `default_fallback_cli_tool`'s own naming; default `sonnet`... though note
-  every claude-dispatched phase in this repo's own workflow YAMLs already
-  sets `cli_model: sonnet` as its primary, so with the shipped default this
-  particular fallback is presently a same-model no-op for claude — a
-  different value should be picked once there's a real escalation tier to
-  fall back to).
+  its own namespace).
 - **The "already off default model" gate compared against pi's global
   default unconditionally.** `agent.cli_model != config.cli_model` is only
-  the right comparison when `agent.cli_type == config.default_cli_tool`
-  (pi) — for any other CLI, `config.cli_model` is meaningless (it's not
-  claude's baseline). A claude agent's `cli_model` (typically `sonnet`, set
-  per-phase) would never equal `"Qwen3.6-27B-UD-Q4_K_XL.gguf"`, so the gate
-  silently excluded every claude agent regardless of whether
-  `model_fallback_keystrokes` was implemented for it. Fixed to compare
-  against `cli_agent.default_model` (the per-CLI class attribute) whenever
-  `agent.cli_type` isn't the primary `default_cli_tool` — mirroring
-  `manager.py`'s own `global_model` resolution for the identical reason.
+  the right comparison when `agent.cli_type == config.default_cli_tool` —
+  for any *other* CLI, `config.cli_model` is meaningless. A claude agent's
+  `cli_model` (typically `sonnet`, set per-phase) would never equal
+  `"Qwen3.6-27B-UD-Q4_K_XL.gguf"`, so the gate silently excluded every
+  claude agent regardless of whether `model_fallback_keystrokes` was
+  implemented for it.
+
+Both are fixed by resolving **by role, not by CLI product identity**:
+`CLIAgentInterface.fallback_model(config, is_primary: bool)` is a single
+shared (non-overridden) base-class implementation —
+`config.cli_model_fallback` for whichever CLI is currently the *primary*
+`default_cli_tool`, `config.secondary_cli_model_fallback` for whichever is
+the *secondary*/`default_fallback_cli_tool`. `is_primary` is computed once
+in `_detect_cli_model_fallback` (`agent.cli_type ==
+config.default_cli_tool`) and reused for the baseline-default gate too
+(`config.cli_model` when primary, else `cli_agent.default_model` — mirroring
+`manager.py`'s own `global_model` resolution). This means swapping
+`default_cli_tool`/`default_fallback_cli_tool` (e.g. running Claude as
+primary against a local model, pi as the secondary tier) doesn't leave
+either check pinned to the old role — verified directly (not just for the
+current pi-primary deployment) by tests that set `default_cli_tool: claude`
+and confirm pi reads `secondary_cli_model_fallback` and vice versa.
 
 `ClaudeCodeAgent.model_fallback_keystrokes` reuses the one-line `/model
 <name>` syntax already confirmed working in `_detect_bad_model_error` (no
@@ -295,6 +298,39 @@ model as `getattr(config, "cli_model", None) or "sonnet"` — the same
 pi-specific global, sent to Claude via `/model` on a bad-model rejection.
 Now reads `config.secondary_cli_model_fallback` (falling back to `"sonnet"`
 same as before if unset), for the same reason as the gate fix above.
+
+### The other "pi as secondary" path: phase-level session-limit fallback
+
+Distinct from the `default_cli_tool`/`default_fallback_cli_tool` role
+system above: several workflow YAMLs (`qa_validation.yaml`,
+`scope_review.yaml`, `architectural_review.yaml`, `architecture_design.yaml`,
+`product_validation.yaml`, `adversarial_review.yaml`,
+`feature_architect/workflow.yaml`) run **claude as their own phase-level
+primary** (`cli_tool: claude`) with `fallback_cli_tool: pi` — i.e. pi as
+*that phase's* session-limit kill+restart target, via the pre-existing
+`Phase.fallback_cli_tool`/`fallback_cli_model` mechanism
+(`_mechanical_recovery_for_agent`'s session-limit branch), unrelated to
+`default_fallback_cli_tool`.
+
+Those 7 files previously set `fallback_cli_model:
+Qwen3.6-27B-UD-Q4_K_XL.gguf` — pi's *local* model, the exact single-slot
+bottleneck this whole feature exists to route around. A pi agent dispatched
+this way is a **fresh kill+restart launch**, not an existing session to
+send in-session `/model` keystrokes into, so if it then also got stuck
+queued on the local slot, there was no live mechanism to rescue it (this
+feature's gate wouldn't even fire a second escalation cleanly, and doing so
+would need a `--model` *launch* flag with the full provider-qualified path,
+not the picker's bare search text anyway). Changed to `fallback_cli_model:
+openrouter/mimo-v2.5-pro` in all 7 files — go straight to the
+non-bottlenecked cloud model on this kill+restart, rather than relaunching
+onto the same constrained one.
+
+No code change was needed to make this safe: a pi agent dispatched this way
+now has `cli_model == "openrouter/mimo-v2.5-pro"`, which the baseline-default
+gate above already correctly treats as "not on pi's standard default" —
+`_detect_cli_model_fallback` naturally excludes it rather than attempting a
+further in-session switch on a session that was never interactively
+established for that purpose.
 
 ## What This Does Not Do
 
@@ -342,6 +378,14 @@ same as before if unset), for the same reason as the gate fix above.
 - Unit: `_detect_bad_model_error` (the pre-existing, unrelated Claude-only
   path) reads `config.secondary_cli_model_fallback`, falling back to
   `"sonnet"` when unset.
+- Unit: role symmetry — with `default_cli_tool: claude`, a claude agent
+  reads `cli_model_fallback` (the primary tier's config) and a pi agent
+  reads `secondary_cli_model_fallback` (mirroring the default pi-primary
+  case), proving the resolution isn't hardcoded per CLI product.
+- Unit: a pi agent already on `openrouter/mimo-v2.5-pro` (as if dispatched
+  via a phase's `fallback_cli_tool: pi` session-limit kill+restart) is
+  excluded by the baseline-default gate, not offered a further in-session
+  switch.
 - Manual/live: watch one real frozen pi agent switch over on this repo's own
   self-hosted pipeline, confirm the transcript shows `Model:
   xiaomi/mimo-v2.5-pro`, an `AgentLog` row exists for the switch, and the

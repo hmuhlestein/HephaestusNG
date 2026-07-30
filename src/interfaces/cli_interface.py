@@ -155,18 +155,27 @@ class CLIAgentInterface(ABC):
         per CLI (polymorphic)."""
         return ""
 
-    def fallback_model(self, config) -> Optional[str]:
-        """This CLI's own configured model to switch to when
-        model_fallback_keystrokes fires (e.g. PiAgent reads
-        config.cli_model_fallback, ClaudeCodeAgent reads
-        config.secondary_cli_model_fallback) -- each CLI's valid model
-        strings are its own vocabulary (an OpenRouter path that means
-        something to pi's picker is not necessarily anything Claude Code's
-        /model recognizes), so a single shared config value across every
-        CLI isn't safe. None = unset/unsupported -- the monitor should not
-        guess a default. Concrete with a safe default so the monitor stays
-        harness-agnostic; override per CLI (polymorphic)."""
-        return None
+    def fallback_model(self, config, is_primary: bool) -> Optional[str]:
+        """The configured model to switch to when model_fallback_keystrokes
+        fires, resolved by ROLE, not by which CLI product this is:
+        config.cli_model_fallback is whichever CLI is currently the
+        *primary* default_cli_tool's fallback; config.secondary_cli_model_fallback
+        is whichever CLI is currently the *secondary*/default_fallback_cli_tool's.
+        Swapping default_cli_tool/default_fallback_cli_tool (e.g. running
+        Claude as primary against a local model, pi as the fallback tier)
+        must not silently keep reading the old role's config key just
+        because it's still the same CLI class. Shared here, not overridden
+        per subclass -- this is a role lookup, not a CLI-specific concern
+        (each CLI's own valid model *strings* are model_fallback_keystrokes'
+        job, not this method's). None = unset -- the monitor should not
+        guess a default.
+
+        is_primary: whether this agent's cli_type is the currently
+        configured default_cli_tool (the caller already computes this for
+        its own gate check, so it's passed in rather than re-derived here).
+        """
+        key = "cli_model_fallback" if is_primary else "secondary_cli_model_fallback"
+        return getattr(config, key, None)
 
     def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
         """Literal pane inputs (not chat messages) to switch this CLI's
@@ -502,13 +511,6 @@ class ClaudeCodeAgent(CLIAgentInterface):
             r"Failed to connect",
             r"Maximum retries exceeded",
         ]
-
-    def fallback_model(self, config) -> Optional[str]:
-        # Deliberately its own config key, not agents.cli_model -- that
-        # global is paired with agents.default_cli_tool (pi) and is
-        # typically an OpenRouter path pi's picker resolves, not one of
-        # Claude Code's own model aliases (sonnet/opus/haiku).
-        return getattr(config, "secondary_cli_model_fallback", None)
 
     def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
         # Same one-line `/model <name>` syntax already confirmed working
@@ -864,9 +866,6 @@ class PiAgent(CLIAgentInterface):
             f"Run `mcp connect {server_name}` to reconnect before calling "
             f"any {server_name}_* tool. Verify with `mcp status` afterward."
         )
-
-    def fallback_model(self, config) -> Optional[str]:
-        return getattr(config, "cli_model_fallback", None)
 
     def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
         # Confirmed live: pi's `/model` opens a fuzzy-searchable picker, not

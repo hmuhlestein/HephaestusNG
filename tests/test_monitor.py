@@ -958,6 +958,7 @@ class TestDetectCliModelFallback:
 
     def _frozen_agent(self, make_monitoring_loop, frozen_for_seconds, cli_type="pi", cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf"):
         agent = Agent(id="a1", cli_type=cli_type, cli_model=cli_model, current_task_id="t1")
+        make_monitoring_loop.config.default_cli_tool = "pi"
         make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
         make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
         make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
@@ -1003,6 +1004,86 @@ class TestDetectCliModelFallback:
 
         assert result is True
         mock_agent_manager.send_message_to_agent.assert_called_once_with("a1", "/model opus")
+
+    @pytest.mark.asyncio
+    async def test_role_based_resolution_when_claude_is_primary(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        """Regression: fallback_model must resolve by ROLE (is this agent's
+        cli_type the current default_cli_tool?), not by hardcoding "pi
+        reads cli_model_fallback, claude reads secondary_cli_model_fallback"
+        regardless of which CLI is actually configured as primary. With
+        Claude set as default_cli_tool (e.g. running Claude against a local
+        model), a Claude agent must read cli_model_fallback -- the primary
+        tier's config -- and pi (now the secondary tier) must read
+        secondary_cli_model_fallback, the mirror image of the default
+        pi-primary test above."""
+        agent = Agent(id="a1", cli_type="claude", cli_model="local-claude-model", current_task_id="t1")
+        make_monitoring_loop.config.default_cli_tool = "claude"
+        make_monitoring_loop.config.cli_model = "local-claude-model"
+        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.cli_model_fallback = "opus"
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
+        }
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is True
+        mock_agent_manager.send_message_to_agent.assert_called_once_with("a1", "/model opus")
+
+    @pytest.mark.asyncio
+    async def test_pi_reads_secondary_config_when_it_is_the_fallback_tier(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        """Mirror of the above: with Claude primary, a pi agent (now the
+        secondary/fallback-tier CLI) must read secondary_cli_model_fallback,
+        and its baseline-default gate must compare against PiAgent's own
+        default_model, not config.cli_model (which is Claude's local model
+        here, meaningless to pi)."""
+        agent = Agent(id="a1", cli_type="pi", cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf", current_task_id="t1")
+        make_monitoring_loop.config.default_cli_tool = "claude"
+        make_monitoring_loop.config.cli_model = "local-claude-model"
+        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.secondary_cli_model_fallback = "mimo-v2.5-pro"
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
+        }
+
+        with patch("src.monitoring.monitor.asyncio.sleep", new=AsyncMock()):
+            result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is True
+        assert mock_agent_manager.send_message_to_agent.call_args_list == [
+            (("a1", "/model"),),
+            (("a1", "mimo-v2.5-pro"),),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_pi_dispatched_as_claude_session_limit_fallback_is_excluded(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        """Regression: pi as a *phase-level* session-limit fallback (e.g.
+        qa_validation.yaml's cli_tool: claude / fallback_cli_tool: pi,
+        fallback_cli_model: openrouter/mimo-v2.5-pro) is a fresh kill+restart
+        dispatch (_mechanical_recovery_for_agent's session-limit path), not
+        an existing session to send in-session /model keystrokes into --
+        that agent's cli_model is already the escalated openrouter path, not
+        pi's standard local default, so the baseline-default gate must
+        exclude it rather than attempt a further in-session switch on it."""
+        agent = Agent(id="a1", cli_type="pi", cli_model="openrouter/mimo-v2.5-pro", current_task_id="t1")
+        make_monitoring_loop.config.default_cli_tool = "pi"
+        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
+        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
+        }
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_fallback_configured_disables_feature(self, make_monitoring_loop, mock_agent_manager):
