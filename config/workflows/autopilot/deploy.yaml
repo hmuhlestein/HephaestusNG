@@ -187,7 +187,7 @@ additional_notes: |
 
   After writing deploy_report.md, call:
 
-  hephaestus_complete_my_task({
+  heph_complete_my_task({
     "status": "done",
     "summary": "<brief summary of deployment outcome>",
     "key_learnings": ["<key findings>"]

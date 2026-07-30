@@ -164,7 +164,7 @@ additional_notes: |
   previous QA/security_review runs that need verification:
 
   1. Search for all tickets for this workflow:
-     hephaestus_search_tickets(workflow_id="<your workflow id>", ticket_type="bug")
+     heph_search_tickets(workflow_id="<your workflow id>", ticket_type="bug")
 
   2. For each ticket that is resolved or in "validated"/"shipped" status:
      - Read the ticket's description and reproduction steps
@@ -173,12 +173,12 @@ additional_notes: |
        b. Check the related code changes
        c. Run any tests related to the ticket's area
      - If the fix works — move ticket to "shipped":
-       hephaestus_update_ticket_status(
+       heph_update_ticket_status(
          ticket_id="<ticket id>",
          new_status="shipped",
        )
      - If the fix does NOT work (issue still present) — reopen to "in-progress":
-       hephaestus_update_ticket_status(
+       heph_update_ticket_status(
          ticket_id="<ticket id>",
          new_status="in-progress",
        )
@@ -263,12 +263,12 @@ additional_notes: |
   STEP 8: CREATE TICKETS FOR ISSUES FOUND
   ═══════════════════════════════════════════════════════════════════════
   
-  For EACH issue found (Critical, Major, Minor), create a ticket using hephaestus_create_ticket.
+  For EACH issue found (Critical, Major, Minor), create a ticket using heph_create_ticket.
   
   TICKET TEMPLATE (copy this for each issue):
   
   ```
-  hephaestus_create_ticket(
+  heph_create_ticket(
     agent_id="<your agent id>",
     workflow_id="<your workflow id>",
     task_id="<your task id>",
@@ -487,12 +487,12 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
-  You MUST call the hephaestus_complete_my_task tool. The system CANNOT detect you finished
+  You MUST call the heph_complete_my_task tool. The system CANNOT detect you finished
   without this call. The pipeline WILL get stuck.
   
   After writing all your output files, call:
   
-  hephaestus_complete_my_task({
+  heph_complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was accomplished>",
     "key_learnings": ["<key findings or decisions>"]

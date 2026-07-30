@@ -87,4 +87,4 @@ additional_notes: |
 
   ═══ MARK DONE ═══
 
-  Call hephaestus_complete_my_task with status="done" and a brief summary.
+  Call heph_complete_my_task with status="done" and a brief summary.

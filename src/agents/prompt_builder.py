@@ -17,6 +17,7 @@ from src.prompts.loader import (
     get_non_phase_agent_instructions,
     get_phase_agent_instructions,
     get_phase_agent_resumed_instructions,
+    get_prompt,
     get_ticket_note,
     get_validator_prompt,
     get_workflow_result_criteria,
@@ -86,16 +87,12 @@ class AgentPromptBuilder:
             except Exception as e:
                 logger.warning(f"Could not get workflow description: {e}")
 
-        base_message = f"""
-=== TASK ASSIGNMENT ===
-🔑 Your Agent ID: {agent_id}
-   ⚠️  CRITICAL: Use this EXACT ID when calling MCP tools that require it (e.g. hephaestus_save_memory) — hephaestus_complete_my_task and hephaestus_create_task do NOT take an agent_id, omit it there
-   ⚠️  DO NOT use 'agent-mcp' or any other placeholder - it will fail authorization!
-
-📋 Task ID: {task.id}
-🔄 Workflow ID: {workflow_id if workflow_id else "N/A (standalone task)"}
-📁 {cwd_info}
-"""
+        base_message = "\n" + get_prompt("task_assignment_header", {
+            "agent_id": agent_id,
+            "task_id": task.id,
+            "workflow_id_display": workflow_id if workflow_id else "N/A (standalone task)",
+            "cwd_info": cwd_info,
+        })
 
         logger.info(
             f"🔍 PROMPT SIZE DEBUG: Base message length: {len(base_message)} chars"
@@ -165,15 +162,10 @@ class AgentPromptBuilder:
                             task.phase_id, role
                         ):
                             resumed_session = True
-                            resumed_session_warning = f"""
-
-⚠️  RESUMED SESSION — READ BEFORE DOING ANYTHING ELSE ⚠️
-This session was previously used for an earlier phase on this same design
-(shared "{role}" role, so you keep your prior context). That earlier task is
-ALREADY COMPLETE. Do NOT call hephaestus_update_task_status, hephaestus_save_memory,
-or any other tool referencing a task ID from your earlier conversation history.
-Your ONLY current task is Task ID: {task.id} (stated above) — if you find
-yourself about to act on a different task ID from memory, stop and re-read this."""
+                            resumed_session_warning = "\n\n" + get_prompt(
+                                "resumed_session_warning",
+                                {"role": role, "task_id": task.id},
+                            )
                     else:
                         logger.warning(
                             f"Phase context is None for phase_id: {task.phase_id}"
@@ -283,15 +275,9 @@ COMPLETION CRITERIA:
                                 f"  {(t.description or '')[:300]}"
                                 for t in open_tickets
                             ]
-                            open_tickets_section = (
-                                "\n\n⚠️ OPEN BUG TICKETS FOR THIS WORKFLOW — fix and "
-                                "resolve before marking done:\n"
-                                + "\n".join(lines)
-                                + "\n\nFor each: fix the underlying issue, then call "
-                                'hephaestus_update_ticket_status(ticket_id="...", '
-                                'new_status="shipped") to mark '
-                                "it resolved. hephaestus_complete_my_task(status=\"done\") will be "
-                                "REJECTED while any remain unresolved."
+                            open_tickets_section = "\n\n" + get_prompt(
+                                "open_tickets_section",
+                                {"ticket_lines": "\n".join(lines)},
                             )
             except Exception as e:
                 logger.warning(f"Could not check open tickets: {e}")

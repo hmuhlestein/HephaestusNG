@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 
 from src.agents.manager import AgentManager
 from src.core.database import Agent, AgentLog, DatabaseManager
+from src.prompts.loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -318,11 +319,13 @@ class Conductor:
                     session.close()
 
                 # Assign time slots or priorities
-                message = f"[CONDUCTOR]: Resource coordination for {resource}. "
                 if i == 0:
-                    message += "You have priority access."
+                    message = get_prompt("conductor_messages.priority_access", {"resource": resource})
                 else:
-                    message += f"Please wait for agent {agents[0]} to complete."
+                    message = get_prompt(
+                        "conductor_messages.wait_for_agent",
+                        {"resource": resource, "other_agent": agents[0]},
+                    )
 
                 await self.agent_manager.send_message_to_agent(agent_id, message)
 

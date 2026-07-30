@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from src.agents.manager import AgentManager
 from src.core.database import Agent, AgentLog, DatabaseManager, Task
 from src.interfaces import LLMProviderInterface
+from src.prompts.loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -772,12 +773,7 @@ class Guardian:
             ],
             "needs_steering": True,
             "steering_type": "stuck",
-            "steering_message": (
-                "You appear unresponsive — the monitoring system has been unable "
-                "to analyze your output for several minutes. If your task is "
-                "complete, call hephaestus_update_task_status now. If you are blocked, call "
-                "hephaestus_update_task_status with status='failed' and explain why."
-            ),
+            "steering_message": get_prompt("guardian_unresponsive_steering"),
             "accumulated_goal": "Unknown",
             "active_constraints": [],
         }

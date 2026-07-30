@@ -14,107 +14,11 @@ from src.core.database import (
     ValidationReview,
 )
 from src.validation.check_executors import ValidationCheckType, execute_validation_check
-from src.validation.prompt_builder import ValidationPromptBuilder
 from src.validation.validator_agent import (
-    build_validator_prompt,
     get_agent_results,
     send_feedback_to_agent,
     spawn_validator_agent,
 )
-
-
-class TestValidationPromptBuilder:
-    """Test the validation prompt builder."""
-
-    def test_build_prompt_basic(self):
-        """Test basic prompt building."""
-        builder = ValidationPromptBuilder()
-
-        task = {
-            "id": "task123",
-            "raw_description": "Test task",
-            "enriched_description": "Enhanced test task",
-            "done_definition": "Task is complete",
-        }
-
-        phase_validation = {
-            "criteria": [
-                {
-                    "description": "File exists",
-                    "check_type": "file_exists",
-                    "target": ["test.txt"],
-                }
-            ]
-        }
-
-        workspace_changes = {
-            "files_created": ["test.txt"],
-            "files_modified": [],
-            "files_deleted": [],
-            "detailed_diff": "Added test.txt",
-        }
-
-        prompt = builder.build_prompt(
-            task=task,
-            phase_validation=phase_validation,
-            commit_sha="abc123",
-            workspace_changes=workspace_changes,
-            agent_claims="Task completed",
-            iteration=1,
-        )
-
-        assert "task123" in prompt
-        assert "Enhanced test task" in prompt
-        assert "File exists" in prompt
-        assert "test.txt" in prompt
-        assert "abc123" in prompt
-
-    def test_build_prompt_with_previous_feedback(self):
-        """Test prompt building with previous feedback."""
-        builder = ValidationPromptBuilder()
-
-        task = {"id": "task123", "raw_description": "Test"}
-        previous_feedback = "Please fix the error in line 10"
-
-        prompt = builder.build_prompt(
-            task=task,
-            phase_validation=None,
-            commit_sha="abc123",
-            workspace_changes={},
-            agent_claims="Fixed",
-            iteration=2,
-            previous_feedback=previous_feedback,
-        )
-
-        assert "Please fix the error in line 10" in prompt
-        assert "Iteration: 2" in prompt
-
-    def test_format_validation_criteria(self):
-        """Test formatting of validation criteria."""
-        builder = ValidationPromptBuilder()
-
-        phase_validation = {
-            "criteria": [
-                {
-                    "description": "Tests pass",
-                    "check_type": "test_pass",
-                    "command": "pytest",
-                },
-                {
-                    "description": "File contains pattern",
-                    "check_type": "file_contains",
-                    "target": "README.md",
-                    "pattern": "Installation",
-                },
-            ]
-        }
-
-        formatted = builder._format_validation_criteria(phase_validation)
-
-        assert "Tests pass" in formatted
-        assert "pytest" in formatted
-        assert "README.md" in formatted
-        assert "Installation" in formatted
 
 
 class TestValidationCheckExecutors:
@@ -199,34 +103,6 @@ class TestValidatorAgent:
         )  # validator uses session_scope()
         return manager
 
-    def test_build_validator_prompt(self):
-        """Test building validator prompt."""
-        task = Mock()
-        task.id = "task123"
-        task.raw_description = "Test task"
-        task.enriched_description = "Enhanced test"
-        task.done_definition = "Complete"
-        task.last_validation_feedback = None
-
-        phase = Mock()
-        phase.validation = {"criteria": [{"description": "Test criterion"}]}
-
-        workspace_changes = {"files_created": ["new.txt"]}
-
-        prompt = build_validator_prompt(
-            task=task,
-            phase=phase,
-            commit_sha="abc123",
-            workspace_changes=workspace_changes,
-            agent_claims="Done",
-            iteration=1,
-            validator_agent_id="validator-123",
-        )
-
-        assert "task123" in prompt
-        assert "Test criterion" in prompt
-        assert "new.txt" in prompt
-
     @pytest.mark.asyncio
     async def test_spawn_validator_agent(self, mock_db_manager):
         """Test spawning a validator agent."""
@@ -263,10 +139,6 @@ class TestValidatorAgent:
             patch(
                 "src.validation.validator_agent.get_agent_results",
                 return_value="Agent did X",
-            ),
-            patch(
-                "src.validation.validator_agent.spawn_validator_tmux_session",
-                new_callable=AsyncMock,
             ),
             patch(
                 "src.monitoring.prompt_loader.prompt_loader.format_task_validation_prompt",

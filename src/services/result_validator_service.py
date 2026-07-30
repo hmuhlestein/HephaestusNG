@@ -1,10 +1,9 @@
 """Service for spawning and managing result validator agents."""
 
 import logging
-import uuid
 from typing import Any, Dict, Optional
 
-from src.core.database import Agent, DatabaseManager, Task, Workflow, WorkflowResult
+from src.core.database import DatabaseManager, WorkflowResult
 from src.phases.phase_manager import PhaseManager
 from src.services.result_validation_helpers import (
     ValidationResult,
@@ -69,111 +68,6 @@ class ResultValidatorService:
         except Exception as e:
             logger.error(f"Error checking workflow config: {e}")
             return False, None
-
-    async def spawn_result_validator(
-        self, result_id: str, workflow_id: str, criteria: str
-    ) -> str:
-        """
-        Spawn a result validator agent for a submitted result.
-
-        Args:
-            result_id: ID of the result to validate
-            workflow_id: ID of the workflow
-            criteria: Validation criteria
-
-        Returns:
-            ID of the spawned validator agent
-
-        Raises:
-            ValueError: If result or workflow not found
-        """
-        with self.db_manager.session_scope() as session:
-            # Get the result and workflow
-            result = session.query(WorkflowResult).filter_by(id=result_id).first()
-            if not result:
-                raise ValueError(f"Result not found: {result_id}")
-
-            workflow = session.query(Workflow).filter_by(id=workflow_id).first()
-            if not workflow:
-                raise ValueError(f"Workflow not found: {workflow_id}")
-
-            # Create validator agent ID
-            validator_agent_id = f"result-validator-{uuid.uuid4().hex[:8]}"
-
-            # Build validator prompt
-            from src.validation.result_prompt_builder import (
-                build_result_validator_prompt,
-            )
-
-            validator_prompt = build_result_validator_prompt(
-                result=result,
-                workflow=workflow,
-                criteria=criteria,
-                validator_agent_id=validator_agent_id,
-            )
-
-            # Find the original task assigned to the agent that submitted the result
-            # Be explicit about the join to avoid ambiguity
-            original_task = (
-                session.query(Task)
-                .filter(Task.assigned_agent_id == result.agent_id)
-                .first()
-            )
-
-            # Create validation task
-            validation_task_id = str(uuid.uuid4())
-            validation_task = Task(
-                id=validation_task_id,
-                raw_description=f"Validate result submission for task: {original_task.raw_description if original_task else 'Unknown'}",
-                enriched_description=f"Validate the result submitted by agent {result.agent_id} for workflow {workflow_id}",
-                done_definition="Review and validate the submitted result against workflow criteria, then submit validation using submit_result_validation tool",
-                status="assigned",
-                priority="high",
-                assigned_agent_id=validator_agent_id,
-                parent_task_id=original_task.id if original_task else None,
-                phase_id=original_task.phase_id if original_task else None,
-                workflow_id=workflow_id,
-                validation_enabled=False,  # Validators don't need validation themselves
-            )
-            session.add(validation_task)
-
-            # Create validator agent in database
-            validator_agent = Agent(
-                id=validator_agent_id,
-                agent_type="result_validator",
-                system_prompt=validator_prompt,
-                cli_type="claude",  # Use Claude for result validation
-                status="working",
-                tmux_session_name=f"agent_{validator_agent_id}",
-            )
-            session.add(validator_agent)
-            # Explicit commit: the tmux session spawned below is a genuinely
-            # separate process that reaches the backend over its own
-            # HTTP/MCP connection, not this session -- it must see these
-            # rows as committed the moment it starts, not whenever this
-            # session_scope block happens to exit.
-            session.commit()
-
-            # Get working directory (read-only access to workflow)
-            working_directory = workflow.phases_folder_path
-
-            # Spawn tmux session for validator
-            from src.validation.result_validator_agent import (
-                spawn_result_validator_tmux_session,
-            )
-
-            await spawn_result_validator_tmux_session(
-                agent_id=validator_agent_id,
-                working_directory=working_directory,
-                prompt=validator_prompt,
-                result_file_path=result.result_file_path,
-                read_only=True,
-            )
-
-            logger.info(
-                f"Spawned result validator agent {validator_agent_id} for result {result_id}"
-            )
-            return validator_agent_id
 
     def process_validation_outcome(
         self,

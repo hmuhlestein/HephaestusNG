@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from src.core.database import Agent, DatabaseManager, Task
+from src.prompts.loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -175,11 +176,7 @@ class AgentCommunicationService:
         """
         Nudge a child agent that appears stuck.
         """
-        nudge_msg = (
-            f"[PARENT NUDGE] {reason}. "
-            f"If you're done writing files, call hephaestus_update_task_status NOW. "
-            f"Do NOT exit to the command line."
-        )
+        nudge_msg = get_prompt("parent_nudge_child", {"reason": reason})
         return self.send_message_to_child(parent_agent_id, child_agent_id, nudge_msg)
 
     def get_children_status_summary(self, parent_agent_id: str) -> Dict[str, Any]:

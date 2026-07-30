@@ -312,7 +312,7 @@ class PromptAssembler:
         return f"""{identity}
 
 ═══ PRE-LOADED CONTEXT ═══
-Top 10 relevant memories (use hephaestus_search_memory for more):
+Top 10 relevant memories (use heph_search_memory for more):
 {memory_context}
 
 PROJECT:
@@ -321,15 +321,15 @@ PROJECT:
 ═══ AVAILABLE TOOLS ═══
 
 Hephaestus MCP (task management):
-• hephaestus_create_task - Create sub-tasks (MUST set parent_task_id="{task_id or "unknown"}")
-• hephaestus_update_task_status - Mark done/failed when complete (REQUIRED)
-• hephaestus_save_memory - Save discoveries for other agents
+• heph_create_task - Create sub-tasks (MUST set parent_task_id="{task_id or "unknown"}")
+• heph_update_task_status - Mark done/failed when complete (REQUIRED)
+• heph_save_memory - Save discoveries for other agents
 • spawn_agent - Spawn a specialized Hephaestus subagent (see below)
 
 Memory search:
-• hephaestus_search_memory - Search agent memories semantically
+• heph_search_memory - Search agent memories semantically
   Use when: encountering errors, needing implementation details, finding related work
-  Example: hephaestus_search_memory("PostgreSQL connection timeout solutions")
+  Example: heph_search_memory("PostgreSQL connection timeout solutions")
   Note: Pre-loaded context covers most needs; search for specifics
 
 ═══ SUBAGENT SPAWNING ═══
@@ -348,10 +348,10 @@ Note: workflow_id is required for task creation. Use your current workflow_id.
 
 ═══ WORKFLOW ═══
 1. Work on your task using pre-loaded context
-2. Use hephaestus_search_memory if you need specific information (errors, patterns, implementations)
-3. Save important discoveries via hephaestus_save_memory (error fixes, decisions, warnings)
+2. Use heph_search_memory if you need specific information (errors, patterns, implementations)
+3. Save important discoveries via heph_save_memory (error fixes, decisions, warnings)
 4. Spawn subagents for specialized work (architecture, development, review, etc.)
-5. Call hephaestus_update_task_status when done (status='done') or failed (status='failed')
+5. Call heph_update_task_status when done (status='done') or failed (status='failed')
 
 IDs: Agent={agent_id or "unknown"} | Task={task_id or "unknown"} | Phase={phase_id or "unknown"}"""
 

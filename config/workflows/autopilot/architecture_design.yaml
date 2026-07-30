@@ -112,7 +112,7 @@ additional_notes: |
   
   Also read the original design document to understand the overall vision.
   This context goes into architecture.md — the development agent reads it
-  from there (see STEP 5: do not call hephaestus_create_task to hand this to developers).
+  from there (see STEP 5: do not call heph_create_task to hand this to developers).
   
   CRITICAL — CHECK EXISTING TEST FILES AND ESTABLISH FILE LAYOUT:
   Run: find . -name "test_*.py" -o -name "*_test.py" | head -20
@@ -145,7 +145,7 @@ additional_notes: |
   will sometimes find tech debt that already exists — dead code, missing tests,
   inconsistent patterns, known workarounds. That's not this task's job to fix, and
   it's not a reason to widen the architecture to "clean it up first." File one
-  hephaestus_create_ticket(ticket_type="improvement", tags=["tech-debt"], ...) per
+  heph_create_ticket(ticket_type="improvement", tags=["tech-debt"], ...) per
   distinct item so it's tracked instead of silently dropped, then move on.
 
   ═══════════════════════════════════════════════════════════════════════
@@ -192,7 +192,7 @@ additional_notes: |
   
   ═══════════════════════════════════════════════════════════════════════
   STEP 3: WRITE THE TASK BREAKDOWN INTO architecture.md (documentation only —
-  do not call hephaestus_create_task here, see STEP 5)
+  do not call heph_create_task here, see STEP 5)
   ═══════════════════════════════════════════════════════════════════════
 
   Document a detailed task breakdown for Phase 3 (Development) as TEXT in
@@ -238,12 +238,12 @@ additional_notes: |
   STEP 5: DOCUMENT THE DEVELOPMENT TASK BREAKDOWN IN architecture.md
   ═══════════════════════════════════════════════════════════════════════
 
-  Do NOT call hephaestus_create_task for Phase 3 (development) work. The
+  Do NOT call heph_create_task for Phase 3 (development) work. The
   orchestrator automatically creates the next phase's task once you mark
   this task done — creating it yourself here files real implementation
   work under the architecture_design phase, which is the exact "tasks
   created under the wrong phase" failure the general MCP tool
-  instructions warn about (hephaestus_create_task only creates SUBTASKS
+  instructions warn about (heph_create_task only creates SUBTASKS
   within YOUR OWN current phase). Observed live: an architecture_design
   agent created a task this way whose content was actually QA-validation
   work — it got filed under architecture_design, the real development
@@ -255,7 +255,7 @@ additional_notes: |
   information below expressed as a table or list. The development agent
   reads this from Docs Path and follows it; if IT decides the
   implementation needs its own parallel subtasks, it creates those itself
-  using hephaestus_create_task within its own phase (the standard rule
+  using heph_create_task within its own phase (the standard rule
   every phase follows), using the dependency/parallel-group mechanics
   below as its reference.
 
@@ -264,7 +264,7 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
 
   Document dependencies in architecture.md using this model (for whichever
-  phase agent later creates real tasks via hephaestus_create_task):
+  phase agent later creates real tasks via heph_create_task):
 
   **How it works:**
   - `depends_on`: List of task IDs that must complete before this task starts
@@ -295,7 +295,7 @@ additional_notes: |
   task2: {"parallel_group": "types"}     → can run with task1
   task3: {"parallel_group": "handlers"}  → waits for "types" group to finish
 
-  **Task structure with dependencies (document this per component, do not call hephaestus_create_task):**
+  **Task structure with dependencies (document this per component, do not call heph_create_task):**
   ```
   Task: Implement [Component]
   Ticket: TICKET-001
@@ -460,12 +460,12 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
-  You MUST call the hephaestus_complete_my_task tool. The system CANNOT detect you finished
+  You MUST call the heph_complete_my_task tool. The system CANNOT detect you finished
   without this call. The pipeline WILL get stuck.
   
   After writing all your output files, call:
   
-  hephaestus_complete_my_task({
+  heph_complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was accomplished>",
     "key_learnings": ["<key findings or decisions>"]
