@@ -1529,8 +1529,8 @@ class PhaseManager:
     def _populate_feature_folder(self, session, workflow) -> None:
         """Create .hephaestus/features/<dir>/ and copy all run artifacts into it.
 
-        The worktree is intentionally kept after git_commit_push merges so both
-        committed docs/ and git-excluded .hephaestus/tmux/ logs are available here.
+        The worktree is intentionally kept after git_commit_push merges so the
+        agent-written .hephaestus/ reports and tmux/ logs are still available here.
         """
         try:
             import shutil as _shutil
@@ -1588,26 +1588,28 @@ class PhaseManager:
 
             _doc_extensions = {".md", ".json", ".txt", ".log", ".csv", ".html"}
 
-            # 1. Production artifacts from worktree's docs/ (merged to main but
-            #    the worktree copy is canonical and complete here).
-            wt_docs = wt / "docs"
-            if wt_docs.is_dir():
-                for f in wt_docs.rglob("*"):
-                    if (
-                        f.is_file()
-                        and f.suffix in _doc_extensions
-                        and "tmux" not in f.parts
-                    ):
-                        rel = f.relative_to(wt_docs)
-                        dest = docs_dir / rel
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        if not dest.exists():
-                            _shutil.copy2(str(f), str(dest))
+            # 1. Production artifacts from worktree's .hephaestus/ (git-excluded,
+            #    the worktree copy is canonical and complete here). tmux/,
+            #    features/, and scratch/ are internal orchestration state, not
+            #    report content, so they're excluded from the sweep.
+            wt_hephaestus = wt / CONTEXT_DIR_NAME
+            _sweep_excluded_dirs = {"tmux", "features", "scratch"}
+            if wt_hephaestus.is_dir():
+                for f in wt_hephaestus.rglob("*"):
+                    if not (f.is_file() and f.suffix in _doc_extensions):
+                        continue
+                    rel = f.relative_to(wt_hephaestus)
+                    if rel.parts[0] in _sweep_excluded_dirs:
+                        continue
+                    dest = docs_dir / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if not dest.exists():
+                        _shutil.copy2(str(f), str(dest))
 
             # 2. feature_report.html → feature dir root (where UI expects it)
             for candidate in [
                 docs_dir / "feature_report.html",
-                wt_docs / "feature_report.html",
+                wt_hephaestus / "feature_report.html",
             ]:
                 if candidate.is_file():
                     dest = feature_dir / "feature_report.html"
