@@ -92,6 +92,15 @@ class Config:
         # primary. None means no global fallback, matching prior behavior.
         self.default_fallback_cli_tool = agents.get("default_fallback_cli_tool")
         self.default_fallback_cli_model = agents.get("default_fallback_cli_model")
+        # In-session model fallback for an agent frozen too long (see
+        # docs/PI_MODEL_FALLBACK_DESIGN.md) -- distinct from
+        # default_fallback_cli_tool/_model above, which tears down and
+        # relaunches under a different CLI entirely. Only takes effect for
+        # a CLI whose CLIAgentInterface subclass overrides
+        # model_fallback_keystrokes (today, only pi). None/unset disables
+        # this feature.
+        self.cli_model_fallback_wait_seconds = agents.get("cli_model_fallback_wait_seconds", 120)
+        self.cli_model_fallback = agents.get("cli_model_fallback")
         # Per-turn reasoning budget for pi agents (off|minimal|low|medium|high|xhigh).
         # Bounds rumination; per-phase `thinking_level` overrides this.
         self.cli_thinking_level = agents.get("cli_thinking_level", "medium")

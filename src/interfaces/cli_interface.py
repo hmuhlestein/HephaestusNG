@@ -13,7 +13,7 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +154,29 @@ class CLIAgentInterface(ABC):
         with a safe default so the monitor stays harness-agnostic; override
         per CLI (polymorphic)."""
         return ""
+
+    def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
+        """Literal pane inputs (not chat messages) to switch this CLI's
+        active model to `model` via its own model-switching UI, as a list
+        of (text_to_send, seconds_to_wait_after_sending) pairs, sent in
+        order. Empty = no known in-session model-switch mechanism for this
+        CLI -- the monitor should not guess, since a model-switch slash
+        command is typically client-side (intercepted before it reaches the
+        model) and wrong syntax for the wrong CLI does nothing useful.
+        Concrete with a safe default so the monitor stays harness-agnostic;
+        override per CLI (polymorphic)."""
+        return []
+
+    def model_fallback_confirmed(self, output: str, model: str) -> Optional[bool]:
+        """Check recent pane/transcript output for confirmation that a
+        model_fallback_keystrokes switch to `model` actually landed.
+        Returns True if confirmed, False if there's a specific reason to
+        believe it didn't, None if this CLI has no known way to tell (skip
+        verification silently rather than guess). Concrete with a safe
+        default so the monitor stays harness-agnostic; override per CLI
+        (polymorphic) -- only meaningful for a CLI that also overrides
+        model_fallback_keystrokes."""
+        return None
 
     # ── Shared helpers ───────────────────────────────────────────────────
 
@@ -815,6 +838,22 @@ class PiAgent(CLIAgentInterface):
             f"Run `mcp connect {server_name}` to reconnect before calling "
             f"any {server_name}_* tool. Verify with `mcp status` afterward."
         )
+
+    def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
+        # Confirmed live: pi's `/model` opens a fuzzy-searchable picker, not
+        # a one-line `/model <name>` command -- sending "/model" alone opens
+        # it, then the search text (e.g. "mimo-v2.5-pro", not a full
+        # provider/model path) narrows it to a single match and selects it.
+        return [("/model", 1.0), (model, 0.0)]
+
+    def model_fallback_confirmed(self, output: str, model: str) -> Optional[bool]:
+        # Confirmed live: a successful pick echoes "Model: <provider>/<name>"
+        # (e.g. "Model: xiaomi/mimo-v2.5-pro" for search text
+        # "mimo-v2.5-pro"). Requiring the "Model: " prefix (not just a bare
+        # substring search for `model`) avoids a false positive from the
+        # search text merely being echoed back as typed input if the picker
+        # never actually opened.
+        return re.search(rf"Model:\s*\S*{re.escape(model)}", output) is not None
 
     def parse_output(self, output: str) -> Dict[str, Any]:
         lines = output.strip().split("\n")

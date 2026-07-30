@@ -927,6 +927,254 @@ class TestDetectBadModelError:
         mock_agent_manager.send_message_to_agent.assert_called_once()
 
 
+class TestDetectCliModelFallback:
+    """Regression: pi's local model has only a single inference slot, so an
+    agent queued behind another sits frozen for however long that takes.
+    The generic frozen-nudge path doesn't help (the agent isn't stuck, just
+    waiting), so this switches it in-place to a configured fallback model
+    instead. Polymorphic, not pi-specific: this method never checks
+    agent.cli_type -- it goes through
+    CLIAgentInterface.model_fallback_keystrokes (empty by default, overridden
+    by PiAgent to use its `/model` picker). See
+    docs/PI_MODEL_FALLBACK_DESIGN.md."""
+
+    def _frozen_agent(self, make_monitoring_loop, frozen_for_seconds, cli_type="pi", cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf"):
+        agent = Agent(id="a1", cli_type=cli_type, cli_model=cli_model, current_task_id="t1")
+        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
+        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": "same output", "since": time.time() - frozen_for_seconds, "recov": 0}
+        }
+        return agent
+
+    @pytest.mark.asyncio
+    async def test_cli_without_model_fallback_support_ignored(self, make_monitoring_loop, mock_agent_manager):
+        """Claude's CLIAgentInterface doesn't override
+        model_fallback_keystrokes (base class default: []) -- must be a
+        no-op regardless of how long it's been frozen."""
+        agent = self._frozen_agent(make_monitoring_loop, 200, cli_type="claude", cli_model="sonnet")
+        make_monitoring_loop.config.cli_model = "sonnet"
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_configured_disables_feature(self, make_monitoring_loop, mock_agent_manager):
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+        make_monitoring_loop.config.cli_model_fallback = None
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_agent_already_off_default_model_ignored(self, make_monitoring_loop, mock_agent_manager):
+        """An agent already running something else (including a prior
+        fallback switch) must be left alone -- re-triggering on it would
+        contradict the one-shot-per-task design."""
+        agent = self._frozen_agent(make_monitoring_loop, 200, cli_model="mimo-v2.5-pro")
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_not_yet_frozen_ignored(self, make_monitoring_loop, mock_agent_manager):
+        """No _stuck_state entry at all -- _mechanical_recovery_for_agent
+        hasn't observed a repeated signature for this agent yet."""
+        agent = Agent(id="a1", cli_type="pi", cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf", current_task_id="t1")
+        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
+        make_monitoring_loop._stuck_state = {}
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_frozen_under_threshold_ignored(self, make_monitoring_loop, mock_agent_manager):
+        agent = self._frozen_agent(make_monitoring_loop, 60)  # under the 120s threshold
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_frozen_past_threshold_sends_model_then_search_text(self, make_monitoring_loop, mock_agent_manager):
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+
+        with patch("src.monitoring.monitor.asyncio.sleep", new=AsyncMock()) as mock_sleep:
+            result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is True
+        assert mock_agent_manager.send_message_to_agent.call_args_list == [
+            (("a1", "/model"),),
+            (("a1", "mimo-v2.5-pro"),),
+        ]
+        mock_sleep.assert_awaited_once_with(1)
+
+    @pytest.mark.asyncio
+    async def test_clears_stuck_state_after_switching(self, make_monitoring_loop, mock_agent_manager):
+        """So the fallback model's own first turn gets a fresh frozen-
+        detection window instead of being judged against a signature
+        captured while still on the original model."""
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+
+        await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert "a1" not in make_monitoring_loop._stuck_state
+
+    @pytest.mark.asyncio
+    async def test_only_fires_once_per_agent(self, make_monitoring_loop, mock_agent_manager):
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+
+        await make_monitoring_loop._detect_cli_model_fallback(agent)
+        assert mock_agent_manager.send_message_to_agent.call_count == 2  # "/model" + search text
+
+        # Re-seed stuck_state as if the agent is frozen again on a later cycle.
+        make_monitoring_loop._stuck_state["a1"] = {
+            "sig": "same output", "since": time.time() - 200, "recov": 0
+        }
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        assert mock_agent_manager.send_message_to_agent.call_count == 2  # no additional calls
+
+    @pytest.mark.asyncio
+    async def test_logs_an_agent_event_capturing_why_the_model_switched(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: the switch used to only go to process logs -- nothing
+        queryable was attached to the agent/task recording why its model
+        changed. AgentLog is this codebase's existing mechanism for that
+        (see e.g. Conductor/Guardian writes)."""
+        from contextlib import contextmanager
+
+        session = Mock()
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+
+        await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        session.add.assert_called_once()
+        logged = session.add.call_args[0][0]
+        assert logged.agent_id == "a1"
+        assert logged.log_type == "cli_model_fallback"
+        assert logged.details["from_model"] == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        assert logged.details["to_model"] == "mimo-v2.5-pro"
+        assert logged.details["task_id"] == "t1"
+
+
+class TestVerifyCliModelFallback:
+    """Regression: _detect_cli_model_fallback's switch was fire-and-forget --
+    nothing ever checked whether pi's picker interaction actually landed. A
+    wrong search text or a picker that didn't open in time would leave the
+    agent silently stuck on its original (frozen) model with no record of
+    the failed attempt anywhere."""
+
+    @pytest.mark.asyncio
+    async def test_no_pending_entry_is_a_noop(self, make_monitoring_loop, mock_agent_manager):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        make_monitoring_loop._pending_fallback_verification = {}
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        mock_agent_manager.get_agent_output.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cli_that_cannot_verify_clears_pending_silently(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "anything"
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("sonnet", time.time())
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" not in make_monitoring_loop._pending_fallback_verification
+
+    @pytest.mark.asyncio
+    async def test_confirmed_switch_logs_success_and_clears_pending(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        from contextlib import contextmanager
+
+        session = Mock()
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "Model: xiaomi/mimo-v2.5-pro"
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("mimo-v2.5-pro", time.time())
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" not in make_monitoring_loop._pending_fallback_verification
+        logged = session.add.call_args[0][0]
+        assert logged.log_type == "cli_model_fallback_confirmed"
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_within_grace_period_stays_pending_no_warning(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        make_monitoring_loop.config.monitoring_interval_seconds = 60
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "still on the old model"
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("mimo-v2.5-pro", time.time())  # just switched
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" in make_monitoring_loop._pending_fallback_verification
+        mock_db.session_scope.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_past_grace_period_warns_and_logs(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        from contextlib import contextmanager
+
+        session = Mock()
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        make_monitoring_loop.config.monitoring_interval_seconds = 60
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "still on the old model"
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("mimo-v2.5-pro", time.time() - 200)  # past 2x120s grace
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" not in make_monitoring_loop._pending_fallback_verification
+        logged = session.add.call_args[0][0]
+        assert logged.log_type == "cli_model_fallback_unconfirmed"
+
+
 # ── _update_agent_health_from_trajectory ─────────────────────────
 
 
