@@ -1033,6 +1033,31 @@ class TestDetectCliModelFallback:
         mock_agent_manager.send_message_to_agent.assert_called_once_with("a1", "/model opus")
 
     @pytest.mark.asyncio
+    async def test_same_model_fallback_is_a_noop(self, make_monitoring_loop, mock_agent_manager):
+        """Regression: observed live -- secondary_cli_model_fallback left at
+        its shipped default ("sonnet") happened to equal a claude-primary
+        phase's own model, so the "switch" was a literal no-op that still
+        interrupted the agent (visible in its transcript as `/model sonnet`
+        -> "Model's already set to sonnet"), and re-fired on every backend
+        restart since neither Agent.cli_model nor the baseline-default gate
+        change when the fallback equals the current model -- only the
+        in-memory one-shot set would otherwise have prevented a repeat, and
+        that doesn't survive a restart."""
+        agent = Agent(id="a1", cli_type="claude", cli_model="sonnet", current_task_id="t1")
+        make_monitoring_loop.config.default_cli_tool = "pi"
+        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.secondary_cli_model_fallback = "sonnet"
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
+        }
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_pi_reads_secondary_config_when_it_is_the_fallback_tier(
         self, make_monitoring_loop, mock_agent_manager
     ):

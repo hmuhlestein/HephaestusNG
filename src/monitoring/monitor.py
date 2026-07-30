@@ -620,10 +620,13 @@ class MonitoringLoop:
         not by which CLI product this is (config.cli_model_fallback for
         whichever CLI is currently primary, config.secondary_cli_model_fallback
         for whichever is the secondary/fallback tier) -- unset disables this
-        for that role. Only for agents still on their CLI's own baseline
-        default model -- one already running something else (including a
-        prior switch here, or a deliberate phase-level override) is left
-        alone.
+        for that role, and so does the fallback happening to equal the
+        model the agent is already on (a same-model switch is a no-op that
+        would still interrupt the agent, and unlike a genuine switch it
+        leaves no persisted trace to prevent re-firing on every restart).
+        Only for agents still on their CLI's own baseline default model --
+        one already running something else (including a prior switch here,
+        or a deliberate phase-level override) is left alone.
 
         One-shot per agent (self._switched_to_fallback_model) once the switch
         is confirmed -- a standing decision for the rest of the agent's
@@ -647,6 +650,21 @@ class MonitoringLoop:
             is_primary = agent.cli_type == getattr(self.config, "default_cli_tool", None)
             fallback = cli_agent.fallback_model(self.config, is_primary)
             if not fallback:
+                return False
+            if fallback == agent.cli_model:
+                # Configured fallback is the same model this agent is
+                # already on (observed live: secondary_cli_model_fallback
+                # left at its shipped default happened to equal the
+                # phase's own primary model) -- switching would be a
+                # literal no-op that still interrupts the agent, and
+                # since neither Agent.cli_model nor the baseline-default
+                # gate below change as a result, this is not merely
+                # wasteful once -- with no persisted signal that a switch
+                # was ever "attempted," it would silently re-fire on
+                # every backend restart for as long as the agent stays
+                # frozen (the in-memory one-shot set is the only thing
+                # that would otherwise prevent a repeat, and it doesn't
+                # survive a restart).
                 return False
             keystrokes = cli_agent.model_fallback_keystrokes(fallback)
             if not keystrokes:
