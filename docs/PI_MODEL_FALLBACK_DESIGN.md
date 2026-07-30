@@ -197,8 +197,8 @@ hold one) to avoid a second nested `session_scope()`; called standalone
 ### Verifying the switch landed (implemented)
 
 `_detect_cli_model_fallback` records `self._pending_fallback_verification[agent.id]
-= (model, switched_at)`. A new `_verify_cli_model_fallback`, called for every
-agent each cycle, checks pending entries via
+= (model, original_model, switched_at)`. A new `_verify_cli_model_fallback`,
+called for every agent each cycle, checks pending entries via
 `CLIAgentInterface.model_fallback_confirmed(output, model)` (polymorphic —
 PiAgent's override regex-matches `Model: <provider>/<model>`, requiring the
 `Model: ` prefix rather than a bare substring search, so the search text
@@ -207,9 +207,39 @@ opened — doesn't read as a false confirmation). `None` (CLI can't verify) or
 `True` (confirmed) both clear the pending entry immediately, logging success
 via `_log_agent_event` in the `True` case (`cli_model_fallback_confirmed`).
 `False` stays pending until `2 * monitoring_interval_seconds` has elapsed
-since the switch, then logs a warning + `AgentLog` (`cli_model_fallback_unconfirmed`)
-and gives up — it doesn't retry the switch itself, since that already used
-its one shot.
+since the switch, then logs a warning + `AgentLog` (`cli_model_fallback_unconfirmed`).
+
+### Persisting the switch, and two gaps that fell out of doing so
+
+`agent.cli_model` is surfaced directly in API responses (`mcp/api.py`,
+`mcp/autopilot_api.py`) for UI display, and `get_active_agents()` re-fetches
+a fresh row every cycle — so `_detect_cli_model_fallback` also writes the new
+model to the `Agent.cli_model` DB column (in the same session as its
+`AgentLog` write), not just the in-memory one-shot set. Without this, the UI
+would keep showing the stale original model as "current" indefinitely after
+a real switch.
+
+That persistence interacts with two things that needed fixing once added:
+
+1. **A confirmed-failed switch must not permanently strand the agent.**
+   `_verify_cli_model_fallback`'s unconfirmed-past-grace-period branch also
+   clears the agent from `_switched_to_fallback_model` — the one-shot
+   restriction is meant to stop a *successful* switch from being re-sent,
+   not to burn the agent's only chance at recovery on a single failed
+   picker interaction (e.g. a transient timing miss). If it freezes again
+   later on the still-unswitched original model, `_detect_cli_model_fallback`
+   can try again.
+2. **That retry would otherwise be immediately blocked by the optimistic
+   `Agent.cli_model` write from the first (failed) attempt** —
+   `_detect_cli_model_fallback`'s own gate (`agent.cli_model !=
+   config.cli_model`) would see the agent as already switched, even though
+   the CLI session itself never actually changed. So the same unconfirmed
+   branch also reverts `Agent.cli_model` back to `original_model` (which is
+   why the pending-verification tuple carries it) before clearing the
+   one-shot set.
+
+A confirmed switch, by contrast, leaves both `Agent.cli_model` and the
+one-shot set alone — no automatic switch-back (see below).
 
 ## What This Does Not Do
 
@@ -227,9 +257,6 @@ its one shot.
   255-395`) or `_detect_bad_model_error` — this is a new, narrower, third
   mechanism alongside them (now sharing only the `_log_agent_event` helper),
   not a replacement.
-- **No retry of a failed/unconfirmed switch.** `_verify_cli_model_fallback`
-  only observes and logs; the one-shot set means the switch itself is never
-  attempted a second time for the same agent.
 
 ## Testing Plan
 
@@ -243,12 +270,14 @@ its one shot.
   (mock `send_message_to_agent`, assert call args/order), and
   `_stuck_state` is cleared afterward.
 - Unit: the switch writes an `AgentLog` entry with the right `agent_id`/
-  `log_type`/`details` (asserted against a mocked session's `.add()` call).
+  `log_type`/`details`, and persists the new model onto `Agent.cli_model`
+  (asserted against a mocked session's `.add()`/query-row calls).
 - Unit: `_verify_cli_model_fallback` — no pending entry is a no-op; a CLI
   that can't verify (`None`) clears pending without logging; confirmed logs
-  success and clears; unconfirmed within the grace period stays pending
-  with no warning; unconfirmed past the grace period warns, logs, and
-  clears. All git-stash-verified.
+  success and leaves the one-shot set alone; unconfirmed within the grace
+  period stays pending with no warning; unconfirmed past the grace period
+  warns, logs, clears the one-shot set (retry re-enabled), and reverts
+  `Agent.cli_model` back to the original. All git-stash-verified.
 - Manual/live: watch one real frozen pi agent switch over on this repo's own
   self-hosted pipeline, confirm the transcript shows `Model:
   xiaomi/mimo-v2.5-pro`, an `AgentLog` row exists for the switch, and the
