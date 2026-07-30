@@ -4510,6 +4510,10 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
             for pid in stopped_project_ids:
                 paused = pause_project_workflows(db, pid, paused_by="user")
                 terminated_count += paused
+                # Deactivate the project so UI no longer shows it as Active
+                proj = db.query(AutopilotProject).filter_by(id=pid).first()
+                if proj:
+                    proj.is_active = False
             db.commit()
     except Exception as e:
         logger.error(f"Error cleaning up autopilot agents: {e}")
