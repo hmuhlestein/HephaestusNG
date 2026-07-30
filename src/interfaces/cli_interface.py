@@ -155,6 +155,19 @@ class CLIAgentInterface(ABC):
         per CLI (polymorphic)."""
         return ""
 
+    def fallback_model(self, config) -> Optional[str]:
+        """This CLI's own configured model to switch to when
+        model_fallback_keystrokes fires (e.g. PiAgent reads
+        config.cli_model_fallback, ClaudeCodeAgent reads
+        config.secondary_cli_model_fallback) -- each CLI's valid model
+        strings are its own vocabulary (an OpenRouter path that means
+        something to pi's picker is not necessarily anything Claude Code's
+        /model recognizes), so a single shared config value across every
+        CLI isn't safe. None = unset/unsupported -- the monitor should not
+        guess a default. Concrete with a safe default so the monitor stays
+        harness-agnostic; override per CLI (polymorphic)."""
+        return None
+
     def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
         """Literal pane inputs (not chat messages) to switch this CLI's
         active model to `model` via its own model-switching UI, as a list
@@ -489,6 +502,19 @@ class ClaudeCodeAgent(CLIAgentInterface):
             r"Failed to connect",
             r"Maximum retries exceeded",
         ]
+
+    def fallback_model(self, config) -> Optional[str]:
+        # Deliberately its own config key, not agents.cli_model -- that
+        # global is paired with agents.default_cli_tool (pi) and is
+        # typically an OpenRouter path pi's picker resolves, not one of
+        # Claude Code's own model aliases (sonnet/opus/haiku).
+        return getattr(config, "secondary_cli_model_fallback", None)
+
+    def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
+        # Same one-line `/model <name>` syntax already confirmed working
+        # for Claude Code in _detect_bad_model_error (monitor.py) -- unlike
+        # pi, no picker/search step.
+        return [(f"/model {model}", 0.0)]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
         lines = output.strip().split("\n")
@@ -838,6 +864,9 @@ class PiAgent(CLIAgentInterface):
             f"Run `mcp connect {server_name}` to reconnect before calling "
             f"any {server_name}_* tool. Verify with `mcp status` afterward."
         )
+
+    def fallback_model(self, config) -> Optional[str]:
+        return getattr(config, "cli_model_fallback", None)
 
     def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
         # Confirmed live: pi's `/model` opens a fuzzy-searchable picker, not

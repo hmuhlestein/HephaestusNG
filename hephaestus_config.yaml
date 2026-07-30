@@ -78,6 +78,7 @@ agents:
   default_fallback_cli_model: sonnet
   cli_model_fallback_wait_seconds: 120
   cli_model_fallback: mimo-v2.5-pro
+  secondary_cli_model_fallback: sonnet
   tmux_session_prefix: agent
   health_check_interval: 60
   max_health_failures: 3

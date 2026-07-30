@@ -616,10 +616,12 @@ class MonitoringLoop:
         rather than a second, independent signature comparison -- it already
         computes and updates that state for every agent, every cycle.
 
-        Opt-in via config.cli_model_fallback; unset disables this entirely.
-        Only for agents still on the configured default model -- one already
-        running something else (including a prior switch here) is left
-        alone.
+        Opt-in per CLI via its own fallback_model(config) (e.g. PiAgent
+        reads config.cli_model_fallback, ClaudeCodeAgent reads
+        config.secondary_cli_model_fallback) -- unset disables this for that CLI.
+        Only for agents still on their CLI's own baseline default model --
+        one already running something else (including a prior switch here,
+        or a deliberate phase-level override) is left alone.
 
         One-shot per agent (self._switched_to_fallback_model) once the switch
         is confirmed -- a standing decision for the rest of the agent's
@@ -631,13 +633,28 @@ class MonitoringLoop:
         Questions).
         """
         try:
-            fallback = getattr(self.config, "cli_model_fallback", None)
+            cli_agent = get_cli_agent(agent.cli_type)
+            fallback = cli_agent.fallback_model(self.config)
             if not fallback:
                 return False
-            keystrokes = get_cli_agent(agent.cli_type).model_fallback_keystrokes(fallback)
+            keystrokes = cli_agent.model_fallback_keystrokes(fallback)
             if not keystrokes:
                 return False
-            if agent.cli_model != getattr(self.config, "cli_model", None):
+            # This CLI's own baseline default -- config.cli_model only
+            # applies when this agent's cli_type IS the global
+            # default_cli_tool (see manager.py's identical global_model
+            # resolution); any other CLI's baseline is its own
+            # default_model class attribute. Comparing against the wrong
+            # baseline would either never match a non-default CLI's agents
+            # (leaving them permanently ineligible) or match a deliberate
+            # phase-level override that isn't actually "stuck on the
+            # default" at all.
+            default_for_cli = (
+                getattr(self.config, "cli_model", None)
+                if agent.cli_type == getattr(self.config, "default_cli_tool", None)
+                else cli_agent.default_model
+            )
+            if agent.cli_model != default_for_cli:
                 return False
             if not hasattr(self, "_switched_to_fallback_model"):
                 self._switched_to_fallback_model = set()
@@ -1209,7 +1226,12 @@ class MonitoringLoop:
                 return False
             self._fixed_bad_model.add(agent.id)
 
-            fix_model = getattr(self.config, "cli_model", None) or "sonnet"
+            # config.cli_model is paired with agents.default_cli_tool (pi)
+            # and is typically an OpenRouter path for pi's picker, not one
+            # of Claude Code's own model aliases -- sending it to Claude via
+            # /model would be nonsensical to it. secondary_cli_model_fallback is
+            # Claude's own configured recovery target instead.
+            fix_model = getattr(self.config, "secondary_cli_model_fallback", None) or "sonnet"
             logger.warning(
                 f"[BAD-MODEL] Agent {agent.id[:8]} (claude) rejected its "
                 f"launch model — sending '/model {fix_model}' directly"

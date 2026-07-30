@@ -97,10 +97,15 @@ class Config:
         # default_fallback_cli_tool/_model above, which tears down and
         # relaunches under a different CLI entirely. Only takes effect for
         # a CLI whose CLIAgentInterface subclass overrides
-        # model_fallback_keystrokes (today, only pi). None/unset disables
-        # this feature.
+        # model_fallback_keystrokes (today, pi and claude). Each CLI reads
+        # its own config value (CLIAgentInterface.fallback_model) rather
+        # than sharing one -- pi's is an OpenRouter path its picker
+        # resolves, claude's is one of Claude Code's own model aliases, and
+        # neither vocabulary means anything to the other CLI. None/unset
+        # disables the feature for that CLI.
         self.cli_model_fallback_wait_seconds = agents.get("cli_model_fallback_wait_seconds", 120)
         self.cli_model_fallback = agents.get("cli_model_fallback")
+        self.secondary_cli_model_fallback = agents.get("secondary_cli_model_fallback")
         # Per-turn reasoning budget for pi agents (off|minimal|low|medium|high|xhigh).
         # Bounds rumination; per-phase `thinking_level` overrides this.
         self.cli_thinking_level = agents.get("cli_thinking_level", "medium")

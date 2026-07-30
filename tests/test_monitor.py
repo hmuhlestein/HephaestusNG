@@ -901,9 +901,27 @@ class TestDetectBadModelError:
     async def test_sends_slash_model_command_directly(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
+        """Regression: this must read config.secondary_cli_model_fallback
+        (Claude's own configured recovery model), not config.cli_model --
+        that global is paired with agents.default_cli_tool (pi) and is
+        typically an OpenRouter path pi's picker resolves, meaningless to
+        Claude Code's own /model."""
         agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
-        make_monitoring_loop.config.cli_model = "sonnet"
+        make_monitoring_loop.config.secondary_cli_model_fallback = "opus"
+
+        result = await make_monitoring_loop._detect_bad_model_error(agent)
+
+        assert result is True
+        mock_agent_manager.send_message_to_agent.assert_called_once_with("a1", "/model opus")
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_sonnet_when_unconfigured(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
+        make_monitoring_loop.config.secondary_cli_model_fallback = None
 
         result = await make_monitoring_loop._detect_bad_model_error(agent)
 
@@ -919,7 +937,7 @@ class TestDetectBadModelError:
         reloading with the new model would just be noise."""
         agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
-        make_monitoring_loop.config.cli_model = "sonnet"
+        make_monitoring_loop.config.secondary_cli_model_fallback = "opus"
 
         await make_monitoring_loop._detect_bad_model_error(agent)
         await make_monitoring_loop._detect_bad_model_error(agent)
@@ -950,16 +968,41 @@ class TestDetectCliModelFallback:
 
     @pytest.mark.asyncio
     async def test_cli_without_model_fallback_support_ignored(self, make_monitoring_loop, mock_agent_manager):
-        """Claude's CLIAgentInterface doesn't override
-        model_fallback_keystrokes (base class default: []) -- must be a
-        no-op regardless of how long it's been frozen."""
-        agent = self._frozen_agent(make_monitoring_loop, 200, cli_type="claude", cli_model="sonnet")
-        make_monitoring_loop.config.cli_model = "sonnet"
+        """opencode's CLIAgentInterface doesn't override
+        model_fallback_keystrokes/fallback_model (base class defaults: []
+        and None) -- must be a no-op regardless of how long it's been
+        frozen, for any CLI that hasn't opted in."""
+        agent = self._frozen_agent(make_monitoring_loop, 200, cli_type="opencode", cli_model="anthropic/claude-sonnet-4")
+        make_monitoring_loop.config.cli_model = "anthropic/claude-sonnet-4"
 
         result = await make_monitoring_loop._detect_cli_model_fallback(agent)
 
         assert result is False
         mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_claude_as_secondary_cli_gets_its_own_fallback(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        """Regression: the secondary/fallback CLI (claude, dispatched when
+        pi hits a session limit) must also support this mechanism, using
+        its OWN config value and model vocabulary (claude_model_fallback,
+        e.g. "opus") -- not pi's cli_model_fallback (an OpenRouter path
+        meaningless to Claude Code's /model), and not blocked by a gate
+        that only recognizes pi's global default model."""
+        agent = Agent(id="a1", cli_type="claude", cli_model="sonnet", current_task_id="t1")
+        make_monitoring_loop.config.default_cli_tool = "pi"
+        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.secondary_cli_model_fallback = "opus"
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
+        }
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is True
+        mock_agent_manager.send_message_to_agent.assert_called_once_with("a1", "/model opus")
 
     @pytest.mark.asyncio
     async def test_no_fallback_configured_disables_feature(self, make_monitoring_loop, mock_agent_manager):
