@@ -819,58 +819,35 @@ def get_llm_provider() -> LLMProviderInterface:
         Configured LLM provider instance
     """
     from ..core.llm_config import get_config as get_llm_config
-    from ..core.simple_config import get_config
 
     logger.info("=" * 60)
     logger.info("🔧 Initializing LLM Provider System")
     logger.info("=" * 60)
 
-    # Check if we have multi-provider configuration
-    try:
-        llm_config = get_llm_config()
-        # Use non-strict validation to allow partial initialization
-        llm_config.validate(strict=False)
+    # model_assignments (hephaestus_config.yaml) is required -- MultiProviderLLM
+    # is the only supported prompt source. This used to silently fall back to
+    # single-provider mode (OpenAIProvider/AnthropicProvider) on any failure
+    # here, including a merely-missing config -- those legacy providers carry
+    # their own separate copies of every prompt LangChainLLMClient builds, so
+    # a silent fallback meant a misconfigured deployment could run for a long
+    # time on prompt text that had already drifted out of sync with the
+    # actively maintained versions, with nothing surfacing the mismatch.
+    # Raising here makes a missing/invalid config a startup-time failure
+    # instead of a silent, hard-to-notice divergence.
+    llm_config = get_llm_config()
+    llm_config.validate(strict=False)
 
-        # If we have model assignments, use multi-provider
-        if llm_config._llm_config and llm_config._llm_config.model_assignments:
-            from .multi_provider_llm import MultiProviderLLM
-
-            logger.info(
-                "✅ Using MULTI-PROVIDER LLM configuration (from hephaestus_config.yaml)"
-            )
-            logger.info("=" * 60)
-            return MultiProviderLLM()
-    except Exception as e:
-        logger.warning(
-            f"⚠️ Multi-provider config not available, falling back to single provider: {e}"
+    if not (llm_config._llm_config and llm_config._llm_config.model_assignments):
+        raise RuntimeError(
+            "No model_assignments found in hephaestus_config.yaml. The "
+            "single-provider fallback has been removed -- configure "
+            "model_assignments for the multi-provider LLM client."
         )
 
-    # Fallback to single provider configuration
-    logger.info("⚠️ Using LEGACY SINGLE-PROVIDER mode")
-    config = get_config()
-    config.validate()
+    from .multi_provider_llm import MultiProviderLLM
 
-    logger.info(f"   Provider: {config.llm_provider}")
-    logger.info(f"   Model: {config.llm_model}")
+    logger.info(
+        "✅ Using MULTI-PROVIDER LLM configuration (from hephaestus_config.yaml)"
+    )
     logger.info("=" * 60)
-
-    provider_class = LLM_PROVIDERS.get(config.llm_provider)
-    if not provider_class:
-        raise ValueError(f"Unknown LLM provider: {config.llm_provider}")
-
-    api_key = config.get_api_key()
-    if not api_key:
-        raise ValueError(f"API key not found for provider: {config.llm_provider}")
-
-    if config.llm_provider == "openai":
-        return provider_class(
-            api_key=api_key,
-            model=config.llm_model,
-            embedding_model=config.embedding_model,
-        )
-    elif config.llm_provider == "anthropic":
-        return provider_class(api_key=api_key, model=config.llm_model)
-    elif config.llm_provider == "openrouter":
-        return provider_class(api_key=api_key, model=config.llm_model)
-    else:
-        raise ValueError(f"Unsupported provider: {config.llm_provider}")
+    return MultiProviderLLM()

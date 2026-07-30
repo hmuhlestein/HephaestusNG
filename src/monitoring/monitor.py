@@ -28,6 +28,7 @@ from src.monitoring.conductor import Conductor
 from src.monitoring.guardian import Guardian
 from src.monitoring.trajectory_context import TrajectoryContext
 from src.phases import PhaseManager
+from src.prompts.loader import get_monitor_nudge
 
 logger = logging.getLogger(__name__)
 
@@ -125,436 +126,12 @@ def _strip_sgr(text: str) -> str:
     return _SGR_RE.sub("", text)
 
 
-class AgentState(Enum):
-    """Agent state enumeration."""
-
-    HEALTHY = "healthy"
-    STUCK_WAITING = "stuck_waiting"
-    STUCK_ERROR = "stuck_error"
-    STUCK_CONFUSED = "stuck_confused"
-    UNRECOVERABLE = "unrecoverable"
-
-
-class MonitoringDecision(Enum):
-    """Monitoring decision enumeration."""
-
-    CONTINUE = "continue"
-    NUDGE = "nudge"
-    ANSWER = "answer"
-    RESTART = "restart"
-    RECREATE = "recreate"
-
-
-# Hard timeout for analyze_agent_state's LLM call -- see the call site's own
-# comment for why this must never be unbounded (mirrors Guardian's
-# GUARDIAN_LLM_TIMEOUT in guardian.py).
-AGENT_STATE_LLM_TIMEOUT = 90
-
 # How many idle-nudges a stuck task gets before "the agent produced output"
 # stops being trusted as "the agent made progress" -- see the stuck-task
 # nudge cap in _audit_system_health's own comment for the failure mode this
 # closes (an agent that keeps replying without ever calling
 # complete_my_task resets the idle check forever on activity alone).
 MAX_STUCK_TASK_NUDGES = 3
-
-
-class IntelligentMonitor:
-    """LLM-powered monitoring system for agent health and intervention."""
-
-    def __init__(
-        self,
-        db_manager: DatabaseManager,
-        agent_manager: AgentManager,
-        llm_provider: LLMProviderInterface,
-        rag_system: RAGSystem,
-    ):
-        """Initialize intelligent monitor.
-
-        Args:
-            db_manager: Database manager
-            agent_manager: Agent manager
-            llm_provider: LLM provider for analysis
-            rag_system: RAG system for context
-        """
-        self.db_manager = db_manager
-        self.agent_manager = agent_manager
-        self.llm_provider = llm_provider
-        self.rag_system = rag_system
-        self.config = get_config()
-
-    async def analyze_agent_state(self, agent: Agent) -> Dict[str, Any]:
-        """Analyze agent state and decide on intervention.
-
-        Args:
-            agent: Agent to analyze
-
-        Returns:
-            Analysis result with state and decision
-        """
-        logger.debug(f"Analyzing agent {agent.id} state")
-
-        try:
-            # Collect comprehensive context
-            context = await self._collect_agent_context(agent)
-
-            # Hard timeout so a slow/over-streaming model can never freeze this
-            # shared monitoring loop task -- same reasoning and value as
-            # Guardian's GUARDIAN_LLM_TIMEOUT (guardian.py) and Conductor's
-            # CONDUCTOR_LLM_TIMEOUT (langchain_llm_client.py): an unbounded await
-            # here previously froze the entire monitoring cycle (and therefore
-            # every agent's auto-recovery, not just this one) for as long as the
-            # model stayed silent.
-            analysis = await asyncio.wait_for(
-                self.llm_provider.analyze_agent_state(
-                    agent_output=context["tmux_output"],
-                    task_info={
-                        "description": context["task_description"],
-                        "done_definition": context["done_definition"],
-                        "time_elapsed": context["time_elapsed"],
-                    },
-                    project_context=context["project_context"],
-                ),
-                timeout=AGENT_STATE_LLM_TIMEOUT,
-            )
-
-            logger.info(
-                f"Agent {agent.id} analysis: state={analysis['state']}, "
-                f"decision={analysis['decision']}, confidence={analysis.get('confidence', 0)}"
-            )
-
-            return analysis
-
-        except Exception as e:
-            logger.error(f"Failed to analyze agent {agent.id}: {e}")
-            return {
-                "state": AgentState.HEALTHY.value,
-                "decision": MonitoringDecision.CONTINUE.value,
-                "message": "",
-                "reasoning": "Analysis failed, assuming healthy",
-                "confidence": 0.1,
-            }
-
-    async def _collect_agent_context(self, agent: Agent) -> Dict[str, Any]:
-        """Collect comprehensive context for agent analysis.
-
-        Args:
-            agent: Agent to collect context for
-
-        Returns:
-            Context dictionary
-        """
-        # Get tmux output
-        tmux_output = self.agent_manager.get_agent_output(
-            agent.id,
-            lines=self.config.tmux_output_lines,
-        )
-
-        # Get task details
-        session = self.db_manager.get_session()
-        task = session.query(Task).filter_by(id=agent.current_task_id).first()
-        session.close()
-
-        if not task:
-            logger.error(f"Task {agent.current_task_id} not found for agent {agent.id}")
-            task_description = "Unknown task"
-            done_definition = "Unknown"
-            time_elapsed = 0
-        else:
-            task_description = task.enriched_description or task.raw_description
-            done_definition = task.done_definition
-            time_elapsed = (
-                int((datetime.utcnow() - task.started_at).total_seconds() / 60)
-                if task.started_at
-                else 0
-            )
-
-        # Get project context
-        project_context = await self.agent_manager.get_project_context()
-
-        # Search for similar past issues if agent appears stuck
-        similar_issues = []
-        if self._appears_stuck(tmux_output):
-            similar_issues = await self.rag_system.search_error_solutions(
-                tmux_output[-500:],  # Last 500 chars
-                limit=3,
-            )
-
-        return {
-            "tmux_output": tmux_output,
-            "task_description": task_description,
-            "done_definition": done_definition,
-            "time_elapsed": time_elapsed,
-            "project_context": project_context,
-            "similar_issues": similar_issues,
-        }
-
-    def _appears_stuck(self, output: str) -> bool:
-        """Quick check if agent appears stuck.
-
-        Args:
-            output: Agent output
-
-        Returns:
-            True if appears stuck
-        """
-        stuck_indicators = [
-            "error",
-            "failed",
-            "stuck",
-            "waiting",
-            "timeout",
-            "rate limit",
-        ]
-
-        output_lower = output.lower()
-        return any(indicator in output_lower for indicator in stuck_indicators)
-
-    async def execute_intervention(
-        self,
-        agent: Agent,
-        decision: Dict[str, Any],
-    ):
-        """Execute the monitoring decision.
-
-        Args:
-            agent: Agent to intervene on
-            decision: Decision from analysis
-        """
-        action = decision.get("decision", MonitoringDecision.CONTINUE.value)
-        message = decision.get("message", "")
-        reasoning = decision.get("reasoning", "")
-
-        logger.info(f"Executing intervention for agent {agent.id}: {action}")
-
-        if action == MonitoringDecision.CONTINUE.value:
-            # No action needed
-            return
-
-        elif action == MonitoringDecision.NUDGE.value:
-            # Send helpful nudge message
-            await self._nudge_agent(agent, message)
-            await self._log_intervention(agent, "nudged", message)
-
-        elif action == MonitoringDecision.ANSWER.value:
-            # Answer agent's question with context
-            enriched_answer = await self._enrich_answer(message, agent.current_task_id)
-            await self._send_agent_message(agent, enriched_answer)
-            await self._log_intervention(agent, "answered", enriched_answer)
-
-        elif action == MonitoringDecision.RESTART.value:
-            # Restart the agent
-            await self.agent_manager.restart_agent(agent.id, reasoning)
-            await self._log_intervention(agent, "restarted", reasoning)
-
-        elif action == MonitoringDecision.RECREATE.value:
-            # Create new agent with enhanced approach
-            await self._recreate_agent_with_new_approach(agent, reasoning)
-            await self._log_intervention(agent, "recreated", reasoning)
-
-    async def _nudge_agent(self, agent: Agent, message: str):
-        """Send a nudge message to the agent.
-
-        Args:
-            agent: Agent to nudge
-            message: Nudge message
-        """
-        if not message:
-            message = f"""
-[HEPHAESTUS ASSISTANT]: Just checking in! You're working on task {agent.current_task_id}.
-If you're stuck or need help, remember you can:
-- Create sub-tasks using hephaestus_create_task
-- Save discoveries using hephaestus_save_memory
-- Update task status when done using hephaestus_update_task_status
-
-Current time: {datetime.utcnow().isoformat()}
-"""
-
-        await self._send_agent_message(agent, message)
-
-    async def _send_agent_message(self, agent: Agent, message: str):
-        """Send a message to the agent.
-
-        Args:
-            agent: Agent to message
-            message: Message to send
-        """
-        # Check if task is already done — don't send messages to completed agents
-        if agent.current_task_id:
-            with self.db_manager.session_scope() as session:
-                from src.core.database import Task
-                task = session.query(Task).filter_by(id=agent.current_task_id).first()
-                if task and task.status == "done":
-                    logger.info(
-                        f"[MONITOR] Skipping message to agent {agent.id[:8]} — "
-                        f"task {task.id[:8]} is already done"
-                    )
-                    return
-
-        formatted_message = f"\n[HEPHAESTUS]: {message}\n"
-        await self.agent_manager.send_message_to_agent(agent.id, formatted_message)
-
-    async def _enrich_answer(self, answer: str, task_id: str) -> str:
-        """Enrich an answer with additional context.
-
-        Args:
-            answer: Base answer
-            task_id: Related task ID
-
-        Returns:
-            Enriched answer
-        """
-        # Search for relevant knowledge
-        relevant_knowledge = await self.rag_system.retrieve_for_task(
-            task_description=answer,
-            requesting_agent_id="monitor",
-            limit=5,
-        )
-
-        if relevant_knowledge:
-            enriched = f"{answer}\n\nAdditional context from knowledge base:\n"
-            for memory in relevant_knowledge[:3]:
-                enriched += f"- {memory['content'][:200]}...\n"
-            return enriched
-
-        return answer
-
-    async def _recreate_agent_with_new_approach(self, agent: Agent, reason: str):
-        """Recreate agent with a new approach.
-
-        Args:
-            agent: Agent to recreate
-            reason: Reason for recreation
-        """
-        logger.info(f"Recreating agent {agent.id} with new approach: {reason}")
-
-        session = self.db_manager.get_session()
-        try:
-            # Get task
-            task = session.query(Task).filter_by(id=agent.current_task_id).first()
-            if not task:
-                logger.error(f"Task {agent.current_task_id} not found")
-                return
-
-            # Same restart-loop protection as AgentManager.restart_agent.
-            # This path creates a brand-new Agent row via create_agent_for_task
-            # rather than incrementing restart_count on the existing one, so
-            # without this check it has no bound at all: a decision-maker
-            # that keeps returning RECREATE for the same stuck task could
-            # spin up unlimited new agents.
-            if (agent.restart_count or 0) >= 3:
-                logger.warning(
-                    f"Agent {agent.id[:8]} exceeded max restarts "
-                    f"({agent.restart_count}), failing task instead of recreating"
-                )
-                task.status = "failed"
-                task.failure_reason = f"Agent exceeded max restarts ({agent.restart_count})"
-                session.commit()
-                return
-
-            # Terminate old agent
-            await self.agent_manager.terminate_agent(agent.id)
-
-            # Get failure context
-            failure_context = f"""
-Previous agent failed with: {reason}
-Previous approach issues:
-- {reason}
-
-Please try a different approach, considering:
-- Break down the task into smaller steps
-- Use hephaestus_create_task for complex sub-tasks
-- Save any discoveries or errors encountered
-"""
-
-            # Get enhanced memories including failure patterns
-            memories = await self.rag_system.retrieve_for_task(
-                task_description=f"{task.enriched_description} {failure_context}",
-                requesting_agent_id="monitor",
-                limit=15,
-            )
-
-            # Create new agent with enhanced context
-            enriched_data = {
-                "enriched_description": task.enriched_description,
-                "completion_criteria": [task.done_definition],
-                "agent_prompt": failure_context,
-                "required_capabilities": ["recovery", "problem_solving"],
-                "estimated_complexity": 8,  # Increase complexity
-            }
-
-            project_context = await self.agent_manager.get_project_context()
-
-            # Preserve the task's phase CLI/thinking config on recovery — otherwise a
-            # restarted phase agent silently reverts to the default tool/model/budget.
-            phase_cli_tool = phase_cli_model = phase_glm_token_env = (
-                phase_thinking_level
-            ) = None
-            if task.phase_id:
-                from src.core.database import Phase
-
-                ps = self.db_manager.get_session()
-                try:
-                    ph = ps.query(Phase).filter_by(id=task.phase_id).first()
-                    if ph:
-                        phase_cli_tool = ph.cli_tool
-                        phase_cli_model = ph.cli_model
-                        phase_glm_token_env = ph.glm_api_token_env
-                        phase_thinking_level = ph.thinking_level
-                finally:
-                    ps.close()
-
-            new_agent = await self.agent_manager.create_agent_for_task(
-                task=task,
-                enriched_data=enriched_data,
-                memories=memories,
-                project_context=f"{project_context}\n\n{failure_context}",
-                phase_cli_tool=phase_cli_tool,
-                phase_cli_model=phase_cli_model,
-                phase_glm_token_env=phase_glm_token_env,
-                phase_thinking_level=phase_thinking_level,
-            )
-
-            # Carry the restart count forward onto the new agent row -- it's
-            # a fresh Agent id, so without this the max-restarts check above
-            # would never see accumulated attempts across recreations.
-            db_new_agent = session.query(Agent).filter_by(id=new_agent.id).first()
-            if db_new_agent:
-                db_new_agent.restart_count = (agent.restart_count or 0) + 1
-                session.commit()
-
-            logger.info(f"Created new agent {new_agent.id} to replace {agent.id}")
-
-        except Exception as e:
-            logger.error(f"Failed to recreate agent: {e}")
-            session.rollback()
-        finally:
-            session.close()
-
-    async def _log_intervention(
-        self, agent: Agent, intervention_type: str, details: str
-    ):
-        """Log an intervention.
-
-        Args:
-            agent: Agent involved
-            intervention_type: Type of intervention
-            details: Intervention details
-        """
-        session = self.db_manager.get_session()
-        try:
-            log_entry = AgentLog(
-                agent_id=agent.id,
-                log_type="intervention",
-                message=f"Intervention: {intervention_type}",
-                details={"type": intervention_type, "details": details[:500]},
-            )
-            session.add(log_entry)
-            session.commit()
-        except Exception as e:
-            logger.error(f"Failed to log intervention: {e}")
-            session.rollback()
-        finally:
-            session.close()
 
 
 class MonitoringLoop:
@@ -594,14 +171,6 @@ class MonitoringLoop:
             agent_manager=agent_manager,
         )
         self.trajectory_context = TrajectoryContext(db_manager=db_manager)
-
-        # Keep old monitor for fallback
-        self.intelligent_monitor = IntelligentMonitor(
-            db_manager=db_manager,
-            agent_manager=agent_manager,
-            llm_provider=llm_provider,
-            rag_system=rag_system,
-        )
 
         self.config = get_config()
         self.running = False
@@ -911,27 +480,11 @@ class MonitoringLoop:
                         else ""
                     )
                     if "Operation aborted" in sig:
-                        msg = (
-                            "Your last tool call was aborted. Review what you have already "
-                            "completed in this session. If the work is done, call "
-                            "hephaestus_update_task_status with status='done'. If you are genuinely "
-                            f"blocked, call it with status='failed' and explain why.{mcp_note}"
-                        )
+                        msg = get_monitor_nudge("operation_aborted", mcp_note=mcp_note)
                     elif _MAX_TOKEN_LIMIT_RE.search(_strip_sgr(sig)):
-                        msg = (
-                            "You hit the model's output token limit. Do NOT redo work that "
-                            "already succeeded — check what was actually written before "
-                            "continuing. Break remaining work into smaller chunks: one file "
-                            "read or one write per turn. If the task is done, call "
-                            "hephaestus_update_task_status with status='done'."
-                            f"{mcp_note}"
-                        )
+                        msg = get_monitor_nudge("max_token_limit_recovery", mcp_note=mcp_note)
                     else:
-                        msg = (
-                            "You appear stuck or looping. Stop, state your single next concrete "
-                            f"action in one line, then do it. If blocked, save a memory and call "
-                            f"hephaestus_update_task_status.{mcp_note}"
-                        )
+                        msg = get_monitor_nudge("stuck_or_looping", mcp_note=mcp_note)
                     await self.agent_manager.send_message_to_agent(agent.id, msg)
                     # Re-baseline st["sig"] to the pane AFTER our own nudge
                     # lands, not before. The nudge text gets echoed into the
@@ -1079,11 +632,11 @@ class MonitoringLoop:
                 await self.agent_manager.send_recovery_keystrokes(agent.id)
             await self.agent_manager.send_message_to_agent(
                 agent.id,
-                f"You are in a thought loop — the phrase {top_line[:60]!r} "
-                f"has appeared {top_count} times. STOP. Do not repeat that "
-                "reasoning again. Pick ONE concrete next step, execute it, "
-                "and if you are still blocked call hephaestus_update_task_status with "
-                "status='failed' and explain why.",
+                get_monitor_nudge(
+                    "thought_loop",
+                    top_line=repr(top_line[:60]),
+                    top_count=top_count,
+                ),
             )
             return True
         except Exception as e:
@@ -1147,12 +700,7 @@ class MonitoringLoop:
                 await self.agent_manager.send_recovery_keystrokes(agent.id)
             await self.agent_manager.send_message_to_agent(
                 agent.id,
-                "Your rm command was denied — you must NEVER run `rm -rf` or any "
-                "other destructive filesystem command; this is a hard rule from "
-                "your system prompt, not a suggestion. If you need to replace or "
-                "clean up a file/directory, overwrite it directly with your "
-                "write/edit tools instead of deleting it first. Continue your "
-                "task without using rm.",
+                get_monitor_nudge("dangerous_rm_denied"),
             )
             return True
         except Exception as e:
@@ -1203,12 +751,7 @@ class MonitoringLoop:
             )
             await self.agent_manager.send_message_to_agent(
                 agent.id,
-                "You just hit the model's output token limit — whatever you were "
-                "doing (reading, reasoning, or writing) was too large for one "
-                "turn. Break it into smaller pieces: one file read or write per "
-                "turn, not several chained together, and don't try to redo the "
-                "whole thing at once. Check what actually got written before "
-                "continuing — a write that hit this limit may be truncated.",
+                get_monitor_nudge("max_token_limit_immediate"),
             )
             return True
         except Exception as e:
@@ -1321,16 +864,11 @@ class MonitoringLoop:
             await asyncio.sleep(0.5)
             await self.agent_manager.send_message_to_agent(
                 agent.id,
-                "Your MCP connection to the hephaestus server is down (0 "
-                "connected servers) — this is a client-side connection issue, "
-                f"not a backend problem. {instructions} Once reconnected, "
-                "verify with `mcp status` that hephaestus is actually back, "
-                "then check specifically: have you already called "
-                f"hephaestus_complete_my_task for your CURRENT task_id ({agent.current_task_id or 'unknown -- call get_my_tasks first'}) "
-                "in THIS session? If not, call it now with your real "
-                "results — do not just say 'task already completed' and "
-                "stop. A resumed session can make you recall finishing a "
-                "DIFFERENT, earlier task; that does not count for this one.",
+                get_monitor_nudge(
+                    "mcp_disconnected",
+                    instructions=instructions,
+                    current_task_id=agent.current_task_id or "unknown -- call get_my_tasks first",
+                ),
             )
             return True
         except Exception as e:
@@ -2346,120 +1884,6 @@ class MonitoringLoop:
         finally:
             session.close()
 
-    async def _check_agent(self, agent: Agent):
-        """Check a single agent's health (fallback method).
-
-        Args:
-            agent: Agent to check
-        """
-        # This is now a fallback method - Guardian analysis handles most of this
-        # Only used if Guardian analysis is disabled or fails
-
-        # Check task timeout
-        if self._is_task_timed_out(agent):
-            logger.warning(f"Agent {agent.id} task timed out")
-            await self._handle_timeout(agent)
-
-    def _is_agent_responsive(self, agent: Agent) -> bool:
-        """Check if agent is responsive.
-
-        Args:
-            agent: Agent to check
-
-        Returns:
-            True if responsive
-        """
-        # Check if tmux session exists first
-        if agent.tmux_session_name:
-            if not self.agent_manager.tmux_server.has_session(agent.tmux_session_name):
-                logger.warning(
-                    f"Agent {agent.id} tmux session {agent.tmux_session_name} missing"
-                )
-                return False
-
-        # Check last activity time
-        if agent.last_activity:
-            time_since_activity = datetime.utcnow() - agent.last_activity
-            max_idle = timedelta(minutes=self.config.stuck_detection_minutes)
-
-            if time_since_activity > max_idle:
-                return False
-
-        # Check tmux output for activity
-        output = self.agent_manager.get_agent_output(agent.id, lines=50)
-        if not output:
-            return False
-
-        # Check for stuck patterns
-        cli_agent = get_cli_agent(agent.cli_type)
-        if cli_agent.is_stuck(output):
-            return False
-
-        return True
-
-    def _is_task_timed_out(self, agent: Agent) -> bool:
-        """Check if agent's task has timed out.
-
-        Args:
-            agent: Agent to check
-
-        Returns:
-            True if timed out
-        """
-        session = self.db_manager.get_session()
-        task = session.query(Task).filter_by(id=agent.current_task_id).first()
-        session.close()
-
-        if not task or not task.started_at:
-            return False
-
-        # Calculate timeout based on complexity
-        complexity = task.estimated_complexity or 5
-        timeout_minutes = self.config.agent_timeout_minutes * (1 + complexity / 10)
-
-        time_on_task = datetime.utcnow() - task.started_at
-        return time_on_task > timedelta(minutes=timeout_minutes)
-
-    async def _handle_stuck_agent(self, agent: Agent):
-        """Handle a stuck agent with trajectory-based intervention.
-
-        Args:
-            agent: Stuck agent
-        """
-        logger.info(f"Handling stuck agent {agent.id} with trajectory analysis")
-
-        # Build accumulated context for better understanding
-        accumulated_context = self.trajectory_context.build_accumulated_context(
-            agent_id=agent.id,
-            include_full_history=True,
-        )
-
-        # Check for specific issues in trajectory
-        # Guardian only steers as last resort (health_check_failures >= 3)
-        blockers = accumulated_context.get("discovered_blockers", [])
-        if blockers and agent.health_check_failures >= 3:
-            logger.info(
-                f"Agent {agent.id} has blockers ({agent.health_check_failures} failures): {blockers}"
-            )
-
-            # Last resort: try to help with top 3 blockers
-            for blocker in blockers[:3]:
-                message = f"I see you're blocked on: {blocker}. Try a different approach or create a sub-task if it's complex."
-                await self.guardian.steer_agent(
-                    agent=agent,
-                    steering_type="last_resort_stuck",
-                    message=message,
-                )
-        elif blockers:
-            # Not enough failures yet — just log for observability
-            logger.info(
-                f"Agent {agent.id} has blockers (will steer after 3+ failures): {blockers[:2]}"
-            )
-        else:
-            # No blockers — just do trajectory analysis
-            analysis = await self.intelligent_monitor.analyze_agent_state(agent)
-            await self.intelligent_monitor.execute_intervention(agent, analysis)
-
     async def _handle_missing_tmux_session(self, agent: Agent):
         """Handle an agent with a missing tmux session by restarting it.
 
@@ -2540,25 +1964,6 @@ class MonitoringLoop:
             manifest_path.write_text(_json.dumps(manifest, indent=2))
         except Exception as e:
             logger.debug(f"[TMUX-LOG] Failed to write log for {agent_id[:8]}: {e}")
-
-    async def _handle_timeout(self, agent: Agent):
-        """Handle a timed-out agent.
-
-        Args:
-            agent: Timed-out agent
-        """
-        logger.warning(f"Handling timeout for agent {agent.id}")
-
-        # Force analysis with timeout context
-        analysis = {
-            "state": AgentState.UNRECOVERABLE.value,
-            "decision": MonitoringDecision.RECREATE.value,
-            "message": "",
-            "reasoning": "Task timed out, creating new agent with fresh approach",
-            "confidence": 0.9,
-        }
-
-        await self.intelligent_monitor.execute_intervention(agent, analysis)
 
     async def _audit_system_health(self):
         """Audit system health across all autopilot workflows.
@@ -2654,17 +2059,7 @@ class MonitoringLoop:
                         try:
                             await self.agent_manager.send_message_to_agent(
                                 agent.id,
-                                "No activity has been seen from you in a while. "
-                                f"Your CURRENT task_id is {task.id} -- if a resumed "
-                                "session made you recall completing a DIFFERENT, "
-                                "earlier task, that is not this one and does not "
-                                "count. Check specifically: have you already called "
-                                f"hephaestus_complete_my_task for task_id {task.id} in this "
-                                "session? If not, do that now (verify your actual "
-                                "work against the current code first, don't assume "
-                                "an earlier task's fix covers this one). If you "
-                                "have called it and are still here, say so "
-                                "explicitly and stop.",
+                                get_monitor_nudge("stuck_task_no_activity", task_id=task.id),
                             )
                             self._stuck_task_nudges[task.id] = (nudge_count + 1, datetime.utcnow())
                             logger.info(

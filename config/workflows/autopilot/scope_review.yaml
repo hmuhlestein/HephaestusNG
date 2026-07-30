@@ -151,7 +151,7 @@ additional_notes: |
   WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
   ═══════════════════════════════════════════════════════════════════════
 
-  hephaestus_complete_my_task({
+  heph_complete_my_task({
     "status": "done",
     "summary": "SCOPE_PASS: ..." or "SCOPE_FAIL: ...",
     "key_learnings": ["<list of in-scope, out-of-scope, missing items>"]

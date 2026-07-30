@@ -159,7 +159,7 @@ submit_result_validation(
 - The validation criteria above may require you to execute code, run tests, apply patches, or perform other verification steps
 - You should follow those requirements exactly
 - Use all available tools to verify the submission meets the criteria
-- Only use `submit_result_validation` for your final validation decision (not `hephaestus_update_task_status`, `give_validation_review`, or task management tools)
+- Only use `submit_result_validation` for your final validation decision (not `heph_update_task_status`, `give_validation_review`, or task management tools)
 
 ---
 

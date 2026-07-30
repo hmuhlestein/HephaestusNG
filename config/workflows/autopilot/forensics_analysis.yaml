@@ -19,7 +19,7 @@ done_definitions:
   - "Stuck/crashed agents identified with timestamps"
   - "Common issue patterns cataloged"
   - "Specific prompt rewrites proposed (with before/after text)"
-  - "Tickets created for actionable findings (skip and continue if hephaestus_create_ticket returns an error)"
+  - "Tickets created for actionable findings (skip and continue if heph_create_ticket returns an error)"
   - "forensics_report.md created in Docs Path"
   - "Memory entries saved with feature name prefix in content"
   - "Task marked as done"
@@ -302,14 +302,14 @@ additional_notes: |
   STEP 7: CREATE TICKETS FOR FINDINGS (OPTIONAL — SKIP IF API FAILS)
   ═══════════════════════════════════════════════════════════════════════
 
-  IMPORTANT: Ticket creation is OPTIONAL. If hephaestus_create_ticket returns an error,
+  IMPORTANT: Ticket creation is OPTIONAL. If heph_create_ticket returns an error,
   note "ticket creation failed — findings documented in forensics_report.md"
   and MOVE ON immediately to Step 8. Do NOT retry. Do NOT loop.
 
   For each actionable finding in your report, attempt to create a ticket:
 
   ```
-  hephaestus_create_ticket(
+  heph_create_ticket(
     agent_id="<your agent id>",
     workflow_id="<your workflow id>",
     task_id="<your task id>",
@@ -348,7 +348,7 @@ additional_notes: |
   Save improvements to memory, scoped to this feature:
   
   ```python
-  hephaestus_save_memory({
+  heph_save_memory({
       "content": f"Forensics [{feature_name}] Phase [N]: [finding]. Proposed fix: [fix].",
       "memory_type": "learning"
   })
@@ -387,12 +387,12 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
-  You MUST call the hephaestus_complete_my_task tool. The system CANNOT detect you finished
+  You MUST call the heph_complete_my_task tool. The system CANNOT detect you finished
   without this call. The pipeline WILL get stuck.
   
   After writing all your output files, call:
   
-  hephaestus_complete_my_task({
+  heph_complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was accomplished>",
     "key_learnings": ["<key findings or decisions>"]

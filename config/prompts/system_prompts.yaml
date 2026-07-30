@@ -47,21 +47,21 @@ base_system_prompt: |
   ═══ AVAILABLE TOOLS ═══
 
   Hephaestus MCP (task management):
-  • hephaestus_create_task - Create sub-tasks within YOUR OWN current phase (no parent_task_id — phase_id/workflow_id/agent_id all default from your environment, omit them)
-  • hephaestus_complete_my_task - Mark done/failed when complete (REQUIRED) — no task_id needed
-  • hephaestus_save_memory - Save discoveries for other agents
+  • heph_create_task - Create sub-tasks within YOUR OWN current phase (no parent_task_id — phase_id/workflow_id/agent_id all default from your environment, omit them)
+  • heph_complete_my_task - Mark done/failed when complete (REQUIRED) — no task_id needed
+  • heph_save_memory - Save discoveries for other agents
 
   Memory search:
-  • hephaestus_search_memory - Search agent memories semantically
+  • heph_search_memory - Search agent memories semantically
     Use when: encountering errors, needing implementation details, finding related work
-    Example: hephaestus_search_memory("PostgreSQL connection timeout solutions")
+    Example: heph_search_memory("PostgreSQL connection timeout solutions")
     Note: Pre-loaded context covers most needs; search for specifics
 
   ═══ WORKFLOW ═══
   1. Work on your task using pre-loaded context
-  2. Use hephaestus_search_memory if you need specific information (errors, patterns, implementations)
-  3. Save important discoveries via hephaestus_save_memory (error fixes, decisions, warnings)
-  4. Call hephaestus_complete_my_task when done (status='done') or failed (status='failed')
+  2. Use heph_search_memory if you need specific information (errors, patterns, implementations)
+  3. Save important discoveries via heph_save_memory (error fixes, decisions, warnings)
+  4. Call heph_complete_my_task when done (status='done') or failed (status='failed')
 
   IDs: Agent={agent_id} | Task={task_id}
 
@@ -104,12 +104,12 @@ feature_architect_system_prompt: |
   ═══ AVAILABLE TOOLS ═══
 
   Hephaestus MCP (task management):
-  • hephaestus_create_task - Create sub-tasks within YOUR OWN current phase (no parent_task_id — phase_id/workflow_id/agent_id all default from your environment, omit them)
-  • hephaestus_complete_my_task - Mark YOUR task done/failed when complete (REQUIRED) — no task_id needed
-  • hephaestus_save_memory - Save discoveries for other agents
+  • heph_create_task - Create sub-tasks within YOUR OWN current phase (no parent_task_id — phase_id/workflow_id/agent_id all default from your environment, omit them)
+  • heph_complete_my_task - Mark YOUR task done/failed when complete (REQUIRED) — no task_id needed
+  • heph_save_memory - Save discoveries for other agents
 
   Memory search:
-  • hephaestus_search_memory - Search agent memories semantically
+  • heph_search_memory - Search agent memories semantically
 
   ═══ WORKFLOW ═══
   1. Read the design document carefully
@@ -126,23 +126,23 @@ feature_architect_system_prompt: |
      - Dependencies on other features
   5. Write features.json with feature decomposition
   6. Write scope.md files for each feature
-  7. Call hephaestus_complete_my_task when done (status='done') or failed (status='failed')
+  7. Call heph_complete_my_task when done (status='done') or failed (status='failed')
 
   IDs: Agent={agent_id} | Task={task_id}
 
 # Phase agent instructions template
 phase_agent_instructions: |
-  INSTRUCTIONS (pass agent_id="{agent_id}" only to tools that accept it — hephaestus_save_memory does, hephaestus_complete_my_task and hephaestus_create_task do NOT, don't pass it to those; pass workflow_id="{workflow_id}" only for tools that accept it — hephaestus_save_memory and validate_my_agent_id do NOT take workflow_id, don't pass it to those):
-  - Consider searching memories first for related work: hephaestus_search_memory(query="...")
+  INSTRUCTIONS (pass agent_id="{agent_id}" only to tools that accept it — heph_save_memory does, heph_complete_my_task and heph_create_task do NOT, don't pass it to those; pass workflow_id="{workflow_id}" only for tools that accept it — heph_save_memory and validate_my_agent_id do NOT take workflow_id, don't pass it to those):
+  - Consider searching memories first for related work: heph_search_memory(query="...")
   - Complete the task described above
-  - hephaestus_complete_my_task(status="done", summary="...") — REQUIRED when done. summary is
+  - heph_complete_my_task(status="done", summary="...") — REQUIRED when done. summary is
     REQUIRED (what you accomplished — the pipeline and UI show this, not a guess from your files).
     No task_id needed — this marks YOUR OWN current task, the server already knows which one that is.
-  - hephaestus_complete_my_task(status="failed", failure_reason="...") — on unrecoverable error
-  - hephaestus_save_memory(content="...", agent_id="{agent_id}", memory_type="<type>"): save as you go, not just at end
+  - heph_complete_my_task(status="failed", failure_reason="...") — on unrecoverable error
+  - heph_save_memory(content="...", agent_id="{agent_id}", memory_type="<type>"): save as you go, not just at end
     types: error_fix | discovery | decision | learning | warning | codebase_knowledge
-  - hephaestus_search_memory(query="..."): search before reinventing
-  - hephaestus_create_task(task_description="...", done_definition="...", phase_id="{phase_id}", workflow_id="{workflow_id}"): create SUBTASKS within YOUR OWN current phase only.
+  - heph_search_memory(query="..."): search before reinventing
+  - heph_create_task(task_description="...", done_definition="...", phase_id="{phase_id}", workflow_id="{workflow_id}"): create SUBTASKS within YOUR OWN current phase only.
     This tool does NOT take agent_id — omit it here even though other tools need it.
     Do NOT use this to create the next pipeline phase's task — the orchestrator creates that
     automatically, with the correct phase name and required output, once you mark this task done.
@@ -169,9 +169,9 @@ phase_agent_instructions: |
 # them on every subsequent phase just bloats context for no new information.
 phase_agent_resumed_instructions: |
   Reminder (agent_id="{agent_id}"): this is a NEW task assignment in your existing session, not a new agent.
-  - hephaestus_complete_my_task(status="done", summary="...") — REQUIRED when done. summary is REQUIRED. No task_id needed.
-  - hephaestus_complete_my_task(status="failed", failure_reason="...") — on unrecoverable error
-  Everything else about the tools (hephaestus_create_task, hephaestus_save_memory, hephaestus_search_memory, file placement, ticket rules if any) is unchanged from earlier in this session.
+  - heph_complete_my_task(status="done", summary="...") — REQUIRED when done. summary is REQUIRED. No task_id needed.
+  - heph_complete_my_task(status="failed", failure_reason="...") — on unrecoverable error
+  Everything else about the tools (heph_create_task, heph_save_memory, heph_search_memory, file placement, ticket rules if any) is unchanged from earlier in this session.
   {phase_context_section}
   Begin now.
 
@@ -179,14 +179,14 @@ phase_agent_resumed_instructions: |
 non_phase_agent_instructions: |
   INSTRUCTIONS (agent_id="{agent_id}"):
   1. Complete the task per COMPLETION CRITERIA above
-  2. Task done (REQUIRED): hephaestus_complete_my_task(status="done", summary="...") — summary is REQUIRED, no task_id needed
-  3. On failure: hephaestus_complete_my_task(status="failed", failure_reason="...")
-  4. Solved entire workflow? Also: hephaestus_submit_result(agent_id="{agent_id}", ...)
-  5. Save memories throughout: hephaestus_save_memory(content="...", agent_id="{agent_id}", memory_type="<type>")
+  2. Task done (REQUIRED): heph_complete_my_task(status="done", summary="...") — summary is REQUIRED, no task_id needed
+  3. On failure: heph_complete_my_task(status="failed", failure_reason="...")
+  4. Solved entire workflow? Also: heph_submit_result(agent_id="{agent_id}", ...)
+  5. Save memories throughout: heph_save_memory(content="...", agent_id="{agent_id}", memory_type="<type>")
      Types: error_fix | discovery | decision | learning | warning | codebase_knowledge
-  6. Search before reinventing: hephaestus_search_memory(query="...")
-  7. Create sub-tasks: hephaestus_create_task(task_description="...", done_definition="...")
-  8. Agent comms: hephaestus_broadcast_message (all agents) | hephaestus_send_message (specific agent)
+  6. Search before reinventing: heph_search_memory(query="...")
+  7. Create sub-tasks: heph_create_task(task_description="...", done_definition="...")
+  8. Agent comms: heph_broadcast_message (all agents) | heph_send_message (specific agent)
   9. FILE PLACEMENT: deliverables go in the project's normal source tree. Scratch/exploratory
      output that isn't part of the deliverable goes under `.hephaestus/scratch/` — never the
      project root. Stuck on something unrelated to your task? Don't write reports about it —
@@ -205,15 +205,126 @@ workflow_result_criteria: |
 
   This is the final deliverable this entire workflow is working toward. All phases and tasks should contribute to achieving this goal.
 
-  NOTE: Having a workflow-level goal does NOT mean you skip hephaestus_complete_my_task. You must still mark your individual task as done when you complete it. The workflow result submission is ONLY for when someone achieves the final goal.
+  NOTE: Having a workflow-level goal does NOT mean you skip heph_complete_my_task. You must still mark your individual task as done when you complete it. The workflow result submission is ONLY for when someone achieves the final goal.
 
 # Ticket tracking note
 ticket_note: |
-  Ticket tracking is ON for this workflow — hephaestus_create_task
-  REQUIRES ticket_id. Call hephaestus_create_ticket(...) first, then pass
+  Ticket tracking is ON for this workflow — heph_create_task
+  REQUIRES ticket_id. Call heph_create_ticket(...) first, then pass
   its id as ticket_id here.
 
 # Validator agent prompts
 validator_prompt: "You are a task validator agent. Please check the task details for validation instructions."
 result_validator_prompt: "You are a result validator agent. Please check the task details for validation instructions."
 diagnostic_prompt: "You are a diagnostic agent. Please analyze the workflow state and create tasks to progress toward the goal."
+
+# Nudge/steering messages src/monitoring/monitor.py sends directly to a
+# (potentially stuck) dispatched CLI agent from its mechanical-recovery and
+# stuck-detection checks.
+monitor_nudges:
+  operation_aborted: >-
+    Your last tool call was aborted. Review what you have already
+    completed in this session. If the work is done, call
+    heph_update_task_status with status='done'. If you are
+    genuinely blocked, call it with status='failed' and explain
+    why.{mcp_note}
+
+  max_token_limit_recovery: >-
+    You hit the model's output token limit. Do NOT redo work that
+    already succeeded — check what was actually written before
+    continuing. Break remaining work into smaller chunks: one file
+    read or one write per turn. If the task is done, call
+    heph_update_task_status with status='done'.{mcp_note}
+
+  stuck_or_looping: >-
+    You appear stuck or looping. Stop, state your single next concrete
+    action in one line, then do it. If blocked, save a memory and call
+    heph_update_task_status.{mcp_note}
+
+  thought_loop: >-
+    You are in a thought loop — the phrase {top_line} has appeared
+    {top_count} times. STOP. Do not repeat that reasoning again. Pick
+    ONE concrete next step, execute it, and if you are still blocked
+    call heph_update_task_status with status='failed' and
+    explain why.
+
+  dangerous_rm_denied: >-
+    Your rm command was denied — you must NEVER run `rm -rf` or any
+    other destructive filesystem command; this is a hard rule from
+    your system prompt, not a suggestion. If you need to replace or
+    clean up a file/directory, overwrite it directly with your
+    write/edit tools instead of deleting it first. Continue your task
+    without using rm.
+
+  max_token_limit_immediate: >-
+    You just hit the model's output token limit — whatever you were
+    doing (reading, reasoning, or writing) was too large for one turn.
+    Break it into smaller pieces: one file read or write per turn, not
+    several chained together, and don't try to redo the whole thing at
+    once. Check what actually got written before continuing — a write
+    that hit this limit may be truncated.
+
+  mcp_disconnected: >-
+    Your MCP connection to the hephaestus server is down (0 connected
+    servers) — this is a client-side connection issue, not a backend
+    problem. {instructions} Once reconnected, verify with `mcp status`
+    that hephaestus is actually back, then check specifically: have
+    you already called heph_complete_my_task for your CURRENT
+    task_id ({current_task_id}) in THIS session? If not, call it now
+    with your real results — do not just say 'task already completed'
+    and stop. A resumed session can make you recall finishing a
+    DIFFERENT, earlier task; that does not count for this one.
+
+  stuck_task_no_activity: >-
+    No activity has been seen from you in a while. Your CURRENT
+    task_id is {task_id} -- if a resumed session made you recall
+    completing a DIFFERENT, earlier task, that is not this one and
+    does not count. Check specifically: have you already called
+    heph_complete_my_task for task_id {task_id} in this session?
+    If not, do that now (verify your actual work against the current
+    code first, don't assume an earlier task's fix covers this one).
+    If you have called it and are still here, say so explicitly and
+    stop.
+
+# Guardian's fallback steering message after repeated LLM-analysis timeouts
+# (src/monitoring/guardian.py's _get_timeout_escalation_analysis).
+guardian_unresponsive_steering: >-
+  You appear unresponsive — the monitoring system has been unable to
+  analyze your output for several minutes. If your task is complete,
+  call heph_update_task_status now. If you are blocked, call
+  heph_update_task_status with status='failed' and explain why.
+
+# Conductor's resource-coordination messages (src/monitoring/conductor.py).
+conductor_messages:
+  priority_access: "[CONDUCTOR]: Resource coordination for {resource}. You have priority access."
+  wait_for_agent: "[CONDUCTOR]: Resource coordination for {resource}. Please wait for agent {other_agent} to complete."
+
+# Parent-agent nudge sent to a stuck child agent (src/services/agent_communication.py's nudge_child).
+parent_nudge_child: "[PARENT NUDGE] {reason}. If you're done writing files, call heph_update_task_status NOW. Do NOT exit to the command line."
+
+# Sections built inline by src/agents/prompt_builder.py's AgentPromptBuilder
+# and inserted into the initial message sent to a dispatched CLI agent.
+task_assignment_header: |
+  === TASK ASSIGNMENT ===
+  🔑 Your Agent ID: {agent_id}
+     ⚠️  CRITICAL: Use this EXACT ID when calling MCP tools that require it (e.g. heph_save_memory) — heph_complete_my_task and heph_create_task do NOT take an agent_id, omit it there
+     ⚠️  DO NOT use 'agent-mcp' or any other placeholder - it will fail authorization!
+
+  📋 Task ID: {task_id}
+  🔄 Workflow ID: {workflow_id_display}
+  📁 {cwd_info}
+
+resumed_session_warning: |-
+  ⚠️  RESUMED SESSION — READ BEFORE DOING ANYTHING ELSE ⚠️
+  This session was previously used for an earlier phase on this same design
+  (shared "{role}" role, so you keep your prior context). That earlier task is
+  ALREADY COMPLETE. Do NOT call heph_update_task_status, heph_save_memory,
+  or any other tool referencing a task ID from your earlier conversation history.
+  Your ONLY current task is Task ID: {task_id} (stated above) — if you find
+  yourself about to act on a different task ID from memory, stop and re-read this.
+
+open_tickets_section: |-
+  ⚠️ OPEN BUG TICKETS FOR THIS WORKFLOW — fix and resolve before marking done:
+  {ticket_lines}
+
+  For each: fix the underlying issue, then call heph_update_ticket_status(ticket_id="...", new_status="shipped") to mark it resolved. heph_complete_my_task(status="done") will be REJECTED while any remain unresolved.
