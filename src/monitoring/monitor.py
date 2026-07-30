@@ -306,6 +306,19 @@ class MonitoringLoop:
                                                 f"[SESSION-LIMIT] Re-dispatching with fallback: "
                                                 f"{fallback_tool}/{fallback_model or 'default'}"
                                             )
+                                            self._log_agent_event(
+                                                agent.id, "session_limit_terminated",
+                                                f"Hit {limit_kind} ({agent.cli_type}) — terminated "
+                                                f"and redispatched to {fallback_tool}/{fallback_model or 'default'}",
+                                                {
+                                                    "task_id": stuck_task.id,
+                                                    "limit_kind": limit_kind,
+                                                    "from_cli_type": agent.cli_type,
+                                                    "fallback_cli_type": fallback_tool,
+                                                    "fallback_cli_model": fallback_model,
+                                                },
+                                                session=session,
+                                            )
                                             session.commit()
                                             await self.agent_manager.terminate_agent(agent.id)
                                             self._stuck_state.pop(agent.id, None)
@@ -339,6 +352,18 @@ class MonitoringLoop:
                                                     f"Primary hit {limit_kind}, fallback also failed: "
                                                     f"{fallback_err}"
                                                 )
+                                                self._log_agent_event(
+                                                    agent.id, "session_limit_terminated",
+                                                    f"Hit {limit_kind} ({agent.cli_type}) — terminated, "
+                                                    f"fallback ({fallback_tool}) creation also failed: {fallback_err}",
+                                                    {
+                                                        "task_id": stuck_task.id,
+                                                        "limit_kind": limit_kind,
+                                                        "from_cli_type": agent.cli_type,
+                                                        "fallback_cli_type": fallback_tool,
+                                                    },
+                                                    session=session,
+                                                )
                                                 session.commit()
                                             return True
                                         elif stuck_task.workflow_id:
@@ -361,6 +386,17 @@ class MonitoringLoop:
                                                     f"{stuck_task.workflow_id[:8]} -- no fallback "
                                                     "configured for this phase"
                                                 )
+                                self._log_agent_event(
+                                    agent.id, "session_limit_terminated",
+                                    f"Hit {limit_kind} ({agent.cli_type}) — terminated, "
+                                    "no fallback configured",
+                                    {
+                                        "task_id": stuck_task.id if stuck_task else None,
+                                        "limit_kind": limit_kind,
+                                        "from_cli_type": agent.cli_type,
+                                    },
+                                    session=session,
+                                )
                                 await self.agent_manager.terminate_agent(agent.id)
                                 self._stuck_state.pop(agent.id, None)
                                 return True
@@ -557,6 +593,169 @@ class MonitoringLoop:
         except Exception as e:
             logger.warning(f"[MECH-RECOVERY] check failed for {agent.id[:8]}: {e}")
         return False
+
+    async def _detect_cli_model_fallback(self, agent) -> bool:
+        """When an agent has been frozen too long on its default model,
+        switch it in-place to a configured fallback model via the CLI's own
+        model-switching UI -- instead of leaving it frozen -- see
+        docs/PI_MODEL_FALLBACK_DESIGN.md. Originally motivated by pi's local
+        model having only a single inference slot (an agent queued behind
+        another sits frozen for however long that takes), but the mechanism
+        itself is CLI-agnostic: this method never checks agent.cli_type
+        directly. Whether/how a CLI supports an in-session model switch is
+        entirely polymorphic, via
+        CLIAgentInterface.model_fallback_keystrokes (cli_interface.py) --
+        empty means "not supported for this CLI," so this stays a no-op for
+        any CLI that hasn't opted in (today, only PiAgent has).
+
+        The generic frozen-output path above (_mechanical_recovery_for_agent)
+        doesn't help here: the agent isn't stuck, it's waiting its turn, and
+        a nudge does nothing to speed that up (worst case it looks like a
+        new request and pushes it further back). This runs after that check
+        and reuses its own frozen-duration tracking (self._stuck_state)
+        rather than a second, independent signature comparison -- it already
+        computes and updates that state for every agent, every cycle.
+
+        Opt-in via config.cli_model_fallback; unset disables this entirely.
+        Only for agents still on the configured default model -- one already
+        running something else (including a prior switch here) is left
+        alone.
+
+        One-shot per agent (self._switched_to_fallback_model) -- a standing
+        decision for the rest of the agent's task, not a repeatable nudge.
+        No automatic switch-back (v1; see the design doc's Open Questions).
+        """
+        try:
+            fallback = getattr(self.config, "cli_model_fallback", None)
+            if not fallback:
+                return False
+            keystrokes = get_cli_agent(agent.cli_type).model_fallback_keystrokes(fallback)
+            if not keystrokes:
+                return False
+            if agent.cli_model != getattr(self.config, "cli_model", None):
+                return False
+            if not hasattr(self, "_switched_to_fallback_model"):
+                self._switched_to_fallback_model = set()
+            if agent.id in self._switched_to_fallback_model:
+                return False
+
+            st = getattr(self, "_stuck_state", {}).get(agent.id)
+            if not st or st.get("since") is None:
+                return False
+            wait_seconds = getattr(self.config, "cli_model_fallback_wait_seconds", 120)
+            frozen_for = time.time() - st["since"]
+            if frozen_for < wait_seconds:
+                return False
+
+            self._switched_to_fallback_model.add(agent.id)
+            original_model = agent.cli_model
+            logger.warning(
+                f"[CLI-MODEL-FALLBACK] Agent {agent.id[:8]} ({agent.cli_type}) frozen "
+                f"{int(frozen_for)}s — switching to fallback model '{fallback}'"
+            )
+            self._log_agent_event(
+                agent.id,
+                "cli_model_fallback",
+                f"Frozen {int(frozen_for)}s on '{original_model}' — switched "
+                f"in-place to fallback model '{fallback}'",
+                {
+                    "task_id": agent.current_task_id,
+                    "from_model": original_model,
+                    "to_model": fallback,
+                    "frozen_seconds": int(frozen_for),
+                },
+            )
+            for text, wait_after in keystrokes:
+                await self.agent_manager.send_message_to_agent(agent.id, text)
+                if wait_after:
+                    await asyncio.sleep(wait_after)
+            self._stuck_state.pop(agent.id, None)
+            if not hasattr(self, "_pending_fallback_verification"):
+                self._pending_fallback_verification = {}
+            self._pending_fallback_verification[agent.id] = (fallback, time.time())
+            return True
+        except Exception as e:
+            logger.warning(f"[CLI-MODEL-FALLBACK] check failed for {agent.id[:8]}: {e}")
+        return False
+
+    async def _verify_cli_model_fallback(self, agent) -> None:
+        """Best-effort follow-up to _detect_cli_model_fallback: on a later
+        cycle, check whether the model switch it sent actually landed, per
+        CLIAgentInterface.model_fallback_confirmed (polymorphic -- e.g.
+        pi's "Model: <provider>/<name>" echo). Not blocking and doesn't
+        retry the switch itself (it already used its one shot) -- just
+        surfaces whether the CLI interaction didn't land as expected (wrong
+        search text, picker didn't open in time, etc.) instead of leaving
+        that silent. Logged to AgentLog either way so the outcome is
+        attached to the agent/task record, not just process logs.
+        """
+        pending = getattr(self, "_pending_fallback_verification", {})
+        entry = pending.get(agent.id)
+        if not entry:
+            return
+        model, switched_at = entry
+        try:
+            confirmed = get_cli_agent(agent.cli_type).model_fallback_confirmed(
+                self.agent_manager.get_agent_output(agent.id, lines=40) or "", model
+            )
+            if confirmed is None:
+                # This CLI has no way to confirm -- nothing to verify.
+                pending.pop(agent.id, None)
+                return
+            if confirmed:
+                logger.info(
+                    f"[CLI-MODEL-FALLBACK] Agent {agent.id[:8]} confirmed on "
+                    f"fallback model '{model}'"
+                )
+                self._log_agent_event(
+                    agent.id, "cli_model_fallback_confirmed",
+                    f"Confirmed running on fallback model '{model}'",
+                    {"task_id": agent.current_task_id, "model": model},
+                )
+                pending.pop(agent.id, None)
+                return
+            grace_seconds = 2 * getattr(self.config, "monitoring_interval_seconds", 60)
+            if time.time() - switched_at >= grace_seconds:
+                logger.warning(
+                    f"[CLI-MODEL-FALLBACK] Agent {agent.id[:8]} switch to "
+                    f"'{model}' not confirmed after "
+                    f"{int(time.time() - switched_at)}s — the CLI interaction "
+                    "may not have landed as expected"
+                )
+                self._log_agent_event(
+                    agent.id, "cli_model_fallback_unconfirmed",
+                    f"Switch to fallback model '{model}' not confirmed after "
+                    f"{int(time.time() - switched_at)}s",
+                    {"task_id": agent.current_task_id, "model": model},
+                )
+                pending.pop(agent.id, None)
+        except Exception as e:
+            logger.warning(f"[CLI-MODEL-FALLBACK] verify failed for {agent.id[:8]}: {e}")
+            pending.pop(agent.id, None)
+
+    def _log_agent_event(self, agent_id: str, log_type: str, message: str, details: dict, session=None) -> None:
+        """Persist an AgentLog entry for a monitor-driven intervention --
+        keeps a queryable record on the agent/task of why something
+        happened (e.g. a model switch or termination) that outlives the
+        transient state fields it may have briefly touched (like
+        Task.failure_reason, which the session-limit fallback path clears
+        again once it re-dispatches). Best-effort: a logging failure must
+        never block the intervention itself.
+
+        session: pass the caller's already-open session (e.g. the
+        session-limit block already holds one) to add to it directly
+        instead of opening a second, nested session_scope() -- avoids any
+        question of whether two sessions writing to the same sqlite file
+        at once is safe. Only opens its own when called standalone."""
+        entry = AgentLog(agent_id=agent_id, log_type=log_type, message=message, details=details)
+        if session is not None:
+            session.add(entry)
+            return
+        try:
+            with self.db_manager.session_scope() as new_session:
+                new_session.add(entry)
+        except Exception as e:
+            logger.warning(f"Failed to write AgentLog ({log_type}) for {agent_id[:8]}: {e}")
 
     async def _detect_repetition_loop(self, agent) -> bool:
         """Detect and interrupt an LLM thought-loop where the same sentence repeats
@@ -1155,7 +1354,7 @@ class MonitoringLoop:
         agents = self.agent_manager.get_active_agents()
         logger.info(f"Trajectory monitoring {len(agents)} active agents")
 
-        # Phase 0: cheap mechanical recovery (no LLM). Eight complementary checks:
+        # Phase 0: cheap mechanical recovery (no LLM). Nine complementary checks:
         #   a) OpenRouter credits exhausted — pause workflow + terminate
         #      immediately, before any other check wastes a recovery attempt
         #      on an agent that's about to be torn down anyway
@@ -1163,12 +1362,17 @@ class MonitoringLoop:
         #      reset to pending; uses persisted Agent timestamps so it works
         #      correctly even right after a restart, unlike (c) below
         #   c) frozen output — same substantive 40-line sig for ≥5 min
-        #   d) repetition loop — output growing but same sentence repeats 5+ times
+        #   d) agent frozen on its default model, CLI supports an in-session
+        #      switch (polymorphic, CLIAgentInterface.model_fallback_keystrokes) —
+        #      switch it to a configured fallback model rather than nudging
+        #      (which does nothing for an agent that isn't stuck, just
+        #      waiting), reusing (c)'s own frozen-duration state
+        #   e) repetition loop — output growing but same sentence repeats 5+ times
         #      in the last 80 lines (LLM cycling "Actually, let me try…")
-        #   e) pending rm confirmation — auto-deny immediately, don't wait for (c)
-        #   f) max output token limit hit — nudge immediately, don't wait for (c)
-        #   g) MCP server disconnected — nudge to `mcp connect`, don't wait for (c)
-        #   h) Claude Code rejected its launch model — fix directly with a
+        #   f) pending rm confirmation — auto-deny immediately, don't wait for (c)
+        #   g) max output token limit hit — nudge immediately, don't wait for (c)
+        #   h) MCP server disconnected — nudge to `mcp connect`, don't wait for (c)
+        #   i) Claude Code rejected its launch model — fix directly with a
         #      real `/model <x>` keystroke send, since the agent can't
         #      invoke that slash command itself
         mechanically_intervened = set()
@@ -1181,6 +1385,9 @@ class MonitoringLoop:
                 continue
             if await self._mechanical_recovery_for_agent(agent):
                 mechanically_intervened.add(agent.id)
+            if await self._detect_cli_model_fallback(agent):
+                mechanically_intervened.add(agent.id)
+            await self._verify_cli_model_fallback(agent)
             if await self._detect_repetition_loop(agent):
                 mechanically_intervened.add(agent.id)
             if await self._detect_dangerous_command_confirmation(agent):
