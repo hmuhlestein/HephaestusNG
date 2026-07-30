@@ -1,7 +1,6 @@
 """LangChain-based multi-provider LLM client for Hephaestus."""
 
 import asyncio
-import json
 import logging
 import os
 from enum import Enum
@@ -64,9 +63,9 @@ class ComponentType(Enum):
     AGENT_PROMPTS = "agent_prompts"
 
 
-# Hard timeout for Conductor's LLM calls (analyze_system_coherence,
-# review_qa_report) -- see each call site's own comment for why this must
-# never be unbounded (mirrors Guardian's GUARDIAN_LLM_TIMEOUT in guardian.py).
+# Hard timeout for Conductor's LLM calls (analyze_system_coherence) -- see
+# each call site's own comment for why this must never be unbounded
+# (mirrors Guardian's GUARDIAN_LLM_TIMEOUT in guardian.py).
 CONDUCTOR_LLM_TIMEOUT = 90
 
 
