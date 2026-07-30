@@ -16,13 +16,13 @@ description: |
   QA report with pass/fail status and recommendations.
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
-  - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write ONE file, qa_report.md, to ./docs/qa_validation/ — a YAML
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
+  - Write ONE file, qa_report.md, to ./.hephaestus/qa_validation/ — a YAML
     frontmatter block (structured pass/fail counts, the gate input) followed
     by the full narrative report, in a single file. See STEP 10 below for
     the exact frontmatter schema.
-  - Use exactly that subdirectory name (./docs/qa_validation/) — the
+  - Use exactly that subdirectory name (./.hephaestus/qa_validation/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
 done_definitions:
@@ -113,11 +113,11 @@ additional_notes: |
   
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
-  - ALL docs/reports go in "Docs Path:" (qa_report.md, etc.).
-  - Code/tests go in "Project Path:" (src/, tests/, etc.).
+  - ALL docs/reports go in "Artifacts Path" (qa_report.md, etc.).
+  - Code/tests go in "Project Path" (src/, tests/, etc.).
   - Your task description contains the exact paths — copy them exactly.
   
   Read:
@@ -405,7 +405,7 @@ additional_notes: |
   development, or return to architecture) followed immediately by the full
   narrative report from the steps above. Use REAL numbers from your run.
 
-  Prepend this frontmatter block to the very top of ./docs/qa_validation/qa_report.md,
+  Prepend this frontmatter block to the very top of ./.hephaestus/qa_validation/qa_report.md,
   with EXACTLY this schema (type first, then a closing `---`, then the
   narrative report immediately after):
 

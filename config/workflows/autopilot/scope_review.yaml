@@ -15,21 +15,21 @@ description: |
   corrections if scope has drifted.
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
-  - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write ONE file, scope_review_result.md, to ./docs/scope_review/ — a
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
+  - Write ONE file, scope_review_result.md, to ./.hephaestus/scope_review/ — a
     YAML frontmatter block (structured verdict + out-of-scope/missing
     items, the gate input) followed by a short narrative summary.
-  - Use exactly that subdirectory name (./docs/scope_review/) — the
+  - Use exactly that subdirectory name (./.hephaestus/scope_review/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
 done_definitions:
   - "Original design doc read from ./.hephaestus/design.md"
-  - "./docs/requirements_analysis.md read and compared line-by-line against design doc"
-  - "Every requirement in ./docs/requirements_analysis.md traced to a line in design.md"
+  - "./.hephaestus/requirements_analysis.md read and compared line-by-line against design doc"
+  - "Every requirement in ./.hephaestus/requirements_analysis.md traced to a line in design.md"
   - "Any requirement NOT in design.md flagged as out-of-scope"
-  - "Any design doc requirement missing from ./docs/requirements_analysis.md flagged"
-  - "scope_review_result.md written to ./docs/scope_review/"
+  - "Any design doc requirement missing from ./.hephaestus/requirements_analysis.md flagged"
+  - "scope_review_result.md written to ./.hephaestus/scope_review/"
   - "Task marked as done with verdict PASS or FAIL"
 outputs:
   - "scope_review_result.md"
@@ -61,7 +61,7 @@ additional_notes: |
   cat ./.hephaestus/design.md
 
   # Read the extracted requirements
-  cat ./docs/requirements_analysis.md
+  cat ./.hephaestus/requirements_analysis.md
   ```
 
   If .hephaestus/design.md is missing, run:
@@ -91,7 +91,7 @@ additional_notes: |
   readable, "verdict" MUST be at the frontmatter's top level, no nesting)
   followed by a short narrative summary.
 
-  Write ./docs/scope_review/scope_review_result.md with EXACTLY this
+  Write ./.hephaestus/scope_review/scope_review_result.md with EXACTLY this
   schema (type first, then a closing `---`, then a short summary
   immediately after):
 

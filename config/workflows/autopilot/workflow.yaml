@@ -338,7 +338,7 @@ launch_template:
     - Technology constraints
 
     ### STEP 3: Create Requirements Document
-    Write requirements_analysis.md in ./docs/ (create the directory if needed).
+    Write requirements_analysis.md in ./.hephaestus/ (create the directory if needed).
     The file MUST start with this OKF frontmatter block:
     ```
     ---

@@ -42,11 +42,11 @@ additional_notes: |
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
-  - ALL implementation code goes in "Project Path:" (src/, tests/, etc.).
-  - ALL docs/reports go in "Docs Path:" — not the project root.
+  - ALL implementation code goes in "Project Path" (src/, tests/, etc.).
+  - ALL docs/reports go in "Artifacts Path" — not the project root.
   - Your task description contains the exact paths — copy them exactly.
 
   SCOPE RULE: Before writing any code, read ./.hephaestus/design.md.
@@ -97,12 +97,12 @@ additional_notes: |
 
   Read:
   - ./.hephaestus/design.md — SCOPE AUTHORITY: only implement what this specifies
-  - Your task description for "Docs Path:" and "Project Path:" locations
+  - Your task description for "Artifacts Path" and "Project Path" locations
   - AGENTS.md - Coding style, naming conventions, test commands, commit format
-  - architecture.md (from Docs Path) - Component interfaces and contracts
-  - architectural_review_report.md (from Docs Path, if it exists) — findings from the
+  - architecture.md (from Artifacts Path) - Component interfaces and contracts
+  - architectural_review_report.md (from Artifacts Path, if it exists) — findings from the
     architectural reviewer. Fix every BLOCKER and FIX before marking done.
-  - adversarial_review_report.md (from Docs Path, if it exists) — findings from the
+  - adversarial_review_report.md (from Artifacts Path, if it exists) — findings from the
     adversarial reviewer. Fix every BLOCKER and WARNING before marking done.
     Each finding includes a "Recommended fix" — follow it precisely.
   - pyproject.toml (if present) — check `requires-python` or `python_requires` before writing

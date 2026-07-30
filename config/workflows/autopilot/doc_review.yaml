@@ -18,8 +18,8 @@ outputs:
 additional_notes: |
   OUTPUT STYLE: Terse. Fragments OK. No filler.
 
-  Your working directory IS the project root. Docs Path = ./docs/ (create if missing).
-  ALL reports go in Docs Path. Do NOT write into ./.hephaestus/.
+  Your working directory IS the project root. Artifacts Path = ./.hephaestus/ (create if missing).
+  ALL reports go in Artifacts Path. Do NOT write into ./docs/ (git-tracked).
 
   ═══ STEP 1: CLEAN UP ═══
 

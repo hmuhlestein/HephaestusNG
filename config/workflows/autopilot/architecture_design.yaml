@@ -12,7 +12,7 @@ description: |
   creates detailed task breakdowns with blocking relationships, and produces
   implementation-ready specifications for each component.
 done_definitions:
-  - "./docs/requirements_analysis.md reviewed and understood"
+  - "./.hephaestus/requirements_analysis.md reviewed and understood"
   - "System architecture diagram/description created"
   - "Component interfaces defined (APIs, data models, contracts)"
   - "Data flow documented"
@@ -90,7 +90,7 @@ additional_notes: |
 
   Before doing any work, check if a previous attempt already produced output:
 
-    cat ./docs/architecture.md 2>/dev/null | head -20 || echo "NO_PRIOR_ARCH"
+    cat ./.hephaestus/architecture.md 2>/dev/null | head -20 || echo "NO_PRIOR_ARCH"
 
   If architecture.md EXISTS and is non-empty:
   - Read it fully — do NOT rewrite from scratch
@@ -340,16 +340,16 @@ additional_notes: |
   
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
-  - ALWAYS use the "Docs Path:" value for ALL generated docs (.md, .json, .txt).
-  - ALWAYS use the "Project Path:" value for ALL implementation code.
+  - ALWAYS use the "Artifacts Path" value for ALL generated docs (.md, .json, .txt).
+  - ALWAYS use the "Project Path" value for ALL implementation code.
   - Your task description contains the exact paths — copy them exactly.
   
-  Output path: ./docs/architecture.md
-  ⚠️  NEVER write to ./docs/design/ — that subdirectory holds the design queue, NOT generated outputs.
-  ⚠️  NEVER write architecture.md anywhere except ./docs/architecture.md.
+  Output path: ./.hephaestus/architecture.md
+  ⚠️  NEVER write to ./.hephaestus/design/ — that subdirectory holds the design queue, NOT generated outputs.
+  ⚠️  NEVER write architecture.md anywhere except ./.hephaestus/architecture.md.
   
   # Architecture: [Project Name]
   
