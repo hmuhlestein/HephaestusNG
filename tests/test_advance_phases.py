@@ -2464,6 +2464,46 @@ class TestTriggerArbitration:
             assert "exhausted 5 attempts" in wf.status_reason
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_creates_its_own_sentinel_agent_if_missing(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Regression: this file's own _seed_sentinel_agents autouse
+        fixture pre-creates the ARBITRATION_CREATED_BY Agent row for
+        every test in this file specifically because, per its own
+        docstring, "any code path that sets
+        task.created_by_agent_id=ARBITRATION_CREATED_BY FK-fails"
+        without it -- a test-only workaround for a gap that was never
+        actually closed in _trigger_arbitration itself. Production never
+        seeds that row, so every real call hit
+        sqlite3.IntegrityError: FOREIGN KEY constraint failed on the
+        Task insert, silently caught by _fire_phase_transition's
+        catch-all and logged as "[PHASE-ADVANCE] Transition error" --
+        arbitration could never actually happen. Observed live: 1180+
+        failed attempts over ~30 hours on one workflow, zero arbitration
+        tasks ever created. This test undoes the fixture's seeding to
+        reproduce the true production condition."""
+        from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _trigger_arbitration
+
+        with db_manager.session_scope() as session:
+            session.query(Agent).filter_by(id=ARBITRATION_CREATED_BY).delete()
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        result = _trigger_arbitration(
+            "wf-1", "phase-1", "requirements", "exhausted 5 attempts", MagicMock()
+        )
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            assert session.query(Agent).filter_by(id=ARBITRATION_CREATED_BY).first() is not None
+            task = (
+                session.query(Task)
+                .filter_by(created_by_agent_id=ARBITRATION_CREATED_BY)
+                .first()
+            )
+            assert task is not None
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     def test_prompt_lists_valid_phase_names(
         self, mock_create_agent, db_manager, sample_workflow
     ):
