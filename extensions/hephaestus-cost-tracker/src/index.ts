@@ -26,19 +26,16 @@ interface CostEntry {
 }
 
 export default function (pi: ExtensionAPI) {
-  // Disable entirely outside Hephaestus projects
-  try {
-    const fs = require('fs');
-    const path = require('path');
-    if (!fs.existsSync(path.join(process.cwd(), '.hephaestus'))) return;
-  } catch {
-    return;
-  }
-
   const apiUrl = process.env.HEPHAESTUS_API_URL || 'http://localhost:8300';
   const agentId = process.env.HEPHAESTUS_AGENT_ID;
   const taskId = process.env.HEPHAESTUS_TASK_ID;
   const workflowId = process.env.HEPHAESTUS_WORKFLOW_ID;
+
+  // Only run when launched by Hephaestus — the server requires at least
+  // one of task_id or workflow_id for cost attribution. Without them the
+  // API returns 422 and every turn logs a noisy error.
+  if (!taskId && !workflowId) return;
+
   let sessionCost = 0;
 
   async function postCost(entry: CostEntry): Promise<void> {
@@ -54,7 +51,8 @@ export default function (pi: ExtensionAPI) {
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      const body = await response.text().catch(() => '');
+      throw new Error(`HTTP ${response.status}: ${response.statusText}${body ? ` — ${body}` : ''}`);
     }
   }
 
