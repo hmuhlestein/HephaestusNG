@@ -5136,7 +5136,24 @@ def _trigger_arbitration(
         task_id,
         workflow_id,
         phase_id,
-        agent_type="arbitration",
+        # Not "arbitration" -- Agent.agent_type has a CHECK constraint
+        # ('phase', 'validator', 'result_validator', 'monitor',
+        # 'diagnostic', 'orchestrator') that "arbitration" was never a
+        # member of, so every dispatch here unconditionally raised
+        # sqlite3.IntegrityError, silently caught by create_agent_for_task_
+        # direct's own except-and-return-None and logged only at DEBUG
+        # (invisible at the default log level) -- every arbitration attempt
+        # hit the "if not agent_data" branch below and failed the workflow,
+        # even after Task creation itself was fixed to no longer FK-fail.
+        # "diagnostic" is a safe substitute, not a hack: prompt_builder.py's
+        # format_initial_message already treats "diagnostic" and
+        # "arbitration" identically (both use the verbatim validation_prompt
+        # path), so this changes zero prompt-building behavior while
+        # actually satisfying the constraint. created_by_agent_id
+        # (ARBITRATION_CREATED_BY) on the Task, not Agent.agent_type, is
+        # what identifies/counts arbitration tasks elsewhere (the
+        # max_arbitrations_per_phase cap above) -- unaffected by this.
+        agent_type="diagnostic",
         enriched_data_override={"validation_prompt": prompt},
     )
     if not agent_data:
