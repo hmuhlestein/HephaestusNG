@@ -548,6 +548,37 @@ class TaskCompletionService:
         )
         if result.get("action") == "already_completed":
             logger.info(f"[SPEC-GATE] {phase.name}: already completed by another caller")
+        elif result.get("action") == "arbitrate":
+            # Regression: this branch didn't exist -- mark_phase_complete's
+            # own evaluate() call already incremented total_gotos and
+            # logged "[ARBITRATE] ... requesting LLM arbitration" as a
+            # side effect of being called at all, but nothing here ever
+            # invoked _trigger_arbitration (the thing that actually spawns
+            # a capped arbitration agent and, past the cap, fails the
+            # workflow instead of looping forever). Every other action
+            # this function checks for was handled; "arbitrate" silently
+            # fell through to no-op. Observed live: this path fires once
+            # per task completion (unlike _fire_phase_transition's sweep,
+            # which DOES handle "arbitrate" correctly), so a phase stuck
+            # needing arbitration re-hit this exact leak on every
+            # completion -- 1100+ times over ~30 hours on one workflow,
+            # total_gotos climbing the whole time, zero arbitration tasks
+            # ever actually created.
+            logger.warning(f"[SPEC-GATE] {phase.name}: arbitration needed")
+            reason = result.get("reason") or f"{phase.name} exhausted its retry budget"
+            from src.autopilot.orchestrator import _trigger_arbitration
+
+            await loop.run_in_executor(
+                None,
+                functools.partial(
+                    _trigger_arbitration,
+                    task.workflow_id,
+                    result.get("target_phase_id"),
+                    phase.name,
+                    reason,
+                    logger,
+                ),
+            )
         elif result.get("action") == "goto" and result.get("target_phase_id"):
             logger.info(f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)")
             # task.action/action_target_phase already set by
