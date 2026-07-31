@@ -1313,8 +1313,6 @@ class MonitoringLoop:
                 f"{error_count} persistent connection errors — terminating so pipeline can retry"
             )
             self._connection_error_warned.pop(agent.id, None)
-            await self.agent_manager.terminate_agent(agent.id)
-            self._stuck_state.pop(agent.id, None)
 
             reason_text = (
                 f"{error_count} persistent connection error(s) detected -- "
@@ -1334,6 +1332,18 @@ class MonitoringLoop:
             # over 5+ hours against a dead local inference host, always onto
             # the same broken endpoint, because nothing here ever tried the
             # phase's already-configured fallback_cli_tool: claude.
+            #
+            # terminate_agent() is called AFTER the task's status is
+            # updated and committed below, not before -- mirroring the
+            # session-limit path exactly. Observed live: calling
+            # terminate_agent() first left a window where Agent.status was
+            # already "terminated" but Task.status was still "in_progress"
+            # (pointing at that now-dead agent) -- a separate, unrelated
+            # periodic sweep (attempt_recovery's stale-assigned-task
+            # cleanup) can see exactly that combination and mark the task
+            # failed with a generic "terminated unexpectedly" reason before
+            # this function's own session ever gets to it, silently
+            # skipping the fallback dispatch entirely.
             with self.db_manager.session_scope() as session:
                 from src.core.database import Phase as _Phase
                 from src.core.database import Task as _Task
@@ -1345,6 +1355,8 @@ class MonitoringLoop:
                     .first()
                 )
                 if not stuck_task:
+                    await self.agent_manager.terminate_agent(agent.id)
+                    self._stuck_state.pop(agent.id, None)
                     return True
 
                 fallback_tool = None
@@ -1381,6 +1393,8 @@ class MonitoringLoop:
                         session=session,
                     )
                     session.commit()
+                    await self.agent_manager.terminate_agent(agent.id)
+                    self._stuck_state.pop(agent.id, None)
                     try:
                         new_agent = await self.agent_manager.create_agent_for_task(
                             task=stuck_task,
@@ -1452,6 +1466,9 @@ class MonitoringLoop:
                         session=session,
                     )
                     logger.info(f"[CONNECTION-ERROR] Task {stuck_task.id[:8]} marked failed: {stuck_task.failure_reason}")
+                    session.commit()
+                    await self.agent_manager.terminate_agent(agent.id)
+                    self._stuck_state.pop(agent.id, None)
             return True
         except Exception as e:
             logger.warning(f"[CONNECTION-ERROR] check failed for {agent.id[:8]}: {e}")
