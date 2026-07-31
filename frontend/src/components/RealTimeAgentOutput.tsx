@@ -396,7 +396,9 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
             <div className="flex items-center space-x-3">
               <div className="flex items-center space-x-2">
                 <div className={`w-2 h-2 rounded-full ${
-                  isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
+                  currentStatus === 'terminated'
+                    ? 'bg-blue-500'
+                    : isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
                 }`} />
                 <h3 className="text-lg font-semibold text-gray-800 dark:text-white">
                   {agent.current_task?.phase_info?.name || fallbackPhaseName || agent.agent_type || 'Agent'} {agent.id.substring(0, 8)} - Output
