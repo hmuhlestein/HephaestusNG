@@ -2260,49 +2260,49 @@ class TestSessionLimitPause:
 
 
 class TestDetectConnectionErrors:
-    """Regression: resetting a connection-error-killed task straight to
+    """Regression #1: resetting a connection-error-killed task straight to
     "pending" with no failure_reason let a later, unrelated orphan-check
     (a task sitting pending with no agent for >1min) relabel it
     "Orphaned: never dispatched to an agent" -- a label _advance_phases's
     own retry cap (max_retry_count=2) deliberately exempts from the cap,
     on the theory that a scheduling race should always be retried. That
     let a persistently unreachable LLM endpoint loop forever instead of
-    ever pausing the workflow -- observed live: 46 retries over 5+ hours
-    against a dead local inference host. Failing the task directly, with a
-    real reason, routes it through that same retry cap correctly instead
-    of around it."""
+    ever pausing the workflow.
 
-    @pytest.mark.asyncio
-    async def test_persistent_errors_fail_task_with_reason_not_silent_pending(
-        self, make_monitoring_loop, mock_agent_manager, mock_db
-    ):
+    Regression #2: even with #1 fixed, blindly failing-and-retrying still
+    redispatches onto the SAME broken endpoint every time -- a connection
+    error means the endpoint is unreachable, not that the agent did
+    anything wrong. Observed live: 46+ retries over 5+ hours against a
+    dead local inference host, always onto the same model, even though
+    the phase already had fallback_cli_tool: claude configured. Mirrors
+    the session-limit path: try the phase's (or global) fallback via a
+    fresh kill+restart dispatch first; only fail (routing through the
+    retry cap from #1) if no fallback is configured or the dispatch
+    itself fails."""
+
+    def _session_with(self, task, phase=None):
         from contextlib import contextmanager
 
-        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
-        mock_agent_manager.get_agent_output.return_value = (
-            "Error: Connection error.\nError: Connection error.\nError: Connection error."
-        )
-        mock_agent_manager.terminate_agent = AsyncMock()
-
-        task = Mock(id="t1", status="in_progress", assigned_agent_id="a1", failure_reason=None)
         session = Mock()
-        session.query.return_value.filter_by.return_value.filter.return_value.all.return_value = [task]
+
+        def query_side_effect(model):
+            m = Mock()
+            name = model.__name__ if hasattr(model, "__name__") else str(model)
+            if name == "Task":
+                m.filter_by.return_value.filter.return_value.first.return_value = task
+            elif name == "Phase":
+                m.filter_by.return_value.first.return_value = phase
+            elif name == "Workflow":
+                m.filter_by.return_value.first.return_value = None
+            return m
+
+        session.query.side_effect = query_side_effect
 
         @contextmanager
         def mock_session_scope():
             yield session
 
-        mock_db.session_scope = mock_session_scope
-
-        result = await make_monitoring_loop._detect_connection_errors(agent)
-
-        assert result is True
-        assert task.status == "failed"
-        assert task.assigned_agent_id is None
-        assert task.failure_reason is not None
-        assert "connection error" in task.failure_reason.lower()
-        assert "Orphaned" not in task.failure_reason
-        mock_agent_manager.terminate_agent.assert_called_once()
+        return mock_session_scope, session
 
     @pytest.mark.asyncio
     async def test_single_error_does_not_yet_terminate(self, make_monitoring_loop, mock_agent_manager, mock_db):
@@ -2314,6 +2314,92 @@ class TestDetectConnectionErrors:
 
         assert result is False
         mock_agent_manager.terminate_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_configured_fails_with_reason_not_silent_pending(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = (
+            "Error: Connection error.\nError: Connection error.\nError: Connection error."
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        make_monitoring_loop._stuck_state = {"a1": {"sig": "x", "since": time.time(), "recov": 0}}
+
+        task = Mock(id="t1", status="in_progress", assigned_agent_id="a1", failure_reason=None, phase_id=None)
+        mock_session_scope, session = self._session_with(task, phase=None)
+        mock_db.session_scope = mock_session_scope
+
+        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+            mock_cfg.return_value = Mock(default_fallback_cli_tool=None)
+            result = await make_monitoring_loop._detect_connection_errors(agent)
+
+        assert result is True
+        assert task.status == "failed"
+        assert task.assigned_agent_id is None
+        assert task.failure_reason is not None
+        assert "connection error" in task.failure_reason.lower()
+        assert "Orphaned" not in task.failure_reason
+        mock_agent_manager.terminate_agent.assert_called_once()
+        mock_agent_manager.create_agent_for_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fallback_configured_redispatches_instead_of_failing(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = (
+            "Error: Connection error.\nError: Connection error.\nError: Connection error."
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        new_agent = Mock(id="a2")
+        mock_agent_manager.create_agent_for_task = AsyncMock(return_value=new_agent)
+        make_monitoring_loop._stuck_state = {"a1": {"sig": "x", "since": time.time(), "recov": 0}}
+
+        task = Mock(
+            id="t1", status="in_progress", assigned_agent_id="a1",
+            failure_reason=None, phase_id="p1", workflow_id="wf1",
+        )
+        phase = Mock(fallback_cli_tool="claude", fallback_cli_model="sonnet")
+        mock_session_scope, session = self._session_with(task, phase=phase)
+        mock_db.session_scope = mock_session_scope
+
+        result = await make_monitoring_loop._detect_connection_errors(agent)
+
+        assert result is True
+        assert task.status == "pending"
+        assert task.failure_reason is None
+        mock_agent_manager.create_agent_for_task.assert_called_once()
+        call_kwargs = mock_agent_manager.create_agent_for_task.call_args.kwargs
+        assert call_kwargs["cli_type"] == "claude"
+        assert call_kwargs["phase_cli_model"] == "sonnet"
+
+    @pytest.mark.asyncio
+    async def test_fallback_dispatch_failure_still_fails_with_reason(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = (
+            "Error: Connection error.\nError: Connection error.\nError: Connection error."
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.create_agent_for_task = AsyncMock(side_effect=RuntimeError("worktree gone"))
+        make_monitoring_loop._stuck_state = {"a1": {"sig": "x", "since": time.time(), "recov": 0}}
+
+        task = Mock(
+            id="t1", status="in_progress", assigned_agent_id="a1",
+            failure_reason=None, phase_id="p1", workflow_id="wf1",
+        )
+        phase = Mock(fallback_cli_tool="claude", fallback_cli_model="sonnet")
+        mock_session_scope, session = self._session_with(task, phase=phase)
+        mock_db.session_scope = mock_session_scope
+
+        result = await make_monitoring_loop._detect_connection_errors(agent)
+
+        assert result is True
+        assert task.status == "failed"
+        assert "connection error" in task.failure_reason.lower()
+        assert "worktree gone" in task.failure_reason
 
 
 class TestHandleMissingTmux:

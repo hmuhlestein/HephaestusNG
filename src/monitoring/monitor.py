@@ -1298,40 +1298,144 @@ class MonitoringLoop:
             )
             self._connection_error_warned.pop(agent.id, None)
             await self.agent_manager.terminate_agent(agent.id)
+            self._stuck_state.pop(agent.id, None)
 
-            # Mark the task failed with a real reason -- NOT reset straight to
-            # "pending". Observed live: resetting to pending with no
-            # failure_reason let a later orphan-check (task sits pending with
-            # no agent for >1min -> "Orphaned: never dispatched to an agent")
-            # relabel a genuine, repeated connection failure as a one-off
-            # scheduling race. _advance_phases's own retry cap
-            # (max_retry_count=2) deliberately exempts anything with
-            # "Orphaned" in its failure_reason, on the theory that a
-            # scheduling race should always be retried -- so the mislabel
-            # let this loop past that cap indefinitely (46 retries over 5+
-            # hours against an unreachable local inference host in one
-            # incident) instead of ever pausing the workflow. Failing with an
-            # explicit reason here routes it through that same cap correctly
-            # -- retried a bounded number of times, then paused with a clear
-            # reason once genuinely exhausted, same as every other failure
-            # class already goes through _advance_phases's retry logic.
+            reason_text = (
+                f"{error_count} persistent connection error(s) detected -- "
+                "the LLM/inference endpoint may be unreachable"
+            )
+
+            # A connection error means the CURRENT endpoint (e.g. a local
+            # inference host) is unreachable, not that the agent did
+            # anything wrong -- redispatching onto the SAME model/endpoint
+            # guarantees the identical failure. Mirrors the session-limit
+            # path: try the phase's (or global) configured
+            # fallback_cli_tool/fallback_cli_model via a fresh kill+restart
+            # dispatch first; only mark failed (see below, still routes
+            # through _advance_phases's retry cap -- see the comment that
+            # used to be here) if no fallback is configured or the fallback
+            # dispatch itself fails. Observed live: a task retried 46+ times
+            # over 5+ hours against a dead local inference host, always onto
+            # the same broken endpoint, because nothing here ever tried the
+            # phase's already-configured fallback_cli_tool: claude.
             with self.db_manager.session_scope() as session:
+                from src.core.database import Phase as _Phase
                 from src.core.database import Task as _Task
-                stuck_tasks = (
+
+                stuck_task = (
                     session.query(_Task)
                     .filter_by(assigned_agent_id=agent.id)
                     .filter(_Task.status.in_(["assigned", "in_progress"]))
-                    .all()
+                    .first()
                 )
-                for t in stuck_tasks:
-                    t.status = "failed"
-                    t.assigned_agent_id = None
-                    t.failure_reason = (
-                        f"CLI connection errors: {error_count} persistent "
-                        "connection error(s) detected -- the LLM/inference "
-                        "endpoint may be unreachable"
+                if not stuck_task:
+                    return True
+
+                fallback_tool = None
+                fallback_model = None
+                if stuck_task.phase_id:
+                    phase = session.query(_Phase).filter_by(id=stuck_task.phase_id).first()
+                    if phase:
+                        fallback_tool = getattr(phase, "fallback_cli_tool", None)
+                        fallback_model = getattr(phase, "fallback_cli_model", None)
+                if not fallback_tool:
+                    cfg = get_config()
+                    if cfg.default_fallback_cli_tool and cfg.default_fallback_cli_tool != agent.cli_type:
+                        fallback_tool = cfg.default_fallback_cli_tool
+                        fallback_model = cfg.default_fallback_cli_model
+
+                if fallback_tool and fallback_tool != agent.cli_type:
+                    logger.warning(
+                        f"[CONNECTION-ERROR] Re-dispatching with fallback: "
+                        f"{fallback_tool}/{fallback_model or 'default'}"
                     )
-                    logger.info(f"[CONNECTION-ERROR] Task {t.id[:8]} marked failed: {t.failure_reason}")
+                    stuck_task.status = "pending"
+                    stuck_task.assigned_agent_id = None
+                    stuck_task.failure_reason = None
+                    self._log_agent_event(
+                        agent.id, "connection_error_terminated",
+                        f"{reason_text} — terminated and redispatched to "
+                        f"{fallback_tool}/{fallback_model or 'default'}",
+                        {
+                            "task_id": stuck_task.id,
+                            "from_cli_type": agent.cli_type,
+                            "fallback_cli_type": fallback_tool,
+                            "fallback_cli_model": fallback_model,
+                        },
+                        session=session,
+                    )
+                    session.commit()
+                    try:
+                        new_agent = await self.agent_manager.create_agent_for_task(
+                            task=stuck_task,
+                            enriched_data={},
+                            memories=[],
+                            project_context="",
+                            cli_type=fallback_tool,
+                            phase_cli_tool=fallback_tool,
+                            phase_cli_model=fallback_model,
+                        )
+                        logger.info(
+                            f"[CONNECTION-ERROR] Fallback agent {new_agent.id[:8]} "
+                            f"created for task {stuck_task.id[:8]}"
+                        )
+                        # Same as the session-limit path: clear a stale
+                        # system-pause left by an earlier no-fallback event
+                        # now that a fallback dispatch has actually succeeded.
+                        if stuck_task.workflow_id:
+                            _wf = (
+                                session.query(Workflow)
+                                .filter_by(id=stuck_task.workflow_id)
+                                .first()
+                            )
+                            if _wf and _wf.status == "paused" and _wf.paused_by == "system":
+                                _wf.status = "active"
+                                _wf.paused_by = None
+                                _wf.status_reason = None
+                                _wf.paused_at = None
+                                logger.info(
+                                    f"[CONNECTION-ERROR] Cleared stale pause on "
+                                    f"workflow {stuck_task.workflow_id[:8]}"
+                                )
+                    except Exception as fallback_err:
+                        logger.error(
+                            f"[CONNECTION-ERROR] Fallback agent creation failed: "
+                            f"{fallback_err}"
+                        )
+                        stuck_task.status = "failed"
+                        stuck_task.failure_reason = (
+                            f"CLI connection errors: {reason_text}; fallback "
+                            f"({fallback_tool}) also failed: {fallback_err}"
+                        )
+                        self._log_agent_event(
+                            agent.id, "connection_error_terminated",
+                            f"{reason_text} — terminated, fallback "
+                            f"({fallback_tool}) creation also failed: {fallback_err}",
+                            {
+                                "task_id": stuck_task.id,
+                                "from_cli_type": agent.cli_type,
+                                "fallback_cli_type": fallback_tool,
+                            },
+                            session=session,
+                        )
+                        session.commit()
+                else:
+                    # No fallback configured for this phase or globally --
+                    # mark failed with a real reason (not a silent reset to
+                    # pending) so _advance_phases's retry cap
+                    # (max_retry_count=2) actually applies instead of the
+                    # task getting relabeled "Orphaned" by an unrelated
+                    # stale-pending check and exempted from that cap.
+                    stuck_task.status = "failed"
+                    stuck_task.assigned_agent_id = None
+                    stuck_task.failure_reason = f"CLI connection errors: {reason_text}"
+                    self._log_agent_event(
+                        agent.id, "connection_error_terminated",
+                        f"{reason_text} — terminated, no fallback configured",
+                        {"task_id": stuck_task.id, "from_cli_type": agent.cli_type},
+                        session=session,
+                    )
+                    logger.info(f"[CONNECTION-ERROR] Task {stuck_task.id[:8]} marked failed: {stuck_task.failure_reason}")
             return True
         except Exception as e:
             logger.warning(f"[CONNECTION-ERROR] check failed for {agent.id[:8]}: {e}")
