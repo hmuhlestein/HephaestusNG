@@ -985,7 +985,15 @@ def create_agent_for_task_direct(
         finally:
             session.close()
     except Exception as e:
-        logger.debug(f"[create_agent_for_task_direct] Failed: {e}")
+        # Was logger.debug -- invisible at this app's default log level, so
+        # every dispatch failure here (self-heal task creation, negotiation
+        # retries, arbitration) was completely silent apart from whatever
+        # generic message the caller derived from a bare None return (e.g.
+        # _trigger_arbitration's "Failed to dispatch arbitration agent",
+        # with no indication of why). Elevated so the actual exception is
+        # visible without needing to reproduce it manually outside the
+        # running process.
+        logger.warning(f"[create_agent_for_task_direct] Failed: {e}")
         return None
 
 
