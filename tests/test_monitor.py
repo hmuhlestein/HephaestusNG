@@ -1170,6 +1170,29 @@ class TestDetectCliModelFallback:
         mock_sleep.assert_awaited_once_with(1)
 
     @pytest.mark.asyncio
+    async def test_skips_when_connection_errors_present(self, make_monitoring_loop, mock_agent_manager):
+        """Regression: the picker keystrokes assume the agent is idle at a
+        shell prompt ready to accept "/model" -- if it's actually mid-retry
+        on a connection failure, "/model" may not open the picker in the
+        wait window, and the follow-up search text then falls through to
+        the normal chat input, which pi queues as a live "Steering"
+        message instead of it landing as a model switch (observed live:
+        "mimo-v2.5-pro" sent as Steering, never confirmed). Connection
+        errors are a distinct hard blocker already owned by
+        _detect_connection_errors (itself fallback-aware) -- leave this
+        one alone rather than risk misdirecting a busy agent."""
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+        mock_agent_manager.get_agent_output.return_value = (
+            "Error: Connection error.\nError: Connection error.\n"
+            "Retrying (2/3) in 1s... (escape to cancel)"
+        )
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_clears_stuck_state_after_switching(self, make_monitoring_loop, mock_agent_manager):
         """So the fallback model's own first turn gets a fresh frozen-
         detection window instead of being judged against a signature
