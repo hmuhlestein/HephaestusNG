@@ -1013,3 +1013,49 @@ class TestFireSpecGateIfReadyGoto:
                 await TaskCompletionService.fire_spec_gate_if_ready(session, task)
 
         mock_create_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_arbitrate_triggers_arbitration(self, gate_db, tmp_path):
+        """Regression: this synchronous "gate fired from completion path"
+        checked action in ("already_completed", "goto", "continue") and
+        silently fell through for anything else -- "arbitrate" was never
+        handled. mark_phase_complete's own evaluate() call already
+        incremented total_gotos and logged the "[ARBITRATE] ... requesting
+        LLM arbitration" warning as a side effect of merely being called,
+        so every completion of a phase stuck needing arbitration re-hit
+        this leak: total_gotos climbed and the warning re-logged, but
+        _trigger_arbitration (the thing that actually spawns a capped
+        arbitration agent, or fails the workflow past the cap) was never
+        invoked. Observed live: 1100+ occurrences over ~30 hours on one
+        workflow, zero arbitration tasks ever created."""
+        self._seed(gate_db, tmp_path)
+
+        with gate_db.session_scope() as session:
+            from src.core.database import Task
+
+            task = session.query(Task).filter_by(id="task-adv").first()
+
+            with patch(
+                "src.phases.phase_manager.PhaseManager.mark_phase_complete",
+                return_value={
+                    "action": "arbitrate",
+                    "target_phase": "adversarial_review",
+                    "target_phase_id": "phase-adv",
+                    "reason": "GOTO limit exceeded (4/3), arbitration requested",
+                },
+            ), patch(
+                "src.autopilot.spec.GATED_PHASES", ("adversarial_review",)
+            ), patch(
+                "src.autopilot.spec.build_phase_output", return_value={"score": 0.4}
+            ), patch(
+                "src.autopilot.orchestrator._trigger_arbitration"
+            ) as mock_arbitrate:
+                mock_arbitrate.return_value = True
+                await TaskCompletionService.fire_spec_gate_if_ready(session, task)
+
+        mock_arbitrate.assert_called_once()
+        args, _ = mock_arbitrate.call_args
+        assert args[0] == "wf-1"
+        assert args[1] == "phase-adv"
+        assert args[2] == "adversarial_review"
+        assert "GOTO limit exceeded" in args[3]
