@@ -5094,6 +5094,29 @@ def _trigger_arbitration(
 
     task_id = str(uuid.uuid4())
     with get_db() as db:
+        # Ensure created_by_agent_id's FK is satisfied -- Task.created_by_
+        # agent_id is a real ForeignKey("agents.id"), and ARBITRATION_CREATED_BY
+        # ("arbitration") was never a real Agent row, only a sentinel string.
+        # With FK enforcement on, every single insert below raised
+        # sqlite3.IntegrityError, silently caught by _fire_phase_transition's
+        # catch-all and re-logged as "[PHASE-ADVANCE] Transition error" --
+        # the arbitration Task never persisted, so arbitration could never
+        # actually happen; the phase just kept re-evaluating to "arbitrate"
+        # every sweep tick forever. Mirrors the same get-or-create server.py's
+        # create_task endpoint already does for its own created_by_agent_id.
+        # Observed live: 1180+ failed attempts over ~30 hours on one
+        # workflow, total_gotos climbing the whole time, zero arbitration
+        # tasks ever created.
+        if not db.query(Agent).filter_by(id=ARBITRATION_CREATED_BY).first():
+            db.add(
+                Agent(
+                    id=ARBITRATION_CREATED_BY,
+                    system_prompt="auto-created for arbitration task attribution",
+                    status="idle",
+                    cli_type="system",
+                )
+            )
+            db.flush()
         task = Task(
             id=task_id,
             raw_description=f"Arbitrate stuck phase: {phase_name}",
