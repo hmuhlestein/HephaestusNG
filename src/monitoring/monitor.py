@@ -352,6 +352,24 @@ class MonitoringLoop:
                                                     f"[SESSION-LIMIT] Fallback agent {new_agent.id[:8]} "
                                                     f"created for task {stuck_task.id[:8]}"
                                                 )
+                                                # If the workflow was paused by a prior limit
+                                                # hit (before a fallback was available), clear
+                                                # the stale pause so the pipeline resumes.
+                                                if stuck_task.workflow_id:
+                                                    _wf = (
+                                                        session.query(Workflow)
+                                                        .filter_by(id=stuck_task.workflow_id)
+                                                        .first()
+                                                    )
+                                                    if _wf and _wf.status == "paused" and _wf.paused_by == "system":
+                                                        _wf.status = "active"
+                                                        _wf.paused_by = None
+                                                        _wf.status_reason = None
+                                                        _wf.paused_at = None
+                                                        logger.info(
+                                                            f"[SESSION-LIMIT] Cleared stale pause on "
+                                                            f"workflow {stuck_task.workflow_id[:8]}"
+                                                        )
                                             except Exception as fallback_err:
                                                 logger.error(
                                                     f"[SESSION-LIMIT] Fallback agent creation failed: "
@@ -396,19 +414,20 @@ class MonitoringLoop:
                                                     f"{stuck_task.workflow_id[:8]} -- no fallback "
                                                     "configured for this phase"
                                                 )
-                                self._log_agent_event(
-                                    agent.id, "session_limit_terminated",
-                                    f"Hit {limit_kind} ({agent.cli_type}) — terminated, "
-                                    "no fallback configured",
-                                    {
-                                        "task_id": stuck_task.id if stuck_task else None,
-                                        "limit_kind": limit_kind,
-                                        "from_cli_type": agent.cli_type,
-                                    },
-                                    session=session,
-                                )
-                                await self.agent_manager.terminate_agent(agent.id)
-                                self._stuck_state.pop(agent.id, None)
+                                if stuck_task:
+                                    self._log_agent_event(
+                                        agent.id, "session_limit_terminated",
+                                        f"Hit {limit_kind} ({agent.cli_type}) — terminated, "
+                                        "no fallback configured",
+                                        {
+                                            "task_id": stuck_task.id,
+                                            "limit_kind": limit_kind,
+                                            "from_cli_type": agent.cli_type,
+                                        },
+                                        session=session,
+                                    )
+                                    await self.agent_manager.terminate_agent(agent.id)
+                                    self._stuck_state.pop(agent.id, None)
                                 return True
                 finally:
                     session.close()
@@ -747,11 +766,58 @@ class MonitoringLoop:
                     f"[CLI-MODEL-FALLBACK] Failed to persist cli_model update "
                     f"for {agent.id[:8]}: {persist_err}"
                 )
-            for text, wait_after in keystrokes:
-                await self.agent_manager.send_message_to_agent(agent.id, text)
-                if wait_after:
-                    await asyncio.sleep(wait_after)
-            self._stuck_state.pop(agent.id, None)
+            try:
+                for text, wait_after in keystrokes:
+                    await self.agent_manager.send_message_to_agent(agent.id, text)
+                    if wait_after:
+                        await asyncio.sleep(wait_after)
+            except Exception as send_err:
+                # The one-shot add() and the optimistic DB write above both
+                # already happened before we knew the send would actually go
+                # through. Without this handler, a send failure (e.g. the
+                # tmux session going away mid-send) would leave the agent
+                # permanently blocked by the one-shot gate with no pending
+                # entry ever created -- _verify_cli_model_fallback has
+                # nothing to check, so the MAX_FALLBACK_ATTEMPTS retry budget
+                # this function is supposed to enforce never even gets
+                # consulted. Treat it the same as an unconfirmed switch:
+                # revert the DB write, and allow a retry only if attempts
+                # remain.
+                logger.warning(
+                    f"[CLI-MODEL-FALLBACK] Failed to send switch keystrokes to "
+                    f"{agent.id[:8]}: {send_err}"
+                )
+                try:
+                    with self.db_manager.session_scope() as session:
+                        agent_row = session.query(Agent).filter_by(id=agent.id).first()
+                        if agent_row:
+                            agent_row.cli_model = original_model
+                except Exception as revert_err:
+                    logger.warning(
+                        f"[CLI-MODEL-FALLBACK] Failed to revert cli_model for "
+                        f"{agent.id[:8]}: {revert_err}"
+                    )
+                self._log_agent_event(
+                    agent.id, "cli_model_fallback_send_failed",
+                    f"Failed to send switch keystrokes for fallback model "
+                    f"'{fallback}': {send_err}",
+                    {"task_id": agent.current_task_id, "model": fallback, "attempt": attempt_num},
+                )
+                if attempt_num < MAX_FALLBACK_ATTEMPTS:
+                    self._switched_to_fallback_model.discard(agent.id)
+                return False
+            # Reset the freeze baseline (not the whole _stuck_state entry) so
+            # this mechanism doesn't immediately re-read the agent as "still
+            # frozen" on the next cycle -- but preserve st["recov"], the
+            # generic mechanical-recovery escalation counter that lives in
+            # the same dict entry. Popping the entire entry here (as this
+            # used to) reset recov back to 0 on every attempt, which is the
+            # reason that generic backstop never independently escalated
+            # during the incident MAX_FALLBACK_ATTEMPTS was added for.
+            stuck_entry = self._stuck_state.get(agent.id)
+            if stuck_entry:
+                stuck_entry["since"] = None
+                stuck_entry["sig"] = None
             if not hasattr(self, "_pending_fallback_verification"):
                 self._pending_fallback_verification = {}
             self._pending_fallback_verification[agent.id] = (fallback, original_model, time.time())

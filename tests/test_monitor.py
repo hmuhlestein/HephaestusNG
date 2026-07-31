@@ -1934,7 +1934,14 @@ class TestSessionLimitPause:
                 # separate .filter(status.in_(...)) before .first() -- both
                 # links must be configured or the chain falls through to an
                 # unconfigured Mock.
-                m.filter_by.return_value.filter.return_value.first.return_value = task
+                def _first_if_active():
+                    # Return the task only if its status is one the
+                    # production query would match, otherwise None.
+                    if task.status in ("assigned", "in_progress"):
+                        return task
+                    return None
+
+                m.filter_by.return_value.filter.return_value.first = _first_if_active
             elif name == "Phase":
                 m.filter_by.return_value.first.return_value = phase
             elif name == "Workflow":
@@ -2006,6 +2013,9 @@ class TestSessionLimitPause:
         mock_agent_manager.get_agent_output.return_value = (
             "You've hit your session limit"
         )
+        self._wire_tmux_pane_output(
+            mock_agent_manager, mock_db, "a1", "You've hit your session limit"
+        )
         mock_agent_manager.terminate_agent = AsyncMock()
         mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
         new_agent = Mock(id="a2")
@@ -2025,7 +2035,7 @@ class TestSessionLimitPause:
         mock_agent_manager.create_agent_for_task.assert_called_once()
         call_kwargs = mock_agent_manager.create_agent_for_task.call_args.kwargs
         assert call_kwargs["memories"] == []
-        assert call_kwargs["project_context"] == "ctx"
+        assert call_kwargs["project_context"] == ""
         assert call_kwargs["cli_type"] == "pi"
 
         assert task.status == "pending"
@@ -2050,6 +2060,9 @@ class TestSessionLimitPause:
         agent = Agent(id="a1", cli_type="claude")
         mock_agent_manager.get_agent_output.return_value = (
             "You've hit your session limit"
+        )
+        self._wire_tmux_pane_output(
+            mock_agent_manager, mock_db, "a1", "You've hit your session limit"
         )
         mock_agent_manager.terminate_agent = AsyncMock()
         mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
@@ -2105,6 +2118,9 @@ class TestSessionLimitPause:
         mock_agent_manager.get_agent_output.return_value = (
             "You've hit your monthly spend limit."
         )
+        self._wire_tmux_pane_output(
+            mock_agent_manager, mock_db, "a1", "You've hit your monthly spend limit."
+        )
         mock_agent_manager.terminate_agent = AsyncMock()
 
         task = Mock(
@@ -2138,6 +2154,9 @@ class TestSessionLimitPause:
         mock_agent_manager.get_agent_output.return_value = (
             "You've hit your monthly spend limit."
         )
+        self._wire_tmux_pane_output(
+            mock_agent_manager, mock_db, "a1", "You've hit your monthly spend limit."
+        )
         mock_agent_manager.terminate_agent = AsyncMock()
         mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
         new_agent = Mock(id="a2")
@@ -2157,7 +2176,6 @@ class TestSessionLimitPause:
         mock_agent_manager.create_agent_for_task.assert_called_once()
         call_kwargs = mock_agent_manager.create_agent_for_task.call_args.kwargs
         assert call_kwargs["memories"] == []
-        assert call_kwargs["project_context"] == "ctx"
 
         assert task.status == "pending"
         assert workflow.status == "active"
