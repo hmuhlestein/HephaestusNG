@@ -2440,7 +2440,11 @@ class TestTriggerArbitration:
         assert result is True
         mock_create_agent.assert_called_once()
         _, kwargs = mock_create_agent.call_args
-        assert kwargs["agent_type"] == "arbitration"
+        # Not "arbitration" -- Agent.agent_type's CHECK constraint doesn't
+        # allow it (see test_agent_type_satisfies_the_check_constraint).
+        # "diagnostic" is the deliberate substitute -- prompt_builder.py
+        # treats the two identically for prompt-building purposes.
+        assert kwargs["agent_type"] == "diagnostic"
         assert "validation_prompt" in kwargs["enriched_data_override"]
         assert "requirements" in kwargs["enriched_data_override"]["validation_prompt"]
 
@@ -2502,6 +2506,45 @@ class TestTriggerArbitration:
                 .first()
             )
             assert task is not None
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_agent_type_satisfies_the_check_constraint(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Regression: Agent.agent_type has a CHECK constraint ('phase',
+        'validator', 'result_validator', 'monitor', 'diagnostic',
+        'orchestrator') that "arbitration" was never a member of -- every
+        real (non-mocked) call from create_agent_for_task_direct into
+        AgentManager.create_agent_for_task raised sqlite3.IntegrityError:
+        CHECK constraint failed on the Agent insert, caught and logged
+        only at DEBUG (invisible at the default log level) and returned
+        as None, so every arbitration dispatch failed silently --
+        _trigger_arbitration always hit its "if not agent_data" branch
+        and failed the workflow, even after the Task-creation FK bug was
+        separately fixed. This mocks create_agent_for_task_direct like
+        the other tests in this class (a full dispatch is a heavier
+        integration concern), but then actually tries to persist an
+        Agent row with the captured agent_type value against the real
+        schema -- the authoritative check, not a hardcoded copy of the
+        constraint's allowed list that could itself drift out of sync."""
+        from src.core.database import Agent as _Agent
+        from src.autopilot.orchestrator import _trigger_arbitration
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        _trigger_arbitration(
+            "wf-1", "phase-1", "requirements", "exhausted", MagicMock()
+        )
+
+        _, kwargs = mock_create_agent.call_args
+        agent_type = kwargs["agent_type"]
+
+        with db_manager.session_scope() as session:
+            session.add(_Agent(
+                id="agent-type-check-probe",
+                system_prompt="x", status="idle", cli_type="pi",
+                agent_type=agent_type,
+            ))
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     def test_prompt_lists_valid_phase_names(
