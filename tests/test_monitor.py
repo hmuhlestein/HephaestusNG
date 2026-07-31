@@ -1173,12 +1173,21 @@ class TestDetectCliModelFallback:
     async def test_clears_stuck_state_after_switching(self, make_monitoring_loop, mock_agent_manager):
         """So the fallback model's own first turn gets a fresh frozen-
         detection window instead of being judged against a signature
-        captured while still on the original model."""
+        captured while still on the original model -- but recov (the
+        generic mechanical-recovery escalation counter that lives in the
+        same _stuck_state entry) must survive. Regression: this used to
+        pop() the whole entry, which also reset recov to 0 on every
+        fallback attempt -- the reason the generic frozen/nudge/abandon
+        path never independently escalated during the incident
+        MAX_FALLBACK_ATTEMPTS was added for."""
         agent = self._frozen_agent(make_monitoring_loop, 200)
+        make_monitoring_loop._stuck_state["a1"]["recov"] = 1
 
         await make_monitoring_loop._detect_cli_model_fallback(agent)
 
-        assert "a1" not in make_monitoring_loop._stuck_state
+        assert make_monitoring_loop._stuck_state["a1"]["since"] is None
+        assert make_monitoring_loop._stuck_state["a1"]["sig"] is None
+        assert make_monitoring_loop._stuck_state["a1"]["recov"] == 1
 
     @pytest.mark.asyncio
     async def test_only_fires_once_per_agent(self, make_monitoring_loop, mock_agent_manager):
@@ -1251,6 +1260,73 @@ class TestDetectCliModelFallback:
         await make_monitoring_loop._detect_cli_model_fallback(agent)
 
         assert agent_row.cli_model == "mimo-v2.5-pro"
+
+    @pytest.mark.asyncio
+    async def test_send_failure_reverts_and_allows_retry_under_cap(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: the one-shot flag and the optimistic DB write both
+        happen before the keystroke send is attempted -- previously, if
+        send_message_to_agent raised (e.g. tmux session gone mid-send), no
+        _pending_fallback_verification entry was ever created, so
+        _verify_cli_model_fallback had nothing to check and the agent was
+        permanently blocked by the one-shot gate with the MAX_FALLBACK_ATTEMPTS
+        retry budget never even consulted. A send failure must revert the DB
+        write and behave like an immediately-failed attempt -- retry allowed
+        while attempts remain."""
+        from contextlib import contextmanager
+
+        agent_row = Mock(cli_model="mimo-v2.5-pro")
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = agent_row
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+        mock_agent_manager.send_message_to_agent = AsyncMock(
+            side_effect=RuntimeError("tmux session gone")
+        )
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        assert "a1" not in make_monitoring_loop._switched_to_fallback_model
+        assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+
+    @pytest.mark.asyncio
+    async def test_send_failure_at_max_attempts_gives_up_permanently(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Companion to the above: once MAX_FALLBACK_ATTEMPTS is reached, a
+        send failure must NOT re-enable a retry -- same cap semantics as an
+        unconfirmed switch."""
+        from contextlib import contextmanager
+
+        from src.monitoring.monitor import MAX_FALLBACK_ATTEMPTS
+
+        agent_row = Mock(cli_model="mimo-v2.5-pro")
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = agent_row
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+        make_monitoring_loop._fallback_attempt_count = {"a1": MAX_FALLBACK_ATTEMPTS - 1}
+        mock_agent_manager.send_message_to_agent = AsyncMock(
+            side_effect=RuntimeError("tmux session gone")
+        )
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        assert "a1" in make_monitoring_loop._switched_to_fallback_model
+        assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
 
 
 class TestVerifyCliModelFallback:

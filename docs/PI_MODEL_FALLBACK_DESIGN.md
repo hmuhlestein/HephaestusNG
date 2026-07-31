@@ -286,6 +286,41 @@ pi's actual picker behavior (the one confirmed-working case in this doc used
 the bare name) and risks breaking the common case — not attempted without a
 live test.
 
+Two more gaps surfaced by reviewing the cap fix itself, both closed:
+
+1. **A send failure bypassed the retry budget entirely.** The one-shot
+   `_switched_to_fallback_model.add(agent.id)` and the optimistic
+   `Agent.cli_model` DB write both happen *before* the keystroke-send loop.
+   If `send_message_to_agent` itself raised (e.g. the tmux session gone
+   mid-send), the exception skipped straight past the
+   `_pending_fallback_verification[agent.id] = ...` line — so
+   `_verify_cli_model_fallback` would never see a pending entry for this
+   agent, `MAX_FALLBACK_ATTEMPTS` was never consulted, and the agent was
+   permanently blocked by the one-shot gate after a single failed *send*,
+   not even a failed picker interaction. Fixed by wrapping the send loop in
+   its own `try/except`: on failure, revert `Agent.cli_model`, log
+   `cli_model_fallback_send_failed`, and apply the identical cap logic used
+   for an unconfirmed switch (discard from the one-shot set if
+   `attempt_num < MAX_FALLBACK_ATTEMPTS`, otherwise leave it blocked).
+2. **`_stuck_state.pop(agent.id, None)` after a successful send reset more
+   than intended.** That dict entry is shared with
+   `_mechanical_recovery_for_agent`'s own frozen-timer/escalation state
+   (`st["recov"]`) — popping the whole entry on every fallback attempt also
+   zeroed `recov`, which is part of why the generic frozen/nudge/abandon
+   backstop never independently escalated during the incident above. Now
+   only `since`/`sig` (the freeze baseline) are reset, in place;
+   `st["recov"]` survives. In the common case (frozen for the ordinary
+   reason, no prior generic-recovery nudges — `cli_model_fallback_wait_seconds`
+   defaults to 120s, well under `frozen_seconds`'s 300s, so this mechanism
+   usually fires before the generic path has nudged even once) this makes
+   no observable difference; it matters when the fast `abort_frozen` path
+   (30s) has already nudged once or twice by the time this mechanism's own
+   wait threshold is reached.
+
+Both git-stash-verified (`test_send_failure_reverts_and_allows_retry_under_cap`,
+`test_send_failure_at_max_attempts_gives_up_permanently`, and an updated
+`test_clears_stuck_state_after_switching`).
+
 ### Extended to the secondary/fallback CLI (implemented)
 
 `default_fallback_cli_tool: claude` (`hephaestus_config.yaml`) is itself a
@@ -418,6 +453,13 @@ established for that purpose.
   reaches `MAX_FALLBACK_ATTEMPTS`, still reverts `Agent.cli_model` but does
   NOT clear the one-shot set — no further retries. Git-stash-verified
   against the pre-cap code.
+- Unit: a keystroke-send failure reverts `Agent.cli_model` and applies the
+  same cap logic as an unconfirmed switch (retry allowed under the cap,
+  permanently blocked at/past it) rather than silently bypassing the retry
+  budget. Git-stash-verified.
+- Unit: after a successful switch, `_stuck_state[agent.id]["recov"]`
+  survives (only `since`/`sig` reset) — git-stash-verified against the
+  prior `.pop()`-the-whole-entry behavior.
 - Unit: a CLI genuinely without support (`opencode`, base-class defaults)
   stays a no-op regardless of freeze duration.
 - Unit: claude, as the secondary/fallback CLI, gets its own fallback via
