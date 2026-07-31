@@ -1388,6 +1388,46 @@ class TestVerifyCliModelFallback:
         assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
 
     @pytest.mark.asyncio
+    async def test_unconfirmed_past_grace_period_stops_retrying_after_max_attempts(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: observed live -- with no cap, an agent that kept
+        refreezing retried an unconfirmed switch 40+ times over 7+ hours,
+        each retry blindly resending the same keystrokes into whatever state
+        the CLI actually was in, until one attempt landed on a different,
+        unusable model and broke the session outright. Once
+        _fallback_attempt_count reaches MAX_FALLBACK_ATTEMPTS, a still-
+        unconfirmed switch must NOT clear the one-shot set -- no further
+        retries for this agent's task."""
+        from contextlib import contextmanager
+
+        from src.monitoring.monitor import MAX_FALLBACK_ATTEMPTS
+
+        agent_row = Mock(cli_model="mimo-v2.5-pro")
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = agent_row
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        make_monitoring_loop.config.monitoring_interval_seconds = 60
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "still on the old model"
+        make_monitoring_loop._switched_to_fallback_model = {"a1"}
+        make_monitoring_loop._fallback_attempt_count = {"a1": MAX_FALLBACK_ATTEMPTS}
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time() - 200)
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" in make_monitoring_loop._switched_to_fallback_model
+        # The DB write is still reverted regardless -- we just stop retrying.
+        assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+
+    @pytest.mark.asyncio
     async def test_confirmed_switch_does_not_clear_the_one_shot_set(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):

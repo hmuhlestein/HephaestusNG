@@ -241,6 +241,51 @@ That persistence interacts with two things that needed fixing once added:
 A confirmed switch, by contrast, leaves both `Agent.cli_model` and the
 one-shot set alone — no automatic switch-back (see below).
 
+### Incident: unbounded retry broke a live session (fixed)
+
+The "unconfirmed → clear one-shot set → retry next freeze" loop above had no
+cap. Observed live: agent `64887133` (a `forensics_analysis` task) refroze
+roughly every 15-20 minutes for 7+ hours, and each time
+`_detect_cli_model_fallback` fired again, blindly resending `/model` +
+`mimo-v2.5-pro` into whatever state the pi session actually was in — the
+"revert" in `_verify_cli_model_fallback` only patches our own `Agent.cli_model`
+DB row, it never undoes anything in the live CLI session. Across 40+ attempts,
+one landed on a different provider's catalog entry for the same model name
+(`opencode-go`, pi's "OpenCode Go" provider — a real entry in pi's own model
+catalog, legitimately absent from this repo's config since it's pi's
+vocabulary, not ours) which has no `OPENCODE_API_KEY` configured. From then
+on the session was stuck repeating `Error: No API key found for opencode-go`
+and could never produce the `Model: ` confirmation line again, so every
+subsequent retry also went unconfirmed — an unrecoverable loop that also
+never registered as "frozen" to the generic mechanical-recovery check, since
+pi's own repeated error output kept changing the output signature.
+
+Fixed with `MAX_FALLBACK_ATTEMPTS = 2` (monitor.py, mirrors
+`_mechanical_recovery_for_agent`'s existing `max_recov` pattern):
+`_detect_cli_model_fallback` now tracks `self._fallback_attempt_count[agent.id]`,
+incremented on every switch attempt. `_verify_cli_model_fallback`'s
+unconfirmed-past-grace-period branch checks that count — below the cap,
+behavior is unchanged (revert + clear the one-shot set, retry allowed); at
+or past the cap, it still reverts `Agent.cli_model` but leaves the agent in
+`_switched_to_fallback_model`, permanently blocking further attempts for
+that agent's task, and logs `cli_model_fallback_abandoned` instead of
+`cli_model_fallback_unconfirmed` so the give-up is distinguishable in
+`AgentLog`. The live broken agent was terminated via
+`POST /api/terminate_agent` (marks its task `failed`, letting the phase's
+normal `MAX_PHASE_ATTEMPTS` retry redispatch a fresh agent) rather than sent
+more keystrokes — a missing API key isn't something another `/model`
+interaction can fix.
+
+Residual, not fixed here: the search text sent to the picker (`mimo-v2.5-pro`,
+unqualified by provider) is inherently ambiguous if more than one configured
+provider offers a same-named model — the cap bounds the *damage* from that
+ambiguity, it doesn't remove it. Qualifying the config value with an
+explicit provider prefix (e.g. `xiaomi/mimo-v2.5-pro`) might reduce
+ambiguity further, but changing the search text itself is unverified against
+pi's actual picker behavior (the one confirmed-working case in this doc used
+the bare name) and risks breaking the common case — not attempted without a
+live test.
+
 ### Extended to the secondary/fallback CLI (implemented)
 
 `default_fallback_cli_tool: claude` (`hephaestus_config.yaml`) is itself a
@@ -369,6 +414,10 @@ established for that purpose.
   period stays pending with no warning; unconfirmed past the grace period
   warns, logs, clears the one-shot set (retry re-enabled), and reverts
   `Agent.cli_model` back to the original. All git-stash-verified.
+- Unit: unconfirmed past the grace period, once `_fallback_attempt_count`
+  reaches `MAX_FALLBACK_ATTEMPTS`, still reverts `Agent.cli_model` but does
+  NOT clear the one-shot set — no further retries. Git-stash-verified
+  against the pre-cap code.
 - Unit: a CLI genuinely without support (`opencode`, base-class defaults)
   stays a no-op regardless of freeze duration.
 - Unit: claude, as the secondary/fallback CLI, gets its own fallback via
@@ -402,3 +451,14 @@ established for that purpose.
    workflow YAMLs (all already primary on `sonnet`). Needs a real
    escalation target (e.g. `opus`) once claude's own freeze behavior is
    observed live and there's a concrete "next tier" to fall back to.
+3. **`MAX_FALLBACK_ATTEMPTS = 2`** — same kind of guess as
+   `cli_model_fallback_wait_seconds`, chosen to mirror the existing
+   `max_recov` convention rather than from observed data. Once an agent
+   exhausts it, it just sits frozen on the original model with no further
+   intervention from this mechanism (the generic mechanical-recovery/
+   stuck-task paths are still the backstop) — worth watching whether that's
+   too eager or too lenient once there's more live signal on how often a
+   switch genuinely fails to confirm for reasons other than the
+   provider-ambiguity incident above.
+4. **Picker search-text provider ambiguity** — see the incident section
+   above. Not fixed; the retry cap only bounds the blast radius.

@@ -133,6 +133,16 @@ def _strip_sgr(text: str) -> str:
 # complete_my_task resets the idle check forever on activity alone).
 MAX_STUCK_TASK_NUDGES = 3
 
+# How many times _detect_cli_model_fallback/_verify_cli_model_fallback will
+# retry an unconfirmed model switch for the same agent before giving up for
+# good. Observed live: with no cap, an agent that kept refreezing retried an
+# unconfirmed switch 40+ times over 7+ hours -- each retry blindly resent the
+# same keystrokes into whatever state the CLI was actually in (the "revert on
+# unconfirmed" only patches our own DB record, it never undoes anything in
+# the live session), and one of those retries landed on a different, unusable
+# catalog entry that broke the session outright.
+MAX_FALLBACK_ATTEMPTS = 2
+
 
 class MonitoringLoop:
     """Main monitoring loop for the system with trajectory monitoring."""
@@ -698,10 +708,15 @@ class MonitoringLoop:
                 return False
 
             self._switched_to_fallback_model.add(agent.id)
+            if not hasattr(self, "_fallback_attempt_count"):
+                self._fallback_attempt_count = {}
+            attempt_num = self._fallback_attempt_count.get(agent.id, 0) + 1
+            self._fallback_attempt_count[agent.id] = attempt_num
             original_model = agent.cli_model
             logger.warning(
                 f"[CLI-MODEL-FALLBACK] Agent {agent.id[:8]} ({agent.cli_type}) frozen "
-                f"{int(frozen_for)}s — switching to fallback model '{fallback}'"
+                f"{int(frozen_for)}s — switching to fallback model '{fallback}' "
+                f"(attempt {attempt_num}/{MAX_FALLBACK_ATTEMPTS})"
             )
             # Persist the switch to Agent.cli_model, not just the in-memory
             # one-shot set -- agent.cli_model is surfaced directly in API
@@ -791,18 +806,27 @@ class MonitoringLoop:
                 return
             grace_seconds = 2 * getattr(self.config, "monitoring_interval_seconds", 60)
             if time.time() - switched_at >= grace_seconds:
+                attempt_count = getattr(self, "_fallback_attempt_count", {}).get(agent.id, 1)
+                gave_up = attempt_count >= MAX_FALLBACK_ATTEMPTS
                 logger.warning(
                     f"[CLI-MODEL-FALLBACK] Agent {agent.id[:8]} switch to "
                     f"'{model}' not confirmed after "
                     f"{int(time.time() - switched_at)}s — the CLI interaction "
                     "may not have landed as expected"
+                    + (" (attempts exhausted, giving up)" if gave_up else "")
                 )
                 self._log_agent_event(
-                    agent.id, "cli_model_fallback_unconfirmed",
+                    agent.id,
+                    "cli_model_fallback_abandoned" if gave_up else "cli_model_fallback_unconfirmed",
                     f"Switch to fallback model '{model}' not confirmed after "
                     f"{int(time.time() - switched_at)}s -- reverting recorded "
-                    f"cli_model to '{original_model}'",
-                    {"task_id": agent.current_task_id, "model": model},
+                    f"cli_model to '{original_model}'"
+                    + (
+                        f" -- {attempt_count}/{MAX_FALLBACK_ATTEMPTS} attempts used, not retrying again"
+                        if gave_up
+                        else ""
+                    ),
+                    {"task_id": agent.current_task_id, "model": model, "attempt": attempt_count},
                 )
                 # Revert the optimistic DB write from _detect_cli_model_fallback
                 # -- otherwise its own gate (agent.cli_model != config.cli_model)
@@ -820,7 +844,14 @@ class MonitoringLoop:
                         f"{agent.id[:8]}: {revert_err}"
                     )
                 pending.pop(agent.id, None)
-                getattr(self, "_switched_to_fallback_model", set()).discard(agent.id)
+                # Below MAX_FALLBACK_ATTEMPTS: discard from the one-shot set so
+                # _detect_cli_model_fallback can try again next time this agent
+                # freezes long enough. At/past the cap: leave it in the set --
+                # permanently blocks further attempts for this agent's task,
+                # rather than retrying an interaction that keeps failing to
+                # confirm indefinitely (see MAX_FALLBACK_ATTEMPTS).
+                if not gave_up:
+                    getattr(self, "_switched_to_fallback_model", set()).discard(agent.id)
         except Exception as e:
             logger.warning(f"[CLI-MODEL-FALLBACK] verify failed for {agent.id[:8]}: {e}")
             pending.pop(agent.id, None)
