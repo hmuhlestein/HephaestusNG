@@ -2259,6 +2259,63 @@ class TestSessionLimitPause:
         mock_agent_manager.terminate_agent.assert_called_once()
 
 
+class TestDetectConnectionErrors:
+    """Regression: resetting a connection-error-killed task straight to
+    "pending" with no failure_reason let a later, unrelated orphan-check
+    (a task sitting pending with no agent for >1min) relabel it
+    "Orphaned: never dispatched to an agent" -- a label _advance_phases's
+    own retry cap (max_retry_count=2) deliberately exempts from the cap,
+    on the theory that a scheduling race should always be retried. That
+    let a persistently unreachable LLM endpoint loop forever instead of
+    ever pausing the workflow -- observed live: 46 retries over 5+ hours
+    against a dead local inference host. Failing the task directly, with a
+    real reason, routes it through that same retry cap correctly instead
+    of around it."""
+
+    @pytest.mark.asyncio
+    async def test_persistent_errors_fail_task_with_reason_not_silent_pending(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        from contextlib import contextmanager
+
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = (
+            "Error: Connection error.\nError: Connection error.\nError: Connection error."
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        task = Mock(id="t1", status="in_progress", assigned_agent_id="a1", failure_reason=None)
+        session = Mock()
+        session.query.return_value.filter_by.return_value.filter.return_value.all.return_value = [task]
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+
+        result = await make_monitoring_loop._detect_connection_errors(agent)
+
+        assert result is True
+        assert task.status == "failed"
+        assert task.assigned_agent_id is None
+        assert task.failure_reason is not None
+        assert "connection error" in task.failure_reason.lower()
+        assert "Orphaned" not in task.failure_reason
+        mock_agent_manager.terminate_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_single_error_does_not_yet_terminate(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "Error: Connection error."
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        result = await make_monitoring_loop._detect_connection_errors(agent)
+
+        assert result is False
+        mock_agent_manager.terminate_agent.assert_not_called()
+
+
 class TestHandleMissingTmux:
     @pytest.mark.asyncio
     async def test_restarts_agent(
