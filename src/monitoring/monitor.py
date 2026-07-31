@@ -726,6 +726,22 @@ class MonitoringLoop:
             if frozen_for < wait_seconds:
                 return False
 
+            # Don't fire into an active connection-error retry loop. The
+            # keystroke sequence assumes the agent is idle at a shell
+            # prompt ready to accept "/model" -- if it's instead mid-retry
+            # on a connection failure, "/model" may not open the picker in
+            # the wait window, and the follow-up search text then falls
+            # through to the normal chat input, which pi queues as a live
+            # "Steering" message rather than picker text (observed live:
+            # "mimo-v2.5-pro" sent as Steering, never landing as a model
+            # switch). Connection errors are a distinct hard blocker
+            # already owned by _detect_connection_errors (which is itself
+            # fallback-aware) -- leave this one alone rather than risk
+            # misdirecting a busy agent.
+            recent_output = self.agent_manager.get_agent_output(agent.id, lines=20) or ""
+            if _CONNECTION_ERROR_RE.search(_strip_sgr(recent_output)):
+                return False
+
             self._switched_to_fallback_model.add(agent.id)
             if not hasattr(self, "_fallback_attempt_count"):
                 self._fallback_attempt_count = {}
