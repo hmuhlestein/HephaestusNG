@@ -455,21 +455,33 @@ fi
 
 # ─── 10. Pi Extension (Cost Tracker) ─────────────────────────────
 
-if command -v pi &>/dev/null; then
-    EXT_DIR="$PREFIX/extensions/hephaestus-cost-tracker"
-    if [ -d "$EXT_DIR" ]; then
-        log "Building pi cost tracker extension..."
-        cd "$EXT_DIR"
+header "Pi Extension (Cost Tracker)"
+
+EXT_SRC="$PREFIX/extensions/hephaestus-cost-tracker"
+PI_EXT_DIR="$HOME/.pi/agent/extensions"
+
+if [ -d "$EXT_SRC" ]; then
+    # Build the extension if needed
+    if [ -f "$EXT_SRC/package.json" ]; then
+        log "Building cost tracker extension..."
+        cd "$EXT_SRC"
         if [ ! -d "node_modules" ]; then
             npm install --silent 2>/dev/null
         fi
-        npx tsc 2>/dev/null && ok "Cost tracker extension built" || warn "Cost tracker build failed (npm/npx required)"
+        npx tsc 2>/dev/null && ok "Extension built" || warn "Extension build failed (npm/npx required)"
         cd "$PREFIX"
-        log "Installing pi cost tracker extension..."
-        pi install "$EXT_DIR" -l --approve 2>/dev/null && ok "Cost tracker extension installed" || warn "pi extension install failed"
+    fi
+
+    # Symlink into pi's global extensions directory
+    if [ -f "$EXT_SRC/dist/index.js" ]; then
+        mkdir -p "$PI_EXT_DIR"
+        ln -sf "$EXT_SRC/dist/index.js" "$PI_EXT_DIR/hephaestus-cost-tracker.js"
+        ok "Cost tracker symlinked → $PI_EXT_DIR/hephaestus-cost-tracker.js"
+    else
+        warn "Extension dist/index.js not found — build may have failed"
     fi
 else
-    warn "pi not found — skipping cost tracker extension (install pi later and run: pi install $PREFIX/extensions/hephaestus-cost-tracker -l)"
+    warn "Extension source not found at $EXT_SRC — skipping"
 fi
 
 # ─── 11. Update Model Pricing ──────────────────────────────────────
