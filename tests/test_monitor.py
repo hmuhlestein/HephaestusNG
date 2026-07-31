@@ -2339,6 +2339,43 @@ class TestDetectConnectionErrors:
         mock_agent_manager.terminate_agent.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_terminates_agent_only_after_task_status_already_updated(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: terminate_agent() used to run BEFORE the task's
+        status was updated, leaving a window where Agent.status was
+        already "terminated" while Task.status was still "in_progress"
+        (pointing at that now-dead agent). A separate, unrelated periodic
+        sweep (attempt_recovery's stale-assigned-task cleanup) can see
+        exactly that combination and mark the task failed with a generic
+        "terminated unexpectedly" reason before this function's own
+        session ever gets to it -- silently skipping the fallback dispatch
+        entirely. terminate_agent must not be called until the task has
+        already left "assigned"/"in_progress"."""
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = (
+            "Error: Connection error.\nError: Connection error.\nError: Connection error."
+        )
+        make_monitoring_loop._stuck_state = {"a1": {"sig": "x", "since": time.time(), "recov": 0}}
+        task = Mock(id="t1", status="in_progress", assigned_agent_id="a1", failure_reason=None, phase_id=None)
+        status_at_terminate_call = []
+
+        async def fake_terminate(agent_id):
+            status_at_terminate_call.append(task.status)
+
+        mock_agent_manager.terminate_agent = AsyncMock(side_effect=fake_terminate)
+
+        mock_session_scope, session = self._session_with(task, phase=None)
+        mock_db.session_scope = mock_session_scope
+
+        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+            mock_cfg.return_value = Mock(default_fallback_cli_tool=None)
+            result = await make_monitoring_loop._detect_connection_errors(agent)
+
+        assert result is True
+        assert status_at_terminate_call == ["failed"]
+
+    @pytest.mark.asyncio
     async def test_no_fallback_configured_fails_with_reason_not_silent_pending(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
