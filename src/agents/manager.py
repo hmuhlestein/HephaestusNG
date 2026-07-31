@@ -1656,6 +1656,35 @@ class AgentManager:
             agent.current_task_id = None  # Clear stale reference
             agent.terminated_at = datetime.utcnow()
 
+            # Safety net: release any task still pointing at this
+            # now-terminated agent. Every well-behaved caller already
+            # resets its own task's status/assigned_agent_id before
+            # calling terminate_agent (e.g. the session-limit and
+            # connection-error fallback paths in monitor.py) -- by the
+            # time we get here, assigned_agent_id no longer points at
+            # this agent, so this is a no-op for them. It only fires for
+            # a caller that forgot, closing the gap at the shared
+            # primitive instead of requiring every one of terminate_agent's
+            # ~15 call sites to remember it. Observed live: a task sat
+            # "in_progress" pointing at an already-terminated agent
+            # indefinitely -- current_task_id was correctly cleared on the
+            # agent side (satisfying that half of the termination
+            # invariant) but nothing ever reset the task, so no dispatch
+            # path ever picked it up again.
+            stray_tasks = (
+                session.query(Task)
+                .filter_by(assigned_agent_id=agent_id)
+                .filter(Task.status.in_(["assigned", "in_progress"]))
+                .all()
+            )
+            for stray in stray_tasks:
+                logger.warning(
+                    f"[TERMINATE] Task {stray.id[:8]} still pointed at "
+                    f"terminated agent {agent_id[:8]} -- resetting to pending"
+                )
+                stray.status = "pending"
+                stray.assigned_agent_id = None
+
             # Log termination with captured output
             log_entry = AgentLog(
                 agent_id=agent_id,

@@ -1153,6 +1153,86 @@ class TestTerminateAgent:
         )
         assert "wip.py" in repo.head.commit.stats.files
 
+    @pytest.mark.asyncio
+    async def test_releases_stray_task_still_pointing_at_terminated_agent(
+        self, mock_agent_manager, db_manager
+    ):
+        """Regression: terminate_agent only ever updated the Agent row
+        (status/current_task_id/terminated_at) -- every caller was
+        independently responsible for resetting its OWN task's status/
+        assigned_agent_id, and a caller that forgot left the task
+        permanently stranded: "in_progress"/"assigned" tasks are never
+        picked up by any dispatch path, only "pending" ones are. Observed
+        live: a task sat "in_progress" pointing at an already-terminated
+        agent indefinitely -- current_task_id was correctly cleared on
+        the agent side (satisfying that half of the termination
+        invariant) but nothing ever reset the task."""
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-stray-1", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                    working_directory="/tmp/nonexistent-stray-worktree",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-stray-1", workflow_id="wf-stray-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d",
+                    status="in_progress", assigned_agent_id="agent-stray-1",
+                )
+            )
+            session.add(
+                Agent(
+                    id="agent-stray-1", system_prompt="Test", status="working",
+                    cli_type="claude", current_task_id="task-stray-1",
+                )
+            )
+
+        await mock_agent_manager.terminate_agent("agent-stray-1")
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-stray-1").first()
+            assert task.status == "pending"
+            assert task.assigned_agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_does_not_touch_a_task_the_caller_already_released(
+        self, mock_agent_manager, db_manager
+    ):
+        """A task whose caller already reset assigned_agent_id/status
+        before calling terminate_agent (the correct, well-behaved
+        pattern -- see monitor.py's session-limit and connection-error
+        fallback paths) must be left alone by the safety net."""
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-stray-2", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                    working_directory="/tmp/nonexistent-stray-worktree-2",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-stray-2", workflow_id="wf-stray-2", phase_id="phase-1",
+                    raw_description="r", done_definition="d",
+                    status="pending", assigned_agent_id=None,
+                )
+            )
+            session.add(
+                Agent(
+                    id="agent-stray-2", system_prompt="Test", status="working",
+                    cli_type="claude", current_task_id=None,
+                )
+            )
+
+        await mock_agent_manager.terminate_agent("agent-stray-2")
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-stray-2").first()
+            assert task.status == "pending"
+            assert task.assigned_agent_id is None
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
