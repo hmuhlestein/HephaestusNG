@@ -1299,7 +1299,22 @@ class MonitoringLoop:
             self._connection_error_warned.pop(agent.id, None)
             await self.agent_manager.terminate_agent(agent.id)
 
-            # Reset assigned tasks to pending
+            # Mark the task failed with a real reason -- NOT reset straight to
+            # "pending". Observed live: resetting to pending with no
+            # failure_reason let a later orphan-check (task sits pending with
+            # no agent for >1min -> "Orphaned: never dispatched to an agent")
+            # relabel a genuine, repeated connection failure as a one-off
+            # scheduling race. _advance_phases's own retry cap
+            # (max_retry_count=2) deliberately exempts anything with
+            # "Orphaned" in its failure_reason, on the theory that a
+            # scheduling race should always be retried -- so the mislabel
+            # let this loop past that cap indefinitely (46 retries over 5+
+            # hours against an unreachable local inference host in one
+            # incident) instead of ever pausing the workflow. Failing with an
+            # explicit reason here routes it through that same cap correctly
+            # -- retried a bounded number of times, then paused with a clear
+            # reason once genuinely exhausted, same as every other failure
+            # class already goes through _advance_phases's retry logic.
             with self.db_manager.session_scope() as session:
                 from src.core.database import Task as _Task
                 stuck_tasks = (
@@ -1309,9 +1324,14 @@ class MonitoringLoop:
                     .all()
                 )
                 for t in stuck_tasks:
-                    t.status = "pending"
+                    t.status = "failed"
                     t.assigned_agent_id = None
-                    logger.info(f"[CONNECTION-ERROR] Task {t.id[:8]} reset to pending")
+                    t.failure_reason = (
+                        f"CLI connection errors: {error_count} persistent "
+                        "connection error(s) detected -- the LLM/inference "
+                        "endpoint may be unreachable"
+                    )
+                    logger.info(f"[CONNECTION-ERROR] Task {t.id[:8]} marked failed: {t.failure_reason}")
             return True
         except Exception as e:
             logger.warning(f"[CONNECTION-ERROR] check failed for {agent.id[:8]}: {e}")
