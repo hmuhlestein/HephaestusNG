@@ -70,11 +70,9 @@ class PhaseContext(BaseModel):
 
         context += "\nPipeline (use phase=N when creating tasks):\n"
         for phase in self.all_phases:
-            status_indicator = (
-                "✓"
-                if phase.id < current.id
-                else ("→" if phase.id == current.id else "○")
-            )
+            if phase.id > current.id:
+                continue
+            status_indicator = "✓" if phase.id < current.id else "→"
             desc_short = (
                 phase.description[:80].split("\n")[0] if phase.description else ""
             )
