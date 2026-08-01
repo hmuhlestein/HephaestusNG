@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import toast from 'react-hot-toast';
 import { apiService } from '@/services/api';
 
 interface Project {
@@ -99,11 +100,17 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       return { previousProjects };
     },
-    onError: (_err, _projectId, context) => {
+    onError: (err: any, _projectId, context) => {
       // If the mutation fails, roll back to the previous value
       if (context?.previousProjects) {
         queryClient.setQueryData(['projects'], context.previousProjects);
       }
+      // Without this, a failed activation (e.g. the max-concurrent-projects
+      // cap) just silently reverted the optimistic UI change -- clicking a
+      // project in the sidebar appeared to do nothing at all, with the
+      // backend's actual reason (visible in the network tab, not the UI)
+      // never reaching the user.
+      toast.error(err?.response?.data?.detail || 'Failed to activate project');
     },
     onSuccess: (_data, projectId) => {
       selectProject(projectId);
@@ -142,10 +149,11 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       });
       return { previousProjects };
     },
-    onError: (_err, _projectId, context) => {
+    onError: (err: any, _projectId, context) => {
       if (context?.previousProjects) {
         queryClient.setQueryData(['projects'], context.previousProjects);
       }
+      toast.error(err?.response?.data?.detail || 'Failed to deactivate project');
     },
     onSettled: () => {
       setTimeout(() => {
