@@ -561,6 +561,21 @@ def score_scope_review(
 ) -> Tuple[float, Dict[str, Any]]:
     """Score a scope_review_result.md. Binary: PASS=1.0, FAIL=0.2, missing=0.4.
 
+    Trusts the agent's verdict field directly -- out_of_scope/missing are
+    listed for transparency but do not themselves force a FAIL. scope_review.yaml
+    explicitly tells the agent to PASS with benign items still listed (an
+    implementation detail the design doc implies, e.g.) and reserve FAIL for
+    real scope drift. Requiring both lists empty here used to override that
+    judgment call: an agent that correctly assessed benign-only items and
+    wrote verdict=PASS still scored 0.2 (FAIL) because a list had entries,
+    forcing an unwinnable goto loop back to product_requirements whenever a
+    design doc had any historical inconsistency (e.g. its own schema comment
+    omitting a value its own code example uses) -- product_requirements
+    regenerates the same reasonable inference, scope_review re-approves it,
+    the scorer re-fails it, forever. Observed live: 162 gotos and all 3
+    arbitration attempts burned on exactly this pattern before the workflow
+    gave up.
+
     Accepts both the canonical flat schema and the nested schema agents sometimes
     write ({"scope_review": {"verdict": ...}, "out_of_scope_items": [...], ...}).
     """
@@ -611,7 +626,7 @@ def score_scope_review(
         "out_of_scope_count": len(out_of_scope),
         "missing_count": len(missing),
     }
-    if verdict == "PASS" and not out_of_scope and not missing:
+    if verdict == "PASS":
         return 1.0, {**meta, "band": "pass"}
     # Same handoff mechanism as score_architectural_review/score_adversarial_review's
     # report_text quoting (see _fire_phase_transition's feedback extraction):
