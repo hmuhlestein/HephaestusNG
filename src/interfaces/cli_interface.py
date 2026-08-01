@@ -868,11 +868,17 @@ class PiAgent(CLIAgentInterface):
         )
 
     def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
-        # Confirmed live: pi's `/model` opens a fuzzy-searchable picker, not
-        # a one-line `/model <name>` command -- sending "/model" alone opens
-        # it, then the search text (e.g. "mimo-v2.5-pro", not a full
-        # provider/model path) narrows it to a single match and selects it.
-        return [("/model", 1.0), (model, 0.0)]
+        # The two-step form ("/model" alone, wait for the picker, then the
+        # search text as a second send) never confirmed a single successful
+        # switch across 80 attempts system-wide (0 cli_model_fallback_confirmed
+        # vs 58 unconfirmed + 6 abandoned) -- the wait window is exactly
+        # where a busy/slow-to-respond agent lets the second send land as a
+        # queued chat "Steering" message instead of picker input, since the
+        # picker hadn't actually opened yet. pi's `/model` accepts the search
+        # text as a trailing argument on the same line, pre-filtering the
+        # picker to a single match in one atomic send -- no wait window for
+        # the agent to be mid-turn in.
+        return [(f"/model {model}", 0.0)]
 
     def model_fallback_confirmed(self, output: str, model: str) -> Optional[bool]:
         # Confirmed live: a successful pick echoes "Model: <provider>/<name>"
