@@ -961,6 +961,63 @@ def create_agent_for_task_direct(
                 if getattr(task, "completion_criteria", None):
                     enriched_data["completion_criteria"] = task.completion_criteria
 
+            # Per-cli/model concurrency gate (e.g. a local model's single
+            # inference slot) -- this is the orchestrator's OWN direct
+            # dispatch path for phase transitions, entirely bypassing
+            # QueueService.get_next_queued_task's equivalent check, even
+            # though this is the path that actually creates most phase
+            # tasks (scope_review, development, etc.) in a live run. Reuses
+            # QueueService's resolution/count helpers rather than
+            # re-deriving the same formula a second place to drift from.
+            phase_cli_tool_override = None
+            phase_cli_model_override = None
+            phase_glm_token_env = None
+            phase_thinking_level = None
+            qs = getattr(server_state, "queue_service", None)
+            if qs and qs.cli_model_concurrency_limits:
+                cli_type, model = qs._resolve_cli_and_model(session, task)
+                if cli_type and model:
+                    limit = qs.cli_model_concurrency_limits.get(f"{cli_type}/{model}")
+                    if limit is not None and qs.get_active_agent_count_for_cli_model(cli_type, model) >= limit:
+                        fallback_model = qs._resolve_fallback_model(cli_type)
+                        if fallback_model and fallback_model != model:
+                            fallback_limit = qs.cli_model_concurrency_limits.get(f"{cli_type}/{fallback_model}")
+                            fallback_active = (
+                                qs.get_active_agent_count_for_cli_model(cli_type, fallback_model)
+                                if fallback_limit is not None
+                                else 0
+                            )
+                            if fallback_limit is None or fallback_active < fallback_limit:
+                                phase_cli_tool_override = cli_type
+                                phase_cli_model_override = fallback_model
+                                # Passing phase_cli_tool/_model explicitly
+                                # below short-circuits create_agent_for_task's
+                                # own auto-fetch-from-Phase-row block (it
+                                # only fires when all four phase_* args are
+                                # None) -- fetch glm_token_env/thinking_level
+                                # here too so overriding the CLI/model
+                                # doesn't also silently drop this phase's
+                                # other config for this one dispatch.
+                                if task.phase_id:
+                                    _phase_row = session.query(Phase).filter_by(id=task.phase_id).first()
+                                    if _phase_row:
+                                        phase_glm_token_env = _phase_row.glm_api_token_env
+                                        phase_thinking_level = _phase_row.thinking_level
+                                logger.info(
+                                    f"[create_agent_for_task_direct] Task {task_id[:8]}'s primary combo "
+                                    f"{cli_type}/{model} at its concurrency limit -- dispatching on "
+                                    f"fallback model {fallback_model} instead"
+                                )
+                        if phase_cli_tool_override is None:
+                            # No usable fallback -- dispatch on the primary
+                            # anyway rather than block this phase transition
+                            # entirely (this function has no "queue and
+                            # retry later" path the way process_queue does).
+                            logger.warning(
+                                f"[create_agent_for_task_direct] Task {task_id[:8]}'s combo {cli_type}/{model} "
+                                "at its concurrency limit with no usable fallback -- dispatching anyway"
+                            )
+
             agent = asyncio.run(
                 server_state.agent_manager.create_agent_for_task(
                     task=task,
@@ -969,6 +1026,10 @@ def create_agent_for_task_direct(
                     project_context="",
                     agent_type=agent_type,
                     use_existing_worktree=True,
+                    phase_cli_tool=phase_cli_tool_override,
+                    phase_cli_model=phase_cli_model_override,
+                    phase_glm_token_env=phase_glm_token_env,
+                    phase_thinking_level=phase_thinking_level,
                 )
             )
             # create_agent_for_task mutates task.assigned_agent_id/status on
@@ -7012,6 +7073,75 @@ def run_phase0(
         _cleanup_worktree(worktree, branch, project_path, logger)
 
 
+# ── Review mode helpers ───────────────────────────────────────────────────────
+
+
+def _should_pause_for_review(project_id: str) -> bool:
+    """Return True if this project has review_mode enabled."""
+    try:
+        from src.core.database import AutopilotProject, get_db
+        with get_db() as db:
+            proj = db.query(AutopilotProject).get(project_id)
+            return bool(proj and getattr(proj, "review_mode", False))
+    except Exception:
+        return False
+
+
+def _pause_feature_for_review(feature_id: str, logger: "OrchestratorLogger") -> None:
+    """Pause a feature's workflow with paused_by='review'.
+
+    The self-heal sweep skips any workflow with paused_by set, so this
+    prevents auto-resume without touching any other code paths.
+    """
+    try:
+        from src.core.database import Feature, Workflow, get_db
+        with get_db() as db:
+            feat = db.query(Feature).filter_by(id=feature_id).first()
+            if feat and feat.workflow_id:
+                wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
+                if wf and wf.paused_by != "review":
+                    wf.status = "paused"
+                    wf.paused_by = "review"
+                    db.commit()
+                    logger.info(f"[REVIEW] Feature {feature_id} paused for review")
+    except Exception as e:
+        logger.error(f"[REVIEW] Failed to pause feature {feature_id} for review: {e}")
+
+
+def _wait_for_review_clearance(
+    feature_id: str,
+    logger: "OrchestratorLogger",
+    project_id: Optional[str] = None,
+    poll_interval: int = 30,
+) -> None:
+    """Block until the feature's review pause is cleared (paused_by != 'review').
+
+    Polls the DB every poll_interval seconds. Returns when:
+    - the user approves or requests changes (paused_by cleared), OR
+    - the pipeline stop signal fires (_should_stop returns True).
+    Waits indefinitely otherwise — Review Mode requires explicit human action.
+    """
+    logger.info(f"[REVIEW] Waiting for human review of feature {feature_id}")
+    while True:
+        if project_id and _should_stop(project_id):
+            logger.info(f"[REVIEW] Stop signal — exiting review wait for {feature_id}")
+            return
+        try:
+            from src.core.database import Feature, Workflow, get_db
+            with get_db() as db:
+                feat = db.query(Feature).filter_by(id=feature_id).first()
+                if not feat or not feat.workflow_id:
+                    logger.info(f"[REVIEW] Feature {feature_id} no longer exists — exiting review wait")
+                    return
+                wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
+                if not wf or wf.paused_by != "review":
+                    logger.info(f"[REVIEW] Review cleared for feature {feature_id}")
+                    return
+        except Exception as e:
+            logger.error(f"[REVIEW] Error checking review status: {e}")
+        time.sleep(poll_interval)
+
+
 def _run_one_feature(
     sdk,
     design_entry: DesignEntry,
@@ -7284,6 +7414,14 @@ def _run_one_feature(
             # graceful backend restart mid-pipeline returns "interrupted"
             # here, then destroyed the very worktree resume needed).
             _cleanup_worktree(worktree, branch, project_path, logger)
+
+        # Review mode: if the project has review_mode enabled, pause here and
+        # wait for explicit human approval before returning to the caller.
+        # _wait_for_review_clearance polls every 30 s and respects the
+        # pipeline's stop_event so Stop/restart work cleanly.
+        if project_id and feature_id and _should_pause_for_review(project_id):
+            _pause_feature_for_review(feature_id, logger)
+            _wait_for_review_clearance(feature_id, logger, project_id=project_id)
 
         return final_status
 
