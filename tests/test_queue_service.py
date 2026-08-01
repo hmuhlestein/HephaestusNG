@@ -330,9 +330,11 @@ class TestCliModelConcurrencyLimit:
     Qwen3.6-27B-UD-Q4_K_XL.gguf) used to have no way to cap concurrency --
     a second agent dispatched onto it just sat frozen waiting its turn
     instead of doing anything. cli_model_concurrency_limits caps active
-    agents per (cli_tool, cli_model) combo; a queued task that would
-    dispatch onto a saturated combo is skipped over (not dequeued) rather
-    than starving the whole queue behind it."""
+    agents per (cli_tool, cli_model) combo. This fixture has no fallback
+    model configured, so a queued task whose combo is saturated is skipped
+    over (not dequeued) rather than starving the whole queue behind it --
+    see TestCliModelConcurrencyFallback for the (more common) case where a
+    fallback model IS configured."""
 
     @pytest.fixture
     def limited_queue_service(self, db_manager):
@@ -387,6 +389,100 @@ class TestCliModelConcurrencyLimit:
 
         assert task is not None
         assert task.id == task_id
+
+
+class TestCliModelConcurrencyFallback:
+    """When a queued task's primary combo is saturated and a fallback MODEL
+    is configured for that cli_tool (e.g. pi's Qwen -> mimo-v2.5-pro, same
+    CLI, different model -- CLIAgentInterface.fallback_model's role-based
+    target), dispatch onto the fallback instead of stalling the task in the
+    queue."""
+
+    @pytest.fixture
+    def queue_service_with_fallback(self, db_manager):
+        return QueueService(
+            db_manager,
+            max_concurrent_agents=10,
+            cli_model_concurrency_limits={"pi/qwen-local": 1},
+            default_cli_tool="pi",
+            default_cli_model="qwen-local",
+            cli_model_fallback="mimo-v2.5-pro",
+        )
+
+    def test_dispatches_on_fallback_model_when_primary_is_saturated(
+        self, queue_service_with_fallback, db_manager
+    ):
+        create_test_agent(db_manager, status="working", cli_type="pi", cli_model="qwen-local")
+        phase_id = create_test_phase(db_manager, cli_tool="pi", cli_model="qwen-local")
+        task_id = create_test_task(db_manager, priority="high", status="queued", phase_id=phase_id)
+
+        task = queue_service_with_fallback.get_next_queued_task()
+
+        assert task is not None
+        assert task.id == task_id
+        assert task._dispatch_cli_override == ("pi", "mimo-v2.5-pro")
+
+    def test_secondary_tier_reads_its_own_fallback_config(self, db_manager):
+        """Mirrors CLIAgentInterface.fallback_model's role resolution: a
+        non-default (secondary-tier) cli_tool must read
+        secondary_cli_model_fallback, not the primary's cli_model_fallback."""
+        qs = QueueService(
+            db_manager,
+            max_concurrent_agents=10,
+            cli_model_concurrency_limits={"pi/qwen-local": 1},
+            default_cli_tool="claude",  # pi is the secondary tier here
+            default_cli_model="local-claude-model",
+            cli_model_fallback="opus",  # claude's (primary) fallback -- must NOT be used
+            secondary_cli_model_fallback="mimo-v2.5-pro",
+        )
+        create_test_agent(db_manager, status="working", cli_type="pi", cli_model="qwen-local")
+        phase_id = create_test_phase(db_manager, cli_tool="pi", cli_model="qwen-local")
+        task_id = create_test_task(db_manager, priority="high", status="queued", phase_id=phase_id)
+
+        task = qs.get_next_queued_task()
+
+        assert task is not None
+        assert task.id == task_id
+        assert task._dispatch_cli_override == ("pi", "mimo-v2.5-pro")
+
+    def test_skips_when_fallback_combo_is_also_saturated(self, db_manager):
+        qs = QueueService(
+            db_manager,
+            max_concurrent_agents=10,
+            cli_model_concurrency_limits={"pi/qwen-local": 1, "pi/mimo-v2.5-pro": 1},
+            default_cli_tool="pi",
+            default_cli_model="qwen-local",
+            cli_model_fallback="mimo-v2.5-pro",
+        )
+        create_test_agent(db_manager, status="working", cli_type="pi", cli_model="qwen-local")
+        create_test_agent(db_manager, status="working", cli_type="pi", cli_model="mimo-v2.5-pro")
+        phase_id = create_test_phase(db_manager, cli_tool="pi", cli_model="qwen-local")
+        create_test_task(db_manager, priority="high", status="queued", phase_id=phase_id)
+
+        task = qs.get_next_queued_task()
+
+        assert task is None
+
+    def test_fallback_equal_to_primary_is_not_used(self, db_manager):
+        """Same no-op guard as CLIAgentInterface's in-session switch: a
+        fallback that happens to equal the primary model isn't a real
+        fallback -- must fall through to skip, not loop dispatching onto
+        the same saturated combo."""
+        qs = QueueService(
+            db_manager,
+            max_concurrent_agents=10,
+            cli_model_concurrency_limits={"pi/qwen-local": 1},
+            default_cli_tool="pi",
+            default_cli_model="qwen-local",
+            cli_model_fallback="qwen-local",
+        )
+        create_test_agent(db_manager, status="working", cli_type="pi", cli_model="qwen-local")
+        phase_id = create_test_phase(db_manager, cli_tool="pi", cli_model="qwen-local")
+        create_test_task(db_manager, priority="high", status="queued", phase_id=phase_id)
+
+        task = qs.get_next_queued_task()
+
+        assert task is None
 
 
 class TestDequeueTask:

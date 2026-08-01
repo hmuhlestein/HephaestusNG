@@ -21,6 +21,8 @@ class QueueService:
         cli_model_concurrency_limits: Optional[Dict[str, int]] = None,
         default_cli_tool: Optional[str] = None,
         default_cli_model: Optional[str] = None,
+        cli_model_fallback: Optional[str] = None,
+        secondary_cli_model_fallback: Optional[str] = None,
     ):
         """Initialize queue service.
 
@@ -31,9 +33,14 @@ class QueueService:
                 cap, keyed by "cli_tool/cli_model" (e.g. a local model with a
                 single inference slot: {"pi/Qwen3.6-27B-UD-Q4_K_XL.gguf": 1}).
                 A task whose phase would resolve to a combo already at its
-                limit is skipped over in the queue (not dequeued) rather than
-                dispatched into a slot that isn't actually free -- distinct
-                from max_concurrent_agents, which caps total agents
+                limit is dispatched on that cli_tool's configured fallback
+                MODEL instead (same CLI, different model -- e.g. pi staying
+                pi but Qwen -> mimo-v2.5-pro), same as
+                CLIAgentInterface.fallback_model's in-session switch target,
+                just applied at dispatch time instead of mid-session. Only
+                skipped over (not dequeued) if no fallback is configured, or
+                the fallback combo is itself at its own configured limit.
+                Distinct from max_concurrent_agents, which caps total agents
                 regardless of which CLI/model they're on. Unset/empty = no
                 per-cli/model limits (original behavior).
             default_cli_tool: Mirrors agents.default_cli_tool -- needed here
@@ -42,16 +49,34 @@ class QueueService:
                 without actually creating the agent.
             default_cli_model: Mirrors agents.cli_model (the primary tier's
                 global default model).
+            cli_model_fallback: Mirrors agents.cli_model_fallback -- the
+                fallback model for whichever CLI is currently default_cli_tool
+                (the "primary" tier, in CLIAgentInterface.fallback_model's
+                role-based terms).
+            secondary_cli_model_fallback: Mirrors agents.secondary_cli_model_fallback
+                -- the fallback model for the non-default (secondary) CLI tier.
         """
         self.db_manager = db_manager
         self.max_concurrent_agents = max_concurrent_agents
         self.cli_model_concurrency_limits = cli_model_concurrency_limits or {}
         self.default_cli_tool = default_cli_tool
         self.default_cli_model = default_cli_model
+        self.cli_model_fallback = cli_model_fallback
+        self.secondary_cli_model_fallback = secondary_cli_model_fallback
         logger.info(
             f"QueueService initialized with max_concurrent_agents={max_concurrent_agents}, "
             f"cli_model_concurrency_limits={self.cli_model_concurrency_limits}"
         )
+
+    def _resolve_fallback_model(self, cli_type: str) -> Optional[str]:
+        """The configured fallback model for cli_type, resolved by ROLE
+        (primary vs secondary tier) -- mirrors
+        CLIAgentInterface.fallback_model's own role lookup exactly, since
+        this is used to pick the SAME target that mechanism would switch an
+        already-running agent to mid-session, just applied at dispatch time
+        instead."""
+        is_primary = cli_type == self.default_cli_tool
+        return self.cli_model_fallback if is_primary else self.secondary_cli_model_fallback
 
     def get_active_agent_count(self, project_id: Optional[str] = None) -> int:
         """Get count of currently active agents (not terminated).
@@ -331,12 +356,16 @@ class QueueService:
                         continue
 
                 # A configured per-cli/model concurrency limit (e.g. a local
-                # model with a single inference slot) -- skip over this task
-                # rather than dispatch it into a slot that isn't actually
-                # free; the next-highest-priority task that fits (a
-                # different cli/model, or the same one once a slot frees up)
-                # still gets picked up this same pass instead of the whole
-                # queue stalling behind one saturated combo.
+                # model with a single inference slot) -- rather than stall
+                # this task in the queue, dispatch it on that cli_tool's
+                # configured fallback MODEL instead (same CLI, different
+                # model -- e.g. pi staying pi but Qwen -> mimo-v2.5-pro),
+                # which doesn't share the primary model's slot constraint.
+                # Only skip over the task (not dequeue it) if no fallback is
+                # configured, or the fallback combo is itself saturated --
+                # the next-highest-priority task that fits still gets picked
+                # up this same pass instead of the whole queue stalling
+                # behind one combo.
                 if self.cli_model_concurrency_limits:
                     cli_type, model = self._resolve_cli_and_model(session, task)
                     if cli_type and model:
@@ -344,9 +373,28 @@ class QueueService:
                         if limit is not None:
                             active = self.get_active_agent_count_for_cli_model(cli_type, model)
                             if active >= limit:
+                                fallback_model = self._resolve_fallback_model(cli_type)
+                                if fallback_model and fallback_model != model:
+                                    fallback_limit = self.cli_model_concurrency_limits.get(
+                                        f"{cli_type}/{fallback_model}"
+                                    )
+                                    fallback_active = (
+                                        self.get_active_agent_count_for_cli_model(cli_type, fallback_model)
+                                        if fallback_limit is not None
+                                        else 0
+                                    )
+                                    if fallback_limit is None or fallback_active < fallback_limit:
+                                        logger.info(
+                                            f"Task {task.id}'s primary combo {cli_type}/{model} at its "
+                                            f"concurrency limit ({active}/{limit}) -- dispatching on "
+                                            f"fallback model {fallback_model} instead"
+                                        )
+                                        task._dispatch_cli_override = (cli_type, fallback_model)
+                                        return task
                                 logger.debug(
-                                    f"Task {task.id} would dispatch on {cli_type}/{model}, "
-                                    f"already at its concurrency limit ({active}/{limit}) -- skipping for now"
+                                    f"Task {task.id} would dispatch on {cli_type}/{model}, already at "
+                                    f"its concurrency limit ({active}/{limit}) with no usable fallback "
+                                    "-- skipping for now"
                                 )
                                 continue
 
