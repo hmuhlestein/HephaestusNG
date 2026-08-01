@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.core.database import Agent, Base, Task
+from src.core.database import Agent, Base, Phase, Task, Workflow
 from src.services.queue_service import QueueService
 
 
@@ -55,7 +55,7 @@ def queue_service(db_manager):
     return QueueService(db_manager, max_concurrent_agents=3)
 
 
-def create_test_task(db_manager, task_id=None, priority="medium", status="pending"):
+def create_test_task(db_manager, task_id=None, priority="medium", status="pending", phase_id=None):
     """Helper to create a test task."""
     session = db_manager.get_session()
     try:
@@ -66,6 +66,7 @@ def create_test_task(db_manager, task_id=None, priority="medium", status="pendin
             done_definition="Complete the task",
             status=status,
             priority=priority,
+            phase_id=phase_id,
         )
         session.add(task)
         session.commit()
@@ -75,7 +76,34 @@ def create_test_task(db_manager, task_id=None, priority="medium", status="pendin
     return task_id
 
 
-def create_test_agent(db_manager, agent_id=None, status="working"):
+def create_test_phase(db_manager, phase_id=None, cli_tool=None, cli_model=None):
+    """Helper to create a test phase (with its parent workflow row, required
+    by the FK) with an optional per-phase cli_tool/cli_model override."""
+    session = db_manager.get_session()
+    try:
+        workflow_id = str(uuid.uuid4())
+        session.add(
+            Workflow(id=workflow_id, name="Test workflow", phases_folder_path="/tmp")
+        )
+        phase = Phase(
+            id=phase_id or str(uuid.uuid4()),
+            workflow_id=workflow_id,
+            order=1,
+            name="test_phase",
+            description="Test phase",
+            done_definitions=[],
+            cli_tool=cli_tool,
+            cli_model=cli_model,
+        )
+        session.add(phase)
+        session.commit()
+        phase_id = phase.id
+    finally:
+        session.close()
+    return phase_id
+
+
+def create_test_agent(db_manager, agent_id=None, status="working", cli_type="claude", cli_model=None):
     """Helper to create a test agent."""
     session = db_manager.get_session()
     try:
@@ -83,7 +111,8 @@ def create_test_agent(db_manager, agent_id=None, status="working"):
             id=agent_id or str(uuid.uuid4()),
             system_prompt="Test prompt",
             status=status,
-            cli_type="claude",
+            cli_type=cli_type,
+            cli_model=cli_model,
         )
         session.add(agent)
         session.commit()
@@ -294,6 +323,70 @@ class TestGetNextQueuedTask:
         next_task = queue_service.get_next_queued_task()
         # Should get boosted task even though high priority task exists
         assert next_task.id == boosted_id
+
+
+class TestCliModelConcurrencyLimit:
+    """Regression: a local model with a single inference slot (e.g. pi's
+    Qwen3.6-27B-UD-Q4_K_XL.gguf) used to have no way to cap concurrency --
+    a second agent dispatched onto it just sat frozen waiting its turn
+    instead of doing anything. cli_model_concurrency_limits caps active
+    agents per (cli_tool, cli_model) combo; a queued task that would
+    dispatch onto a saturated combo is skipped over (not dequeued) rather
+    than starving the whole queue behind it."""
+
+    @pytest.fixture
+    def limited_queue_service(self, db_manager):
+        return QueueService(
+            db_manager,
+            max_concurrent_agents=10,
+            cli_model_concurrency_limits={"pi/qwen-local": 1},
+            default_cli_tool="pi",
+            default_cli_model="qwen-local",
+        )
+
+    def test_skips_task_whose_combo_is_at_its_limit(self, limited_queue_service, db_manager):
+        create_test_agent(db_manager, status="working", cli_type="pi", cli_model="qwen-local")
+        phase_id = create_test_phase(db_manager, cli_tool="pi", cli_model="qwen-local")
+        create_test_task(db_manager, priority="high", status="queued", phase_id=phase_id)
+
+        task = limited_queue_service.get_next_queued_task()
+
+        assert task is None
+
+    def test_dispatches_task_once_the_combo_has_a_free_slot(self, limited_queue_service, db_manager):
+        phase_id = create_test_phase(db_manager, cli_tool="pi", cli_model="qwen-local")
+        task_id = create_test_task(db_manager, priority="high", status="queued", phase_id=phase_id)
+
+        task = limited_queue_service.get_next_queued_task()
+
+        assert task is not None
+        assert task.id == task_id
+
+    def test_falls_through_to_a_different_combo_not_at_its_limit(self, limited_queue_service, db_manager):
+        create_test_agent(db_manager, status="working", cli_type="pi", cli_model="qwen-local")
+        saturated_phase = create_test_phase(db_manager, cli_tool="pi", cli_model="qwen-local")
+        create_test_task(db_manager, priority="high", status="queued", phase_id=saturated_phase)
+
+        other_phase = create_test_phase(db_manager, cli_tool="claude", cli_model="sonnet")
+        other_task_id = create_test_task(db_manager, priority="medium", status="queued", phase_id=other_phase)
+
+        task = limited_queue_service.get_next_queued_task()
+
+        assert task is not None
+        assert task.id == other_task_id
+
+    def test_no_limits_configured_is_a_noop(self, queue_service, db_manager):
+        """The default (no cli_model_concurrency_limits) fixture must behave
+        exactly as before -- no phase lookups, no skipped tasks."""
+        create_test_agent(db_manager, status="working", cli_type="pi", cli_model="qwen-local")
+        create_test_agent(db_manager, status="working", cli_type="pi", cli_model="qwen-local")
+        phase_id = create_test_phase(db_manager, cli_tool="pi", cli_model="qwen-local")
+        task_id = create_test_task(db_manager, priority="high", status="queued", phase_id=phase_id)
+
+        task = queue_service.get_next_queued_task()
+
+        assert task is not None
+        assert task.id == task_id
 
 
 class TestDequeueTask:

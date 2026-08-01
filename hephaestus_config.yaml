@@ -79,6 +79,11 @@ agents:
   cli_model_fallback_wait_seconds: 120
   cli_model_fallback: mimo-v2.5-pro
   secondary_cli_model_fallback: sonnet
+  # The local Qwen model has only a single inference slot -- a second agent
+  # dispatched onto it just sits frozen waiting its turn instead of doing
+  # anything. Cap it at 1 so the queue holds the second task instead.
+  cli_model_concurrency_limits:
+    "pi/Qwen3.6-27B-UD-Q4_K_XL.gguf": 1
   tmux_session_prefix: agent
   health_check_interval: 60
   max_health_failures: 3

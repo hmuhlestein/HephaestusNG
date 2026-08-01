@@ -106,6 +106,15 @@ class Config:
         self.cli_model_fallback_wait_seconds = agents.get("cli_model_fallback_wait_seconds", 120)
         self.cli_model_fallback = agents.get("cli_model_fallback")
         self.secondary_cli_model_fallback = agents.get("secondary_cli_model_fallback")
+        # Per-(cli_tool, cli_model) concurrency cap, keyed by "cli_tool/cli_model"
+        # (e.g. a local model with a single inference slot:
+        # {"pi/Qwen3.6-27B-UD-Q4_K_XL.gguf": 1}). Distinct from
+        # max_concurrent_agents (mcp section) below, which caps total agents
+        # regardless of which CLI/model they're on -- this stops the queue
+        # from dispatching a second agent onto a combo that can only
+        # actually serve one request at a time, which just leaves the
+        # second agent frozen waiting its turn instead of doing anything.
+        self.cli_model_concurrency_limits = agents.get("cli_model_concurrency_limits", {}) or {}
         # Per-turn reasoning budget for pi agents (off|minimal|low|medium|high|xhigh).
         # Bounds rumination; per-phase `thinking_level` overrides this.
         self.cli_thinking_level = agents.get("cli_thinking_level", "medium")

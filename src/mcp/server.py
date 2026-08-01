@@ -350,6 +350,9 @@ class ServerState:
         self.queue_service = QueueService(
             db_manager=self.db_manager,
             max_concurrent_agents=config.max_concurrent_agents,
+            cli_model_concurrency_limits=config.cli_model_concurrency_limits,
+            default_cli_tool=config.default_cli_tool,
+            default_cli_model=config.cli_model,
         )
         logger.info(f"Queue service initialized with max_concurrent_agents={config.max_concurrent_agents}")
 

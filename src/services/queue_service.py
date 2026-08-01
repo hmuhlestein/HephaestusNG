@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_
 
-from src.core.database import Agent, DatabaseManager, Task, Workflow
+from src.core.database import Agent, DatabaseManager, Phase, Task, Workflow
 
 logger = logging.getLogger(__name__)
 
@@ -14,17 +14,43 @@ logger = logging.getLogger(__name__)
 class QueueService:
     """Manages task queueing and agent concurrency limits."""
 
-    def __init__(self, db_manager: DatabaseManager, max_concurrent_agents: int):
+    def __init__(
+        self,
+        db_manager: DatabaseManager,
+        max_concurrent_agents: int,
+        cli_model_concurrency_limits: Optional[Dict[str, int]] = None,
+        default_cli_tool: Optional[str] = None,
+        default_cli_model: Optional[str] = None,
+    ):
         """Initialize queue service.
 
         Args:
             db_manager: Database manager instance
             max_concurrent_agents: Maximum number of agents that can run concurrently
+            cli_model_concurrency_limits: Per-(cli_tool, cli_model) concurrency
+                cap, keyed by "cli_tool/cli_model" (e.g. a local model with a
+                single inference slot: {"pi/Qwen3.6-27B-UD-Q4_K_XL.gguf": 1}).
+                A task whose phase would resolve to a combo already at its
+                limit is skipped over in the queue (not dequeued) rather than
+                dispatched into a slot that isn't actually free -- distinct
+                from max_concurrent_agents, which caps total agents
+                regardless of which CLI/model they're on. Unset/empty = no
+                per-cli/model limits (original behavior).
+            default_cli_tool: Mirrors agents.default_cli_tool -- needed here
+                to resolve a queued task's phase to the same cli_type/model
+                AgentManager.create_agent_for_task would dispatch it as,
+                without actually creating the agent.
+            default_cli_model: Mirrors agents.cli_model (the primary tier's
+                global default model).
         """
         self.db_manager = db_manager
         self.max_concurrent_agents = max_concurrent_agents
+        self.cli_model_concurrency_limits = cli_model_concurrency_limits or {}
+        self.default_cli_tool = default_cli_tool
+        self.default_cli_model = default_cli_model
         logger.info(
-            f"QueueService initialized with max_concurrent_agents={max_concurrent_agents}"
+            f"QueueService initialized with max_concurrent_agents={max_concurrent_agents}, "
+            f"cli_model_concurrency_limits={self.cli_model_concurrency_limits}"
         )
 
     def get_active_agent_count(self, project_id: Optional[str] = None) -> int:
@@ -50,6 +76,45 @@ class QueueService:
             count = query.count()
             logger.debug(f"Active agent count: {count} (project_id={project_id})")
             return count
+
+    def _resolve_cli_and_model(self, session, task: Task) -> tuple:
+        """What AgentManager.create_agent_for_task would resolve task's
+        cli_type/model to, without creating an agent. Mirrors that method's
+        own phase-then-global-default resolution (manager.py's
+        `cli_type = phase_cli_tool or cli_type or self.config.default_cli_tool`
+        and its `model = (phase_cli_model if phase_cli_tool else None) or
+        global_model or cli_agent.default_model`) -- deliberately not the
+        explicit `cli_type=` override create_agent_for_task also accepts,
+        since that's only ever passed by the session-limit fallback
+        redispatch mid-run, never for a fresh queue dispatch like this.
+        """
+        from src.interfaces.cli_interface import get_cli_agent
+
+        phase = session.query(Phase).filter_by(id=task.phase_id).first() if task.phase_id else None
+        phase_cli_tool = getattr(phase, "cli_tool", None) if phase else None
+        phase_cli_model = getattr(phase, "cli_model", None) if phase else None
+        cli_type = phase_cli_tool or self.default_cli_tool
+        if not cli_type:
+            return None, None
+        cli_agent = get_cli_agent(cli_type)
+        global_model = self.default_cli_model if cli_type == self.default_cli_tool else None
+        model = (phase_cli_model if phase_cli_tool else None) or global_model or cli_agent.default_model
+        return cli_type, model
+
+    def get_active_agent_count_for_cli_model(self, cli_type: str, model: str) -> int:
+        """Count of currently active agents on this exact (cli_type, model)
+        combo -- the budget a per-cli/model concurrency limit is checked
+        against, e.g. a local model with a single inference slot."""
+        with self.db_manager.session_scope() as session:
+            return (
+                session.query(Agent)
+                .filter(
+                    Agent.status.in_(["working", "starting", "idle"]),
+                    Agent.cli_type == cli_type,
+                    Agent.cli_model == model,
+                )
+                .count()
+            )
 
     def should_queue_task(self, project_id: Optional[str] = None) -> bool:
         """Check if we should queue the next task instead of creating an agent.
@@ -264,6 +329,26 @@ class QueueService:
                             f"This task should have status='blocked', not 'queued'. Skipping."
                         )
                         continue
+
+                # A configured per-cli/model concurrency limit (e.g. a local
+                # model with a single inference slot) -- skip over this task
+                # rather than dispatch it into a slot that isn't actually
+                # free; the next-highest-priority task that fits (a
+                # different cli/model, or the same one once a slot frees up)
+                # still gets picked up this same pass instead of the whole
+                # queue stalling behind one saturated combo.
+                if self.cli_model_concurrency_limits:
+                    cli_type, model = self._resolve_cli_and_model(session, task)
+                    if cli_type and model:
+                        limit = self.cli_model_concurrency_limits.get(f"{cli_type}/{model}")
+                        if limit is not None:
+                            active = self.get_active_agent_count_for_cli_model(cli_type, model)
+                            if active >= limit:
+                                logger.debug(
+                                    f"Task {task.id} would dispatch on {cli_type}/{model}, "
+                                    f"already at its concurrency limit ({active}/{limit}) -- skipping for now"
+                                )
+                                continue
 
                 # Task is valid, return it
                 logger.info(
