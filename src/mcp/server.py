@@ -353,6 +353,8 @@ class ServerState:
             cli_model_concurrency_limits=config.cli_model_concurrency_limits,
             default_cli_tool=config.default_cli_tool,
             default_cli_model=config.cli_model,
+            cli_model_fallback=config.cli_model_fallback,
+            secondary_cli_model_fallback=config.secondary_cli_model_fallback,
         )
         logger.info(f"Queue service initialized with max_concurrent_agents={config.max_concurrent_agents}")
 
@@ -1369,6 +1371,17 @@ async def process_queue(project_id: Optional[str] = None):
                 phase_id=task_for_agent.phase_id,
                 requesting_agent_id="system",
             )
+
+        # QueueService.get_next_queued_task set this when the phase's
+        # primary cli/model combo was at its configured concurrency limit
+        # (e.g. a local model's single inference slot) -- dispatch on the
+        # fallback model it picked instead of the phase's own cli_tool/
+        # cli_model. Only overrides those two keys; phase_glm_token_env/
+        # phase_thinking_level stay as resolved from the phase.
+        if hasattr(next_task, "_dispatch_cli_override"):
+            override_cli_tool, override_cli_model = next_task._dispatch_cli_override
+            dispatch_context["phase_cli_tool"] = override_cli_tool
+            dispatch_context["phase_cli_model"] = override_cli_model
 
         agent = await AgentDispatchService.dispatch(
             task=task_for_agent,
