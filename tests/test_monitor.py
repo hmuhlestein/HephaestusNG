@@ -1111,6 +1111,33 @@ class TestDetectCliModelFallback:
         mock_agent_manager.send_message_to_agent.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_exhausted_attempts_stay_exhausted_across_a_restart(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        """Regression: _switched_to_fallback_model/_fallback_attempt_count are
+        in-memory only, so a fresh MonitoringLoop (i.e. after a `heph
+        restart`) used to have no way to know MAX_FALLBACK_ATTEMPTS was
+        already spent, and would grant the agent a full fresh 2-attempt
+        budget all over again. Observed live: agent e6633fe6 got two
+        separate 2-attempt episodes (18:13-18:21, then 19:07-19:18 after a
+        restart in between) instead of being capped at 2 total. AgentLog
+        already has 2 'cli_model_fallback' entries for this agent -- a fresh
+        process (empty in-memory state, as after a restart) must still
+        refuse to fire a 3rd."""
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.all.return_value = [
+            ("cli_model_fallback",),
+            ("cli_model_fallback",),
+        ]
+        make_monitoring_loop.db_manager.session_scope.return_value.__enter__.return_value = mock_session
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_no_fallback_configured_disables_feature(self, make_monitoring_loop, mock_agent_manager):
         agent = self._frozen_agent(make_monitoring_loop, 200)
         make_monitoring_loop.config.cli_model_fallback = None
