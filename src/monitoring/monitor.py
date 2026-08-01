@@ -718,6 +718,51 @@ class MonitoringLoop:
             if agent.id in self._switched_to_fallback_model:
                 return False
 
+            # Restart-proof floor: _switched_to_fallback_model/_fallback_attempt_count
+            # are in-memory only, so a routine `heph restart` used to reset an
+            # agent's exhausted MAX_FALLBACK_ATTEMPTS budget back to zero --
+            # observed live, agent e6633fe6 got two full fresh 2-attempt
+            # episodes (18:13-18:21, then again 19:07-19:18 after a restart
+            # in between), doubling the disruptive switch attempts and, worse,
+            # each attempt risks landing as an unconsumed queued "Steering"
+            # message that jams the agent's input indefinitely. AgentLog is
+            # the durable record of every attempt this mechanism has made;
+            # reconstruct prior_attempts/gave_up from it so the cap survives
+            # a restart the same way the one-shot set does within a process.
+            prior_attempts = 0
+            gave_up = False
+            try:
+                with self.db_manager.session_scope() as session:
+                    log_types = [
+                        row[0]
+                        for row in session.query(AgentLog.log_type)
+                        .filter(
+                            AgentLog.agent_id == agent.id,
+                            AgentLog.log_type.in_(
+                                ["cli_model_fallback", "cli_model_fallback_abandoned"]
+                            ),
+                        )
+                        .all()
+                    ]
+                prior_attempts = log_types.count("cli_model_fallback")
+                gave_up = "cli_model_fallback_abandoned" in log_types
+            except Exception as e:
+                logger.warning(
+                    f"[CLI-MODEL-FALLBACK] failed to read prior attempt history "
+                    f"for {agent.id[:8]}: {e}"
+                )
+            # Take whichever count is higher -- DB-derived normally leads
+            # (this same function writes the log entry right after
+            # incrementing the in-memory counter), but the in-memory value
+            # can briefly be higher within one process (e.g. a send failure
+            # on this very attempt hasn't been logged yet).
+            prior_attempts = max(
+                prior_attempts, getattr(self, "_fallback_attempt_count", {}).get(agent.id, 0)
+            )
+            if gave_up or prior_attempts >= MAX_FALLBACK_ATTEMPTS:
+                self._switched_to_fallback_model.add(agent.id)
+                return False
+
             st = getattr(self, "_stuck_state", {}).get(agent.id)
             if not st or st.get("since") is None:
                 return False
@@ -745,7 +790,9 @@ class MonitoringLoop:
             self._switched_to_fallback_model.add(agent.id)
             if not hasattr(self, "_fallback_attempt_count"):
                 self._fallback_attempt_count = {}
-            attempt_num = self._fallback_attempt_count.get(agent.id, 0) + 1
+            # Seeded from the DB-derived prior_attempts above, not the
+            # in-memory dict alone -- see the restart-proofing note above.
+            attempt_num = prior_attempts + 1
             self._fallback_attempt_count[agent.id] = attempt_num
             original_model = agent.cli_model
             logger.warning(
@@ -2657,6 +2704,14 @@ class MonitoringLoop:
                         f">{self.config.stuck_detection_minutes} minutes"
                     )
                 session.commit()
+
+                # Collect cost data for stuck tasks (done or failed) -- the
+                # agent consumed LLM tokens before going silent.
+                try:
+                    from src.services.cost_collection_service import collect_task_cost
+                    collect_task_cost(task.id)
+                except Exception as e:
+                    logger.debug(f"[COST-COLLECT] Failed for stuck task {task.id[:8]}: {e}")
         except Exception as e:
             logger.error(f"Error in task stuck detection: {e}")
         finally:
