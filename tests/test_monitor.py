@@ -1079,10 +1079,9 @@ class TestDetectCliModelFallback:
             result = await make_monitoring_loop._detect_cli_model_fallback(agent)
 
         assert result is True
-        assert mock_agent_manager.send_message_to_agent.call_args_list == [
-            (("a1", "/model"),),
-            (("a1", "mimo-v2.5-pro"),),
-        ]
+        mock_agent_manager.send_message_to_agent.assert_called_once_with(
+            "a1", "/model mimo-v2.5-pro"
+        )
 
     @pytest.mark.asyncio
     async def test_pi_dispatched_as_claude_session_limit_fallback_is_excluded(
@@ -1183,31 +1182,27 @@ class TestDetectCliModelFallback:
         mock_agent_manager.send_message_to_agent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_frozen_past_threshold_sends_model_then_search_text(self, make_monitoring_loop, mock_agent_manager):
+    async def test_frozen_past_threshold_sends_model_in_one_atomic_message(self, make_monitoring_loop, mock_agent_manager):
         agent = self._frozen_agent(make_monitoring_loop, 200)
 
-        with patch("src.monitoring.monitor.asyncio.sleep", new=AsyncMock()) as mock_sleep:
-            result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
 
         assert result is True
-        assert mock_agent_manager.send_message_to_agent.call_args_list == [
-            (("a1", "/model"),),
-            (("a1", "mimo-v2.5-pro"),),
-        ]
-        mock_sleep.assert_awaited_once_with(1)
+        mock_agent_manager.send_message_to_agent.assert_called_once_with(
+            "a1", "/model mimo-v2.5-pro"
+        )
 
     @pytest.mark.asyncio
     async def test_skips_when_connection_errors_present(self, make_monitoring_loop, mock_agent_manager):
         """Regression: the picker keystrokes assume the agent is idle at a
-        shell prompt ready to accept "/model" -- if it's actually mid-retry
-        on a connection failure, "/model" may not open the picker in the
-        wait window, and the follow-up search text then falls through to
-        the normal chat input, which pi queues as a live "Steering"
-        message instead of it landing as a model switch (observed live:
-        "mimo-v2.5-pro" sent as Steering, never confirmed). Connection
-        errors are a distinct hard blocker already owned by
-        _detect_connection_errors (itself fallback-aware) -- leave this
-        one alone rather than risk misdirecting a busy agent."""
+        shell prompt ready to accept "/model <name>" -- if it's actually
+        mid-retry on a connection failure, the send may not land as picker
+        input at all, and instead falls through to the normal chat input,
+        which pi queues as a live "Steering" message instead of it landing
+        as a model switch. Connection errors are a distinct hard blocker
+        already owned by _detect_connection_errors (itself fallback-aware)
+        -- leave this one alone rather than risk misdirecting a busy
+        agent."""
         agent = self._frozen_agent(make_monitoring_loop, 200)
         mock_agent_manager.get_agent_output.return_value = (
             "Error: Connection error.\nError: Connection error.\n"
@@ -1244,7 +1239,7 @@ class TestDetectCliModelFallback:
         agent = self._frozen_agent(make_monitoring_loop, 200)
 
         await make_monitoring_loop._detect_cli_model_fallback(agent)
-        assert mock_agent_manager.send_message_to_agent.call_count == 2  # "/model" + search text
+        assert mock_agent_manager.send_message_to_agent.call_count == 1  # one atomic "/model <name>"
 
         # Re-seed stuck_state as if the agent is frozen again on a later cycle.
         make_monitoring_loop._stuck_state["a1"] = {
@@ -1253,7 +1248,7 @@ class TestDetectCliModelFallback:
         result = await make_monitoring_loop._detect_cli_model_fallback(agent)
 
         assert result is False
-        assert mock_agent_manager.send_message_to_agent.call_count == 2  # no additional calls
+        assert mock_agent_manager.send_message_to_agent.call_count == 1  # no additional calls
 
     @pytest.mark.asyncio
     async def test_logs_an_agent_event_capturing_why_the_model_switched(
