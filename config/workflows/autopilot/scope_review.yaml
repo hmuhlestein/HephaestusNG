@@ -45,8 +45,12 @@ additional_notes: |
   YOUR MISSION: Ensure requirements_analysis.md is a faithful, complete
   extraction of the original design doc — nothing added, nothing dropped.
 
-  This is a BINARY gate. Either requirements match the design or they don't.
-  Do NOT redesign or expand. Do NOT accept "reasonable additions."
+  Verdict is a judgment call, not a mechanical list-emptiness check (see
+  Field rules below) — but the bar stays high. Do NOT redesign or expand.
+  Do NOT accept a new capability, endpoint, table, or workflow just because
+  it "seems reasonable" — that is real drift and must FAIL. Only forgive an
+  item as benign when it's a narrow implementation detail the design doc
+  itself implies (directly, or via its own inconsistency).
 
   Do NOT edit any source code or tests — this may be an existing codebase
   with plenty of both already present. You only read, compare, and write JSON.
@@ -120,11 +124,22 @@ additional_notes: |
   ```
 
   Field rules:
-  - verdict: "PASS" if no out_of_scope and no missing; "FAIL" otherwise.
+  - verdict is your holistic judgment, not a mechanical list-emptiness check.
+    FAIL only for REAL scope drift: a new capability, endpoint, table, or
+    workflow not implied anywhere in design.md, or a requirement whose
+    removal means something in design.md doesn't get built. PASS is fine
+    even with non-empty out_of_scope/missing when every item is benign: an
+    implementation detail reasonably inferred from design.md (pagination
+    defaults, a defensively standard event for a documented flow), or
+    something design.md itself implies inconsistently (e.g. its own code
+    example uses a value its schema comment omits). List every item you
+    notice either way — non-empty lists do NOT force FAIL by themselves.
   - out_of_scope: list of requirement strings present in requirements_analysis.md
-    but NOT in design.md (verbatim text from requirements_analysis.md).
+    but NOT in design.md (verbatim text from requirements_analysis.md), each
+    still listed even when benign enough not to affect verdict.
   - missing: list of requirement strings present in design.md but absent from
-    requirements_analysis.md (verbatim text from design.md).
+    requirements_analysis.md (verbatim text from design.md), each still
+    listed even when benign enough not to affect verdict.
   - correction_instructions: empty string if PASS; specific rewrites for the
     product_requirements agent if FAIL.
   - summary: one-line description of the verdict.
@@ -142,8 +157,11 @@ additional_notes: |
 
   RULES:
   - Do NOT rewrite requirements_analysis.md yourself.
-  - Do NOT approve scope additions because "they seem reasonable."
-  - Do NOT mark FAIL for minor wording differences — only real scope drift.
+  - Do NOT approve a new capability/endpoint/table/workflow because it
+    "seems reasonable" — that is real scope drift, mark FAIL.
+  - Do NOT mark FAIL for minor wording differences or benign implementation
+    details implied by the design doc — only real scope drift (see Field
+    rules above for the distinction). List the item either way.
   - Do NOT create architecture or code. Just read, compare, and write JSON.
   - Do NOT edit any existing source code or test files — report only.
 

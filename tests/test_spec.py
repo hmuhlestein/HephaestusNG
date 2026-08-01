@@ -100,6 +100,25 @@ class TestScoreScopeReview:
         assert score == 1.0
         assert meta["band"] == "pass"
 
+    def test_pass_with_benign_listed_items_is_still_a_pass(self):
+        """Regression: scope_review.yaml tells the agent to PASS with benign
+        items still listed for transparency (an implementation detail the
+        design doc implies, e.g.) and reserve FAIL for real scope drift.
+        Requiring both lists empty for a PASS score overrode that judgment
+        call and forced an unwinnable goto loop: product_requirements keeps
+        regenerating the same reasonable inference, scope_review keeps
+        re-approving it with verdict=PASS, the scorer kept re-failing it
+        anyway because the list wasn't empty. Observed live: 162 gotos and
+        all 3 arbitration attempts burned on exactly this pattern."""
+        result = {
+            "verdict": "PASS",
+            "out_of_scope": ["free_signup transaction type (consistent with design's own example)"],
+            "missing": ["maxBalance: 500 constraint (minor, enforceable via validation)"],
+        }
+        score, meta = score_scope_review(result)
+        assert score == 1.0
+        assert meta["band"] == "pass"
+
     def test_drift_quotes_items_in_reason(self):
         """The goto handoff (_fire_phase_transition) reads meta["reason"] --
         must quote the actual out-of-scope/missing items, not just generic
