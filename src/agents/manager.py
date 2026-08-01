@@ -502,6 +502,11 @@ class AgentManager:
                 env_vars["HEPHAESTUS_WORKFLOW_ID"] = task.workflow_id
             if task.phase_id:
                 env_vars["HEPHAESTUS_PHASE_ID"] = task.phase_id
+            # Cost tracker extension needs the API URL to post cost entries.
+            import os
+
+            _api_port = os.environ.get("HEPHAESTUS_PORT") or str(getattr(self.config, "mcp_port", 8300))
+            env_vars["HEPHAESTUS_API_URL"] = f"http://localhost:{_api_port}"
 
             # 4. Create tmux session IN THE WORKTREE with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)
@@ -586,7 +591,7 @@ class AgentManager:
                                 or ""
                             )
                         complexity = await self.llm_provider.classify_complexity(
-                            design_text
+                            design_text, workflow_id=task.workflow_id
                         )
                         self._complexity_cache[task.workflow_id] = complexity
                     # low complexity → low thinking; medium → medium; high → keep phase base
@@ -1651,6 +1656,16 @@ class AgentManager:
                     except Exception:
                         pass
 
+            # Collect cost data before clearing agent references.
+            # Once current_task_id and assigned_agent_id are cleared,
+            # collect_task_cost can no longer discover the agent/session.
+            if agent.current_task_id:
+                try:
+                    from src.services.cost_collection_service import collect_task_cost
+                    collect_task_cost(agent.current_task_id)
+                except Exception as e:
+                    logger.debug(f"[COST-COLLECT] Failed on terminate for agent {agent_id[:8]}: {e}")
+
             # Update agent status
             agent.status = "terminated"
             agent.current_task_id = None  # Clear stale reference
@@ -1862,6 +1877,10 @@ class AgentManager:
                 env_vars["HEPHAESTUS_WORKFLOW_ID"] = task.workflow_id
             if task.phase_id:
                 env_vars["HEPHAESTUS_PHASE_ID"] = task.phase_id
+            import os
+
+            _api_port = os.environ.get("HEPHAESTUS_PORT") or str(getattr(self.config, "mcp_port", 8300))
+            env_vars["HEPHAESTUS_API_URL"] = f"http://localhost:{_api_port}"
 
             # Create new tmux session with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)

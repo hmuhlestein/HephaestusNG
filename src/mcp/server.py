@@ -2197,6 +2197,62 @@ async def create_task(
                         phase_id=temp_task.phase_id,
                     )
 
+                    # 6.6 Per-cli/model concurrency gate (e.g. a local
+                    # model's single inference slot) -- this endpoint's own
+                    # capacity check above (6.5) only covers the GLOBAL
+                    # max_concurrent_agents cap, which says nothing about
+                    # whether THIS specific combo has a free slot. Dispatch
+                    # on the fallback model instead if it's saturated; if no
+                    # fallback is usable, queue the task the same way 6.5
+                    # already does for the global cap, rather than dispatch
+                    # into a slot that isn't actually free.
+                    qs = server_state.queue_service
+                    if qs.cli_model_concurrency_limits:
+                        with qs.db_manager.session_scope() as _qsession:
+                            _cli_type, _model = qs._resolve_cli_and_model(_qsession, temp_task)
+                        if _cli_type and _model:
+                            _limit = qs.cli_model_concurrency_limits.get(f"{_cli_type}/{_model}")
+                            if _limit is not None and qs.get_active_agent_count_for_cli_model(_cli_type, _model) >= _limit:
+                                _fallback_model = qs._resolve_fallback_model(_cli_type)
+                                _use_fallback = False
+                                if _fallback_model and _fallback_model != _model:
+                                    _fb_limit = qs.cli_model_concurrency_limits.get(f"{_cli_type}/{_fallback_model}")
+                                    _fb_active = (
+                                        qs.get_active_agent_count_for_cli_model(_cli_type, _fallback_model)
+                                        if _fb_limit is not None
+                                        else 0
+                                    )
+                                    _use_fallback = _fb_limit is None or _fb_active < _fb_limit
+                                if _use_fallback:
+                                    logger.info(
+                                        f"Task {task_id}'s primary combo {_cli_type}/{_model} at its "
+                                        f"concurrency limit -- dispatching on fallback model {_fallback_model} instead"
+                                    )
+                                    dispatch_context["phase_cli_tool"] = _cli_type
+                                    dispatch_context["phase_cli_model"] = _fallback_model
+                                else:
+                                    logger.info(
+                                        f"Task {task_id}'s combo {_cli_type}/{_model} at its concurrency "
+                                        "limit with no usable fallback -- queueing instead of dispatching"
+                                    )
+                                    qs.enqueue_task(task_id)
+                                    queue_status = qs.get_queue_status()
+                                    from src.core.database import resolve_project_for_workflow
+
+                                    bcast_project_id, bcast_project_name = resolve_project_for_workflow(request.workflow_id)
+                                    await server_state.broadcast_update(
+                                        {
+                                            "type": "task_queued",
+                                            "task_id": task_id,
+                                            "description": enriched_task["enriched_description"][:200],
+                                            "queue_position": queue_status.get("queued_tasks_count", 0),
+                                            "slots_available": queue_status.get("slots_available", 0),
+                                        },
+                                        project_id=bcast_project_id,
+                                        project_name=bcast_project_name,
+                                    )
+                                    return
+
                     agent = await AgentDispatchService.dispatch(
                         task=temp_task,
                         enriched_data=enriched_task,
@@ -2581,8 +2637,9 @@ async def update_task_status(
 
             session.commit()
 
-            # Collect cost data for completed tasks
-            if request.status == "done":
+            # Collect cost data for completed tasks (done or failed --
+            # failed tasks still consumed LLM tokens and should be attributed)
+            if request.status in ("done", "failed"):
                 TaskCompletionService.collect_cost_on_completion(request.task_id)
 
             # Commit in the shared worktree when a task completes successfully,
@@ -3207,6 +3264,51 @@ async def restart_task_endpoint(
                 task_description_for_rag=task.enriched_description or task.raw_description,
                 phase_id=task.phase_id,
             )
+
+            # Per-cli/model concurrency gate -- same reasoning as create_task's
+            # 6.6 (this endpoint's own should_queue_task above only covers the
+            # global cap). Fall back to the fallback model if the primary
+            # combo is saturated; queue the task if no fallback is usable.
+            qs = server_state.queue_service
+            if qs.cli_model_concurrency_limits:
+                with qs.db_manager.session_scope() as _qsession:
+                    _cli_type, _model = qs._resolve_cli_and_model(_qsession, task)
+                if _cli_type and _model:
+                    _limit = qs.cli_model_concurrency_limits.get(f"{_cli_type}/{_model}")
+                    if _limit is not None and qs.get_active_agent_count_for_cli_model(_cli_type, _model) >= _limit:
+                        _fallback_model = qs._resolve_fallback_model(_cli_type)
+                        _use_fallback = False
+                        if _fallback_model and _fallback_model != _model:
+                            _fb_limit = qs.cli_model_concurrency_limits.get(f"{_cli_type}/{_fallback_model}")
+                            _fb_active = (
+                                qs.get_active_agent_count_for_cli_model(_cli_type, _fallback_model)
+                                if _fb_limit is not None
+                                else 0
+                            )
+                            _use_fallback = _fb_limit is None or _fb_active < _fb_limit
+                        if _use_fallback:
+                            logger.info(
+                                f"Task {task_id}'s primary combo {_cli_type}/{_model} at its "
+                                f"concurrency limit -- dispatching on fallback model {_fallback_model} instead"
+                            )
+                            dispatch_context["phase_cli_tool"] = _cli_type
+                            dispatch_context["phase_cli_model"] = _fallback_model
+                        else:
+                            logger.info(
+                                f"Task {task_id}'s combo {_cli_type}/{_model} at its concurrency limit "
+                                "with no usable fallback -- queueing instead of dispatching"
+                            )
+                            qs.enqueue_task(task_id)
+                            await server_state.broadcast_update(
+                                {"type": "task_restarted", "task_id": task_id, "status": "queued"},
+                                project_id=bcast_project_id,
+                                project_name=bcast_project_name,
+                            )
+                            return {
+                                "success": True,
+                                "message": f"Task {task_id[:8]} restarted and added to queue",
+                                "status": "queued",
+                            }
 
             # Create agent for the task
             agent = await AgentDispatchService.dispatch(
