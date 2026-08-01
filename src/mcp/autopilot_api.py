@@ -394,6 +394,9 @@ class PipelineStatus(BaseModel):
     # hitting the concurrency cap can identify and stop EXACTLY the
     # project(s) blocking it instead of resorting to a bare stop-all call.
     running_projects: List[Dict[str, Any]] = Field(default_factory=list)
+    # Review mode
+    review_mode: bool = False
+    features_awaiting_review: int = 0
 
 
 class MessageItem(BaseModel):
@@ -644,6 +647,33 @@ async def get_pipeline_status(
         ),
         running_projects=running_projects_list,
     )
+
+    # Populate review_mode and features_awaiting_review for the requested project
+    if project_id:
+        try:
+            from src.core.database import AutopilotProject, Feature, Workflow
+            from src.core.database import get_db as _get_db
+
+            with _get_db() as _db:
+                _proj = _db.query(AutopilotProject).get(project_id)
+                result.review_mode = bool(_proj and getattr(_proj, "review_mode", False))
+                # Count features whose workflow is paused_by="review"
+                proj_wf_ids = [
+                    wf.id for wf in _db.query(Workflow).filter_by(project_id=project_id).all()
+                ]
+                if proj_wf_ids:
+                    result.features_awaiting_review = (
+                        _db.query(Feature)
+                        .join(Workflow, Feature.workflow_id == Workflow.id)
+                        .filter(
+                            Feature.workflow_id.in_(proj_wf_ids),
+                            Workflow.paused_by == "review",
+                        )
+                        .count()
+                    )
+        except Exception:
+            pass
+
     return _store(cache_key, result)
 
 
@@ -3043,6 +3073,7 @@ async def get_project_design_status(project_id: str, filename: str):
                         "completed_at": t.completed_at.isoformat() if t.completed_at else None,
                         "agent_id": t.assigned_agent_id,
                         "agent_status": agent.status if agent else None,
+                        "cost_total_usd": t.cost_total_usd or 0.0,
                     }
                 )
 
@@ -3238,6 +3269,7 @@ async def get_project_design_status(project_id: str, filename: str):
                             "completed_at": t.completed_at.isoformat() if t.completed_at else None,
                             "agent_id": t.assigned_agent_id,
                             "agent_status": agent_status,
+                            "cost_total_usd": t.cost_total_usd or 0.0,
                         }
                     )
 
@@ -3284,6 +3316,16 @@ async def get_project_design_status(project_id: str, filename: str):
                     "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
                     "has_report": has_report,
                     "cost_total_usd": feat.cost_total_usd or 0.0,
+                    # Review mode fields
+                    "review_pending": (
+                        feat_wf_id is not None
+                        and any(
+                            wf.id == feat_wf_id and wf.paused_by == "review"
+                            for wf in matching_workflows
+                        )
+                    ),
+                    "review_status": getattr(feat, "review_status", None),
+                    "review_feedback": getattr(feat, "review_feedback", None),
                 }
             )
 
@@ -3324,7 +3366,7 @@ async def get_project_design_status(project_id: str, filename: str):
                         "tasks": phase0_tasks,
                         "created_at": phase0_wf.created_at.isoformat() if phase0_wf.created_at else None,
                         "completed_at": None,
-                        "cost_total_usd": 0.0,
+                        "cost_total_usd": phase0_wf.cost_total_usd or 0.0,
                     },
                 )
 
@@ -3432,6 +3474,17 @@ def _scan_features() -> List[Dict[str, Any]]:
     if not FEATURES_DIR or not Path(FEATURES_DIR).exists():
         return _store("features", [])
 
+    # Enrich with DB cost data (cost_entries ledger) which is more accurate
+    # than pipeline_metrics.json (the old LiteLLM tracker).
+    db_costs = {}
+    try:
+        from src.core.database import Feature as DBFeature, get_db
+        with get_db() as db:
+            for f in db.query(DBFeature).filter(DBFeature.cost_total_usd > 0).all():
+                db_costs[f.feature_key or f.id] = f.cost_total_usd
+    except Exception:
+        pass
+
     features = []
     features_path = Path(FEATURES_DIR)
 
@@ -3451,6 +3504,10 @@ def _scan_features() -> List[Dict[str, Any]]:
         else:
             name = dir_name
 
+        # Prefer DB cost over metrics file cost
+        feature_key = dir_name.split("_", 1)[1] if "_" in dir_name else dir_name
+        cost_total = db_costs.get(feature_key) or db_costs.get(dir_name) or metrics.get("cost_total", 0)
+
         features.append(
             {
                 "id": feature_dir.name,
@@ -3459,7 +3516,7 @@ def _scan_features() -> List[Dict[str, Any]]:
                 "iterations": metrics.get("iterations", 0),
                 "total_time_seconds": metrics.get("total_time_seconds", 0),
                 "stop_reason": metrics.get("stop_reason", "unknown"),
-                "cost_total": metrics.get("cost_total", 0),
+                "cost_total": cost_total,
                 "cost_currency": metrics.get("cost_currency", "USD"),
                 "created_at": created_at,
                 "has_report": report_path.exists(),
@@ -3595,6 +3652,146 @@ async def resume_feature(feature_id: str):
     return {
         "success": True,
         "message": f"Resumed feature {feature_name} — restarting {len(to_restart)} task(s)",
+    }
+
+
+# ── Review Mode ───────────────────────────────────────────────────────────────
+
+
+class ReviewModeUpdate(BaseModel):
+    review_mode: bool
+
+
+class FeatureReviewRequest(BaseModel):
+    action: str  # "approve" or "request_changes"
+    feedback: Optional[str] = None
+
+
+@router.patch("/projects/{project_id}/review-mode")
+async def set_review_mode(project_id: str, req: ReviewModeUpdate):
+    """Toggle review mode for a project. When enabled, the pipeline pauses
+    after each feature's deploy phase and waits for explicit approval."""
+    from src.core.database import AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Project not found")
+        proj.review_mode = req.review_mode
+        db.commit()
+    _invalidate("status")
+    return {"review_mode": req.review_mode}
+
+
+@router.post("/features/{feature_id}/review")
+async def review_feature(feature_id: str, req: FeatureReviewRequest):
+    """Approve a feature or request changes.
+
+    approve:          clears the review pause, pipeline advances.
+    request_changes:  saves feedback, resumes iteration, pipeline advances.
+    """
+    if req.action not in ("approve", "request_changes"):
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'request_changes'")
+    if req.action == "request_changes" and not (req.feedback or "").strip():
+        raise HTTPException(status_code=400, detail="feedback is required when requesting changes")
+
+    from src.core.database import Feature, Task, Workflow, get_db
+
+    with get_db() as db:
+        feature = db.query(Feature).filter_by(id=feature_id).first()
+        if not feature:
+            raise HTTPException(status_code=404, detail="Feature not found")
+        if not feature.workflow_id:
+            raise HTTPException(status_code=400, detail="Feature has no linked workflow")
+
+        wf = db.query(Workflow).filter_by(id=feature.workflow_id).first()
+        if not wf:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        if wf.paused_by != "review":
+            # Idempotent — already cleared (user double-clicked, or pipeline
+            # advanced on its own). Return success rather than an error.
+            return {"success": True, "message": "Feature was not awaiting review"}
+
+        feature.review_status = "approved" if req.action == "approve" else "changes_requested"
+        feature.reviewed_at = datetime.utcnow()
+        feature.reviewed_by = "ui-user"
+
+        if req.action == "approve":
+            # Clear the review pause — orchestrator's _wait_for_review_clearance
+            # polls paused_by; setting it to None unblocks the loop.
+            wf.status = "active"
+            wf.paused_by = None
+            # Restore Feature.status to "active" so derive_feature_status
+            # doesn't short-circuit on "paused" forever after approval.
+            feature.status = "active"
+            db.commit()
+            _invalidate("status")
+            return {"success": True, "message": f"Feature {feature.name} approved"}
+
+        # request_changes path
+        feature.review_feedback = req.feedback
+        workflow_id = feature.workflow_id
+        feature_name = feature.name
+
+        # Resume the workflow (same logic as resume_feature endpoint)
+        if wf.status in ("paused", "failed"):
+            wf.status = "active"
+            wf.paused_by = None
+            wf.status_reason = None
+
+        candidates = (
+            db.query(Task)
+            .filter(
+                Task.workflow_id == workflow_id,
+                Task.status.in_(["blocked", "failed", "assigned", "in_progress"]),
+            )
+            .all()
+        )
+        restartable = []
+        for t in candidates:
+            if t.status in ("blocked", "failed"):
+                restartable.append(t)
+            elif t.assigned_agent_id:
+                from src.core.database import Agent
+                agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
+                if not agent or agent.status == "terminated":
+                    restartable.append(t)
+
+        to_restart = [(t.id, t.phase_id) for t in restartable]
+        for t in restartable:
+            t.status = "pending"
+            t.failure_reason = None
+            t.assigned_agent_id = None
+
+        # Inject feedback into each restarted task via TaskPromptOverride
+        if req.feedback and to_restart:
+            from src.core.database import TaskPromptOverride
+            feedback_prefix = (
+                f"## Human Review Feedback\n\n{req.feedback.strip()}\n\n"
+                "Please address the above feedback in your implementation.\n\n---\n\n"
+            )
+            for task_id, _ in to_restart:
+                existing = db.query(TaskPromptOverride).filter_by(task_id=task_id).first()
+                if existing:
+                    existing.user_prompt = feedback_prefix + (existing.user_prompt or "")
+                else:
+                    db.add(TaskPromptOverride(
+                        task_id=task_id,
+                        user_prompt=feedback_prefix,
+                        updated_by="ui-user",
+                    ))
+
+        feature.status = "active"
+        db.commit()
+
+    # Spawn agents for restarted tasks (out of DB session, same as resume_feature)
+    for task_id, phase_id in to_restart:
+        asyncio.create_task(_spawn_agent_for_task(task_id, phase_id))
+
+    _invalidate("status")
+    return {
+        "success": True,
+        "message": f"Changes requested for {feature_name} — restarting {len(to_restart)} task(s)",
     }
 
 

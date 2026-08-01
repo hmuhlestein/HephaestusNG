@@ -472,13 +472,19 @@ if [ -d "$EXT_SRC" ]; then
         cd "$PREFIX"
     fi
 
-    # Symlink into pi's global extensions directory
-    if [ -f "$EXT_SRC/dist/index.js" ]; then
+    # Symlink into pi's global extensions directory.
+    # Pi auto-discovers *.ts files -- the compiled .js is NOT discovered.
+    # Symlink the source .ts so pi can load it directly (pi runs TS natively).
+    if [ -f "$EXT_SRC/src/index.ts" ]; then
+        mkdir -p "$PI_EXT_DIR"
+        ln -sf "$EXT_SRC/src/index.ts" "$PI_EXT_DIR/hephaestus-cost-tracker.ts"
+        ok "Cost tracker symlinked → $PI_EXT_DIR/hephaestus-cost-tracker.ts"
+    elif [ -f "$EXT_SRC/dist/index.js" ]; then
         mkdir -p "$PI_EXT_DIR"
         ln -sf "$EXT_SRC/dist/index.js" "$PI_EXT_DIR/hephaestus-cost-tracker.js"
         ok "Cost tracker symlinked → $PI_EXT_DIR/hephaestus-cost-tracker.js"
     else
-        warn "Extension dist/index.js not found — build may have failed"
+        warn "Extension source/dist not found — build may have failed"
     fi
 else
     warn "Extension source not found at $EXT_SRC — skipping"

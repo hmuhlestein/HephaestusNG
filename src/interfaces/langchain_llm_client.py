@@ -395,7 +395,7 @@ class LangChainLLMClient:
 
         return response
 
-    async def classify_complexity(self, design_text: str) -> str:
+    async def classify_complexity(self, design_text: str, workflow_id: Optional[str] = None) -> str:
         """One fast LLM call: rate a design's implementation complexity as
         'low' | 'medium' | 'high'. Used to size agent reasoning budget + decomposition
         to the actual scope (so a calculator isn't treated like a multi-service system).
@@ -416,6 +416,7 @@ class LangChainLLMClient:
                     HumanMessage(content=prompt),
                 ],
                 component="complexity_classification",
+                workflow_id=workflow_id,
             )
             text = (getattr(resp, "content", None) or str(resp)).strip().lower()
             for level in (
