@@ -4,7 +4,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -1960,6 +1960,103 @@ class TestCreateAgentForTaskDirectAppStateGuard:
             result = create_agent_for_task_direct("task-1", "wf-1", "phase-1")
 
         assert result is None
+
+
+class TestCreateAgentForTaskDirectCliModelConcurrencyLimit:
+    """Regression: create_agent_for_task_direct is the orchestrator's OWN
+    direct dispatch path for phase transitions -- it's what actually
+    creates most phase tasks (scope_review, development, etc.) in a live
+    run, entirely bypassing QueueService.get_next_queued_task's per-cli/
+    model concurrency check. A local model's single inference slot could
+    still get double-booked through this path even with that check in
+    place on the queue-mediated path."""
+
+    def _seed(self, db, cli_tool="pi", cli_model="qwen-local", saturate=True):
+        from src.core.database import Agent, Phase, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp"))
+            session.add(
+                Phase(
+                    id="phase-1", workflow_id="wf-1", order=1, name="development",
+                    description="d", done_definitions=[], cli_tool=cli_tool, cli_model=cli_model,
+                )
+            )
+            session.add(
+                Task(
+                    id="task-1", raw_description="r", done_definition="d",
+                    status="pending", phase_id="phase-1", workflow_id="wf-1",
+                )
+            )
+            if saturate:
+                session.add(
+                    Agent(id="busy-agent", system_prompt="p", status="working", cli_type=cli_tool, cli_model=cli_model)
+                )
+
+    def _server_state(self, db, **queue_service_kwargs):
+        from src.services.queue_service import QueueService
+
+        server_state = Mock()
+        server_state.db_manager = db
+        server_state.agent_manager.create_agent_for_task = AsyncMock(
+            return_value=Mock(id="new-agent")
+        )
+        server_state.queue_service = QueueService(db, max_concurrent_agents=10, **queue_service_kwargs)
+        return server_state
+
+    def test_dispatches_on_fallback_when_primary_combo_saturated(self, orch_db_env):
+        from src.autopilot.orchestrator import create_agent_for_task_direct
+
+        self._seed(orch_db_env, saturate=True)
+        server_state = self._server_state(
+            orch_db_env,
+            cli_model_concurrency_limits={"pi/qwen-local": 1},
+            default_cli_tool="pi",
+            default_cli_model="qwen-local",
+            cli_model_fallback="mimo-v2.5-pro",
+        )
+
+        with patch("src.core.app_context.get_app_state", return_value=server_state):
+            result = create_agent_for_task_direct("task-1", "wf-1", "phase-1")
+
+        assert result == {"agent_id": "new-agent", "status": "created"}
+        _, kwargs = server_state.agent_manager.create_agent_for_task.call_args
+        assert kwargs["phase_cli_tool"] == "pi"
+        assert kwargs["phase_cli_model"] == "mimo-v2.5-pro"
+
+    def test_dispatches_on_primary_when_combo_has_a_free_slot(self, orch_db_env):
+        from src.autopilot.orchestrator import create_agent_for_task_direct
+
+        self._seed(orch_db_env, saturate=False)
+        server_state = self._server_state(
+            orch_db_env,
+            cli_model_concurrency_limits={"pi/qwen-local": 1},
+            default_cli_tool="pi",
+            default_cli_model="qwen-local",
+            cli_model_fallback="mimo-v2.5-pro",
+        )
+
+        with patch("src.core.app_context.get_app_state", return_value=server_state):
+            create_agent_for_task_direct("task-1", "wf-1", "phase-1")
+
+        _, kwargs = server_state.agent_manager.create_agent_for_task.call_args
+        assert kwargs["phase_cli_tool"] is None
+        assert kwargs["phase_cli_model"] is None
+
+    def test_no_limits_configured_is_a_noop(self, orch_db_env):
+        """No queue_service.cli_model_concurrency_limits configured -- must
+        behave exactly as before, no per-cli/model lookups at all."""
+        from src.autopilot.orchestrator import create_agent_for_task_direct
+
+        self._seed(orch_db_env, saturate=True)
+        server_state = self._server_state(orch_db_env)
+
+        with patch("src.core.app_context.get_app_state", return_value=server_state):
+            create_agent_for_task_direct("task-1", "wf-1", "phase-1")
+
+        _, kwargs = server_state.agent_manager.create_agent_for_task.call_args
+        assert kwargs["phase_cli_tool"] is None
+        assert kwargs["phase_cli_model"] is None
 
 
 class TestCreateCorrectiveTask:
