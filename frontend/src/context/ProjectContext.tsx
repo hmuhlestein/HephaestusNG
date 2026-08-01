@@ -21,7 +21,6 @@ interface ProjectContextType {
   loading: boolean;
   error: Error | null;
   selectProject: (projectId: string) => void;
-  activateProject: (projectId: string) => void;
   deactivateProject: (projectId: string) => void;
   createProject: (name: string, baseDir: string, isDefault?: boolean) => Promise<Project>;
   deleteProject: (projectId: string) => Promise<void>;
@@ -80,64 +79,6 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const selectedProject = projects.find((p: Project) => p.id === selectedProjectId) || null;
 
-  const activateMutation = useMutation({
-    mutationFn: (projectId: string) => apiService.activateProject(projectId),
-    onMutate: async (projectId) => {
-      // Cancel any outgoing refetches so they don't overwrite our optimistic update
-      await queryClient.cancelQueries({ queryKey: ['projects'] });
-
-      // Snapshot the previous value
-      const previousProjects = queryClient.getQueryData<Project[]>(['projects']);
-
-      // Optimistically mark just the target project active -- activating
-      // one project no longer deactivates any other (the backend caps
-      // concurrent active projects instead of enforcing exclusivity), so
-      // this must not touch every other project's is_active like it used to.
-      queryClient.setQueryData(['projects'], (old: Project[] | undefined) => {
-        if (!old) return old;
-        return old.map(p => (p.id === projectId ? { ...p, is_active: true } : p));
-      });
-
-      return { previousProjects };
-    },
-    onError: (err: any, _projectId, context) => {
-      // If the mutation fails, roll back to the previous value
-      if (context?.previousProjects) {
-        queryClient.setQueryData(['projects'], context.previousProjects);
-      }
-      // Without this, a failed activation (e.g. the max-concurrent-projects
-      // cap) just silently reverted the optimistic UI change -- clicking a
-      // project in the sidebar appeared to do nothing at all, with the
-      // backend's actual reason (visible in the network tab, not the UI)
-      // never reaching the user.
-      toast.error(err?.response?.data?.detail || 'Failed to activate project');
-    },
-    onSuccess: (_data, projectId) => {
-      selectProject(projectId);
-      // Invalidate project-scoped queries in background (don't block UI)
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
-        queryClient.invalidateQueries({ queryKey: ['autopilot-queue'] });
-        queryClient.invalidateQueries({ queryKey: ['autopilot-features'] });
-        queryClient.invalidateQueries({ queryKey: ['autopilot-messages'] });
-        queryClient.invalidateQueries({ queryKey: ['autopilot-logs'] });
-        queryClient.invalidateQueries({ queryKey: ['autopilot-input'] });
-        queryClient.invalidateQueries({ queryKey: ['autopilot-archived-messages'] });
-        queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs'] });
-        queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] });
-        queryClient.invalidateQueries({ queryKey: ['workflow-executions'] });
-        queryClient.invalidateQueries({ queryKey: ['tasks'] });
-        queryClient.invalidateQueries({ queryKey: ['agents'] });
-      }, 0);
-    },
-    onSettled: () => {
-      // Refetch projects in background
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ['projects'] });
-      }, 0);
-    },
-  });
-
   const deactivateMutation = useMutation({
     mutationFn: (projectId: string) => apiService.deactivateProject(projectId),
     onMutate: async (projectId) => {
@@ -177,10 +118,6 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     },
   });
 
-  const activateProject = useCallback((projectId: string) => {
-    activateMutation.mutate(projectId);
-  }, [activateMutation]);
-
   const deactivateProject = useCallback((projectId: string) => {
     deactivateMutation.mutate(projectId);
   }, [deactivateMutation]);
@@ -202,7 +139,6 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         loading: isLoading,
         error: error as Error | null,
         selectProject,
-        activateProject,
         deactivateProject,
         createProject,
         deleteProject,
