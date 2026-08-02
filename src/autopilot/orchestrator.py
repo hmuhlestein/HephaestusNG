@@ -918,6 +918,8 @@ def create_agent_for_task_direct(
     phase_id: Optional[str] = None,
     agent_type: str = "phase",
     enriched_data_override: Optional[dict] = None,
+    phase_cli_tool_override: Optional[str] = None,
+    phase_cli_model_override: Optional[str] = None,
 ) -> Optional[dict]:
     """Create an agent for a pending task directly in-process (H-2 fix).
 
@@ -974,7 +976,8 @@ def create_agent_for_task_direct(
             phase_glm_token_env = None
             phase_thinking_level = None
             qs = getattr(server_state, "queue_service", None)
-            if qs and qs.cli_model_concurrency_limits:
+            # Only run concurrency check if no explicit overrides were passed
+            if qs and qs.cli_model_concurrency_limits and not phase_cli_tool_override:
                 cli_type, model = qs._resolve_cli_and_model(session, task)
                 if cli_type and model:
                     limit = qs.cli_model_concurrency_limits.get(f"{cli_type}/{model}")
@@ -4850,7 +4853,35 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
         # only thing that ever ran for it. Dispatch a fresh agent directly,
         # mirroring _create_phase_task's own create-then-update pattern.
         for task_id in reset_task_ids:
-            agent_data = create_agent_for_task_direct(task_id, phase.workflow_id, phase.id)
+            # Check if this task failed due to session/CLI limit -- if so,
+            # resolve the fallback CLI/model for the retry so we don't
+            # just hit the same limit again.
+            session_limit_override_cli = None
+            session_limit_override_model = None
+            with get_db() as check_db:
+                check_task = check_db.query(Task).filter_by(id=task_id).first()
+                if check_task and "session limit" in (check_task.failure_reason or "").lower():
+                    if phase.id:
+                        _phase = check_db.query(Phase).filter_by(id=phase.id).first()
+                        if _phase:
+                            session_limit_override_cli = getattr(_phase, 'fallback_cli_tool', None)
+                            session_limit_override_model = getattr(_phase, 'fallback_cli_model', None)
+                    if not session_limit_override_cli:
+                        cfg = get_config()
+                        if cfg.default_fallback_cli_tool:
+                            session_limit_override_cli = cfg.default_fallback_cli_tool
+                            session_limit_override_model = cfg.default_fallback_cli_model
+                    if session_limit_override_cli:
+                        logger.info(
+                            f"[PHASE-ADVANCE] Task {task_id[:8]} failed due to session limit -- "
+                            f"retrying with fallback {session_limit_override_cli}/{session_limit_override_model or 'default'}"
+                        )
+
+            agent_data = create_agent_for_task_direct(
+                task_id, phase.workflow_id, phase.id,
+                phase_cli_tool_override=session_limit_override_cli,
+                phase_cli_model_override=session_limit_override_model,
+            )
             with get_db() as retry_db:
                 retry_task = retry_db.query(Task).filter_by(id=task_id).first()
                 if not retry_task:
