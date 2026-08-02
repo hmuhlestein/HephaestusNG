@@ -10,14 +10,14 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5300,
+    port: parseInt(process.env.FRONTEND_PORT || '5300'),
     proxy: {
       '/api': {
-        target: 'http://localhost:8300',
+        target: `http://localhost:${process.env.BACKEND_PORT || '8300'}`,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:8300',
+        target: `ws://localhost:${process.env.BACKEND_PORT || '8300'}`,
         ws: true,
       },
     },

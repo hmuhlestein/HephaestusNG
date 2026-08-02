@@ -42,6 +42,7 @@ class Config:
         server = config.get("server", {})
         self.mcp_host = server.get("host", "0.0.0.0")
         self.mcp_port = server.get("port", 8300)
+        self.frontend_port = server.get("frontend_port", 5300)
         self.enable_cors = server.get("enable_cors", True)
 
         # Paths settings

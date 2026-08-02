@@ -17,6 +17,7 @@ from src.cli.utils import (
     save_pid,
 )
 from src.core.constants import HEPHAESTUS_LOGS_DIR
+from src.core.simple_config import get_config as _get_config
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
 logger = logging.getLogger(__name__)
@@ -575,18 +576,23 @@ def _start_frontend() -> bool:
     frontend_dir = HEPHAESTUS_DIR / "frontend"
     if not (frontend_dir / "package.json").exists():
         return False
-    # Ensure port 5300 is free
-    _kill_port(5300)
+    config = _get_config()
+    frontend_port = config.frontend_port
+    _kill_port(frontend_port)
     log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = open(log_dir / "frontend.log", "a")
     try:
+        env = os.environ.copy()
+        env["FRONTEND_PORT"] = str(frontend_port)
+        env["BACKEND_PORT"] = str(config.mcp_port)
         proc = subprocess.Popen(
             ["npm", "run", "dev"],
             cwd=str(frontend_dir),
             stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
+            env=env,
             start_new_session=True,  # detach into own session — survives launcher/shell exit
         )
         save_pid("frontend", proc.pid)
@@ -614,7 +620,8 @@ def _print_results(results, port):
             icon = "FAIL"
         print(f"  {service:12s} {icon:4s} {status}")
     print()
-    print("  Frontend:  http://localhost:5300")
+    config = _get_config()
+    print(f"  Frontend:  http://localhost:{config.frontend_port}")
     print(f"  Backend:   http://127.0.0.1:{port}")
     print(f"  Health:    http://127.0.0.1:{port}/health")
 
