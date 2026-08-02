@@ -630,7 +630,7 @@ class TestEvaluationGotoConsumesGateArtifacts:
 
         docs = tmp_path / ".hephaestus" / "adversarial_review"
         docs.mkdir(parents=True)
-        (docs / "adversarial_review_report.md").write_text(
+        (docs / "adversarial.md").write_text(
             "---\ntype: adversarial_review_result\nblocker_count: 4\n---\n\n# stale report"
         )
 
@@ -683,7 +683,7 @@ class TestEvaluationGotoConsumesGateArtifacts:
 
         assert result["action"] == "goto"
         assert result["target_phase"] == "development"
-        assert not (docs / "adversarial_review_report.md").exists()
+        assert not (docs / "adversarial.md").exists()
 
 
 class TestForceGotoConsumesGateArtifacts:
@@ -699,7 +699,7 @@ class TestForceGotoConsumesGateArtifacts:
 
         docs = tmp_path / ".hephaestus" / "qa_validation"
         docs.mkdir(parents=True)
-        (docs / "qa_report.md").write_text(
+        (docs / "qa.md").write_text(
             "---\ntype: qa_validation_result\nfailed_tests: 3\n---\n\n# stale report"
         )
 
@@ -742,7 +742,7 @@ class TestForceGotoConsumesGateArtifacts:
 
         assert result["action"] == "goto"
         assert result["target_phase"] == "architecture_design"
-        assert not (docs / "qa_report.md").exists()
+        assert not (docs / "qa.md").exists()
 
 
 class TestPopulateFeatureFolder:
@@ -766,7 +766,7 @@ class TestPopulateFeatureFolder:
         wt = tmp_path / "project"
         (wt / ".hephaestus" / "qa_validation").mkdir(parents=True)
         (wt / ".hephaestus" / "architecture.md").write_text("# Architecture")
-        (wt / ".hephaestus" / "qa_validation" / "qa_report.md").write_text("# QA")
+        (wt / ".hephaestus" / "qa_validation" / "qa.md").write_text("# QA")
         (wt / ".hephaestus" / "feature_report.html").write_text("<html></html>")
 
         with real_db.session_scope() as session:
@@ -791,7 +791,7 @@ class TestPopulateFeatureFolder:
         assert len(feature_dirs) == 1
         feature_dir = feature_dirs[0]
         assert (feature_dir / "docs" / "architecture.md").exists()
-        assert (feature_dir / "docs" / "qa_validation" / "qa_report.md").exists()
+        assert (feature_dir / "docs" / "qa_validation" / "qa.md").exists()
         assert (feature_dir / "feature_report.html").exists()
 
     def test_excludes_tmux_features_and_scratch_directories(self, real_db, tmp_path):
@@ -805,7 +805,7 @@ class TestPopulateFeatureFolder:
         (wt / ".hephaestus" / "features" / "some-feature" / "scope.md").write_text("# Scope")
         (wt / ".hephaestus" / "scratch").mkdir(parents=True)
         (wt / ".hephaestus" / "scratch" / "notes.md").write_text("# Notes")
-        (wt / ".hephaestus" / "requirements_analysis.md").write_text("# Requirements")
+        (wt / ".hephaestus" / "requirements.md").write_text("# Requirements")
 
         with real_db.session_scope() as session:
             session.add(
@@ -833,7 +833,7 @@ class TestPopulateFeatureFolder:
         copied_names = {f.name for f in copied if f.is_file()}
         # pipeline_metrics.json is always written by _populate_feature_folder
         # itself (step 5), independent of the .hephaestus/ sweep under test.
-        assert copied_names == {"requirements_analysis.md", "pipeline_metrics.json"}
+        assert copied_names == {"requirements.md", "pipeline_metrics.json"}
 
 
 class TestGetOrchestratorPhaseOrderMap:
@@ -1196,7 +1196,7 @@ class TestGetPhaseContextUsesLiveRequiredOutput:
         (workflows_dir / "phase_mgr_test_def").mkdir(parents=True)
         (workflows_dir / "phase_mgr_test_def" / "workflow.yaml").write_text(
             "required_output:\n"
-            "  architectural_review: architectural_review_report.md\n"
+            "  architectural_review: review.md\n"
         )
         monkeypatch.setattr("src.workflow_registry._WORKFLOWS_DIR", workflows_dir)
 
@@ -1217,7 +1217,7 @@ class TestGetPhaseContextUsesLiveRequiredOutput:
                     # when the phase still wrote a json+md pair.
                     outputs=_json.dumps(
                         [
-                            "architectural_review_report.md",
+                            "review.md",
                             "architectural_review_result.json",
                         ]
                     ),
@@ -1248,7 +1248,7 @@ class TestGetPhaseContextUsesLiveRequiredOutput:
 
         pm = PhaseManager(db_manager=real_db_with_override)
         ctx = pm.get_phase_context("phase-review")
-        assert ctx.phase.outputs == ["architectural_review_report.md"]
+        assert ctx.phase.outputs == ["review.md"]
 
     def test_non_file_outputs_survive_for_a_phase_with_no_override(
         self, real_db_with_override

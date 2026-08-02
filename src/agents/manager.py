@@ -575,7 +575,7 @@ class AgentManager:
                                 cands += [
                                     wd / CONTEXT_DIR_NAME / "design.md",
                                     wd / CONTEXT_DIR_NAME / "design_document.md",
-                                    wd / CONTEXT_DIR_NAME / "requirements_analysis.md",
+                                    wd / CONTEXT_DIR_NAME / "requirements.md",
                                 ]
                                 for _p in cands:
                                     if _p.is_file():
@@ -1185,7 +1185,7 @@ class AgentManager:
 
             # Architecture context for architect-as-adversarial-reviewer (§10.1.1).
             # When the architect is re-invoked for phase 4, it needs access to the
-            # architecture.md and requirements_analysis.md from previous phases.
+            # architecture.md and requirements.md from previous phases.
             # These are in the shared worktree's docs/ directory.
             if workflow_id:
                 session2 = self.db_manager.get_session()
@@ -1200,10 +1200,10 @@ class AgentManager:
                                     context["architecture.md"] = arch_path.read_text()
                                 except Exception:
                                     pass
-                            req_path = worktree_docs / "requirements_analysis.md"
+                            req_path = worktree_docs / "requirements.md"
                             if req_path.exists():
                                 try:
-                                    context["requirements_analysis.md"] = (
+                                    context["requirements.md"] = (
                                         req_path.read_text()
                                     )
                                 except Exception:

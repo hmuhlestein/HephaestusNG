@@ -21,7 +21,7 @@ description: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
-  - Write ONE file, architectural_review_report.md, to ./.hephaestus/architectural_review/ —
+  - Write ONE file, review.md, to ./.hephaestus/architectural_review/ —
     a YAML frontmatter block (blocker_count/fix_count/defer_count, the gate
     input) followed by the full BLOCKER/FIX/DEFER findings report.
   - Use exactly that subdirectory name (./.hephaestus/architectural_review/) — the
@@ -29,7 +29,7 @@ description: |
     to it.
 done_definitions:
   - "./.hephaestus/architecture.md reviewed and design rationale understood"
-  - "./.hephaestus/requirements_analysis.md reviewed and requirements verified"
+  - "./.hephaestus/requirements.md reviewed and requirements verified"
   - "All implemented code reviewed against architecture"
   - "Component boundaries verified"
   - "Interface contracts verified"
@@ -37,14 +37,14 @@ done_definitions:
   - "Design patterns and naming conventions checked"
   - "All BLOCKER and FIX findings documented with file:line and recommended fix"
   - "DEFER issues documented"
-  - "architectural_review_report.md created with a YAML frontmatter block (blocker_count/fix_count/defer_count, gate input) followed by the BLOCKER/FIX/DEFER findings"
+  - "review.md created with a YAML frontmatter block (blocker_count/fix_count/defer_count, gate input) followed by the BLOCKER/FIX/DEFER findings"
   - "Memory saved with review findings"
   - "Task marked as done"
 outputs:
-  - "architectural_review_report.md"
+  - "review.md"
 next_steps:
-  - "Phase 6 adversarial review reads architectural_review_report.md"
-  - "Phase 7 doc review reads architectural_review_report.md"
+  - "Phase 6 adversarial review reads review.md"
+  - "Phase 7 doc review reads review.md"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
   Technical terms exact. No pleasantries (sure/certainly/happy to). 
@@ -57,7 +57,7 @@ additional_notes: |
   YOUR MISSION: Review the developer's code against the architecture you designed.
   
   You created the architecture (architecture.md) and the requirements
-  (requirements_analysis.md). The developer implemented it. Now review whether
+  (requirements.md). The developer implemented it. Now review whether
   the implementation matches your design — catch deviations, over-engineering,
   and design invariant violations.
   
@@ -76,14 +76,14 @@ additional_notes: |
   - Your task description for "Artifacts Path" and "Project Path" locations
   - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
   - architecture.md (from Artifacts Path) - YOUR design decisions, component structure, interfaces
-  - requirements_analysis.md (from Artifacts Path) - What the system should do (contains REQ-XXX IDs)
+  - requirements.md (from Artifacts Path) - What the system should do (contains REQ-XX IDs)
   - Your goal: Did the implementation (in Project Path) match the ORIGINAL DESIGN?
 
   **REQUIREMENT TRACKING (MANDATORY):**
-  requirements_analysis.md contains REQ-XXX numbered requirements. For each REQ-XXX:
+  requirements.md contains REQ-XX numbered requirements. For each REQ-XX:
   - Verify the implementation covers it
   - Note which files implement each requirement
-  - Include a "Requirements Coverage" section in your report listing each REQ-XXX status
+  - Include a "Requirements Coverage" section in your report listing each REQ-XX status
 
   SCOPE CHECK (do this before anything else):
   Compare architecture.md against ./.hephaestus/design.md. If the architecture
@@ -144,7 +144,7 @@ additional_notes: |
   `qa_validation` (a later phase) owns running the test suite and executing
   the program. Do not run `pytest`, execute the program's entry point, or
   cat runtime log files to "see if it works" — read the source and compare
-  it against architecture.md/requirements_analysis.md. If you cannot tell
+  it against architecture.md/requirements.md. If you cannot tell
   whether something is correct from reading the code, note it as a
   DEFER/FIX with the specific uncertainty rather than running the program
   to check.
@@ -167,7 +167,7 @@ additional_notes: |
   STEP 4: WRITE THE REPORT
   ═══════════════════════════════════════════════════════════════════════
 
-  Write architectural_review_report.md to the Docs Path. This is your ONLY output.
+  Write review.md to the Docs Path. This is your ONLY output.
   Do NOT edit any source files or tests.
 
   # Architectural Review Report
@@ -175,7 +175,7 @@ additional_notes: |
   **Reviewer:** Architect (design author)
   **Target:** {what was reviewed}
   **Date:** {date}
-  **Design artifacts:** architecture.md, requirements_analysis.md
+  **Design artifacts:** architecture.md, requirements.md
 
   ## Summary
   - **BLOCKERS:** [count] — architecture violated; developer must fix before next phase
@@ -216,8 +216,8 @@ additional_notes: |
 
   | REQ ID | Status | Implemented In | Notes |
   |--------|--------|----------------|-------|
-  | REQ-001 | ✅/❌ | file.py:42 | [notes] |
-  | REQ-002 | ✅/❌ | - | NOT IMPLEMENTED |
+  | REQ-01 | ✅/❌ | file.py:42 | [notes] |
+  | REQ-02 | ✅/❌ | - | NOT IMPLEMENTED |
 
   Count: X/Y requirements implemented
 
@@ -243,10 +243,10 @@ additional_notes: |
   - Common deviation patterns to watch for
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6: PREPEND STRUCTURED RESULT TO architectural_review_report.md (NOT OPTIONAL)
+  STEP 6: PREPEND STRUCTURED RESULT TO review.md (NOT OPTIONAL)
   ═══════════════════════════════════════════════════════════════════════
 
-  architectural_review_report.md is ONE file: a YAML frontmatter block
+  review.md is ONE file: a YAML frontmatter block
   followed by the full report above. The frontmatter is what drives the
   pipeline: if BLOCKERs are found, the pipeline sends the FULL report
   straight to the developer agent as its next task -- without a nonzero

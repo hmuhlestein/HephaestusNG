@@ -13,7 +13,7 @@ import yaml
 def _write_qa_report(docs_dir, qa_result):
     frontmatter = {"type": "qa_validation_result", **qa_result}
     text = "---\n" + yaml.safe_dump(frontmatter, sort_keys=False) + "---\n\n# QA Report\n"
-    (docs_dir / "qa_report.md").write_text(text)
+    (docs_dir / "qa.md").write_text(text)
 
 
 class TestSpecGateFiring:
@@ -23,7 +23,7 @@ class TestSpecGateFiring:
         """Test that the spec gate fires when qa_validation phase completes."""
         from src.autopilot.spec import build_phase_output
 
-        # Create a failing qa_report.md
+        # Create a failing qa.md
         docs = tmp_path / ".hephaestus" / "qa_validation"
         docs.mkdir(parents=True)
         qa_result = {
@@ -48,7 +48,7 @@ class TestSpecGateFiring:
         """Test that a low score causes a GOTO action."""
         from src.autopilot.spec import build_phase_output
 
-        # Create a qa_report.md with critical issues (architecture band)
+        # Create a qa.md with critical issues (architecture band)
         docs = tmp_path / ".hephaestus" / "qa_validation"
         docs.mkdir(parents=True)
         qa_result = {
@@ -71,7 +71,7 @@ class TestSpecGateFiring:
         """Test that a good result passes the gate."""
         from src.autopilot.spec import build_phase_output
 
-        # Create a passing qa_report.md
+        # Create a passing qa.md
         docs = tmp_path / ".hephaestus" / "qa_validation"
         docs.mkdir(parents=True)
         qa_result = {
@@ -222,10 +222,10 @@ class TestOutputExistenceFloor:
 
         class _FakePhase:
             name = "qa_validation"
-            outputs = ["qa_report.md", "qa_result.json"]
+            outputs = ["qa.md", "qa_result.json"]
 
         assert get_phase_required_files(_FakePhase()) == [
-            "qa_report.md",
+            "qa.md",
             "qa_result.json",
         ]
 
@@ -250,8 +250,8 @@ class TestOutputExistenceFloor:
                 self.outputs = outputs
 
         assert get_phase_required_files(
-            _FakePhase("adversarial_review", ["adversarial_review_report.md"])
-        ) == ["adversarial_review_report.md"]
+            _FakePhase("adversarial_review", ["adversarial.md"])
+        ) == ["adversarial.md"]
         assert get_phase_required_files(
-            _FakePhase("security_review", ["security_report.md"])
-        ) == ["security_report.md"]
+            _FakePhase("security_review", ["security.md"])
+        ) == ["security.md"]

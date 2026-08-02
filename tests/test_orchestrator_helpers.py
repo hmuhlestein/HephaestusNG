@@ -955,7 +955,7 @@ class TestCollectReportSummaries:
         from src.autopilot.orchestrator import collect_report_summaries
 
         # Reports are at project_path level, not in subdirectory
-        (tmp_path / "qa_report.md").write_text("# QA Report\nAll tests passed")
+        (tmp_path / "qa.md").write_text("# QA Report\nAll tests passed")
         (tmp_path / "architecture.md").write_text("# Architecture")
         result = collect_report_summaries(tmp_path)
         assert "qa" in result
@@ -2534,13 +2534,13 @@ class TestSweepStrayFiles:
         docs = feature / "docs"
         docs.mkdir()
 
-        stray = feature / "security_report.md"
+        stray = feature / "security.md"
         stray.write_text("# Security Report")
 
         with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
             _sweep_stray_files(tmp_path, feature, docs, logger)
         assert not stray.exists()
-        assert (docs / "security_report.md").exists()
+        assert (docs / "security.md").exists()
 
     def test_moves_stray_dirs(self, tmp_path):
         from unittest.mock import patch
@@ -2554,13 +2554,13 @@ class TestSweepStrayFiles:
         docs.mkdir()
 
         # Create report file directly in project root (not in a subdirectory)
-        stray = tmp_path / "qa_report.md"
+        stray = tmp_path / "qa.md"
         stray.write_text("# QA Report")
 
         with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
             _sweep_stray_files(tmp_path, feature, docs, logger)
         assert not stray.exists()
-        assert (docs / "qa_report.md").exists()
+        assert (docs / "qa.md").exists()
 
     def test_copies_report_docs(self, tmp_path):
         from unittest.mock import patch
@@ -2577,11 +2577,11 @@ class TestSweepStrayFiles:
         # _REPORT_SUBDIR, see 5f26488's docs/ -> .hephaestus/ migration)
         proj_docs = tmp_path / ".hephaestus"
         proj_docs.mkdir()
-        (proj_docs / "qa_report.md").write_text("# QA Report")
+        (proj_docs / "qa.md").write_text("# QA Report")
 
         with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
             _sweep_stray_files(tmp_path, feature, docs, logger)
-        assert (docs / "qa_report.md").exists()
+        assert (docs / "qa.md").exists()
 
 
 class TestArchiveAndCleanup:
@@ -2597,7 +2597,7 @@ class TestArchiveAndCleanup:
         project_path = tmp_path / "project"
         (project_path / ".hephaestus" / "qa_validation").mkdir(parents=True)
         (project_path / ".hephaestus" / "architecture.md").write_text("# Architecture")
-        (project_path / ".hephaestus" / "qa_validation" / "qa_report.md").write_text("# QA")
+        (project_path / ".hephaestus" / "qa_validation" / "qa.md").write_text("# QA")
 
         designs_folder = tmp_path / "designs_folder"
         designs_folder.mkdir()
@@ -2610,7 +2610,7 @@ class TestArchiveAndCleanup:
         _archive_and_cleanup(design_entry, designs_folder, OrchestratorLogger(tmp_path / "logs"))
 
         assert (designs_folder / ".hephaestus" / "architecture.md").exists()
-        assert (designs_folder / ".hephaestus" / "qa_report.md").exists()
+        assert (designs_folder / ".hephaestus" / "qa.md").exists()
 
     def test_excludes_tmux_features_and_scratch_directories(self, tmp_path):
         """tmux/ (transcript logs), features/ (Phase 0 internal state), and
@@ -2626,7 +2626,7 @@ class TestArchiveAndCleanup:
         (hephaestus / "features" / "some-feature" / "scope.md").write_text("scope")
         (hephaestus / "scratch").mkdir(parents=True)
         (hephaestus / "scratch" / "notes.md").write_text("notes")
-        (hephaestus / "requirements_analysis.md").write_text("# Requirements")
+        (hephaestus / "requirements.md").write_text("# Requirements")
 
         designs_folder = tmp_path / "designs_folder"
         designs_folder.mkdir()
@@ -2639,7 +2639,7 @@ class TestArchiveAndCleanup:
         _archive_and_cleanup(design_entry, designs_folder, OrchestratorLogger(tmp_path / "logs"))
 
         dest = designs_folder / ".hephaestus"
-        assert (dest / "requirements_analysis.md").exists()
+        assert (dest / "requirements.md").exists()
         assert not (dest / "agent_x.transcript.log").exists()
         assert not (dest / "scope.md").exists()
         assert not (dest / "notes.md").exists()
@@ -5583,7 +5583,7 @@ class TestCreatePhaseTaskReviewCap:
             count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
             assert count == 3
 
-        result_md = tmp_path / ".hephaestus" / "architectural_review" / "architectural_review_report.md"
+        result_md = tmp_path / ".hephaestus" / "architectural_review" / "review.md"
         assert result_md.exists()
         from src.autopilot.okf_markdown import read_okf
 
@@ -5749,7 +5749,7 @@ class TestCreatePhaseTaskReviewCap:
 
         assert result is True
         mock_fire.assert_called_once()
-        report = tmp_path / ".hephaestus" / "adversarial_review" / "adversarial_review_report.md"
+        report = tmp_path / ".hephaestus" / "adversarial_review" / "adversarial.md"
         assert report.exists()
         text = report.read_text()
         assert "capped after 3 runs" in text

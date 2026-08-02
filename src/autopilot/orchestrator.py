@@ -3767,18 +3767,18 @@ SWEEP_ENABLED = False
 _SWEEP_REPORT_NAMES = {
     "review_findings.md",
     "review_report.md",
-    "security_report.md",
+    "security.md",
     "test_failures.md",
-    "doc_review_report.md",
+    "docs.md",
     "adversarial_review.md",
-    "adversarial_review_report.md",
-    "forensics_report.md",
+    "adversarial.md",
+    "forensics.md",
     "architecture.md",
     "run_health.json",
     "pipeline_metrics.json",
-    "qa_report.md",
-    "product_validation.md",
-    "scope_review_result.md",
+    "qa.md",
+    "validation.md",
+    "scope.md",
     "arbitration_result.json",
 }
 _STRAY_DIRS: set = set()  # no directories swept until re-validated
@@ -3853,14 +3853,14 @@ def _report_path(project_path: Path, filename: str) -> Path:
 def collect_report_summaries(project_path: Path) -> Dict[str, str]:
     summaries = {}
     report_files = {
-        "requirements": "requirements_analysis.md",
+        "requirements": "requirements.md",
         "architecture": "architecture.md",
         "review": "review_report.md",
-        "doc_review": "doc_review_report.md",
-        "security": "security_report.md",
-        "qa": "qa_report.md",
-        "product_validation": "product_validation.md",
-        "forensics": "forensics_report.md",
+        "doc_review": "docs.md",
+        "security": "security.md",
+        "qa": "qa.md",
+        "product_validation": "validation.md",
+        "forensics": "forensics.md",
     }
 
     for key, filename in report_files.items():
@@ -3972,7 +3972,7 @@ def generate_product_validation_report(
     and the engine's evaluation points. This function is a fallback that reads
     existing reports for display/summary purposes only.
     """
-    validation_path = _report_path(project_path, "product_validation.md")
+    validation_path = _report_path(project_path, "validation.md")
 
     if validation_path.exists():
         from src.autopilot.okf_markdown import read_okf
@@ -3982,7 +3982,7 @@ def generate_product_validation_report(
             frontmatter, _ = parsed
             verdict = str(frontmatter.get("verdict", "")).upper()
             meets_spec = verdict == "PASS" and qa_passed
-            logger.info(f"Using structured product_validation.md frontmatter: verdict={verdict}")
+            logger.info(f"Using structured validation.md frontmatter: verdict={verdict}")
             return meets_spec, validation_path.read_text()
 
         # Fallback: no parseable frontmatter -- fall back to a raw text scan
@@ -4991,7 +4991,7 @@ def _fire_phase_transition(workflow_id: str, phase_id: str, phase_name: str, log
             # phase's corrective task should see THAT, not a reason that
             # contradicts the real work already done (observed live: a
             # developer task was told "WHY YOU'RE HERE: no
-            # adversarial_review_report.md found" while the adversarial
+            # adversarial.md found" while the adversarial
             # review that sent it there had, per its own completion_notes,
             # found and reported 3 concrete BLOCKERs -- the agent had to
             # rediscover them itself instead of being told directly).
@@ -5089,8 +5089,8 @@ change case): {phase_list_text}
 
 WHAT TO DO:
 1. Read whatever evidence is relevant -- the latest gate output file(s) in
-   ./.hephaestus/ (e.g. qa_report.md, adversarial_review_report.md,
-   security_report.md -- whichever exist for this workflow; each starts
+   ./.hephaestus/ (e.g. qa.md, adversarial.md,
+   security.md -- whichever exist for this workflow; each starts
    with a YAML frontmatter block giving its structured verdict/counts,
    followed by the full narrative report), and the phase's own recent
    deliverables, to understand exactly what's blocking progress.
@@ -7054,7 +7054,7 @@ def run_phase0(
         # goto ever fired, so the report text never got embedded in a
         # corrective task's description either) leaves no audit trail at
         # all of what the reviewer actually checked and confirmed was fine.
-        review_src = features_json_path.parent / "feature_review_report.md"
+        review_src = features_json_path.parent / "review.md"
         if review_src.exists():
             shutil.copy2(review_src, designs_folder / review_src.name)
 
@@ -7417,9 +7417,9 @@ def _run_one_feature(
 
         # Sweep artifacts to permanent record. Phase reports now live under
         # .hephaestus/ (git-excluded) -- some flat at the top level
-        # (requirements_analysis.md, architecture.md), some one level down
-        # in a phase subdirectory (qa_validation/qa_report.md,
-        # adversarial_review/adversarial_review_report.md, etc., per each
+        # (requirements.md, architecture.md), some one level down
+        # in a phase subdirectory (qa_validation/qa.md,
+        # adversarial_review/adversarial.md, etc., per each
         # gated phase's CRITICAL PATH RULE) -- so this must recurse, not
         # just iterate the top level like the old flat docs/ layout needed.
         # Excludes tmux/ (transcript logs), features/ (Phase 0 internal
@@ -7817,9 +7817,9 @@ def _archive_and_cleanup(
     repo_root = worktree.parent.parent  # .worktrees/ -> project root
 
     # Copy docs. Recurse, not iterate the top level -- some phase reports
-    # sit flat at .hephaestus/<file> (requirements_analysis.md,
+    # sit flat at .hephaestus/<file> (requirements.md,
     # architecture.md), others one level down in a phase subdirectory
-    # (qa_validation/qa_report.md, per each gated phase's CRITICAL PATH
+    # (qa_validation/qa.md, per each gated phase's CRITICAL PATH
     # RULE). Excludes tmux/ (transcript logs), features/ (Phase 0 internal
     # state), and scratch/ (agent scratch space) -- not phase-report
     # artifacts.

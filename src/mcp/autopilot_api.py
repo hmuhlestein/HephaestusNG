@@ -3999,12 +3999,12 @@ async def get_feature_detail(feature_id: str):
 
     summaries = {}
     summary_files = {
-        "requirements_summary": "requirements_analysis.md",
+        "requirements_summary": "requirements.md",
         "architecture_summary": "architecture.md",
-        "security_summary": "security_report.md",
-        "qa_summary": "qa_report.md",
-        "product_validation_summary": "product_validation.md",
-        "forensics_summary": "forensics_report.md",
+        "security_summary": "security.md",
+        "qa_summary": "qa.md",
+        "product_validation_summary": "validation.md",
+        "forensics_summary": "forensics.md",
     }
     for key, fname in summary_files.items():
         fpath = docs_dir / fname
@@ -4076,7 +4076,7 @@ async def list_feature_record_docs(feature_id: str):
     pipeline). This one reads from a Feature row's own workflow's
     working_directory/docs -- the storage location every current multi-
     feature design pipeline actually writes to (architecture.md,
-    qa_report.md, etc., same files task_completion_service verifies).
+    qa.md, etc., same files task_completion_service verifies).
     """
     from src.core.database import AutopilotDesign, Feature, Workflow, get_db
 

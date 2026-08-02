@@ -20,17 +20,17 @@ done_definitions:
   - "Common issue patterns cataloged"
   - "Specific prompt rewrites proposed (with before/after text)"
   - "Tickets created for actionable findings (skip and continue if heph_create_ticket returns an error)"
-  - "forensics_report.md created in Docs Path"
+  - "forensics.md created in Docs Path"
   - "Memory entries saved with feature name prefix in content"
   - "Task marked as done"
 outputs:
-  - "forensics_report.md"
+  - "forensics.md"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK.
   Technical terms exact. No pleasantries (sure/certainly/happy to).
   Not: "I'll now proceed to analyze forensics." Yes: "Analyze commit history, diff."
 
-  Start forensics_report.md with this frontmatter block, then the report
+  Start forensics.md with this frontmatter block, then the report
   immediately after:
   ```
   ---
@@ -45,11 +45,11 @@ additional_notes: |
   YOUR MISSION: Read real data, compare prompts to outcomes, propose fixes
 
   Do NOT edit any source code or tests. Your only outputs are
-  forensics_report.md, tickets, and memory entries — you analyze what
+  forensics.md, tickets, and memory entries — you analyze what
   already happened, you don't change it.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 0: ESTABLISH YOUR PATHS
+  STEP 1: ESTABLISH YOUR PATHS
   ═══════════════════════════════════════════════════════════════════════
 
   Your task description contains these exact lines — copy the values verbatim:
@@ -61,15 +61,15 @@ additional_notes: |
 
   PHASE ARTIFACTS (requirements, architecture, reports, QA results):
     Read from: ./.hephaestus/ (your worktree-relative path — this is where agents wrote them)
-    Example: ./.hephaestus/requirements_analysis.md, ./.hephaestus/qa_validation/qa_report.md
+    Example: ./.hephaestus/requirements.md, ./.hephaestus/qa_validation/qa.md
 
   PHASE PROMPTS (the YAML files that instructed each agent):
     Read from: <Docs Path (absolute)>/phase_prompts/
     Example: $DOCS_ABS/phase_prompts/development.yaml
 
   FORENSICS REPORT (your output):
-    Write to: ./.hephaestus/forensics_report.md  ← this gets committed to git
-    Also copy to: <Docs Path (absolute)>/forensics_report.md  ← for the feature record
+    Write to: ./.hephaestus/forensics.md  ← this gets committed to git
+    Also copy to: <Docs Path (absolute)>/forensics.md  ← for the feature record
 
   PIPELINE METRICS:
     Read from: <Docs Path (absolute)>/pipeline_metrics.json
@@ -88,7 +88,7 @@ additional_notes: |
   Do NOT search for other feature folders. Do NOT use paths from previous runs.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 0.5: DECIDE ANALYSIS DEPTH
+  STEP 2: DECIDE ANALYSIS DEPTH
   ═══════════════════════════════════════════════════════════════════════
 
   Try to read `<Docs Path (absolute)>/run_health.json`. This file may not exist
@@ -101,7 +101,7 @@ additional_notes: |
     - `error_count` (int): error-pattern lines found in tmux logs
 
     If `clean == true` AND `error_count == 0`:
-      → LIGHT MODE: Write a brief forensics_report.md (1-2 pages). Confirm
+      → LIGHT MODE: Write a brief forensics.md (1-2 pages). Confirm
         the run was healthy, note timing/GOTO count/key outputs. Skip deep
         tmux log analysis. Skip ticket creation.
 
@@ -115,10 +115,10 @@ additional_notes: |
   GOTOs are normal pipeline iteration — not errors. A run with 1-2 GOTOs that
   ended in success is healthy.
 
-  Log which mode you chose and why at the top of forensics_report.md.
+  Log which mode you chose and why at the top of forensics.md.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 1: READ PIPELINE METRICS (REAL DATA)
+  STEP 3: READ PIPELINE METRICS (REAL DATA)
   ═══════════════════════════════════════════════════════════════════════
 
   Read `<Docs Path (absolute)>/pipeline_metrics.json`. This contains:
@@ -132,7 +132,7 @@ additional_notes: |
   pipeline_metrics.json from another folder or run.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: READ ACTUAL AGENT PROMPTS
+  STEP 4: READ ACTUAL AGENT PROMPTS
   ═══════════════════════════════════════════════════════════════════════
 
   Read all files in `<Docs Path (absolute)>/phase_prompts/`. These are YAML files
@@ -148,19 +148,19 @@ additional_notes: |
   Quote the relevant sections verbatim when proposing rewrites.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: READ ALL PHASE OUTPUTS
+  STEP 5: READ ALL PHASE OUTPUTS
   ═══════════════════════════════════════════════════════════════════════
 
   Read each artifact from YOUR WORKTREE'S ./.hephaestus/ — agents wrote their outputs
   there, and those files are still present:
-  - ./.hephaestus/requirements_analysis.md
+  - ./.hephaestus/requirements.md
   - ./.hephaestus/architecture.md
   - ./.hephaestus/review_report.md
-  - ./.hephaestus/doc_review_report.md
-  - ./.hephaestus/security_report.md
-  - ./.hephaestus/qa_report.md
-  - ./.hephaestus/product_validation.md
-  - ./.hephaestus/scope_review_result.md
+  - ./.hephaestus/docs.md
+  - ./.hephaestus/security.md
+  - ./.hephaestus/qa.md
+  - ./.hephaestus/validation.md
+  - ./.hephaestus/scope.md
 
   Also read the original design document at ./.hephaestus/design.md.
 
@@ -169,7 +169,7 @@ additional_notes: |
   2. The original design document (the source of truth)
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3b: READ FULL AGENT TMUX LOGS (RAW SESSION OUTPUT) — FULL MODE ONLY
+  STEP 5b: READ FULL AGENT TMUX LOGS (RAW SESSION OUTPUT) — FULL MODE ONLY
   ═══════════════════════════════════════════════════════════════════════
 
   Skip this step entirely in LIGHT MODE.
@@ -197,7 +197,7 @@ additional_notes: |
   - Over-engineering (solved a harder problem than required)
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3c: FIND GUARDIAN STEERING IN THE TMUX LOGS
+  STEP 5c: FIND GUARDIAN STEERING IN THE TMUX LOGS
   ═══════════════════════════════════════════════════════════════════════
 
   There is no separate API tool for this — Guardian steering messages are
@@ -213,7 +213,7 @@ additional_notes: |
   - Any repeated patterns (same error, same blocker)
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: COMPARE PROMPTS TO OUTCOMES
+  STEP 6: COMPARE PROMPTS TO OUTCOMES
   ═══════════════════════════════════════════════════════════════════════
   
   For each phase, answer these questions using EVIDENCE from the artifacts:
@@ -226,7 +226,7 @@ additional_notes: |
   - Were any instructions ignored or misunderstood?
   
   ### Was the output quality adequate?
-  - Compare requirements_analysis.md against the original design doc
+  - Compare requirements.md against the original design doc
   - Did requirements cover everything in the design?
   - Does the code implement what architecture.md specifies?
   - Did the reviewer find issues that the developer should have caught?
@@ -238,7 +238,7 @@ additional_notes: |
   - Were the same issues found in multiple iterations?
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: IDENTIFY PATTERNS
+  STEP 7: IDENTIFY PATTERNS
   ═══════════════════════════════════════════════════════════════════════
   
   Look for patterns across all phases:
@@ -259,12 +259,12 @@ additional_notes: |
   - What information from the original design was lost between phases?
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6: WRITE FORENSICS REPORT
+  STEP 8: WRITE FORENSICS REPORT
   ═══════════════════════════════════════════════════════════════════════
 
-  Write forensics_report.md to TWO locations:
-  1. ./.hephaestus/forensics_report.md  (worktree — gets committed to git, primary)
-  2. <Docs Path (absolute)>/forensics_report.md  (feature folder record)
+  Write forensics.md to TWO locations:
+  1. ./.hephaestus/forensics.md  (worktree — gets committed to git, primary)
+  2. <Docs Path (absolute)>/forensics.md  (feature folder record)
 
   Write the worktree copy first.
   
@@ -299,11 +299,11 @@ additional_notes: |
   If a phase performed well, say so in one line and move on.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 7: CREATE TICKETS FOR FINDINGS (OPTIONAL — SKIP IF API FAILS)
+  STEP 9: CREATE TICKETS FOR FINDINGS (OPTIONAL — SKIP IF API FAILS)
   ═══════════════════════════════════════════════════════════════════════
 
   IMPORTANT: Ticket creation is OPTIONAL. If heph_create_ticket returns an error,
-  note "ticket creation failed — findings documented in forensics_report.md"
+  note "ticket creation failed — findings documented in forensics.md"
   and MOVE ON immediately to Step 8. Do NOT retry. Do NOT loop.
 
   For each actionable finding in your report, attempt to create a ticket:
@@ -342,7 +342,7 @@ additional_notes: |
   - Agent performance issues (low priority)
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 8: SAVE TO MEMORY (SCOPED)
+  STEP 10: SAVE TO MEMORY (SCOPED)
   ═══════════════════════════════════════════════════════════════════════
   
   Save improvements to memory, scoped to this feature:

@@ -146,7 +146,7 @@ class TestVerifyOutputArtifact:
 
         sub = tmp_path / ".hephaestus" / "qa_validation"
         sub.mkdir(parents=True)
-        (sub / "qa_report.md").write_text("---\ntype: qa_validation_result\n---\n\n# QA Report")
+        (sub / "qa.md").write_text("---\ntype: qa_validation_result\n---\n\n# QA Report")
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
@@ -154,7 +154,7 @@ class TestVerifyOutputArtifact:
         )
 
         with patch(
-            "src.autopilot.spec.get_phase_required_files", return_value=["qa_report.md"]
+            "src.autopilot.spec.get_phase_required_files", return_value=["qa.md"]
         ):
             result = TaskCompletionService.verify_output_artifact(
                 session=mock_session, task=task, phase=phase
@@ -172,7 +172,7 @@ class TestVerifyOutputArtifact:
 
         other = tmp_path / ".hephaestus" / "some_other_feature"
         other.mkdir(parents=True)
-        (other / "qa_report.md").write_text("# stale report from elsewhere")
+        (other / "qa.md").write_text("# stale report from elsewhere")
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
@@ -181,12 +181,12 @@ class TestVerifyOutputArtifact:
 
         # Step 2's feature_dir fallback defaults to the REAL config's
         # project_root (cwd under pytest -- this actual repo, which has
-        # real leftover .hephaestus/features/*/docs/qa_report.md files from
+        # real leftover .hephaestus/features/*/docs/qa.md files from
         # past pipeline runs) unless pinned at tmp_path -- without this the
         # test could pass for the wrong reason (finding an unrelated real
         # file) instead of proving the subdirectory-search removal.
         with patch(
-            "src.autopilot.spec.get_phase_required_files", return_value=["qa_report.md"]
+            "src.autopilot.spec.get_phase_required_files", return_value=["qa.md"]
         ), patch("src.autopilot.spec.load_optional_phases", return_value=[]), patch(
             "src.core.simple_config.get_config",
             return_value=Mock(project_root=tmp_path),
@@ -259,7 +259,7 @@ class TestVerifyOutputArtifact:
 
         sub = tmp_path / ".hephaestus" / "product_validation"
         sub.mkdir(parents=True)
-        (sub / "product_validation.md").write_text("no frontmatter block here")
+        (sub / "validation.md").write_text("no frontmatter block here")
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
@@ -268,7 +268,7 @@ class TestVerifyOutputArtifact:
 
         with patch(
             "src.autopilot.spec.get_phase_required_files",
-            return_value=["product_validation.md"],
+            return_value=["validation.md"],
         ), patch("src.autopilot.spec.load_optional_phases", return_value=[]):
             result = TaskCompletionService.verify_output_artifact(
                 session=mock_session, task=task, phase=phase
@@ -284,7 +284,7 @@ class TestVerifyOutputArtifact:
 
         sub = tmp_path / ".hephaestus" / "product_validation"
         sub.mkdir(parents=True)
-        (sub / "product_validation.md").write_text(
+        (sub / "validation.md").write_text(
             "---\ntype: product_validation_result\nverdict: PASS\n---\n\n# Report"
         )
 
@@ -295,7 +295,7 @@ class TestVerifyOutputArtifact:
 
         with patch(
             "src.autopilot.spec.get_phase_required_files",
-            return_value=["product_validation.md"],
+            return_value=["validation.md"],
         ):
             result = TaskCompletionService.verify_output_artifact(
                 session=mock_session, task=task, phase=phase
@@ -422,7 +422,7 @@ class TestVerifyOutputSurvivedCommit:
 
         with patch(
             "src.autopilot.spec.get_phase_required_files",
-            return_value=["security_report.md"],
+            return_value=["security.md"],
         ):
             result = TaskCompletionService.verify_output_survived_commit(
                 session=mock_session, task=task, phase=phase
@@ -430,7 +430,7 @@ class TestVerifyOutputSurvivedCommit:
 
         assert result is not None
         assert result["status"] == "failed"
-        assert "security_report.md" in result["message"]
+        assert "security.md" in result["message"]
         assert task.status == "failed"
         assert task.failure_reason == result["message"]
 
@@ -459,7 +459,7 @@ class TestVerifyGateResultSchema:
 
         sub = tmp_path / ".hephaestus" / "qa_validation"
         sub.mkdir(parents=True)
-        (sub / "qa_report.md").write_text(
+        (sub / "qa.md").write_text(
             "---\n"
             "overall_status: PASS\n"
             "test_results:\n"
@@ -491,7 +491,7 @@ class TestVerifyGateResultSchema:
 
         sub = tmp_path / ".hephaestus" / "qa_validation"
         sub.mkdir(parents=True)
-        (sub / "qa_report.md").write_text(
+        (sub / "qa.md").write_text(
             "---\n"
             "type: qa_validation_result\n"
             "failed_tests: 0\n"
@@ -539,7 +539,7 @@ class TestVerifyGateResultSchema:
 
         internal_dir = tmp_path / CONTEXT_DIR_NAME
         internal_dir.mkdir()
-        (internal_dir / "feature_review_report.md").write_text(
+        (internal_dir / "review.md").write_text(
             "---\ntype: feature_review_result\nsummary: no counts here\n---\n\n# Report"
         )
 

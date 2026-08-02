@@ -439,7 +439,7 @@ class TestRunPhase0Tiers:
         (worktree / ".hephaestus" / "features.json").write_text(
             json.dumps(features_json_content)
         )
-        (worktree / ".hephaestus" / "feature_review_report.md").write_text(
+        (worktree / ".hephaestus" / "review.md").write_text(
             "---\ntype: feature_review_result\nblocker_count: 0\nfix_count: 0\ndefer_count: 0\n---\n\n"
             "# Feature Review Report\n\nClean pass."
         )
@@ -476,7 +476,7 @@ class TestRunPhase0Tiers:
                 logger=MagicMock(),
             )
 
-        assert (designs_folder / "feature_review_report.md").read_text() == (
+        assert (designs_folder / "review.md").read_text() == (
             "---\ntype: feature_review_result\nblocker_count: 0\nfix_count: 0\ndefer_count: 0\n---\n\n"
             "# Feature Review Report\n\nClean pass."
         )

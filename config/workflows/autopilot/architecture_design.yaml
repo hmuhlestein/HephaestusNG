@@ -8,11 +8,11 @@ fallback_cli_model: openrouter/mimo-v2.5-pro
 description: |
   Create detailed technical architecture and task breakdown.
 
-  Reads requirements_analysis.md from Phase 1, designs the system architecture,
+  Reads requirements.md from Phase 1, designs the system architecture,
   creates detailed task breakdowns with blocking relationships, and produces
   implementation-ready specifications for each component.
 done_definitions:
-  - "./.hephaestus/requirements_analysis.md reviewed and understood"
+  - "./.hephaestus/requirements.md reviewed and understood"
   - "System architecture diagram/description created"
   - "Component interfaces defined (APIs, data models, contracts)"
   - "Data flow documented"
@@ -54,7 +54,7 @@ additional_notes: |
   never written.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 0: RIGHT-SIZE YOUR DESIGN TO THE ACTUAL COMPLEXITY (READ FIRST)
+  STEP 1: RIGHT-SIZE YOUR DESIGN TO THE ACTUAL COMPLEXITY (READ FIRST)
   ═══════════════════════════════════════════════════════════════════════
   
   Match the breadth and depth of your architecture AND task breakdown to the
@@ -85,7 +85,7 @@ additional_notes: |
   steps below are the complete toolkit; apply the parts the design actually warrants.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 0.5: CHECK FOR PRIOR PARTIAL WORK (RETRY AWARENESS)
+  STEP 2: CHECK FOR PRIOR PARTIAL WORK (RETRY AWARENESS)
   ═══════════════════════════════════════════════════════════════════════
 
   Before doing any work, check if a previous attempt already produced output:
@@ -97,22 +97,30 @@ additional_notes: |
   - Check what's missing vs the done_definitions above
   - Fill only the gaps, then mark done
 
-  If it does NOT exist (or is empty): proceed normally from STEP 1.
+  If it does NOT exist (or is empty): proceed normally from STEP 3.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 1: READ REQUIREMENTS AND EXISTING FILES
+  STEP 3: READ REQUIREMENTS AND EXISTING FILES
   ═══════════════════════════════════════════════════════════════════════
 
-  Read requirements_analysis.md from Phase 1. Understand:
-  - All functional requirements
-  - Non-functional requirements
+  Read requirements.md from Phase 1. Understand:
+  - All functional requirements (REQ-XX numbered)
+  - Non-functional requirements (NFR-XX numbered)
   - Component list and dependencies
   - Technology constraints
   - Implementation order
-  
+
+  **REQUIREMENT TRACKING:**
+  requirements.md contains REQ-XX and NFR-XX numbered requirements.
+  When designing architecture, reference these IDs:
+  - Map each REQ-XX to the component(s) that implement it
+  - Note which NFR-XX requirements affect architecture decisions
+  - Include a "Requirements-to-Components Mapping" section in architecture.md
+    showing which components satisfy which REQ-XX requirements
+
   Also read the original design document to understand the overall vision.
   This context goes into architecture.md — the development agent reads it
-  from there (see STEP 5: do not call heph_create_task to hand this to developers).
+  from there (see STEP 7: do not call heph_create_task to hand this to developers).
   
   CRITICAL — CHECK EXISTING TEST FILES AND ESTABLISH FILE LAYOUT:
   Run: find . -name "test_*.py" -o -name "*_test.py" | head -20
@@ -149,7 +157,7 @@ additional_notes: |
   distinct item so it's tracked instead of silently dropped, then move on.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: DESIGN SYSTEM ARCHITECTURE
+  STEP 4: DESIGN SYSTEM ARCHITECTURE
   ═══════════════════════════════════════════════════════════════════════
   
   For each component, define:
@@ -191,8 +199,8 @@ additional_notes: |
   - Environment setup
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: WRITE THE TASK BREAKDOWN INTO architecture.md (documentation only —
-  do not call heph_create_task here, see STEP 5)
+  STEP 5: WRITE THE TASK BREAKDOWN INTO architecture.md (documentation only —
+  do not call heph_create_task here, see STEP 7)
   ═══════════════════════════════════════════════════════════════════════
 
   Document a detailed task breakdown for Phase 3 (Development) as TEXT in
@@ -219,7 +227,7 @@ additional_notes: |
   **Estimated Complexity:** simple / moderate / complex
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: CREATE TICKETS WITH BLOCKING RELATIONSHIPS
+  STEP 6: CREATE TICKETS WITH BLOCKING RELATIONSHIPS
   ═══════════════════════════════════════════════════════════════════════
   
   Create Kanban tickets for each component:
@@ -235,7 +243,7 @@ additional_notes: |
   - Tags for categorization
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: DOCUMENT THE DEVELOPMENT TASK BREAKDOWN IN architecture.md
+  STEP 7: DOCUMENT THE DEVELOPMENT TASK BREAKDOWN IN architecture.md
   ═══════════════════════════════════════════════════════════════════════
 
   Do NOT call heph_create_task for Phase 3 (development) work. The
@@ -325,7 +333,7 @@ additional_notes: |
   ```
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6: SAVE TO MEMORY
+  STEP 8: SAVE TO MEMORY
   ═══════════════════════════════════════════════════════════════════════
   
   Save architectural decisions to memory:
@@ -335,7 +343,7 @@ additional_notes: |
   - Critical implementation notes
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 7: CREATE ARCHITECTURE DOCUMENT
+  STEP 9: CREATE ARCHITECTURE DOCUMENT
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
@@ -392,7 +400,7 @@ additional_notes: |
   ...
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 8: OBJECT-ORIENTED DESIGN PASS
+  STEP 10: OBJECT-ORIENTED DESIGN PASS
   ═══════════════════════════════════════════════════════════════════════
   
   Before finalizing the architecture, perform an OO design pass:
@@ -432,7 +440,7 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   DO:
-  - Read requirements_analysis.md thoroughly
+  - Read requirements.md thoroughly
   - Design clear component interfaces
   - Create tasks with proper blocking relationships
   - Include detailed acceptance criteria

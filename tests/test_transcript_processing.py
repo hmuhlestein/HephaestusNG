@@ -507,12 +507,12 @@ class TestReadTranscriptLogReal:
             "read ~/code/s:200-299\n"
             "read ~/code/sotto/.worktrees:200-299\n"
             "read ~/code/sotto/.worktrees/wt_feature/docs:200-299\n"
-            "read ~/code/sotto/.worktrees/wt_feature/docs/requirements_analysis.md:200-299\n"
+            "read ~/code/sotto/.worktrees/wt_feature/docs/requirements.md:200-299\n"
         )
         result = self._run(tmp_path, content)
         assert result.count("read") == 1
         assert (
-            "read ~/code/sotto/.worktrees/wt_feature/docs/requirements_analysis.md:200-299"
+            "read ~/code/sotto/.worktrees/wt_feature/docs/requirements.md:200-299"
             in result
         )
         assert "All tests pass. Let me verify:" in result
@@ -570,7 +570,7 @@ class TestReadTranscriptLogReal:
             " mcp call hephaestus_update_task_status\n"
             ' { "status": "done" }\n'
             " ✅ Task done successfully\n"
-            " write ~/code/proj/docs/qa_report.md\n"
+            " write ~/code/proj/docs/qa.md\n"
             " # QA Report\n"
             " $ pytest -q\n"
             " 10 passed\n"
@@ -582,7 +582,7 @@ class TestReadTranscriptLogReal:
             ' { "status": "done" }',
             " ✅ Task done successfully",
             "",
-            " write ~/code/proj/docs/qa_report.md",
+            " write ~/code/proj/docs/qa.md",
             " # QA Report",
             "",
             " $ pytest -q",

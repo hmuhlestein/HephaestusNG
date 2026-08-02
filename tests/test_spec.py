@@ -391,8 +391,8 @@ def _okf(frontmatter_yaml: str, body: str = "# Report\n") -> str:
 
 class TestReadOkfReport:
     def test_reads_from_root(self, tmp_path):
-        (tmp_path / "qa_report.md").write_text(_okf("passed: true"))
-        result, _ = read_okf_report(tmp_path, "qa_report.md")
+        (tmp_path / "qa.md").write_text(_okf("passed: true"))
+        result, _ = read_okf_report(tmp_path, "qa.md")
         assert result == {"passed": True}
 
     def test_missing_file(self, tmp_path):
@@ -401,8 +401,8 @@ class TestReadOkfReport:
         assert body is None
 
     def test_no_frontmatter_block(self, tmp_path):
-        (tmp_path / "qa_report.md").write_text("not okf, just text")
-        result, body = read_okf_report(tmp_path, "qa_report.md")
+        (tmp_path / "qa.md").write_text("not okf, just text")
+        result, body = read_okf_report(tmp_path, "qa.md")
         assert result is None
         assert body is None
 
@@ -413,8 +413,8 @@ class TestReadOkfReport:
         fallback."""
         sub = tmp_path / ".hephaestus" / "qa_validation"
         sub.mkdir(parents=True)
-        (sub / "qa_report.md").write_text(_okf("passed: true"))
-        result, _ = read_okf_report(tmp_path, "qa_report.md", phase_name="qa_validation")
+        (sub / "qa.md").write_text(_okf("passed: true"))
+        result, _ = read_okf_report(tmp_path, "qa.md", phase_name="qa_validation")
         assert result == {"passed": True}
 
     def test_phase_scoped_subdirectory_wins_over_stale_root_file(self, tmp_path):
@@ -422,12 +422,12 @@ class TestReadOkfReport:
         actually told to use -- it must win over a stale file sitting at
         the project root from an earlier attempt, not the other way
         around."""
-        (tmp_path / "qa_report.md").write_text(_okf("passed: false\nstale: true"))
+        (tmp_path / "qa.md").write_text(_okf("passed: false\nstale: true"))
         sub = tmp_path / ".hephaestus" / "qa_validation"
         sub.mkdir(parents=True)
-        (sub / "qa_report.md").write_text(_okf("passed: true\nstale: false"))
+        (sub / "qa.md").write_text(_okf("passed: true\nstale: false"))
 
-        result, _ = read_okf_report(tmp_path, "qa_report.md", phase_name="qa_validation")
+        result, _ = read_okf_report(tmp_path, "qa.md", phase_name="qa_validation")
         assert result == {"passed": True, "stale": False}
 
     def test_no_phase_name_does_not_search_other_subdirectories(self, tmp_path):
@@ -439,9 +439,9 @@ class TestReadOkfReport:
         docs.mkdir()
         other = docs / "some_other_feature"
         other.mkdir()
-        (other / "qa_report.md").write_text(_okf("passed: true"))
+        (other / "qa.md").write_text(_okf("passed: true"))
 
-        result, _ = read_okf_report(tmp_path, "qa_report.md")
+        result, _ = read_okf_report(tmp_path, "qa.md")
         assert result is None
 
 
@@ -458,7 +458,7 @@ class TestBuildPhaseOutput:
     def test_qa_validation_with_result(self, tmp_path):
         docs = tmp_path / ".hephaestus" / "qa_validation"
         docs.mkdir(parents=True)
-        (docs / "qa_report.md").write_text(_okf(
+        (docs / "qa.md").write_text(_okf(
             "type: qa_validation_result\n"
             "failed_tests: 0\n"
             "passed_tests: 50\n"
@@ -483,7 +483,7 @@ class TestBuildPhaseOutput:
     def test_adversarial_review_with_blockers(self, tmp_path):
         docs = tmp_path / ".hephaestus" / "adversarial_review"
         docs.mkdir(parents=True)
-        (docs / "adversarial_review_report.md").write_text(_okf(
+        (docs / "adversarial.md").write_text(_okf(
             "type: adversarial_review_result\n"
             "blocker_count: 6\n"
             "warning_count: 6\n"
@@ -497,7 +497,7 @@ class TestBuildPhaseOutput:
     def test_architectural_review_with_blockers(self, tmp_path):
         docs = tmp_path / ".hephaestus" / "architectural_review"
         docs.mkdir(parents=True)
-        (docs / "architectural_review_report.md").write_text(_okf(
+        (docs / "review.md").write_text(_okf(
             "type: architectural_review_result\n"
             "blocker_count: 2\n"
             "fix_count: 0\n"
@@ -527,7 +527,7 @@ class TestBuildPhaseOutput:
 
         heph_dir = tmp_path / CONTEXT_DIR_NAME
         heph_dir.mkdir()
-        (heph_dir / "feature_review_report.md").write_text(_okf(
+        (heph_dir / "review.md").write_text(_okf(
             "type: feature_review_result\n"
             "blocker_count: 0\n"
             "fix_count: 1\n"
