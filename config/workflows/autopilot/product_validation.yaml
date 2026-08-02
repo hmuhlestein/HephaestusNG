@@ -78,24 +78,41 @@ additional_notes: |
 
   Also read:
   - AGENTS.md - Repository guidelines, coding conventions, project structure
-  - requirements_analysis.md (what was extracted — compare against design for scope drift)
+  - requirements_analysis.md (what was extracted — contains REQ-XXX requirement IDs)
   - architecture.md (how it was designed — compare against design for scope drift)
   - doc_review_report.md (documentation quality review)
   - qa_report.md (what was tested)
-  
+
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: VERIFY FUNCTIONAL REQUIREMENTS
+  STEP 2: VERIFY FUNCTIONAL REQUIREMENTS (REQ-XXX TRACKING)
   ═══════════════════════════════════════════════════════════════════════
-  
+
+  **REQUIREMENT TRACKING (MANDATORY):**
+  requirements_analysis.md contains REQ-XXX numbered requirements. For EACH REQ-XXX:
+
+  1. Find the corresponding code implementation
+  2. Verify it does what the design doc specifies
+  3. Check acceptance criteria are met
+  4. Check if the Success Criteria checkbox `[x] REQ-XXX` is checked (set by development)
+  5. Create a compliance matrix in your report:
+
+  | REQ ID | Requirement | Status | Evidence | Files |
+  |--------|-------------|--------|----------|-------|
+  | REQ-001 | [description] | ✅ MET / ❌ UNMET | [How verified] | [files] |
+  | REQ-002 | [description] | ✅ MET / ❌ UNMET | [How verified] | [files] |
+
+  6. If any REQ-XXX is UNMET, include it in the unmet_requirements
+     list in the YAML frontmatter of your report.
+
   For EACH functional requirement from the design document:
-  
+
   1. Find the corresponding code implementation
   2. Verify it does what the design doc specifies
   3. Check acceptance criteria are met
   4. Note any gaps or deviations
-  
+
   Create a compliance matrix:
-  
+
   | Design Requirement | Implementation | Status | Evidence |
   |--------------------|----------------|--------|----------|
   | [From design doc]  | [File/function] | PASS/FAIL | [How verified] |

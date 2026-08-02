@@ -62,22 +62,28 @@ additional_notes: |
   and design invariant violations.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 1: RE-READ YOUR DESIGN
+  STEP 1: RE-READ YOUR DESIGN AND REQUIREMENTS
   ═══════════════════════════════════════════════════════════════════════
-  
+
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALL docs/reports go in "Artifacts Path".
   - Do NOT edit any source code or tests. Your only output is the report.
   - Your task description contains the exact paths — copy them exactly.
-  
+
   Read:
   - Your task description for "Artifacts Path" and "Project Path" locations
   - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
   - architecture.md (from Artifacts Path) - YOUR design decisions, component structure, interfaces
-  - requirements_analysis.md (from Artifacts Path) - What the system should do
+  - requirements_analysis.md (from Artifacts Path) - What the system should do (contains REQ-XXX IDs)
   - Your goal: Did the implementation (in Project Path) match the ORIGINAL DESIGN?
+
+  **REQUIREMENT TRACKING (MANDATORY):**
+  requirements_analysis.md contains REQ-XXX numbered requirements. For each REQ-XXX:
+  - Verify the implementation covers it
+  - Note which files implement each requirement
+  - Include a "Requirements Coverage" section in your report listing each REQ-XXX status
 
   SCOPE CHECK (do this before anything else):
   Compare architecture.md against ./.hephaestus/design.md. If the architecture
@@ -204,6 +210,16 @@ additional_notes: |
   per DEFER finding so it stays tracked. Do NOT ticket BLOCKER or FIX findings
   here — those go back to development now via blocker_count, not later via a
   ticket. Ticketing DEFER items does not change blocker_count/fix_count.
+
+  ## Requirements Coverage
+  If requirements_registry.json was loaded, include:
+
+  | REQ ID | Status | Implemented In | Notes |
+  |--------|--------|----------------|-------|
+  | REQ-001 | ✅/❌ | file.py:42 | [notes] |
+  | REQ-002 | ✅/❌ | - | NOT IMPLEMENTED |
+
+  Count: X/Y requirements implemented
 
   ## Architecture Deviations
   [Deviations from the planned architecture — what was different and why it matters]
