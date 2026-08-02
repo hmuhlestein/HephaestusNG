@@ -41,10 +41,11 @@ def kill_existing_services():
     """Kill any existing Hephaestus services and processes on port 8300."""
     print("[Cleanup] Killing existing services...")
 
-    # Kill processes on port 8300
+    # Kill processes LISTENING on port 8300 (-sTCP:LISTEN avoids
+    # killing VS Code Remote SSH port-forwarding connections).
     try:
         result = subprocess.run(
-            ["lsof", "-ti", ":8300"],
+            ["lsof", "-ti", ":8300", "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
         )

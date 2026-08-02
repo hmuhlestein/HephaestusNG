@@ -26,7 +26,12 @@ def run(args):
         except Exception:
             port = 8300
 
-    # First, kill ALL processes on the backend port to prevent stale processes.
+    # First, kill ALL processes LISTENING on the backend port to prevent stale
+    # processes. Filters to LISTEN sockets only (-sTCP:LISTEN) -- a plain
+    # `lsof -ti :port` also matches VS Code Remote SSH port-forwarding
+    # connections and other outbound client connections. Killing those
+    # silently nukes the user's entire VS Code remote session.
+    #
     # Block until the processes themselves fully exit instead of a flat
     # sleep(1) or a port-LISTEN check -- a graceful ASGI shutdown unbinds the
     # listening socket quickly but can keep the process alive much longer
@@ -40,7 +45,7 @@ def run(args):
     # (is_process_running), not just the port, closes that gap.
     try:
         result = subprocess.run(
-            ["lsof", "-ti", f":{port}"], capture_output=True, text=True
+            ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"], capture_output=True, text=True
         )
         pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
         if pids:
