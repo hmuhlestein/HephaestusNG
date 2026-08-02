@@ -92,3 +92,4 @@ config/model_pricing.json
 .pi-subagents/
 extensions/*/node_modules/
 .pi/
+.codegraph/
