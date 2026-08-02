@@ -252,7 +252,7 @@ additional_notes: "════════════════════�
   \ -X POST http://localhost:8300/api/auth/login   -H \"Content-Type: application/json\"   -d '{\"email\": \"test@example.com\"\
   , \"password\": \"test123\"}'\n\n# Verify response is correct\n# Verify logs show expected behavior\n# Verify database changes\
   \ are correct (if applicable)\n```\n\n**For Frontend Components:**\n```bash\n# Start the frontend dev server\nnpm run dev\n\
-  \n# Open browser to http://localhost:5173\n# Manually test the component:\n# - Does it render?\n# - Does it handle user\
+  \n# Open browser to http://localhost:5300\n# Manually test the component:\n# - Does it render?\n# - Does it handle user\
   \ interaction?\n# - Does it call APIs correctly?\n# - Are there console errors?\n```\n\n**For CLI Tools:**\n```bash\n# Run\
   \ the CLI with test inputs\npython src/cli.py --command test --input \"sample data\"\n\n# Verify output is correct\n# Verify\
   \ exit code is correct\n# Verify files created/modified as expected\n```\n\n**For Libraries:**\n```python\n# Import and\

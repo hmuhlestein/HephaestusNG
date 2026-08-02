@@ -575,8 +575,8 @@ def _start_frontend() -> bool:
     frontend_dir = HEPHAESTUS_DIR / "frontend"
     if not (frontend_dir / "package.json").exists():
         return False
-    # Ensure port 5173 is free
-    _kill_port(5173)
+    # Ensure port 5300 is free
+    _kill_port(5300)
     log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = open(log_dir / "frontend.log", "a")
@@ -614,7 +614,7 @@ def _print_results(results, port):
             icon = "FAIL"
         print(f"  {service:12s} {icon:4s} {status}")
     print()
-    print("  Frontend:  http://localhost:5173")
+    print("  Frontend:  http://localhost:5300")
     print(f"  Backend:   http://127.0.0.1:{port}")
     print(f"  Health:    http://127.0.0.1:{port}/health")
 

@@ -124,10 +124,10 @@ if config.enable_cors:
     else:
         # Development defaults: localhost only
         _cors_origins = [
-            "http://localhost:5173",
+            "http://localhost:5300",
             "http://localhost:3000",
             "http://localhost:8300",
-            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5300",
             "http://127.0.0.1:3000",
             "http://127.0.0.1:8300",
         ]
