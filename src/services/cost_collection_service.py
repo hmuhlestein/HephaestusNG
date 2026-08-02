@@ -14,15 +14,75 @@ Usage:
 import json
 import logging
 import re
+import subprocess
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _is_claude_pro_account() -> bool:
+    """Detect if Claude Code is authenticated with a Pro/Team subscription.
+
+    Pro and Team accounts have unlimited usage (within rate limits) for a
+    flat monthly fee, so token counting is misleading. We detect this by
+    running `claude auth status` and checking the subscriptionType field.
+
+    Known subscription types:
+    - "pro": $20/mo individual plan (unlimited Sonnet, limited Opus)
+    - "team": $30/mo per seat (unlimited usage)
+    - "enterprise": custom pricing (unlimited usage)
+    - "max": higher-tier Pro with more Opus usage
+
+    Returns True if subscription-based (Pro/Team/Enterprise/Max), False
+    otherwise (API key billing, free tier, etc.)
+    """
+    try:
+        result = subprocess.run(
+            ["claude", "auth", "status"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            status = json.loads(result.stdout)
+            sub_type = (status.get("subscriptionType") or "").lower()
+            # All subscription types have flat-rate usage — don't count tokens
+            if sub_type in ("pro", "max", "team", "enterprise"):
+                logger.info(f"[COST] Claude account detected as '{sub_type}' — token counting disabled (flat-rate subscription)")
+                return True
+            # Also check authMethod — OAuth login (claude.ai) without an
+            # explicit subscriptionType still means the user is on some
+            # managed plan, not pure API key billing.
+            auth_method = (status.get("authMethod") or "").lower()
+            if auth_method == "claude.ai" and not sub_type:
+                logger.info("[COST] Claude authenticated via claude.ai (no subscriptionType) — assuming flat-rate, token counting disabled")
+                return True
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
+        logger.debug(f"[COST] Could not detect Claude subscription: {e}")
+    return False
+
+
+def _is_subscription_cli(cli_type: str) -> bool:
+    """Check if a CLI tool uses a subscription model (flat-rate, no per-token cost).
+
+    Currently detects:
+    - Claude Code Pro/Team/Enterprise/Max
+    - (Future: Cursor, Windsurf, etc. if they expose similar auth status)
+    """
+    if cli_type in ("claude_code", "claude"):
+        return _is_claude_pro_account()
+    # Add other subscription-based CLIs here as they're discovered
+    # if cli_type == "cursor":
+    #     return _is_cursor_pro_account()
+    return False
 
 
 class CostCollector(ABC):
@@ -572,6 +632,12 @@ def collect_task_cost(task_id: str) -> None:
 
         # Discover session file based on CLI type
         cli_type = agent.cli_type or "pi"
+
+        # Skip token-based cost collection for subscription CLIs (Pro/Team/etc.)
+        # These accounts pay a flat monthly fee — counting tokens is misleading.
+        if _is_subscription_cli(cli_type):
+            logger.debug(f"[COST-COLLECT] Task {task_id[:8]} agent {agent.id[:8]} uses {cli_type} subscription — skipping token cost collection")
+            return
 
         # The pi extension posts costs to /api/autopilot/cost-entries in
         # real time as turns complete (source="pi" CostEntry rows). If any
