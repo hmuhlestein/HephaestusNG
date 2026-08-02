@@ -241,14 +241,13 @@ class MonitoringLoop:
         try:
             if not hasattr(self, "_stuck_state"):
                 self._stuck_state = {}
-            out = self.agent_manager.get_agent_output(agent.id, lines=40)
-            if not out:
-                return
-
-            # Spend/session limit check: read directly from tmux pane
-            # because the interactive menu ("Stop and wait for limit to
-            # reset") only appears in the live pane, not in the transcript
-            # log that get_agent_output reads from.
+            # Read directly from tmux pane for real-time stuck detection.
+            # get_agent_output reads from the stability-tracked clean transcript
+            # which withholds output until lines stabilize -- an agent actively
+            # streaming but stuck in a loop shows no output there, defeating
+            # the frozen-signature comparison entirely.
+            out = None
+            raw_text = ""
             try:
                 session = self.db_manager.get_session()
                 try:
@@ -263,184 +262,147 @@ class MonitoringLoop:
                                 "capture-pane", "-p", "-S", "-40"
                             ).stdout
                             raw_text = "\n".join(raw) if raw else ""
-                            stripped_raw = _strip_sgr(raw_text)
-                            spend_limit_hit = _SPEND_LIMIT_RE.search(stripped_raw)
-                            if spend_limit_hit or _SESSION_LIMIT_RE.search(stripped_raw):
-                                # Determine the specific limit kind for accurate logging
-                                if spend_limit_hit:
-                                    matched_text = spend_limit_hit.group(0).lower()
-                                    if "weekly" in matched_text:
-                                        limit_kind = "weekly spend limit"
-                                    else:
-                                        limit_kind = "monthly spend limit"
-                                else:
-                                    limit_kind = "session limit"
-                                logger.warning(
-                                    f"[SESSION-LIMIT] Agent {agent.id[:8]} ({agent.cli_type}) hit {limit_kind} — "
-                                    f"terminating immediately (not recoverable)"
-                                )
-                                with self.db_manager.session_scope() as session:
-                                    from src.core.database import Phase as _Phase
-
-                                    stuck_task = (
-                                        session.query(Task)
-                                        .filter_by(assigned_agent_id=agent.id)
-                                        .filter(Task.status.in_(["assigned", "in_progress"]))
-                                        .first()
-                                    )
-                                    if stuck_task:
-                                        stuck_task.status = "failed"
-                                        stuck_task.failure_reason = f"CLI {limit_kind} reached"
-                                        logger.info(
-                                            f"[SESSION-LIMIT] Task {stuck_task.id[:8]} marked failed; "
-                                            f"phase will be retried"
-                                        )
-
-                                        fallback_tool = None
-                                        fallback_model = None
-                                        if stuck_task.phase_id:
-                                            phase = (
-                                                session.query(_Phase)
-                                                .filter_by(id=stuck_task.phase_id)
-                                                .first()
-                                            )
-                                            if phase:
-                                                fallback_tool = getattr(phase, "fallback_cli_tool", None)
-                                                fallback_model = getattr(phase, "fallback_cli_model", None)
-
-                                        # Fall back to global config defaults
-                                        if not fallback_tool:
-                                            cfg = get_config()
-                                            logger.warning(
-                                                f"[SESSION-LIMIT] Phase fallback: {getattr(phase, 'fallback_cli_tool', None) if phase else 'no phase'}, "
-                                                f"Global fallback: {cfg.default_fallback_cli_tool}, Agent type: {agent.cli_type}"
-                                            )
-                                            if cfg.default_fallback_cli_tool and cfg.default_fallback_cli_tool != agent.cli_type:
-                                                fallback_tool = cfg.default_fallback_cli_tool
-                                                fallback_model = cfg.default_fallback_cli_model
-
-                                        if fallback_tool and fallback_tool != agent.cli_type:
-                                            logger.warning(
-                                                f"[SESSION-LIMIT] Re-dispatching with fallback: "
-                                                f"{fallback_tool}/{fallback_model or 'default'}"
-                                            )
-                                            self._log_agent_event(
-                                                agent.id, "session_limit_terminated",
-                                                f"Hit {limit_kind} ({agent.cli_type}) — terminated "
-                                                f"and redispatched to {fallback_tool}/{fallback_model or 'default'}",
-                                                {
-                                                    "task_id": stuck_task.id,
-                                                    "limit_kind": limit_kind,
-                                                    "from_cli_type": agent.cli_type,
-                                                    "fallback_cli_type": fallback_tool,
-                                                    "fallback_cli_model": fallback_model,
-                                                },
-                                                session=session,
-                                            )
-                                            session.commit()
-                                            await self.agent_manager.terminate_agent(agent.id)
-                                            self._stuck_state.pop(agent.id, None)
-
-                                            try:
-                                                stuck_task.status = "pending"
-                                                stuck_task.assigned_agent_id = None
-                                                stuck_task.failure_reason = None
-                                                session.commit()
-
-                                                new_agent = await self.agent_manager.create_agent_for_task(
-                                                    task=stuck_task,
-                                                    enriched_data={},
-                                                    memories=[],
-                                                    project_context="",
-                                                    cli_type=fallback_tool,
-                                                    phase_cli_tool=fallback_tool,
-                                                    phase_cli_model=fallback_model,
-                                                )
-                                                logger.info(
-                                                    f"[SESSION-LIMIT] Fallback agent {new_agent.id[:8]} "
-                                                    f"created for task {stuck_task.id[:8]}"
-                                                )
-                                                # If the workflow was paused by a prior limit
-                                                # hit (before a fallback was available), clear
-                                                # the stale pause so the pipeline resumes.
-                                                if stuck_task.workflow_id:
-                                                    _wf = (
-                                                        session.query(Workflow)
-                                                        .filter_by(id=stuck_task.workflow_id)
-                                                        .first()
-                                                    )
-                                                    if _wf and _wf.status == "paused" and _wf.paused_by == "system":
-                                                        _wf.status = "active"
-                                                        _wf.paused_by = None
-                                                        _wf.status_reason = None
-                                                        _wf.paused_at = None
-                                                        logger.info(
-                                                            f"[SESSION-LIMIT] Cleared stale pause on "
-                                                            f"workflow {stuck_task.workflow_id[:8]}"
-                                                        )
-                                            except Exception as fallback_err:
-                                                logger.error(
-                                                    f"[SESSION-LIMIT] Fallback agent creation failed: "
-                                                    f"{fallback_err}"
-                                                )
-                                                stuck_task.status = "failed"
-                                                stuck_task.failure_reason = (
-                                                    f"Primary hit {limit_kind}, fallback also failed: "
-                                                    f"{fallback_err}"
-                                                )
-                                                self._log_agent_event(
-                                                    agent.id, "session_limit_terminated",
-                                                    f"Hit {limit_kind} ({agent.cli_type}) — terminated, "
-                                                    f"fallback ({fallback_tool}) creation also failed: {fallback_err}",
-                                                    {
-                                                        "task_id": stuck_task.id,
-                                                        "limit_kind": limit_kind,
-                                                        "from_cli_type": agent.cli_type,
-                                                        "fallback_cli_type": fallback_tool,
-                                                    },
-                                                    session=session,
-                                                )
-                                                session.commit()
-                                            return True
-                                        elif stuck_task.workflow_id:
-                                            workflow = (
-                                                session.query(Workflow)
-                                                .filter_by(id=stuck_task.workflow_id)
-                                                .first()
-                                            )
-                                            if workflow and workflow.status != "paused":
-                                                workflow.status = "paused"
-                                                workflow.paused_by = "system"
-                                                workflow.status_reason = (
-                                                    f"CLI {limit_kind} hit ({agent.cli_type}), no "
-                                                    "fallback configured -- will auto-resume on its "
-                                                    "own retry cooldown once the limit resets"
-                                                )
-                                                workflow.paused_at = datetime.utcnow()
-                                                logger.warning(
-                                                    f"[SESSION-LIMIT] Pausing workflow "
-                                                    f"{stuck_task.workflow_id[:8]} -- no fallback "
-                                                    "configured for this phase"
-                                                )
-                                if stuck_task:
-                                    self._log_agent_event(
-                                        agent.id, "session_limit_terminated",
-                                        f"Hit {limit_kind} ({agent.cli_type}) — terminated, "
-                                        "no fallback configured",
-                                        {
-                                            "task_id": stuck_task.id,
-                                            "limit_kind": limit_kind,
-                                            "from_cli_type": agent.cli_type,
-                                        },
-                                        session=session,
-                                    )
-                                    await self.agent_manager.terminate_agent(agent.id)
-                                    self._stuck_state.pop(agent.id, None)
-                                return True
+                            out = raw_text
                 finally:
                     session.close()
             except Exception as _pane_err:
-                logger.debug(f"Pane capture for spend-limit check failed: {_pane_err}")
+                logger.debug(f"Pane capture for stuck check failed: {_pane_err}")
+
+            # Fallback to get_agent_output if direct capture failed
+            if not out:
+                out = self.agent_manager.get_agent_output(agent.id, lines=40)
+            if not out:
+                return
+            # Spend/session limit check using the already-captured pane output.
+            # The interactive menu ("Stop and wait for limit to reset") only
+            # appears in the live pane, not in the transcript log.
+            stripped_raw = _strip_sgr(raw_text)
+            if stripped_raw:
+                spend_limit_hit = _SPEND_LIMIT_RE.search(stripped_raw)
+                if spend_limit_hit or _SESSION_LIMIT_RE.search(stripped_raw):
+                    # Determine the specific limit kind for accurate logging
+                    if spend_limit_hit:
+                        matched_text = spend_limit_hit.group(0).lower()
+                        if "weekly" in matched_text:
+                            limit_kind = "weekly spend limit"
+                        else:
+                            limit_kind = "monthly spend limit"
+                    else:
+                        limit_kind = "session limit"
+                    logger.warning(
+                        f"[SESSION-LIMIT] Agent {agent.id[:8]} ({agent.cli_type}) hit {limit_kind} — "
+                        f"terminating immediately (not recoverable)"
+                    )
+                    with self.db_manager.session_scope() as session:
+                        from src.core.database import Phase as _Phase
+
+                        stuck_task = (
+                            session.query(Task)
+                            .filter_by(assigned_agent_id=agent.id)
+                            .filter(Task.status.in_(["assigned", "in_progress"]))
+                            .first()
+                        )
+                        if stuck_task:
+                            stuck_task.status = "failed"
+                            stuck_task.failure_reason = f"CLI {limit_kind} reached"
+                            logger.info(
+                                f"[SESSION-LIMIT] Task {stuck_task.id[:8]} marked failed; "
+                                f"phase will be retried"
+                            )
+
+                            fallback_tool = None
+                            fallback_model = None
+                            if stuck_task.phase_id:
+                                phase = session.query(_Phase).filter_by(id=stuck_task.phase_id).first()
+                                if phase:
+                                    fallback_tool = getattr(phase, "fallback_cli_tool", None)
+                                    fallback_model = getattr(phase, "fallback_cli_model", None)
+
+                            # Fall back to global config defaults
+                            if not fallback_tool:
+                                cfg = get_config()
+                                if cfg.default_fallback_cli_tool and cfg.default_fallback_cli_tool != agent.cli_type:
+                                    fallback_tool = cfg.default_fallback_cli_tool
+                                    fallback_model = cfg.default_fallback_cli_model
+
+                            if fallback_tool and fallback_tool != agent.cli_type:
+                                logger.warning(
+                                    f"[SESSION-LIMIT] Re-dispatching with fallback: "
+                                    f"{fallback_tool}/{fallback_model or 'default'}"
+                                )
+                                self._log_agent_event(
+                                    agent.id, "session_limit_terminated",
+                                    f"Hit {limit_kind} ({agent.cli_type}) — terminated "
+                                    f"and redispatched to {fallback_tool}/{fallback_model or 'default'}",
+                                    {
+                                        "task_id": stuck_task.id,
+                                        "limit_kind": limit_kind,
+                                        "from_cli_type": agent.cli_type,
+                                        "fallback_cli_type": fallback_tool,
+                                        "fallback_cli_model": fallback_model,
+                                    },
+                                    session=session,
+                                )
+                                session.commit()
+                                await self.agent_manager.terminate_agent(agent.id)
+                                self._stuck_state.pop(agent.id, None)
+
+                                try:
+                                    stuck_task.status = "pending"
+                                    stuck_task.assigned_agent_id = None
+                                    stuck_task.failure_reason = None
+                                    session.commit()
+
+                                    new_agent = await self.agent_manager.create_agent_for_task(
+                                        task=stuck_task,
+                                        enriched_data={},
+                                        memories=[],
+                                        project_context="",
+                                        cli_type=fallback_tool,
+                                        phase_cli_tool=fallback_tool,
+                                        phase_cli_model=fallback_model,
+                                    )
+                                    logger.info(
+                                        f"[SESSION-LIMIT] Fallback agent {new_agent.id[:8]} "
+                                        f"created for task {stuck_task.id[:8]}"
+                                    )
+                                    if stuck_task.workflow_id:
+                                        _wf = session.query(Workflow).filter_by(id=stuck_task.workflow_id).first()
+                                        if _wf and _wf.status == "paused" and _wf.paused_by == "system":
+                                            _wf.status = "active"
+                                            _wf.paused_by = None
+                                            _wf.status_reason = None
+                                            _wf.paused_at = None
+                                except Exception as fallback_err:
+                                    logger.error(f"[SESSION-LIMIT] Fallback agent creation failed: {fallback_err}")
+                                    stuck_task.status = "failed"
+                                    stuck_task.failure_reason = f"Primary hit {limit_kind}, fallback also failed: {fallback_err}"
+                                    self._log_agent_event(
+                                        agent.id, "session_limit_terminated",
+                                        f"Hit {limit_kind} ({agent.cli_type}) — terminated, fallback ({fallback_tool}) also failed: {fallback_err}",
+                                        {"task_id": stuck_task.id, "limit_kind": limit_kind, "from_cli_type": agent.cli_type, "fallback_cli_type": fallback_tool},
+                                        session=session,
+                                    )
+                                    session.commit()
+                                return True
+                            elif stuck_task.workflow_id:
+                                workflow = session.query(Workflow).filter_by(id=stuck_task.workflow_id).first()
+                                if workflow and workflow.status != "paused":
+                                    workflow.status = "paused"
+                                    workflow.paused_by = "system"
+                                    workflow.status_reason = f"CLI {limit_kind} hit ({agent.cli_type}), no fallback configured"
+                                    workflow.paused_at = datetime.utcnow()
+                        if stuck_task:
+                            self._log_agent_event(
+                                agent.id, "session_limit_terminated",
+                                f"Hit {limit_kind} ({agent.cli_type}) — terminated, no fallback configured",
+                                {"task_id": stuck_task.id, "limit_kind": limit_kind, "from_cli_type": agent.cli_type},
+                                session=session,
+                            )
+                            await self.agent_manager.terminate_agent(agent.id)
+                            self._stuck_state.pop(agent.id, None)
+                        return True
+
             # Strip SGR color codes here, for the signature only -- other
             # consumers of get_agent_output still get color preserved. See
             # _strip_sgr's docstring: a TUI that re-emits color codes on
