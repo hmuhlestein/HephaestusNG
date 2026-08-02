@@ -26,12 +26,12 @@ session_roles:
 # If a phase declares an output, update_task_status rejects 'done' when
 # the artifact is missing (catches hallucinated completions at the source).
 required_output:
-  architecture_design: architecture.md
-  scope_review: scope_review_result.md
-  architectural_review: architectural_review_report.md
-  adversarial_review: adversarial_review_report.md
-  qa_validation: qa_report.md
-  product_validation: product_validation.md
+  architecture_design: .hephaestus/architecture_design/architecture.md
+  scope_review: .hephaestus/scope_review/scope_review_result.md
+  architectural_review: .hephaestus/architectural_review/architectural_review_report.md
+  adversarial_review: .hephaestus/adversarial_review/adversarial_review_report.md
+  qa_validation: .hephaestus/qa_validation/qa_report.md
+  product_validation: .hephaestus/product_validation/product_validation.md
 
 # Optional phases that can fail without blocking the pipeline.
 # All other phases are required — if they fail after MAX_PHASE_ATTEMPTS,
