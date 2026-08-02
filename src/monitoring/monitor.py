@@ -469,20 +469,69 @@ class MonitoringLoop:
 
             # Context overflow: local model hit its context size limit.
             # This is a hard blocker — the agent can't continue with the
-            # current model. Trigger model fallback immediately.
+            # current model. Terminate and restart with fresh context on
+            # the fallback model rather than switching in-session (which
+            # would inherit the bloated context and degrade performance).
             if _CONTEXT_OVERFLOW_RE.search(sig):
                 logger.warning(
-                    f"[CONTEXT-OVERFLOW] Agent {agent.id[:8]} ({agent.cli_type}) hit context size limit"
+                    f"[CONTEXT-OVERFLOW] Agent {agent.id[:8]} ({agent.cli_type}) "
+                    f"hit context size limit — terminating for fresh restart"
                 )
-                # Use the existing model fallback mechanism
-                if await self._detect_cli_model_fallback(agent):
-                    return True
-                # If no model fallback available, this is unrecoverable
-                # with the current model — log and let the stuck detection
-                # handle termination
-                logger.warning(
-                    f"[CONTEXT-OVERFLOW] No model fallback available for {agent.id[:8]}"
-                )
+                with self.db_manager.session_scope() as session:
+                    from src.core.database import Phase as _Phase
+
+                    stuck_task = (
+                        session.query(Task)
+                        .filter_by(assigned_agent_id=agent.id)
+                        .filter(Task.status.in_(["assigned", "in_progress"]))
+                        .first()
+                    )
+                    if stuck_task:
+                        # Resolve fallback model
+                        fallback_tool = None
+                        fallback_model = None
+                        if stuck_task.phase_id:
+                            phase = session.query(_Phase).filter_by(id=stuck_task.phase_id).first()
+                            if phase:
+                                fallback_tool = getattr(phase, "fallback_cli_tool", None)
+                                fallback_model = getattr(phase, "fallback_cli_model", None)
+                        if not fallback_tool:
+                            cfg = get_config()
+                            if cfg.default_fallback_cli_tool and cfg.default_fallback_cli_tool != agent.cli_type:
+                                fallback_tool = cfg.default_fallback_cli_tool
+                                fallback_model = cfg.default_fallback_cli_model
+
+                        if fallback_tool and fallback_tool != agent.cli_type:
+                            logger.info(
+                                f"[CONTEXT-OVERFLOW] Restarting with {fallback_tool}/{fallback_model or 'default'}"
+                            )
+                            stuck_task.status = "pending"
+                            stuck_task.assigned_agent_id = None
+                            stuck_task.failure_reason = None
+                            session.commit()
+
+                            await self.agent_manager.terminate_agent(agent.id)
+                            self._stuck_state.pop(agent.id, None)
+
+                            new_agent = await self.agent_manager.create_agent_for_task(
+                                task=stuck_task,
+                                enriched_data={},
+                                memories=[],
+                                project_context="",
+                                cli_type=fallback_tool,
+                                phase_cli_tool=fallback_tool,
+                                phase_cli_model=fallback_model,
+                            )
+                            self._log_agent_event(
+                                agent.id, "context_overflow_terminated",
+                                f"Context overflow ({agent.cli_model}) — terminated and restarted "
+                                f"with {fallback_tool}/{fallback_model or 'default'} (fresh context)",
+                                {"task_id": stuck_task.id, "from_model": agent.cli_model, "fallback": fallback_tool},
+                                session=session,
+                            )
+                            return True
+                        else:
+                            logger.warning(f"[CONTEXT-OVERFLOW] No fallback available for {agent.id[:8]}")
 
             # Session limit: hard blocker — can't recover, fail immediately.
             # This fires on an already-running agent mid-session (unlike
