@@ -17,6 +17,8 @@ import MessageCenter from '@/components/autopilot/MessageCenter';
 import AddDesignModal from '@/components/autopilot/AddDesignModal';
 import LoadDesignModal from '@/components/autopilot/LoadDesignModal';
 import HumanInputBanner from '@/components/autopilot/HumanInputBanner';
+import ReviewModeToggle from '@/components/autopilot/ReviewModeToggle';
+import FeatureReviewModal from '@/components/autopilot/FeatureReviewModal';
 import ProjectSettingsModal from '@/components/ProjectSettingsModal';
 import { useProject } from '@/context/ProjectContext';
 import toast from 'react-hot-toast';
@@ -252,9 +254,16 @@ const Autopilot: React.FC = () => {
     enabled: !!projectId,
   });
   const [showProjectSettings, setShowProjectSettings] = useState(false);
+  const [reviewFeatureId, setReviewFeatureId] = useState<string | null>(null);
+  const [reviewFeature, setReviewFeature] = useState<any | null>(null);
 
-  const tabs: { id: Tab; label: string; icon: React.ElementType; badge?: number }[] = [
-    { id: 'queue', label: 'Design Queue', icon: ListOrdered, badge: status?.queue_depth },
+  const handleReviewFeature = (featureId: string, feature: any) => {
+    setReviewFeatureId(featureId);
+    setReviewFeature(feature);
+  };
+
+  const tabs: { id: Tab; label: string; icon: React.ElementType; badge?: number; reviewBadge?: boolean }[] = [
+    { id: 'queue', label: 'Design Queue', icon: ListOrdered, badge: status?.queue_depth, reviewBadge: (status?.features_awaiting_review ?? 0) > 0 },
     { id: 'features', label: 'Completed', icon: History },
     { id: 'messages', label: 'Messages', icon: MessageSquare, badge: messages?.length },
     { id: 'logs', label: 'Logs', icon: Terminal },
@@ -324,6 +333,12 @@ const Autopilot: React.FC = () => {
         onBudgetClick={() => setShowProjectSettings(true)}
       />
 
+      {/* Review Mode Toggle */}
+      <ReviewModeToggle
+        projectId={projectId}
+        reviewMode={status?.review_mode ?? false}
+      />
+
       {/* Tab Navigation */}
       <div className="border-b border-gray-200">
         <nav className="flex space-x-1 -mb-px">
@@ -345,6 +360,9 @@ const Autopilot: React.FC = () => {
                   {tab.badge}
                 </span>
               )}
+              {tab.reviewBadge && (
+                <span className="ml-1 w-2 h-2 rounded-full bg-amber-500 animate-pulse inline-block" title="Features awaiting review" />
+              )}
             </button>
           ))}
         </nav>
@@ -365,6 +383,7 @@ const Autopilot: React.FC = () => {
               onAddDesign={() => setShowAddDesign(true)}
               onLoadDesign={() => setShowLoadDesign(true)}
               currentDesign={status?.current_design}
+              onReviewFeature={handleReviewFeature}
             />
           )}
           {activeTab === 'features' && (
@@ -398,6 +417,12 @@ const Autopilot: React.FC = () => {
       <ProjectSettingsModal
         isOpen={showProjectSettings}
         onClose={() => setShowProjectSettings(false)}
+      />
+      <FeatureReviewModal
+        featureId={reviewFeatureId}
+        feature={reviewFeature}
+        projectId={projectId}
+        onClose={() => { setReviewFeatureId(null); setReviewFeature(null); }}
       />
     </div>
   );

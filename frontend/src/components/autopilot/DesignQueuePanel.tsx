@@ -21,7 +21,7 @@ import { CSS } from '@dnd-kit/utilities';
 import {
   Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
   CheckCircle2, XCircle, Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, Layers,
-  PauseCircle, Square, RotateCcw, FileBarChart2
+  PauseCircle, Square, RotateCcw, FileBarChart2, Eye
 } from 'lucide-react';
 import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -39,9 +39,10 @@ interface DesignQueuePanelProps {
   onAddDesign: () => void;
   onLoadDesign: () => void;
   currentDesign?: string | null;
+  onReviewFeature?: (featureId: string, feature: any) => void;
 }
 
-const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, onLoadDesign, currentDesign }) => {
+const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, onLoadDesign, currentDesign, onReviewFeature }) => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
@@ -329,6 +330,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   onDetail={handleDetail}
                   onTaskClick={setSelectedTaskId}
                   onSelectFeature={setSelectedFeature}
+                  onReviewFeature={onReviewFeature}
                   onAction={(action) => {
                     if (action === 'rerun') {
                       // /autopilot/queue/rerun stops the orchestrator and
@@ -519,6 +521,7 @@ interface SortableDesignItemProps {
   onDetail: (filename: string) => void;
   onTaskClick: (taskId: string) => void;
   onSelectFeature: (feature: any) => void;
+  onReviewFeature?: (featureId: string, feature: any) => void;
   onAction?: (action: 'pause' | 'stop' | 'resume' | 'rerun') => void;
   actionPending?: { pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean };
   status?: string;
@@ -531,7 +534,7 @@ interface SortableDesignItemProps {
   projectId: string | null;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, projectId }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, projectId }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -729,6 +732,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                       feature={feature}
                       onTaskClick={onTaskClick}
                       onSelectFeature={onSelectFeature}
+                      onReviewFeature={onReviewFeature}
                       projectId={projectId ?? undefined}
                       onFeatureUpdate={() => refetchFeatures()}
                     />
@@ -775,9 +779,10 @@ const FeatureRow: React.FC<{
   feature: any;
   onTaskClick: (taskId: string) => void;
   onSelectFeature: (feature: any) => void;
+  onReviewFeature?: (featureId: string, feature: any) => void;
   projectId?: string;
   onFeatureUpdate?: () => void;
-}> = ({ feature, onTaskClick, onSelectFeature, onFeatureUpdate }) => {
+}> = ({ feature, onTaskClick, onSelectFeature, onReviewFeature, onFeatureUpdate }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-features');
@@ -801,6 +806,7 @@ const FeatureRow: React.FC<{
   // entries' own `workflow_id` supports instead.
   const isRealFeature = !feature.id.startsWith('phase0-') && !feature.id.startsWith('placeholder-');
   const hasWorkflow = !!feature.workflow_id;
+  const reviewPending = !!feature.review_pending;
 
   const runFeatureAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun' | 'delete') => {
     if (action === 'delete' && !confirm(
@@ -837,8 +843,12 @@ const FeatureRow: React.FC<{
   };
 
   return (
-    <div className="bg-white rounded-lg border border-gray-100 overflow-hidden">
-      <div className="flex items-center gap-3 px-3 py-2">
+    <div className={`rounded-lg border overflow-hidden transition-colors ${
+      reviewPending
+        ? 'bg-amber-50 border-l-4 border-amber-400 border-t-amber-200 border-b-amber-200 border-r-amber-200'
+        : 'bg-white border-gray-100'
+    }`}>
+      <div className={`flex items-center gap-3 px-3 py-2 ${reviewPending ? 'animate-pulse-subtle' : ''}`}>
         <div
           className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer hover:bg-gray-50 transition-colors rounded"
           onClick={() => {
@@ -892,6 +902,11 @@ const FeatureRow: React.FC<{
           )}
           <FeatureCostBadge cost={feature.cost_total_usd ?? 0} />
           <FeatureStatusBadge status={feature.status} />
+          {reviewPending && (
+            <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-100 text-amber-700 border border-amber-300 animate-pulse">
+              Review
+            </span>
+          )}
           <RowActionIcons
             size="sm"
             canPause={hasWorkflow && feature.status === 'active'}
@@ -923,6 +938,16 @@ const FeatureRow: React.FC<{
               title="View feature report"
             >
               <FileBarChart2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {reviewPending && onReviewFeature && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onReviewFeature(feature.id, feature); }}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-sm transition-colors"
+              title="Review this feature"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              Review
             </button>
           )}
         </div>
