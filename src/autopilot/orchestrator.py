@@ -7102,6 +7102,7 @@ def _pause_feature_for_review(feature_id: str, logger: "OrchestratorLogger") -> 
                 if wf and wf.paused_by != "review":
                     wf.status = "paused"
                     wf.paused_by = "review"
+                    feat.status = "paused"
                     db.commit()
                     logger.info(f"[REVIEW] Feature {feature_id} paused for review")
     except Exception as e:
