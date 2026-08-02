@@ -15,6 +15,7 @@
 - Read the files you will touch. Read the files that call the files you will touch.
 - Match existing patterns in the codebase.
 - Surface assumptions out loud. Do not bury assumptions inside the implementation.
+- If a `.codegraph/` directory exists, use CodeGraph tools to explore callers, callees, and impact before editing. Prefer `codegraph_search` and `codegraph_context` over grep for finding symbols and understanding relationships.
 
 ## Writing code
 

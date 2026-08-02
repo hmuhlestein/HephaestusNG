@@ -10,8 +10,6 @@ server:
 # Paths Configuration
 paths:
   database: "./hephaestus.db"
-  phases_folder: "./example_workflows/crackme_solving"
-  worktree_base: "/tmp/hephaestus_worktrees"
   project_root: "./your_project"
 
 # Git Configuration

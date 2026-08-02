@@ -4,17 +4,15 @@ server:
   enable_cors: true
 paths:
   database: ./hephaestus.db
-  phases_folder: ./example_workflows/crackme_solving
   # project_root: defaults to current working directory
-  worktree_base: /tmp/hephaestus_worktrees
 git:
   # main_repo_path: defaults to current working directory
   worktree_branch_prefix: agent-
   auto_commit: true
   conflict_resolution: newest_file_wins
 llm:
-  embedding_model: text-embedding-3-large
-  embedding_provider: openrouter
+  embedding_model: BAAI/bge-small-en-v1.5
+  embedding_provider: fastembed
   default_provider: openrouter
   default_model: xiaomi/mimo-v2.5
   default_temperature: 0.7
