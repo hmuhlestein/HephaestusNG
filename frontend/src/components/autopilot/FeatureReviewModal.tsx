@@ -1,0 +1,194 @@
+import React, { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { motion, AnimatePresence } from 'framer-motion';
+import { X, CheckCircle2, RotateCcw, Clock, DollarSign, Layers, Eye } from 'lucide-react';
+import { apiService } from '@/services/api';
+import { StatusBadge, StatusIcon, formatTime } from '@/pages/Autopilot';
+import toast from 'react-hot-toast';
+
+interface FeatureReviewModalProps {
+  featureId: string | null;
+  /** Full feature object from design-status response — avoids hitting the
+   *  legacy FEATURES_DIR scan endpoint which doesn't accept DB feat- ids. */
+  feature?: any;
+  projectId: string | null;
+  onClose: () => void;
+}
+
+const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feature, projectId, onClose }) => {
+  const queryClient = useQueryClient();
+  const [feedback, setFeedback] = useState('');
+
+  // Only load docs (to detect report presence); metadata comes from `feature` prop.
+  const { data: featureDocs } = useQuery({
+    queryKey: ['autopilot-feature-docs', featureId],
+    queryFn: () => apiService.getFeatureRecordDocs(featureId!),
+    enabled: !!featureId,
+  });
+  const reportDoc = featureDocs?.docs.find((d: any) => d.name === 'feature_report.html');
+  // Also accept has_report from the feature prop as a fallback while docs load
+  const hasReport = !!reportDoc || !!feature?.has_report;
+
+  const reviewMutation = useMutation({
+    mutationFn: ({ action, fb }: { action: 'approve' | 'request_changes'; fb?: string }) =>
+      apiService.postFeatureReview(featureId!, action, fb),
+    onSuccess: (_, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['autopilot-design-statuses', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-status', projectId] });
+      if (vars.action === 'approve') {
+        toast.success('Feature approved — pipeline advancing');
+      } else {
+        toast.success('Changes requested — feature queued for revision');
+      }
+      onClose();
+    },
+    onError: () => toast.error('Failed to submit review decision'),
+  });
+
+  if (!featureId) return null;
+
+  const name = feature?.name ?? featureId;
+  const status = feature?.status ?? 'paused';
+  const tasks: any[] = feature?.tasks ?? [];
+  const totalTime = tasks.reduce((s: number, t: any) => {
+    if (t.created_at && t.completed_at) {
+      return s + (new Date(t.completed_at).getTime() - new Date(t.created_at).getTime()) / 1000;
+    }
+    return s;
+  }, 0);
+  const costTotal: number = feature?.cost_total_usd ?? 0;
+  const iterations = tasks.filter((t: any) => t.status === 'done').length;
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        key="feature-review-backdrop"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      >
+        <motion.div
+          initial={{ scale: 0.95, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.95, opacity: 0 }}
+          className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[90vh] overflow-hidden flex flex-col"
+        >
+          {/* Header */}
+          <div className="flex-none px-6 py-4 border-b flex items-center justify-between bg-gradient-to-r from-amber-50 to-white">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-amber-100">
+                <Eye className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <StatusIcon status={status} />
+                  <h2 className="text-lg font-bold text-gray-800">{name}</h2>
+                  <StatusBadge status={status} />
+                </div>
+                <span className="text-xs font-semibold text-amber-600 tracking-wide uppercase mt-0.5 block">
+                  Awaiting Your Review
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Body — split pane */}
+          <div className="flex-1 flex overflow-hidden min-h-0">
+            {/* Left: HTML report iframe */}
+            <div className="flex-1 min-w-0 border-r border-gray-100 bg-gray-950">
+              {hasReport ? (
+                <iframe
+                  src={`/api/autopilot/feature-records/${encodeURIComponent(featureId)}/report`}
+                  className="w-full h-full border-0"
+                  title="Feature Report"
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-3">
+                  <Eye className="w-10 h-10 text-gray-600" />
+                  <p className="text-sm">Report not yet available</p>
+                </div>
+              )}
+            </div>
+
+            {/* Right: review panel */}
+            <div className="w-80 flex-none flex flex-col overflow-y-auto">
+              {/* Metrics */}
+              <div className="p-5 border-b border-gray-100 space-y-3">
+                <h3 className="text-sm font-semibold text-gray-700">Feature Summary</h3>
+                {iterations > 0 && (
+                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                    <Layers className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                    {iterations} task{iterations !== 1 ? 's' : ''} completed
+                  </div>
+                )}
+                {totalTime > 0 && (
+                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                    <Clock className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                    {formatTime(Math.round(totalTime))}
+                  </div>
+                )}
+                {costTotal > 0 && (
+                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                    <DollarSign className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                    ${costTotal.toFixed(4)}
+                  </div>
+                )}
+                {feature?.scope && (
+                  <p className="text-xs text-gray-500 leading-relaxed line-clamp-4">{feature.scope}</p>
+                )}
+              </div>
+
+              {/* Feedback */}
+              <div className="p-5 flex-1 flex flex-col gap-3">
+                <label className="text-sm font-semibold text-gray-700">
+                  Feedback
+                  <span className="ml-1 text-xs font-normal text-gray-400">(required for changes)</span>
+                </label>
+                <textarea
+                  value={feedback}
+                  onChange={(e) => setFeedback(e.target.value)}
+                  placeholder="Describe what needs to change, or leave blank to approve…"
+                  maxLength={2000}
+                  rows={8}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-400 resize-y"
+                />
+                <p className="text-xs text-gray-400 text-right">{feedback.length}/2000</p>
+              </div>
+
+              {/* Action buttons */}
+              <div className="p-5 border-t border-gray-100 flex flex-col gap-3">
+                <button
+                  onClick={() => reviewMutation.mutate({ action: 'approve' })}
+                  disabled={reviewMutation.isPending}
+                  className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm transition-colors disabled:opacity-50"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Approve &amp; Continue
+                </button>
+                <button
+                  onClick={() => reviewMutation.mutate({ action: 'request_changes', fb: feedback })}
+                  disabled={reviewMutation.isPending || !feedback.trim()}
+                  className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-semibold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={!feedback.trim() ? 'Enter feedback before requesting changes' : undefined}
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  Request Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
+export default FeatureReviewModal;
