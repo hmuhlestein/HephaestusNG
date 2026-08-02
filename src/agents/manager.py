@@ -700,15 +700,18 @@ class AgentManager:
             # Send launch command to tmux
             pane = tmux_session.attached_window.attached_pane
 
-            # If using GLM, export env vars in the shell first
+            # Export env vars in the shell first — these are required for
+            # MCP tool authentication (HEPHAESTUS_AGENT_ID etc.) and GLM.
             if env_vars:
                 logger.info(
-                    f"Exporting GLM environment variables in shell for agent {agent_id}"
+                    f"Exporting {len(env_vars)} environment variables for agent {agent_id}: "
+                    f"{', '.join(env_vars.keys())}"
                 )
                 for key, value in env_vars.items():
                     pane.send_keys(f'export {key}="{value}"', enter=True)
-                # Brief pause to ensure exports complete
-                await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.1)  # Small delay between exports
+                # Longer pause to ensure all exports complete before CLI launch
+                await asyncio.sleep(1.0)
 
             # Echo task info to terminal so we can see what the agent is working on
             task_desc = (task.enriched_description or task.raw_description or "")[:200]
@@ -2013,15 +2016,18 @@ class AgentManager:
 
             pane = tmux_session.attached_window.attached_pane
 
-            # If using GLM, export env vars in the shell first
+            # Export env vars in the shell first — these are required for
+            # MCP tool authentication (HEPHAESTUS_AGENT_ID etc.) and GLM.
             if env_vars:
                 logger.info(
-                    f"Exporting GLM environment variables in shell for restarted agent {agent_id}"
+                    f"Exporting {len(env_vars)} environment variables for restarted agent {agent_id}: "
+                    f"{', '.join(env_vars.keys())}"
                 )
                 for key, value in env_vars.items():
                     pane.send_keys(f'export {key}="{value}"', enter=True)
-                # Brief pause to ensure exports complete
-                await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.1)  # Small delay between exports
+                # Longer pause to ensure all exports complete before CLI launch
+                await asyncio.sleep(1.0)
 
             # Launch the CLI (pi/claude/etc.) in the fresh session
             pane.send_keys(launch_command, enter=True)
