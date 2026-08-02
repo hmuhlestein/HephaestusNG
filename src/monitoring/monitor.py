@@ -266,7 +266,15 @@ class MonitoringLoop:
                             stripped_raw = _strip_sgr(raw_text)
                             spend_limit_hit = _SPEND_LIMIT_RE.search(stripped_raw)
                             if spend_limit_hit or _SESSION_LIMIT_RE.search(stripped_raw):
-                                limit_kind = "monthly spend limit" if spend_limit_hit else "session limit"
+                                # Determine the specific limit kind for accurate logging
+                                if spend_limit_hit:
+                                    matched_text = spend_limit_hit.group(0).lower()
+                                    if "weekly" in matched_text:
+                                        limit_kind = "weekly spend limit"
+                                    else:
+                                        limit_kind = "monthly spend limit"
+                                else:
+                                    limit_kind = "session limit"
                                 logger.warning(
                                     f"[SESSION-LIMIT] Agent {agent.id[:8]} ({agent.cli_type}) hit {limit_kind} — "
                                     f"terminating immediately (not recoverable)"

@@ -1364,11 +1364,16 @@ class AgentManager:
             try:
                 output = "\n".join(pane.cmd("capture-pane", "-p", "-S", "-50").stdout)
                 output_lower = output.lower()
-                # Only match the exact Claude session-limit message — generic
-                # fragments like "session limit" or "rate limit" false-positive
-                # on the prompt text itself (which discusses limits).
+                # Match Claude session/rate/limit messages — weekly and monthly
+                # spend limits are distinct from "session limit" and must be
+                # caught here too, otherwise the agent starts "successfully"
+                # and the monitor has to catch it on a later cycle (if it even
+                # runs before the agent is terminated another way). Anchored to
+                # confirmed exact phrases to avoid false-positive on prompt text.
                 for indicator in (
                     "you've hit your session limit",
+                    "you've hit your weekly limit",
+                    "you've hit your monthly limit",
                     "too many requests, please slow down",
                 ):
                     if indicator in output_lower:

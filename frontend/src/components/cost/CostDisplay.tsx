@@ -1,5 +1,5 @@
 import React from 'react';
-import { DollarSign, TrendingUp, AlertTriangle } from 'lucide-react';
+import { DollarSign, AlertTriangle } from 'lucide-react';
 
 interface CostDisplayProps {
   currentCost: number;
