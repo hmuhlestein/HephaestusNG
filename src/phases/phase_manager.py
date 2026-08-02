@@ -1413,6 +1413,33 @@ class PhaseManager:
             )
             return None
 
+        # Don't start a new phase if another phase is already in_progress.
+        # This prevents out-of-order execution when a long-running phase
+        # (e.g. scope_review) completes after a later phase (e.g. development)
+        # has already started. Without this check, _start_next_phase would
+        # create a duplicate task for an intermediate phase that either
+        # already completed or should wait for the current phase to finish.
+        # Observed live: scope_review ran for ~20 hours; when it finally
+        # completed, it triggered a new architecture_design task while
+        # development was already in_progress.
+        in_progress_execution = (
+            session.query(PhaseExecution)
+            .join(Phase, PhaseExecution.phase_id == Phase.id)
+            .filter(
+                Phase.workflow_id == current_phase.workflow_id,
+                PhaseExecution.status == "in_progress",
+                Phase.id != current_phase_id,
+            )
+            .first()
+        )
+        if in_progress_execution:
+            other_phase = session.query(Phase).filter_by(id=in_progress_execution.phase_id).first()
+            logger.info(
+                f"[PHASE] _start_next_phase skipped — {other_phase.name if other_phase else 'another phase'} "
+                f"is already in_progress for this workflow"
+            )
+            return None
+
         # Honor an explicit goto/retry target recorded on the task that just
         # completed this phase, instead of unconditionally advancing to the
         # next phase by order. E.g. qa_validation finds a failure and goto's

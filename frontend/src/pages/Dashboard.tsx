@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
-import { Bot, FileText, Database, AlertCircle, TrendingUp, Clock, Ban, AlertTriangle, DollarSign } from 'lucide-react';
+import { Bot, FileText, Database, AlertCircle, TrendingUp, Clock, Ban, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { apiService } from '@/services/api';
 import { DashboardStats } from '@/types';
