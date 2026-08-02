@@ -41,22 +41,32 @@ def kill_existing_services():
     """Kill any existing Hephaestus services and processes on port 8300."""
     print("[Cleanup] Killing existing services...")
 
-    # Kill processes LISTENING on port 8300 (-sTCP:LISTEN avoids
-    # killing VS Code Remote SSH port-forwarding connections).
+    # Kill python processes LISTENING on port 8300.
+    # Filters by command name so VS Code Remote SSH port-forwarding
+    # proxies (also `node`, also LISTEN) are never killed.
     try:
         result = subprocess.run(
             ["lsof", "-ti", ":8300", "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
         )
-        if result.stdout.strip():
-            pids = result.stdout.strip().split("\n")
-            for pid in pids:
-                try:
-                    os.kill(int(pid), signal.SIGKILL)
-                    print(f"  Killed process on port 8300 (PID: {pid})")
-                except ProcessLookupError:
-                    pass
+        raw_pids = [p for p in result.stdout.strip().split("\n") if p.strip()]
+        if raw_pids:
+            ps = subprocess.run(
+                ["ps", "-o", "pid=,comm=", "-p", ",".join(raw_pids)],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in ps.stdout.strip().splitlines():
+                parts = line.split(None, 1)
+                if len(parts) < 2:
+                    continue
+                pid_str, comm = parts[0].strip(), parts[1].strip()
+                if comm.startswith(("python", "uvicorn")):
+                    try:
+                        os.kill(int(pid_str), signal.SIGKILL)
+                        print(f"  Killed process on port 8300 (PID: {pid_str})")
+                    except (ProcessLookupError, ValueError):
+                        pass
     except Exception as e:
         print(f"  Warning: Could not kill processes on port 8300: {e}")
 

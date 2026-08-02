@@ -116,9 +116,16 @@ start_qdrant() {
 }
 
 start_backend() {
-    if lsof -ti :8300 -sTCP:LISTEN >/dev/null 2>&1; then
-        warn "Port 8300 in use - killing existing process"
-        lsof -ti :8300 -sTCP:LISTEN | xargs kill -9 2>/dev/null
+    local port=${BACKEND_PORT:-8300}
+    local pids
+    # Filter by comm name to avoid killing VS Code Remote SSH's node proxy
+    pids=$(lsof -ti :$port -sTCP:LISTEN 2>/dev/null | while read pid; do
+        comm=$(ps -o comm= -p $pid 2>/dev/null)
+        case "$comm" in python*|uvicorn*) echo $pid;; esac
+    done)
+    if [ -n "$pids" ]; then
+        warn "Port $port in use - killing existing python processes"
+        echo "$pids" | xargs kill -9 2>/dev/null
         sleep 1
     fi
 
