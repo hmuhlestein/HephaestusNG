@@ -707,10 +707,14 @@ class AgentManager:
                     f"Exporting {len(env_vars)} environment variables for agent {agent_id}: "
                     f"{', '.join(env_vars.keys())}"
                 )
+                # Set via tmux set-environment so vars persist across shell
+                # restarts and are inherited by all child processes.
+                for key, value in env_vars.items():
+                    tmux_session.set_environment(key, value)
+                # Also export in the current shell for immediate availability
                 for key, value in env_vars.items():
                     pane.send_keys(f'export {key}="{value}"', enter=True)
-                    await asyncio.sleep(0.1)  # Small delay between exports
-                # Longer pause to ensure all exports complete before CLI launch
+                    await asyncio.sleep(0.1)
                 await asyncio.sleep(1.0)
 
             # Echo task info to terminal so we can see what the agent is working on
@@ -2023,10 +2027,14 @@ class AgentManager:
                     f"Exporting {len(env_vars)} environment variables for restarted agent {agent_id}: "
                     f"{', '.join(env_vars.keys())}"
                 )
+                # Set via tmux set-environment so vars persist across shell
+                # restarts and are inherited by all child processes.
+                for key, value in env_vars.items():
+                    tmux_session.set_environment(key, value)
+                # Also export in the current shell for immediate availability
                 for key, value in env_vars.items():
                     pane.send_keys(f'export {key}="{value}"', enter=True)
-                    await asyncio.sleep(0.1)  # Small delay between exports
-                # Longer pause to ensure all exports complete before CLI launch
+                    await asyncio.sleep(0.1)
                 await asyncio.sleep(1.0)
 
             # Launch the CLI (pi/claude/etc.) in the fresh session
