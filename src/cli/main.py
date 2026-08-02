@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--host", default="127.0.0.1", help="Backend host (default: 127.0.0.1)"
     )
     parser.add_argument(
-        "--port", type=int, default=8300, help="Backend port (default: 8300)"
+        "--port", type=int, default=None, help="Backend port (default: from config)"
     )
 
     sub = parser.add_subparsers(dest="command", help="Available commands")
@@ -130,8 +130,17 @@ def _log_command(command: str, argv: list) -> None:
 
 
 def main(argv=None):
+    from src.core.simple_config import get_config as _get_config
+
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Resolve port from config if not explicitly passed
+    if args.port is None:
+        try:
+            args.port = _get_config().mcp_port
+        except Exception:
+            args.port = 8300
 
     if not args.command:
         print(BANNER)

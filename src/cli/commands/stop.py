@@ -17,14 +17,14 @@ def register(subparsers):
 def run(args):
     stopped = {}
 
-    # Read port from config
-    try:
-        from src.core.simple_config import Config
+    port = getattr(args, "port", None)
+    if not port:
+        try:
+            from src.core.simple_config import get_config
 
-        config = Config()
-        port = config.mcp_port or 8300
-    except Exception:
-        port = 8300
+            port = get_config().mcp_port
+        except Exception:
+            port = 8300
 
     # First, kill ALL processes on the backend port to prevent stale processes.
     # Block until the processes themselves fully exit instead of a flat

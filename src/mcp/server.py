@@ -123,14 +123,16 @@ if config.enable_cors:
         _cors_origins = [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
     else:
         # Development defaults: localhost only
-        _cors_origins = [
-            "http://localhost:5300",
-            "http://localhost:3000",
-            "http://localhost:8300",
-            "http://127.0.0.1:5300",
-            "http://127.0.0.1:3000",
-            "http://127.0.0.1:8300",
-        ]
+        _config = get_config()
+        _frontend_port = _config.frontend_port
+        _backend_port = _config.mcp_port
+        _cors_origins = [f"http://localhost:{_frontend_port}",
+                         "http://localhost:3000",
+                         f"http://localhost:{_backend_port}",
+                         f"http://127.0.0.1:{_frontend_port}",
+                         "http://127.0.0.1:3000",
+                         f"http://127.0.0.1:{_backend_port}",
+                         ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins,

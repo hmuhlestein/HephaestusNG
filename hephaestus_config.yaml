@@ -1,6 +1,7 @@
 server:
   host: 0.0.0.0
   port: 8300
+  frontend_port: 5300
   enable_cors: true
 paths:
   database: ./hephaestus.db
