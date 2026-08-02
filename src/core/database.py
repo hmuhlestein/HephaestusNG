@@ -1080,6 +1080,10 @@ class AutopilotProject(Base):
     # Budget limit - None means no limit
     cost_limit_usd = Column(Float, nullable=True)
 
+    # Review mode: when True, pipeline pauses after each feature's deploy phase
+    # and waits for the user to approve or request changes before continuing.
+    review_mode = Column(Boolean, default=False, nullable=False)
+
     designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
 
 
@@ -1117,6 +1121,18 @@ class Feature(Base):
 
     # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
     cost_total_usd = Column(Float, default=0.0, nullable=False)
+
+    # Review mode columns — populated when project.review_mode is True and
+    # the pipeline pauses this feature after its deploy phase for human sign-off.
+    review_status = Column(
+        String,
+        CheckConstraint("review_status IN ('pending', 'approved', 'changes_requested')"),
+        nullable=True,
+        default=None,
+    )
+    review_feedback = Column(Text, nullable=True)   # user's change-request text
+    reviewed_at = Column(DateTime, nullable=True)
+    reviewed_by = Column(String(100), nullable=True, default=None)
 
     # Relationships
     design = relationship("AutopilotDesign", back_populates="features")
@@ -1405,6 +1421,7 @@ class DatabaseManager:
         self._migrate_task_action_target_phase_column()
         self._migrate_cost_tracking_columns()
         self._migrate_phase_fallback_columns()
+        self._migrate_review_mode_columns()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -2081,6 +2098,35 @@ class DatabaseManager:
                 logger.debug(f"Could not populate phase fallbacks: {e}")
         except Exception as e:
             logger.debug(f"Phases fallback columns migration (may already exist): {e}")
+
+    def _migrate_review_mode_columns(self):
+        """Add review_mode to autopilot_projects and review columns to features."""
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE autopilot_projects ADD COLUMN review_mode BOOLEAN NOT NULL DEFAULT 0"))
+                except Exception:
+                    pass  # Column already exists
+                try:
+                    conn.execute(text("ALTER TABLE features ADD COLUMN review_status VARCHAR"))
+                except Exception:
+                    pass
+                try:
+                    conn.execute(text("ALTER TABLE features ADD COLUMN review_feedback TEXT"))
+                except Exception:
+                    pass
+                try:
+                    conn.execute(text("ALTER TABLE features ADD COLUMN reviewed_at DATETIME"))
+                except Exception:
+                    pass
+                try:
+                    conn.execute(text("ALTER TABLE features ADD COLUMN reviewed_by VARCHAR(100)"))
+                except Exception:
+                    pass
+                conn.commit()
+                logger.info("Migrated review_mode columns")
+        except Exception as e:
+            logger.debug(f"Review mode columns migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""
