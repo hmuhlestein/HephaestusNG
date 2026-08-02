@@ -5,10 +5,10 @@ server:
 paths:
   database: ./hephaestus.db
   phases_folder: ./example_workflows/crackme_solving
+  # project_root: defaults to current working directory
   worktree_base: /tmp/hephaestus_worktrees
-  project_root: /Users/hmuhlestein/code/sotto
 git:
-  main_repo_path: /Users/hmuhlestein/code/sotto
+  # main_repo_path: defaults to current working directory
   worktree_branch_prefix: agent-
   auto_commit: true
   conflict_resolution: newest_file_wins

@@ -341,6 +341,7 @@ def run(args):
         else:
             results["backend"] = "started but not healthy"
             print(" timeout")
+            _print_backend_error()
 
     # Monitor
     if not args.backend_only and not args.no_monitor:
@@ -616,3 +617,31 @@ def _print_results(results, port):
     print("  Frontend:  http://localhost:5173")
     print(f"  Backend:   http://127.0.0.1:{port}")
     print(f"  Health:    http://127.0.0.1:{port}/health")
+
+
+def _print_backend_error() -> None:
+    """Tail the backend log and print the likely cause of a startup failure."""
+    log_path = Path(HEPHAESTUS_LOGS_DIR) / "backend.log"
+    if not log_path.exists():
+        print()
+        print(f"  Check the backend log for details:")
+        print(f"    {log_path}")
+        return
+    try:
+        lines = log_path.read_text().splitlines()
+    except OSError:
+        return
+    tail = lines[-50:]
+    error_keys = ("ERROR", "Error", "Traceback", "Exception", "NoSuchPath",
+                  "FATAL", "fatal", "Set paths", "heph project")
+    error_lines = [ln for ln in tail if any(k in ln for k in error_keys)]
+    if error_lines:
+        print()
+        print("  Error details:")
+        for ln in error_lines[-10:]:
+            print(f"    {ln}")
+        print(f"  Full log: {log_path}")
+    else:
+        print()
+        print(f"  Check the backend log for details:")
+        print(f"    {log_path}")

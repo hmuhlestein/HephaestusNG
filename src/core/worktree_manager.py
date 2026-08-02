@@ -107,9 +107,13 @@ class WorktreeManager:
 
         try:
             self.main_repo = Repo(self._project_root)
-        except git.InvalidGitRepositoryError:
-            logger.error(f"Invalid git repository at {self._project_root}")
-            raise ValueError(f"Not a git repository: {self._project_root}")
+        except (git.InvalidGitRepositoryError, git.NoSuchPathError) as e:
+            logger.error(
+                f"Cannot open git repository at {self._project_root}: {e}\n"
+                f"Set paths.project_root and git.main_repo_path in hephaestus_config.yaml, "
+                f"or activate a project with: heph project activate <name>"
+            )
+            raise ValueError(f"Not a valid git repository: {self._project_root}") from e
 
         self.merge_lock_path = (
             Path(self.main_repo.working_dir) / ".git" / ".hephaestus_merge_lock"
