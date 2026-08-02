@@ -110,7 +110,7 @@ class ProcessWatchdog:
                 logger.debug(f"Could not kill duplicate process {pid}: {e}")
 
     def check_duplicate_port_listeners(self, port: int) -> None:
-        """Kill any extra process bound to `port` beyond the tracked backend.
+        """Kill any extra python process bound to `port` beyond the tracked backend.
 
         A second backend process racing the tracked one creates two
         independent AutopilotService singletons against the same DB -- one
@@ -126,26 +126,14 @@ class ProcessWatchdog:
         does, by looking at what's actually bound to the port instead of
         trusting any single PID-tracking mechanism.
 
-        Must filter to LISTEN sockets only (-sTCP:LISTEN) -- plain
-        `lsof -ti :port` matches ANY socket referencing that port,
-        including outbound CLIENT connections from other processes making
-        API calls to the backend (curl, the frontend's Vite proxy, the
-        monitor's own health polling, etc). Without the filter, every
-        short-lived client process making a request at the moment this
-        check ran got misidentified as a rogue duplicate SERVER and killed
-        -- observed live: a fresh, unrelated PID "duplicate" appearing and
-        getting killed every single watchdog cycle, indefinitely, long
-        after the actual backend-duplication bug (assume_backend_running)
-        was already fixed.
+        Uses get_port_listeners to filter both by LISTEN socket state AND
+        process command name. VS Code Remote SSH also creates a LISTEN
+        socket on the same port (with `node` as the command) -- killing
+        that nukes the user's entire remote session.
         """
+        from src.cli.utils.ports import get_port_listeners
         try:
-            result = subprocess.run(
-                ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
+            pids = get_port_listeners(port, {"python", "uvicorn"})
         except Exception as e:
             logger.debug(f"Duplicate-backend port check failed: {e}")
             return
@@ -544,32 +532,13 @@ def _start_watchdog(port: int, args) -> bool:
 
 
 def _kill_port(port: int) -> None:
-    """Kill whatever is listening on the given port.
+    """Kill node/npm processes LISTENing on the given port.
 
-    Filters to LISTEN sockets only (-sTCP:LISTEN) -- a plain
-    `lsof -ti :port` also matches outbound client connections to that port
-    (e.g. an in-flight request to the backend), which don't block a fresh
-    bind and have no business being killed here.
+    Filters by command name to avoid killing VS Code Remote SSH
+    port-forwarding proxies (also `node`, also LISTEN).
     """
-    import signal
-
-    try:
-        result = subprocess.run(
-            ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.stdout.strip():
-            for pid_str in result.stdout.strip().split("\n"):
-                try:
-                    pid = int(pid_str)
-                    os.kill(pid, signal.SIGKILL)
-                except (ValueError, OSError):
-                    pass
-            time.sleep(1)  # Wait for port to free
-    except Exception:
-        pass
+    from src.cli.utils.ports import kill_port_listeners
+    kill_port_listeners(port, {"node", "npm"})
 
 
 def _start_frontend() -> bool:

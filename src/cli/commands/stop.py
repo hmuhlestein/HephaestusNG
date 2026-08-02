@@ -6,6 +6,7 @@ import subprocess
 import time
 
 from src.cli.utils import is_process_running, output, read_pid, remove_pid
+from src.cli.utils.ports import get_port_listeners, kill_port_listeners
 
 
 def register(subparsers):
@@ -26,11 +27,10 @@ def run(args):
         except Exception:
             port = 8300
 
-    # First, kill ALL processes LISTENING on the backend port to prevent stale
-    # processes. Filters to LISTEN sockets only (-sTCP:LISTEN) -- a plain
-    # `lsof -ti :port` also matches VS Code Remote SSH port-forwarding
-    # connections and other outbound client connections. Killing those
-    # silently nukes the user's entire VS Code remote session.
+    # First, kill ALL python processes LISTENING on the backend port to
+    # prevent stale processes. Uses get_port_listeners to filter by command
+    # name so VS Code Remote SSH port-forwarding proxies (also LISTEN
+    # sockets, also `node`) are never killed.
     #
     # Block until the processes themselves fully exit instead of a flat
     # sleep(1) or a port-LISTEN check -- a graceful ASGI shutdown unbinds the
@@ -43,11 +43,8 @@ def run(args):
     # state a legitimately-running agent (started by the NEW process after
     # the restart) had just changed. Checking actual process liveness
     # (is_process_running), not just the port, closes that gap.
+    pids = get_port_listeners(port, {"python", "uvicorn"})
     try:
-        result = subprocess.run(
-            ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"], capture_output=True, text=True
-        )
-        pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
         if pids:
             for pid in pids:
                 try:
