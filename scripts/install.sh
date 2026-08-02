@@ -332,7 +332,7 @@ else
 
     if $_install_ash; then
         log "Installing ash wrapper (uvx local mode)..."
-        cp "$REPO_DIR/scripts/ash" "$ASH_WRAPPER" \
+        cp "$PREFIX/scripts/ash" "$ASH_WRAPPER" \
           && chmod +x "$ASH_WRAPPER" \
           && ok "ash wrapper installed → $ASH_WRAPPER" \
           || warn "ash wrapper install failed — security phase will skip automated scan"
@@ -607,8 +607,8 @@ PI_AGENTS_DIR="$HOME/.pi/agent/agents"
 PI_MCP_CONFIG="$HOME/.config/mcp/mcp.json"
 PI_MCP_BACKUP="$HOME/.config/mcp/mcp.json.bak"
 
-# Check if pi is installed
-if command -v pi >/dev/null 2>&1 || [ -d "$HOME/.pi" ]; then
+# Check if pi CLI is installed (must be on PATH — just having ~/.pi is not enough)
+if command -v pi >/dev/null 2>&1; then
     log "Pi detected — configuring MCP tools"
     
     # Check if pi-mcp-adapter is installed (wraps MCP servers for pi without context overhead)
@@ -624,6 +624,31 @@ if command -v pi >/dev/null 2>&1 || [ -d "$HOME/.pi" ]; then
         fi
     else
         ok "pi-mcp-adapter already installed"
+    fi
+
+    # Offer to install pi-codegraph-extension
+    if ! pi list 2>/dev/null | grep -q 'pi-codegraph-extension'; then
+        _install_codegraph=true
+        if [ -t 0 ]; then
+            printf "${BLUE}[heph]${NC} Install pi-codegraph-extension (codebase indexing for pi)? [Y/n] "
+            read -r _cg_reply </dev/tty
+            case "${_cg_reply:-Y}" in
+                [Nn]*) _install_codegraph=false ;;
+            esac
+        fi
+        if $_install_codegraph; then
+            log "Installing pi-codegraph-extension..."
+            if pi install npm:pi-codegraph-extension 2>&1 | tail -3; then
+                ok "pi-codegraph-extension installed"
+            else
+                warn "Failed to install pi-codegraph-extension"
+                warn "Install manually: pi install npm:pi-codegraph-extension"
+            fi
+        else
+            ok "pi-codegraph-extension skipped"
+        fi
+    else
+        ok "pi-codegraph-extension already installed"
     fi
     
     # Generate and install Hephaestus pi agents from phase files
