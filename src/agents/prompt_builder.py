@@ -201,10 +201,21 @@ class AgentPromptBuilder:
 
         base_message += resumed_session_warning
 
+        # Inject any TaskPromptOverride (e.g. review feedback from the UI)
+        override_text = ""
+        try:
+            from src.core.database import TaskPromptOverride, get_db
+            with get_db() as _db:
+                _override = _db.query(TaskPromptOverride).filter_by(task_id=task.id).first()
+                if _override and _override.user_prompt:
+                    override_text = _override.user_prompt
+        except Exception:
+            pass
+
         base_message += f"""
 
 TASK DESCRIPTION:
-{task.enriched_description or task.raw_description}
+{override_text}{task.enriched_description or task.raw_description}
 
 COMPLETION CRITERIA:
 {task.done_definition}"""
