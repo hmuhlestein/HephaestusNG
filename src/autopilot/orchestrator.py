@@ -4774,12 +4774,15 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
             .filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter)
             .all()
         )
-        # Orphaned tasks (never dispatched) are scheduling issues, not agent
-        # failures -- they should always be retryable.
+        # Orphaned tasks (never dispatched) and session/spend limit failures
+        # are not agent faults -- they should always be retryable. Session
+        # limit failures will use the fallback model on retry.
+        _limit_failure = lambda r: "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
         retryable_tasks = [
             t for t in failed_tasks
             if (t.retry_count or 0) < max_retry_count
             or "Orphaned" in (t.failure_reason or "")
+            or _limit_failure(t.failure_reason)
         ]
         if not retryable_tasks:
             reasons = sorted({t.failure_reason for t in failed_tasks if t.failure_reason})
@@ -4860,7 +4863,7 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
             session_limit_override_model = None
             with get_db() as check_db:
                 check_task = check_db.query(Task).filter_by(id=task_id).first()
-                if check_task and "session limit" in (check_task.failure_reason or "").lower():
+                if check_task and ("session limit" in (check_task.failure_reason or "").lower() or "spend limit" in (check_task.failure_reason or "").lower()):
                     if phase.id:
                         _phase = check_db.query(Phase).filter_by(id=phase.id).first()
                         if _phase:
