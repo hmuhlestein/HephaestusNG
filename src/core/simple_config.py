@@ -47,10 +47,6 @@ class Config:
         # Paths settings
         paths = config.get("paths", {})
         self.database_path = Path(paths.get("database", "./hephaestus.db"))
-        self.phases_folder = paths.get("phases_folder", "./sample-phases")
-        self.branch_base_path = Path(
-            paths.get("worktree_base", "/tmp/hephaestus_worktrees")
-        )
         # Worktree isolation base. None => WorktreeManager computes <repo>/.worktrees
         # (in-repo, git-excluded). Set an explicit path only to override.
         _wt_base = paths.get("worktree_base_path")
@@ -306,8 +302,6 @@ class Config:
             self.glm_api_token_env = os.getenv("GLM_API_TOKEN_ENV")
 
         # Worktree settings
-        if os.getenv("BRANCH_BASE_PATH"):
-            self.branch_base_path = Path(os.getenv("BRANCH_BASE_PATH"))
         if os.getenv("MAIN_REPO_PATH"):
             self.main_repo_path = Path(os.getenv("MAIN_REPO_PATH"))
         if os.getenv("GIT_BASE_BRANCH"):
@@ -391,10 +385,6 @@ class Config:
         if os.getenv("LOG_LEVEL"):
             self.log_level = os.getenv("LOG_LEVEL")
 
-        # Phases folder from environment
-        if os.getenv("HEPHAESTUS_PHASES_FOLDER"):
-            self.phases_folder = os.getenv("HEPHAESTUS_PHASES_FOLDER")
-
         # Task deduplication settings from environment
         if os.getenv("TASK_DEDUP_ENABLED"):
             self.task_dedup_enabled = os.getenv("TASK_DEDUP_ENABLED").lower() == "true"
@@ -471,9 +461,6 @@ class Config:
         if self.mcp_port:
             env["MCP_PORT"] = str(self.mcp_port)
 
-        # Worktree settings
-        if self.branch_base_path:
-            env["BRANCH_BASE_PATH"] = str(self.branch_base_path)
         if hasattr(self, "working_directory") and self.working_directory:
             env["WORKING_DIRECTORY"] = str(self.working_directory)
 
