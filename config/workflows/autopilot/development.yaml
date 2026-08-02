@@ -100,6 +100,7 @@ additional_notes: |
   - Your task description for "Artifacts Path" and "Project Path" locations
   - AGENTS.md - Coding style, naming conventions, test commands, commit format
   - architecture.md (from Artifacts Path) - Component interfaces and contracts
+  - requirements_analysis.md (from Artifacts Path) - REQ-XXX requirements to implement
   - architectural_review_report.md (from Artifacts Path, if it exists) — findings from the
     architectural reviewer. Fix every BLOCKER and FIX before marking done.
   - adversarial_review_report.md (from Artifacts Path, if it exists) — findings from the
@@ -109,6 +110,13 @@ additional_notes: |
     type hints: `X | Y` union syntax requires Python ≥ 3.10; `list[str]` / `dict[k,v]`
     builtins require ≥ 3.9. Use `Union[X, Y]` / `Optional[X]` / `List[str]` from `typing`
     if the project targets an earlier version.
+
+  **REQUIREMENT TRACKING (MANDATORY):**
+  requirements_analysis.md contains REQ-XXX numbered requirements. When implementing:
+  - Reference the REQ-XXX ID in code comments when implementing each requirement
+  - After implementing a requirement, update requirements_analysis.md:
+    - Change `[ ] REQ-XXX` to `[x] REQ-XXX` in the Success Criteria section
+  - This enables reviewers and product validation to verify requirement coverage
   
   Write implementation code (src/, tests/) to the "Project Path" location.
   

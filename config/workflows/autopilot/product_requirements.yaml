@@ -170,7 +170,7 @@ additional_notes: |
   and flag it for the architect to resolve.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: CREATE REQUIREMENTS DOCUMENT
+  STEP 4: CREATE REQUIREMENTS DOCUMENT WITH REQ-XXX TRACKING
   ═══════════════════════════════════════════════════════════════════════
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
@@ -189,6 +189,14 @@ additional_notes: |
 
   Write requirements_analysis.md to the "Docs Path" location from your task description.
 
+  **REQUIREMENT NUMBERING (MANDATORY):**
+  Every functional requirement MUST be assigned a unique ID:
+  - Format: `REQ-XXX` where XXX is a zero-padded number (REQ-001, REQ-002, ...)
+  - Number sequentially as you decompose requirements
+  - Include the ID in ALL references to that requirement throughout the document
+  - These IDs will be tracked by reviewers and product validation
+  - Non-functional requirements use `NFR-XXX` format
+
   # Requirements Analysis: [Feature Name]
 
   ## Project Context
@@ -200,14 +208,16 @@ additional_notes: |
   ## Feature Requirements (from design document)
 
   ### Functional Requirements
-  1. [Requirement] - Acceptance: [criteria]
-     - Integration with existing: [which components]
-     - Is new: [yes/no]
+  | REQ ID | Requirement | Acceptance Criteria | Priority | Integration |
+  |--------|-------------|---------------------|----------|-------------|
+  | REQ-001 | [Requirement] | [criteria] | High/Med/Low | [components] |
+  | REQ-002 | [Requirement] | [criteria] | High/Med/Low | [components] |
 
   ### Non-Functional Requirements
-  - Performance: [targets]
-  - Security: [requirements]
-  - ...
+  | REQ ID | Category | Requirement | Target |
+  |--------|----------|-------------|--------|
+  | NFR-001 | Performance | [requirement] | [target] |
+  | NFR-002 | Security | [requirement] | [target] |
 
   ## Integration Points
   - [Component A] needs [modification] to support [new feature]
@@ -219,8 +229,8 @@ additional_notes: |
   - Must not: [constraints from project context]
 
   ## Success Criteria
-  - [ ] [Criterion 1]
-  - [ ] [Criterion 2]
+  - [ ] REQ-001: [Criterion 1]
+  - [ ] REQ-002: [Criterion 2]
   - ...
 
   ═══════════════════════════════════════════════════════════════════════
