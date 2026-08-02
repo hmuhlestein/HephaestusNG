@@ -203,7 +203,7 @@ show_status() {
         err "Backend:     not running"
     fi
 
-    if curl -s http://localhost:5173 >/dev/null 2>&1 || curl -s http://localhost:3000 >/dev/null 2>&1; then
+    if curl -s http://localhost:5300 >/dev/null 2>&1 || curl -s http://localhost:3000 >/dev/null 2>&1; then
         ok "Frontend:    running"
     else
         warn "Frontend:    not running"

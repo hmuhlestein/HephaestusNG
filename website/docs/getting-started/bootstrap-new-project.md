@@ -38,7 +38,7 @@ python scripts/bootstrap_project.py \
 
 ## After Bootstrap
 
-- Frontend: http://localhost:5173
+- Frontend: http://localhost:5300
 - Backend API: http://localhost:8300
 - Tickets board: http://localhost:8300/tickets
 

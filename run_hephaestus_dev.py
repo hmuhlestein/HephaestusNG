@@ -448,7 +448,7 @@ def main():
     print("=" * 60)
     print()
     print("Open the frontend to launch workflows:")
-    print("  http://localhost:5173")
+    print("  http://localhost:5300")
     print()
     print("Available workflows:")
     print("  - PRD to Software Builder: Build software from a PRD")

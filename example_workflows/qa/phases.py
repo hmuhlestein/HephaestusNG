@@ -95,7 +95,7 @@ QA_LAUNCH_TEMPLATE = LaunchTemplate(
             label="Frontend URL",
             type="text",
             required=False,
-            description="Frontend URL for browser tests (default: http://localhost:5173)",
+            description="Frontend URL for browser tests (default: http://localhost:5300)",
         ),
         LaunchParameter(
             name="known_issues",
