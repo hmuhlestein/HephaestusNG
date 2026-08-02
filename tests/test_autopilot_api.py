@@ -617,7 +617,7 @@ class TestFeatures:
                 }
             )
         )
-        (docs / "qa_report.md").write_text("# QA Report\nSome content here")
+        (docs / "qa.md").write_text("# QA Report\nSome content here")
 
         resp = client.get("/api/autopilot/features/20260101-120000_detail_test")
         assert resp.status_code == 200

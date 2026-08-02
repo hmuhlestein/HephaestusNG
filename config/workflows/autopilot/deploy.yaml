@@ -21,7 +21,7 @@ description: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
-  - Write ONE file, deploy_report.md, to ./.hephaestus/deploy/.
+  - Write ONE file, deploy.md, to ./.hephaestus/deploy/.
   - Use exactly that subdirectory name — the pipeline only looks for that exact name.
 
 done_definitions:
@@ -29,10 +29,10 @@ done_definitions:
   - "If DEPLOY.md exists: read thoroughly and followed instructions"
   - "If DEPLOY.md missing: completed with 'no deployment instructions' note"
   - "Deployment steps executed (or skipped if no DEPLOY.md)"
-  - "deploy_report.md created with results"
+  - "deploy.md created with results"
   - "Task marked as done"
 outputs:
-  - "deploy_report.md"
+  - "deploy.md"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler. Fragments OK. Technical terms exact.
   
@@ -47,7 +47,7 @@ additional_notes: |
   infrastructure-as-code files as directed by DEPLOY.md.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 0: CHECK FOR DEPLOY.md (PRIMARY INSTRUCTIONS)
+  STEP 1: CHECK FOR DEPLOY.md (PRIMARY INSTRUCTIONS)
   ═══════════════════════════════════════════════════════════════════════
 
   Your task description contains "Project Root (absolute): <path>".
@@ -60,14 +60,14 @@ additional_notes: |
   ```
 
   If DEPLOY.md DOES NOT EXIST:
-    → Write deploy_report.md noting "DEPLOY.md not found — no deployment instructions available"
+    → Write deploy.md noting "DEPLOY.md not found — no deployment instructions available"
     → Mark task done. This is a successful completion, not a failure.
 
   If DEPLOY.md EXISTS:
     → Read it fully, then execute the steps below IN ORDER.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 1: READ DEPLOY.md AND UNDERSTAND REQUIREMENTS
+  STEP 2: READ DEPLOY.md AND UNDERSTAND REQUIREMENTS
   ═══════════════════════════════════════════════════════════════════════
 
   Read DEPLOY.md from the project root. Identify:
@@ -82,7 +82,7 @@ additional_notes: |
   - context.md — any deployment-related notes from prior phases
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: VALIDATE PREREQUISITES
+  STEP 3: VALIDATE PREREQUISITES
   ═══════════════════════════════════════════════════════════════════════
 
   Check that all tools/services referenced in DEPLOY.md are available:
@@ -97,7 +97,7 @@ additional_notes: |
   If critical prerequisites are missing, note this in the report and stop.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: EXECUTE DEPLOYMENT STEPS
+  STEP 4: EXECUTE DEPLOYMENT STEPS
   ═══════════════════════════════════════════════════════════════════════
 
   Follow DEPLOY.md instructions exactly. For each step:
@@ -111,7 +111,7 @@ additional_notes: |
   run migrations first.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: RUN HEALTH CHECKS
+  STEP 5: RUN HEALTH CHECKS
   ═══════════════════════════════════════════════════════════════════════
 
   After deployment, verify the deployment succeeded:
@@ -120,10 +120,10 @@ additional_notes: |
   - Verify key functionality works (smoke test)
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: CREATE DEPLOY REPORT
+  STEP 6: CREATE DEPLOY REPORT
   ═══════════════════════════════════════════════════════════════════════
 
-  Write ./.hephaestus/deploy/deploy_report.md with:
+  Write ./.hephaestus/deploy/deploy.md with:
 
   ```markdown
   ---
@@ -185,7 +185,7 @@ additional_notes: |
   WHEN YOU ARE DONE — MARK YOUR TASK AS COMPLETE
   ═══════════════════════════════════════════════════════════════════════
 
-  After writing deploy_report.md, call:
+  After writing deploy.md, call:
 
   heph_complete_my_task({
     "status": "done",

@@ -406,7 +406,7 @@ class TestDetectDangerousCommandConfirmation:
 class TestDetectMaxTokenLimitError:
     TOKEN_LIMIT_OUTPUT = (
         " Thinking...\n\n"
-        " write .hephaestus/feature_review_report.md\n\n"
+        " write .hephaestus/review.md\n\n"
         " # Feature Review Report\n\n"
         " Error: Model stopped because it reached the maximum output token limit."
         " The response may be incomplete.\n\n"

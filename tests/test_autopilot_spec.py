@@ -234,7 +234,7 @@ def test_product_missing_json_falls_back_to_report_text():
 def test_product_missing_json_no_report_text():
     score, meta = S.score_product_validation(None, S.DEFAULT_SPEC)
     assert 0.3 <= score < 0.7
-    assert meta["reason"] == "no product_validation.md found"
+    assert meta["reason"] == "no validation.md found"
 
 
 def test_product_pass_with_minor_gaps_accepted_within_cap():
@@ -294,7 +294,7 @@ def test_build_phase_output_reads_hephaestus_phase_subdir(tmp_path):
     -- see 5f26488's docs/ -> .hephaestus/ migration."""
     docs = tmp_path / ".hephaestus" / "qa_validation"
     docs.mkdir(parents=True)
-    (docs / "qa_report.md").write_text(_okf(
+    (docs / "qa.md").write_text(_okf(
         "type: qa_validation_result\n"
         "failed_tests: 0\n"
         "passed_tests: 5\n"
@@ -308,7 +308,7 @@ def test_build_phase_output_reads_hephaestus_phase_subdir(tmp_path):
 
 
 def test_build_phase_output_root_fallback(tmp_path):
-    (tmp_path / "product_validation.md").write_text(_okf(
+    (tmp_path / "validation.md").write_text(_okf(
         "type: product_validation_result\n"
         "verdict: NEEDS_WORK\n"
         "unmet_requirements: [\"x\"]"
@@ -344,15 +344,15 @@ class TestConsumeGateArtifacts:
         """read_okf_report's candidates are .hephaestus/<phase_name>/<file>
         then <root>/<file> -- no flat .hephaestus/<file> case exists for a
         gated phase (that's only for non-gated phases like
-        requirements_analysis.md/architecture.md, which aren't scored via
+        requirements.md/architecture.md, which aren't scored via
         this path). Covers the root-fallback candidate specifically;
         test_deletes_from_phase_scoped_subdirectory covers the primary one."""
-        (tmp_path / "adversarial_review_report.md").write_text("# report")
+        (tmp_path / "adversarial.md").write_text("# report")
 
         deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
 
         assert len(deleted) == 1
-        assert not (tmp_path / "adversarial_review_report.md").exists()
+        assert not (tmp_path / "adversarial.md").exists()
 
     def test_unknown_phase_is_a_noop(self, tmp_path):
         hephaestus = tmp_path / ".hephaestus"
@@ -391,12 +391,12 @@ class TestConsumeGateArtifacts:
         reads)."""
         sub = tmp_path / ".hephaestus" / "adversarial_review"
         sub.mkdir(parents=True)
-        (sub / "adversarial_review_report.md").write_text("# report")
+        (sub / "adversarial.md").write_text("# report")
 
         deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
 
         assert len(deleted) == 1
-        assert not (sub / "adversarial_review_report.md").exists()
+        assert not (sub / "adversarial.md").exists()
 
     def test_does_not_delete_a_different_phases_subdirectory_file(self, tmp_path):
         """Regression: the old fallback searched EVERY subdirectory of
@@ -407,12 +407,12 @@ class TestConsumeGateArtifacts:
         hephaestus = tmp_path / ".hephaestus"
         other = hephaestus / "some_other_feature"
         other.mkdir(parents=True)
-        (other / "adversarial_review_report.md").write_text("# report")
+        (other / "adversarial.md").write_text("# report")
 
         deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
 
         assert deleted == []
-        assert (other / "adversarial_review_report.md").exists()
+        assert (other / "adversarial.md").exists()
 
     def test_no_longer_falls_back_to_stale_docs_location(self, tmp_path):
         """Regression: consume_gate_artifacts used to also check docs/ and
@@ -424,12 +424,12 @@ class TestConsumeGateArtifacts:
         (which only reads .hephaestus/) still has nothing fresh to score."""
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "adversarial_review_report.md").write_text("# stale, pre-migration")
+        (docs / "adversarial.md").write_text("# stale, pre-migration")
 
         deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
 
         assert deleted == []
-        assert (docs / "adversarial_review_report.md").exists()
+        assert (docs / "adversarial.md").exists()
 
 
 class TestValidateGateResultSchema:

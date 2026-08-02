@@ -17,7 +17,7 @@ description: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
-  - Write ONE file, scope_review_result.md, to ./.hephaestus/scope_review/ — a
+  - Write ONE file, scope.md, to ./.hephaestus/scope_review/ — a
     YAML frontmatter block (structured verdict + out-of-scope/missing
     items, the gate input) followed by a short narrative summary.
   - Use exactly that subdirectory name (./.hephaestus/scope_review/) — the
@@ -25,14 +25,14 @@ description: |
     to it.
 done_definitions:
   - "Original design doc read from ./.hephaestus/design.md"
-  - "./.hephaestus/requirements_analysis.md read and compared line-by-line against design doc"
-  - "Every requirement in ./.hephaestus/requirements_analysis.md traced to a line in design.md"
+  - "./.hephaestus/requirements.md read and compared line-by-line against design doc"
+  - "Every requirement in ./.hephaestus/requirements.md traced to a line in design.md"
   - "Any requirement NOT in design.md flagged as out-of-scope"
-  - "Any design doc requirement missing from ./.hephaestus/requirements_analysis.md flagged"
-  - "scope_review_result.md written to ./.hephaestus/scope_review/"
+  - "Any design doc requirement missing from ./.hephaestus/requirements.md flagged"
+  - "scope.md written to ./.hephaestus/scope_review/"
   - "Task marked as done with verdict PASS or FAIL"
 outputs:
-  - "scope_review_result.md"
+  - "scope.md"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
   Technical terms exact. No pleasantries (sure/certainly/happy to). 
@@ -42,7 +42,7 @@ additional_notes: |
   YOU ARE A SCOPE GATE — GUARD AGAINST REQUIREMENTS DRIFT
   ═══════════════════════════════════════════════════════════════════════
 
-  YOUR MISSION: Ensure requirements_analysis.md is a faithful, complete
+  YOUR MISSION: Ensure requirements.md is a faithful, complete
   extraction of the original design doc — nothing added, nothing dropped.
 
   Verdict is a judgment call, not a mechanical list-emptiness check (see
@@ -65,7 +65,7 @@ additional_notes: |
   cat ./.hephaestus/design.md
 
   # Read the extracted requirements
-  cat ./.hephaestus/requirements_analysis.md
+  cat ./.hephaestus/requirements.md
   ```
 
   If .hephaestus/design.md is missing, run:
@@ -75,27 +75,34 @@ additional_notes: |
   ```
   and use whatever design doc you find. Do NOT invent requirements.
 
+  **REQUIREMENT TRACKING:**
+  requirements.md should contain REQ-XX numbered requirements.
+  If they are missing or not numbered, add REQ-XX IDs during your review.
+  Reference these IDs when flagging scope issues:
+  - OUT-OF-SCOPE: REQ-XX that shouldn't exist
+  - MISSING: REQ-XX that should exist but doesn't
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 2: COMPARE LINE BY LINE
   ═══════════════════════════════════════════════════════════════════════
 
   For every functional requirement, feature, file, or function in
-  requirements_analysis.md, ask: "Is this explicitly in design.md?"
+  requirements.md, ask: "Is this explicitly in design.md?"
 
   Classify each as:
   - IN-SCOPE: Directly stated or clearly implied by design.md
   - OUT-OF-SCOPE: Added by the requirements agent, not in design.md
-  - MISSING: In design.md but absent from requirements_analysis.md
+  - MISSING: In design.md but absent from requirements.md
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: WRITE scope_review_result.md
+  STEP 3: WRITE scope.md
   ═══════════════════════════════════════════════════════════════════════
 
-  scope_review_result.md is ONE file: a YAML frontmatter block (machine-
+  scope.md is ONE file: a YAML frontmatter block (machine-
   readable, "verdict" MUST be at the frontmatter's top level, no nesting)
   followed by a short narrative summary.
 
-  Write ./.hephaestus/scope_review/scope_review_result.md with EXACTLY this
+  Write ./.hephaestus/scope_review/scope.md with EXACTLY this
   schema (type first, then a closing `---`, then a short summary
   immediately after):
 
@@ -134,11 +141,11 @@ additional_notes: |
     something design.md itself implies inconsistently (e.g. its own code
     example uses a value its schema comment omits). List every item you
     notice either way — non-empty lists do NOT force FAIL by themselves.
-  - out_of_scope: list of requirement strings present in requirements_analysis.md
-    but NOT in design.md (verbatim text from requirements_analysis.md), each
+  - out_of_scope: list of requirement strings present in requirements.md
+    but NOT in design.md (verbatim text from requirements.md), each
     still listed even when benign enough not to affect verdict.
   - missing: list of requirement strings present in design.md but absent from
-    requirements_analysis.md (verbatim text from design.md), each still
+    requirements.md (verbatim text from design.md), each still
     listed even when benign enough not to affect verdict.
   - correction_instructions: empty string if PASS; specific rewrites for the
     product_requirements agent if FAIL.
@@ -156,7 +163,7 @@ additional_notes: |
     The pipeline evaluation will send this back to product_requirements.
 
   RULES:
-  - Do NOT rewrite requirements_analysis.md yourself.
+  - Do NOT rewrite requirements.md yourself.
   - Do NOT approve a new capability/endpoint/table/workflow because it
     "seems reasonable" — that is real scope drift, mark FAIL.
   - Do NOT mark FAIL for minor wording differences or benign implementation

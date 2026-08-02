@@ -207,7 +207,7 @@ def _seed_qa_validation(test_db, tmp_path):
         Phase(
             id=phase_id, workflow_id=workflow_id, order=8,
             name="qa_validation", description="d", done_definitions=["done"],
-            outputs=json.dumps(["qa_report.md"]),
+            outputs=json.dumps(["qa.md"]),
         )
     )
     session.add(
@@ -226,7 +226,7 @@ def _seed_qa_validation(test_db, tmp_path):
 
 class TestGateResultSchemaFloor:
     """End-to-end regression for the live incident: a QA agent wrote
-    docs/qa_report.md in its own nested shape ({"overall_status": ...,
+    docs/qa.md in its own nested shape ({"overall_status": ...,
     "test_results": {"main_suite": {...}}}) instead of the documented flat
     schema. The declared-output floor passed (the file existed) but
     score_qa's field reads all silently defaulted to "everything passed"
@@ -236,7 +236,7 @@ class TestGateResultSchemaFloor:
         task_id, agent_id = _seed_qa_validation(test_db, tmp_path)
         docs = tmp_path / ".hephaestus" / "qa_validation"
         docs.mkdir(parents=True)
-        (docs / "qa_report.md").write_text(
+        (docs / "qa.md").write_text(
             "---\n"
             "overall_status: PASS\n"
             "test_results:\n"
@@ -266,7 +266,7 @@ class TestGateResultSchemaFloor:
         task_id, agent_id = _seed_qa_validation(test_db, tmp_path)
         docs = tmp_path / ".hephaestus" / "qa_validation"
         docs.mkdir(parents=True)
-        (docs / "qa_report.md").write_text(
+        (docs / "qa.md").write_text(
             "---\n"
             "type: qa_validation_result\n"
             "failed_tests: 0\n"

@@ -20,7 +20,7 @@ description: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
-  - Write ONE file, adversarial_review_report.md, to ./.hephaestus/adversarial_review/ —
+  - Write ONE file, adversarial.md, to ./.hephaestus/adversarial_review/ —
     a YAML frontmatter block (blocker_count/warning_count/nit_count, the
     gate input) followed by the full BLOCKER/WARNING/NIT findings report.
   - Use exactly that subdirectory name (./.hephaestus/adversarial_review/) — the
@@ -36,14 +36,14 @@ done_definitions:
   - "Code composition verified — high-level classes don't leak low-level details"
   - "Polymorphism used over conditionals where appropriate"
   - "Complex logic pushed down into lower-level files, classes, and functions"
-  - "adversarial_review_report.md written with a YAML frontmatter block (blocker_count/warning_count/nit_count, gate input) followed by the BLOCKER/WARNING/NIT findings"
+  - "adversarial.md written with a YAML frontmatter block (blocker_count/warning_count/nit_count, gate input) followed by the BLOCKER/WARNING/NIT findings"
   - "Each BLOCKER includes exact failure sequence and specific recommended fix"
   - "Task marked as done"
 outputs:
-  - "adversarial_review_report.md"
+  - "adversarial.md"
 next_steps:
-  - "Phase 7 doc review reads adversarial_review_report.md"
-  - "Phase 8 security review reads adversarial_review_report.md for security concerns"
+  - "Phase 7 doc review reads adversarial.md"
+  - "Phase 8 security review reads adversarial.md for security concerns"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler. Fragments OK. No pleasantries.
   Technical terms exact. Not: "I'll now review the code." Yes: "Trace exception paths."
@@ -59,7 +59,7 @@ additional_notes: |
   conditions, incorrect defaults, and crash scenarios that pass all tests but
   break in production.
 
-  Read architectural_review_report.md first — skip anything already fixed there.
+  Read review.md first — skip anything already fixed there.
 
   ═══════════════════════════════════════════════════════════════════════
   STEP 1: ORIENT
@@ -67,14 +67,20 @@ additional_notes: |
 
   CRITICAL PATH RULE: Your current working directory IS the project root.
   - Read all inputs from ./.hephaestus/ and the .hephaestus/ folder.
-  - Write adversarial_review_report.md to the "Artifacts Path" in your task.
+  - Write adversarial.md to the "Artifacts Path" in your task.
   - Do NOT edit any source code or tests. Your only output is the report.
     The developer will fix based on your findings.
 
   Read:
-  - architectural_review_report.md — what the architect already caught (skip those)
+  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth)
+  - requirements.md — contains REQ-XX requirement IDs to verify
+  - review.md — what the architect already caught (skip those)
   - src/ — ALL new or modified source files (read them in full, not excerpts)
   - tests/ — ALL new or modified test files
+
+  **REQUIREMENT TRACKING:**
+  requirements.md contains REQ-XX numbered requirements. Reference
+  these IDs when documenting findings that violate specific requirements.
 
   ═══════════════════════════════════════════════════════════════════════
   STEP 2: ATTACK VECTORS — WORK THROUGH EACH SYSTEMATICALLY
@@ -191,7 +197,7 @@ additional_notes: |
   IOError (out-of-scope: not specified in design.md)".
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: WRITE adversarial_review_report.md
+  STEP 4: WRITE adversarial.md
   ═══════════════════════════════════════════════════════════════════════
 
   Write the report to the Docs Path. This is your ONLY output — do NOT edit source.
@@ -233,10 +239,10 @@ additional_notes: |
   [Failure modes with no test — state the scenario and the missing assertion]
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: PREPEND STRUCTURED RESULT TO adversarial_review_report.md (NOT OPTIONAL)
+  STEP 5: PREPEND STRUCTURED RESULT TO adversarial.md (NOT OPTIONAL)
   ═══════════════════════════════════════════════════════════════════════
 
-  adversarial_review_report.md is ONE file: a YAML frontmatter block
+  adversarial.md is ONE file: a YAML frontmatter block
   followed by the full report above. The frontmatter is what drives the
   pipeline: if BLOCKERs are found, the pipeline sends the FULL report
   straight to the developer agent as its next task -- without a nonzero
@@ -292,7 +298,7 @@ additional_notes: |
   DO NOT:
   - Edit any source code or test files — report only
   - Review design compliance — that was architectural_review's job
-  - Report issues already addressed in architectural_review_report.md
+  - Report issues already addressed in review.md
   - Be vague ("this could fail") — show the exact failure path
   - Inflate severity to make the report look thorough
   - Skip any of the attack vectors in Step 2
@@ -306,6 +312,6 @@ additional_notes: |
 
   heph_complete_my_task(
     status="done",
-    summary="<brief summary: N BLOCKERs found, M WARNINGs found — see adversarial_review_report.md>",
+    summary="<brief summary: N BLOCKERs found, M WARNINGs found — see adversarial.md>",
     key_learnings=["<specific failure modes found>"]
   )

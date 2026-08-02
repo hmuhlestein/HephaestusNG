@@ -79,7 +79,7 @@ class TestWriteOkf:
         assert frontmatter_block.splitlines()[1] == "type: qa_validation_result"
 
     def test_creates_parent_directories(self, tmp_path):
-        path = tmp_path / "docs" / "qa_validation" / "qa_report.md"
+        path = tmp_path / "docs" / "qa_validation" / "qa.md"
 
         write_okf(path, {"type": "qa_validation_result"}, "body")
 

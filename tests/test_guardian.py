@@ -695,7 +695,7 @@ class TestGuardianPhaseContextUsesLiveRequiredOutput:
         (workflows_dir / "guardian_test_def").mkdir(parents=True)
         (workflows_dir / "guardian_test_def" / "workflow.yaml").write_text(
             "required_output:\n"
-            "  architectural_review: architectural_review_report.md\n"
+            "  architectural_review: review.md\n"
         )
         monkeypatch.setattr("src.workflow_registry._WORKFLOWS_DIR", workflows_dir)
 
@@ -718,7 +718,7 @@ class TestGuardianPhaseContextUsesLiveRequiredOutput:
                 # the phase still wrote a json+md pair.
                 outputs=_json.dumps(
                     [
-                        "architectural_review_report.md",
+                        "review.md",
                         "architectural_review_result.json",
                     ]
                 ),
@@ -748,7 +748,7 @@ class TestGuardianPhaseContextUsesLiveRequiredOutput:
             llm_provider=mock_llm_provider,
         )
         context = await guardian._get_phase_context("phase-1", "wf-1")
-        assert context["outputs"] == ["architectural_review_report.md"]
+        assert context["outputs"] == ["review.md"]
 
     @pytest.mark.asyncio
     async def test_non_file_outputs_survive_for_a_phase_with_no_override(

@@ -362,7 +362,7 @@ class TaskCompletionService:
 
     @staticmethod
     def _parse_forensics_recommendations(report_text: str) -> list:
-        """Extract actionable recommendations from a forensics_report.md.
+        """Extract actionable recommendations from a forensics.md.
 
         Expected shape (what agents actually produce — see
         forensics_analysis.yaml's own example):
@@ -458,7 +458,7 @@ class TaskCompletionService:
 
         from src.core.constants import CONTEXT_DIR_NAME
 
-        report_path = _Path(wf.working_directory) / CONTEXT_DIR_NAME / "forensics_report.md"
+        report_path = _Path(wf.working_directory) / CONTEXT_DIR_NAME / "forensics.md"
         if not report_path.exists():
             return 0
 
@@ -489,7 +489,7 @@ class TaskCompletionService:
                 created += 1
             except Exception as e:
                 logger.warning(f"[FORENSICS_TICKETS] Failed to create ticket for '{rec['title']}': {e}")
-        logger.info(f"[FORENSICS_TICKETS] Created {created}/{len(recommendations)} tickets from forensics_report.md")
+        logger.info(f"[FORENSICS_TICKETS] Created {created}/{len(recommendations)} tickets from forensics.md")
         return created
 
     @staticmethod
