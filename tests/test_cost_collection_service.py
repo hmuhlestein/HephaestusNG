@@ -296,8 +296,8 @@ class TestClaudeCodeCollector:
         entries, _ = collector.collect("s", "t", "w", "a", f, checkpoint=0)
 
         assert len(entries) == 1
-        # Expected: 1M * $3.75/M = $3.75
-        assert abs(entries[0]["cost_usd"] - 3.75) < 0.01
+        # Expected: 1M * $6.0/M = $6.00 (1h cache write rate for sonnet-4)
+        assert abs(entries[0]["cost_usd"] - 6.00) < 0.01
 
     def test_cache_read_cost(self):
         """Cache-read tokens use the cheapest rate."""
