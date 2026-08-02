@@ -192,13 +192,27 @@ class TestPiJsonlCollector:
         assert entries[0]["cache_read_tokens"] == 512
         assert entries[0]["reasoning_tokens"] == 99
 
-    def test_skip_zero_cost(self):
-        """Zero-cost entries are skipped."""
+    def test_skip_zero_cost_zero_tokens(self):
+        """Zero-cost entries with zero tokens are skipped (no usage at all)."""
+        line = _make_assistant_message(0.0)
+        # Override to have zero tokens
+        data = json.loads(line)
+        data["message"]["usage"]["input"] = 0
+        data["message"]["usage"]["output"] = 0
+        f = _make_temp_jsonl([json.dumps(data)])
+        collector = PiJsonlCollector()
+        entries, _ = collector.collect("s", "t", "w", "a", f, checkpoint=0)
+        assert len(entries) == 0
+
+    def test_keep_zero_cost_with_tokens(self):
+        """Zero-cost entries with real tokens are kept (local models)."""
         line = _make_assistant_message(0.0)
         f = _make_temp_jsonl([line])
         collector = PiJsonlCollector()
         entries, _ = collector.collect("s", "t", "w", "a", f, checkpoint=0)
-        assert len(entries) == 0
+        assert len(entries) == 1
+        assert entries[0]["cost_usd"] == 0.0
+        assert entries[0]["input_tokens"] == 5000
 
     def test_malformed_line_skipped(self):
         """Malformed JSON lines are skipped gracefully."""
@@ -466,17 +480,28 @@ def cost_db_session():
 
 def _make_task_agent_workflow(db, cli_type="pi", session_suffix="sess-abc123"):
     """Create the minimal Task/Agent/Workflow rows collect_task_cost needs."""
+    from src.core.database import Phase
     workflow = Workflow(
         id="wf-1",
         name="test",
         phases_folder_path="config/workflows/test",
         working_directory="/tmp/test-cwd",
+        launch_params={"project_path": "/tmp/test-project", "design_id": "des-test"},
+    )
+    phase = Phase(
+        id="phase-1",
+        workflow_id=workflow.id,
+        order=1,
+        name="development",
+        description="test phase",
+        done_definitions=["done"],
     )
     agent = Agent(
         id="agent-1",
         system_prompt="test",
         cli_type=cli_type,
         tmux_session_name=f"hephaestus-{session_suffix}",
+        cli_model="test-model",
     )
     task = Task(
         id="task-1",
@@ -484,8 +509,9 @@ def _make_task_agent_workflow(db, cli_type="pi", session_suffix="sess-abc123"):
         done_definition="test",
         workflow_id=workflow.id,
         assigned_agent_id=agent.id,
+        phase_id=phase.id,
     )
-    db.add_all([workflow, agent, task])
+    db.add_all([workflow, phase, agent, task])
     db.commit()
     return task, agent, workflow
 
