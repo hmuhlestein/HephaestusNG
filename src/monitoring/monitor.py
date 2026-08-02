@@ -82,6 +82,14 @@ _SPEND_LIMIT_RE = re.compile(
 # pi's status-line MCP indicator, e.g. "MCP: 0/1 servers". The denominator
 # group excludes "0/0" (no servers configured at all -- not a failure) by
 # requiring at least one digit that isn't a leading zero. Only observable
+
+# Context overflow: local model hit its context size limit. This is a hard
+# blocker for the current model — the agent can't continue without switching
+# to a model with a larger context window. Should trigger model fallback.
+_CONTEXT_OVERFLOW_RE = re.compile(
+    r"(?:exceed_context_size_error|exceeds the available context size)",
+    re.IGNORECASE,
+)
 # via AgentManager.get_agent_output -- get_agent_output returns raw output
 # as TUI chrome for every other caller.
 _MCP_DISCONNECTED_RE = re.compile(r"MCP:\s*0/[1-9]\d*\s*servers", re.IGNORECASE)
@@ -458,6 +466,23 @@ class MonitoringLoop:
                     pass  # best-effort; the mechanical-recovery check itself must not fail
                 return
             frozen_for = now - st["since"] if st["since"] else 0
+
+            # Context overflow: local model hit its context size limit.
+            # This is a hard blocker — the agent can't continue with the
+            # current model. Trigger model fallback immediately.
+            if _CONTEXT_OVERFLOW_RE.search(sig):
+                logger.warning(
+                    f"[CONTEXT-OVERFLOW] Agent {agent.id[:8]} ({agent.cli_type}) hit context size limit"
+                )
+                # Use the existing model fallback mechanism
+                if await self._detect_cli_model_fallback(agent):
+                    return True
+                # If no model fallback available, this is unrecoverable
+                # with the current model — log and let the stuck detection
+                # handle termination
+                logger.warning(
+                    f"[CONTEXT-OVERFLOW] No model fallback available for {agent.id[:8]}"
+                )
 
             # Session limit: hard blocker — can't recover, fail immediately.
             # This fires on an already-running agent mid-session (unlike
