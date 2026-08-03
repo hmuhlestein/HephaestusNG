@@ -1198,8 +1198,15 @@ class FrontendAPI:
                 if task.related_ticket_ids
                 else None,
             }
-        finally:
-            session.close()
+
+            # Get cost data for this task
+            from sqlalchemy import func
+            task_cost = session.query(func.sum(CostEntry.cost_usd)).filter(
+                CostEntry.task_id == task.id
+            ).scalar() or 0.0
+            result["cost_total_usd"] = round(task_cost, 4)
+
+            return result
 
     async def get_guardian_analyses(
         self, agent_id: str, limit: int = 50
