@@ -312,11 +312,27 @@ class WorkflowTerminationHandler:
 
             for execution in phase_executions:
                 try:
-                    execution.status = "completed"
+                    # Only mark as completed if the phase actually had work done.
+                    # Phases that were pending or never started should be marked as
+                    # failed/terminated, not completed.
+                    if execution.status == "in_progress":
+                        # Check if there are any done tasks for this phase
+                        done_tasks = session.query(Task).filter(
+                            Task.phase_id == execution.phase_id,
+                            Task.status == "done"
+                        ).count()
+                        if done_tasks > 0:
+                            execution.status = "completed"
+                            execution.completion_summary = "Completed due to workflow termination"
+                        else:
+                            execution.status = "failed"
+                            execution.completion_summary = "Failed due to workflow termination (no completed work)"
+                    elif execution.status == "pending":
+                        execution.status = "failed"
+                        execution.completion_summary = "Failed due to workflow termination (never started)"
+                    # Already completed executions stay completed
+                    
                     execution.completed_at = datetime.utcnow()
-                    execution.completion_summary = (
-                        "Completed due to workflow termination by validated result"
-                    )
                     cleanup_actions.append(
                         {
                             "action": "complete_phase_execution",
