@@ -4862,9 +4862,25 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
             reason_text = "; ".join(reasons) if reasons else "no reason recorded"
             logger.warning(
                 f"[PHASE-ADVANCE] Phase {phase.name} has {len(failed_tasks)} failed "
-                f"task(s), all past the retry cap ({max_retry_count}) -- pausing "
-                f"the workflow instead of retrying forever: {reason_text}"
+                f"task(s), all past the retry cap ({max_retry_count})"
             )
+            # Check if there are still pending tasks in other phases —
+            # don't pause the workflow if there's still work to do.
+            other_pending = (
+                db.query(Task)
+                .filter(
+                    Task.workflow_id == phase.workflow_id,
+                    Task.phase_id != phase.id,
+                    Task.status == "pending",
+                )
+                .count()
+            )
+            if other_pending > 0:
+                logger.info(
+                    f"[PHASE-ADVANCE] {phase.name} exhausted retries but {other_pending} "
+                    f"pending tasks remain in other phases — not pausing workflow"
+                )
+                return None
             workflow = db.query(Workflow).filter_by(id=phase.workflow_id).first()
             if workflow and workflow.status != "paused":
                 workflow.status = "paused"
