@@ -24,9 +24,9 @@ const CostDisplay: React.FC<CostDisplayProps> = ({
 
   const formatCost = (cost: number): string => {
     if (cost >= 1000) {
-      return `$${(cost / 1000).toFixed(1)}k`;
+      return `${(cost / 1000).toFixed(1)}k`;
     }
-    return `$${cost.toFixed(2)}`;
+    return cost.toFixed(2);
   };
 
   return (
