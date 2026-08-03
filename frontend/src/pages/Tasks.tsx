@@ -170,11 +170,12 @@ const Tasks: React.FC = () => {
   const [filters, setFilters] = useState<TaskFilters>({
     searchText: searchParams.get('search') || '',
     status: 'all',
-    phase: 'all',
+    phase: searchParams.get('phase') || 'all',
     priority: 'all',
     assignment: 'all',
     dateRange: 'all',
   });
+  const workflowFilter = searchParams.get('workflow') || '';
   const [newTaskIds, setNewTaskIds] = useState<Set<string>>(new Set());
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const { subscribe } = useWebSocket();
@@ -265,6 +266,11 @@ const Tasks: React.FC = () => {
         if (filters.phase !== 'no-phase' && task.phase_name !== filters.phase) {
           return false;
         }
+      }
+
+      // Workflow filter (from URL param)
+      if (workflowFilter && task.workflow_id !== workflowFilter) {
+        return false;
       }
 
       // Priority filter
