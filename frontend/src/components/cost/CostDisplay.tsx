@@ -1,5 +1,5 @@
 import React from 'react';
-import { DollarSign, AlertTriangle } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 
 interface CostDisplayProps {
   currentCost: number;
@@ -24,14 +24,13 @@ const CostDisplay: React.FC<CostDisplayProps> = ({
 
   const formatCost = (cost: number): string => {
     if (cost >= 1000) {
-      return `${(cost / 1000).toFixed(1)}k`;
+      return `$${(cost / 1000).toFixed(1)}k`;
     }
-    return cost.toFixed(2);
+    return `$${cost.toFixed(2)}`;
   };
 
   return (
     <div className={`flex items-center gap-2 ${className}`}>
-      <DollarSign className="w-4 h-4 text-gray-500" />
       <span className="font-mono text-sm font-medium">
         {formatCost(currentCost)}
       </span>
