@@ -4713,14 +4713,16 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                     )
                     .all()
                 )
-                # Filter to retryable tasks (orphaned and session limits are always retryable)
+                # Filter to retryable tasks (orphaned, session limits, and stuck tasks are always retryable)
                 max_retry_count = 2
                 _limit_failure = lambda r: "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
+                _stuck_failure = lambda r: "task stuck" in (r or "").lower()
                 retryable_tasks = [
                     t for t in failed_tasks
                     if (t.retry_count or 0) < max_retry_count
                     or "Orphaned" in (t.failure_reason or "")
                     or _limit_failure(t.failure_reason)
+                    or _stuck_failure(t.failure_reason)
                 ]
                 if retryable_tasks:
                     logger.info(f"[PHASE-ADVANCE] {phase.name} has {done_count} done but {len(retryable_tasks)} failed tasks to retry")
@@ -4843,15 +4845,17 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
             .filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter)
             .all()
         )
-        # Orphaned tasks (never dispatched) and session/spend limit failures
-        # are not agent faults -- they should always be retryable. Session
-        # limit failures will use the fallback model on retry.
+        # Orphaned tasks (never dispatched), session/spend limit failures,
+        # and stuck-task failures are not agent faults -- they should always
+        # be retryable. Session limit failures will use the fallback model on retry.
         _limit_failure = lambda r: "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
+        _stuck_failure = lambda r: "task stuck" in (r or "").lower()
         retryable_tasks = [
             t for t in failed_tasks
             if (t.retry_count or 0) < max_retry_count
             or "Orphaned" in (t.failure_reason or "")
             or _limit_failure(t.failure_reason)
+            or _stuck_failure(t.failure_reason)
         ]
         if not retryable_tasks:
             reasons = sorted({t.failure_reason for t in failed_tasks if t.failure_reason})
