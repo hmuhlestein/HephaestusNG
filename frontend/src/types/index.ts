@@ -234,6 +234,7 @@ export interface TaskFullDetails {
   system_prompt: string | null;
   user_prompt: string;
   workflow_id: string | null;
+  cost_total_usd?: number;
   action?: string | null;
   action_target_phase?: string | null;
   // Task deduplication fields

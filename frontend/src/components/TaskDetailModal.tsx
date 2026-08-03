@@ -8,6 +8,7 @@ import {
   X,
   FileText,
   Clock,
+  DollarSign,
   User,
   Bot,
   Copy,
@@ -479,6 +480,13 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                     <div className="w-2 h-2 bg-green-400 rounded-full ml-2 animate-pulse" />
                   )}
                 </div>
+
+                {taskDetails.cost_total_usd != null && taskDetails.cost_total_usd > 0 && (
+                  <div className="flex items-center text-gray-600 dark:text-gray-400">
+                    <DollarSign className="w-4 h-4 mr-2" />
+                    <span className="font-mono">${taskDetails.cost_total_usd.toFixed(4)}</span>
+                  </div>
+                )}
 
                 <div className="text-gray-600 dark:text-gray-400">
                   Priority: <span className={`font-medium ${
