@@ -1524,7 +1524,14 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
         # issues, not agent failures -- they should retry indefinitely.
         retry_count = task.get("retry_count", 0)
         is_orphan = "Orphaned" in (task.get("failure_reason") or "")
-        if retry_count >= 2 and not is_orphan:
+        # Read max_task_retries from workflow config, default to 5
+        try:
+            from src.autopilot.spec import load_workflow_definition
+            wf_def = load_workflow_definition(workflow_id)
+            max_retry = wf_def.get("orchestrator", {}).get("max_task_retries", 5)
+        except Exception:
+            max_retry = 5
+        if retry_count >= max_retry and not is_orphan:
             logger.info(
                 f"  Task {task_id[:8]} failed {retry_count} times - skipping retry"
             )
@@ -4714,7 +4721,13 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                     .all()
                 )
                 # Filter to retryable tasks (orphaned, session limits, and stuck tasks are always retryable)
-                max_retry_count = 2
+                # Read max_task_retries from workflow config, default to 5
+                try:
+                    from src.autopilot.spec import load_workflow_definition
+                    wf_def = load_workflow_definition(phase.workflow_id)
+                    max_retry_count = wf_def.get("orchestrator", {}).get("max_task_retries", 5)
+                except Exception:
+                    max_retry_count = 5
                 _limit_failure = lambda r: "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
                 _stuck_failure = lambda r: "task stuck" in (r or "").lower()
                 retryable_tasks = [
@@ -4839,7 +4852,13 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
         # re-dispatched every single poll cycle forever, burning a cycle
         # every few seconds indefinitely and starving every other
         # workflow's turn in the same poll loop. Observed live.
-        max_retry_count = 2
+        # Read max_task_retries from workflow config, default to 5
+        try:
+            from src.autopilot.spec import load_workflow_definition
+            wf_def = load_workflow_definition(phase.workflow_id)
+            max_retry_count = wf_def.get("orchestrator", {}).get("max_task_retries", 5)
+        except Exception:
+            max_retry_count = 5
         failed_tasks = (
             db.query(Task)
             .filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter)

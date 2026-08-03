@@ -1149,6 +1149,21 @@ const TaskRow: React.FC<{
               done
             </span>
           )}
+          {task.created_at && (
+            <span className="text-[10px] text-gray-400">
+              {formatElapsed(
+                Math.floor(
+                  ((task.completed_at ? new Date(task.completed_at).getTime() : Date.now()) -
+                    new Date(task.created_at).getTime()) / 1000
+                )
+              )}
+            </span>
+          )}
+          {task.cost_total_usd > 0 && (
+            <span className="text-[10px] text-gray-400">
+              ${task.cost_total_usd.toFixed(2)}
+            </span>
+          )}
         </div>
         <p
           className="text-xs text-gray-500 truncate leading-relaxed"

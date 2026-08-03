@@ -1531,7 +1531,7 @@ class TestRetryFailedTasks:
         from src.autopilot.orchestrator import OrchestratorLogger, _retry_failed_tasks
         from src.core.database import Task
 
-        self._make_workflow_and_failed_task(orch_db_env, retry_count=2)
+        self._make_workflow_and_failed_task(orch_db_env, retry_count=5)
 
         recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
 
@@ -1540,7 +1540,7 @@ class TestRetryFailedTasks:
         with orch_db_env.session_scope() as session:
             task = session.query(Task).filter_by(id="task-1").first()
             assert task.status == "failed"
-            assert task.retry_count == 2
+            assert task.retry_count == 5
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct", return_value=None)
     def test_agent_dispatch_failure_lands_back_on_failed_not_stuck_pending(
@@ -2925,17 +2925,20 @@ class TestAttemptRecovery:
         logger = OrchestratorLogger(Path("/tmp/logs"))
         attempt_recovery("wf-1", logger)
         attempt_recovery("wf-1", logger)
+        attempt_recovery("wf-1", logger)
+        attempt_recovery("wf-1", logger)
+        attempt_recovery("wf-1", logger)
         with orch_db_env.session_scope() as session:
             task = session.query(Task).filter_by(id="t1").first()
-            assert task.retry_count == 2
+            assert task.retry_count == 5
 
-        # Third call must skip retrying entirely -- retry_count already at cap
+        # Sixth call must skip retrying entirely -- retry_count already at cap
         calls_before = mock_create_agent.call_count
         attempt_recovery("wf-1", logger)
         assert mock_create_agent.call_count == calls_before
         with orch_db_env.session_scope() as session:
             task = session.query(Task).filter_by(id="t1").first()
-            assert task.retry_count == 2  # unchanged -- never even attempted
+            assert task.retry_count == 5  # unchanged -- never even attempted
 
     @patch("src.autopilot.orchestrator.get_db")
     @patch("src.autopilot.orchestrator.api_post")
@@ -2953,7 +2956,7 @@ class TestAttemptRecovery:
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_tasks.side_effect = [
-            [{"id": "t1", "retry_count": 2, "phase_id": "p1"}],  # already retried 2x
+            [{"id": "t1", "retry_count": 5, "phase_id": "p1"}],  # already retried 5x
         ]
         mock_agents.return_value = []
         success, msg = attempt_recovery("wf-1", logger)

@@ -44,6 +44,7 @@ optional_phases:
 orchestrator:
   type: evaluating
   max_phase_retries: 2
+  max_task_retries: 5
   max_total_gotos: 30
   evaluation_points:
     - after_phase: scope_review
