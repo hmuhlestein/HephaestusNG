@@ -4683,6 +4683,33 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                 return result
             continue  # No completed tasks yet
 
+        # Before marking phase as complete, check if there are failed tasks
+        # that should be retried. A phase with done tasks AND failed tasks
+        # is NOT complete — the failed tasks need retry first.
+        failed_count = (
+            db.query(Task)
+            .filter(
+                Task.phase_id == phase.id,
+                Task.status == "failed",
+                ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+                *cycle_filter,
+            )
+            .count()
+        )
+        if failed_count > 0:
+            # Has failed tasks — try to retry them before marking complete
+            if not _claim_phase_task_creation(db, phase.id):
+                continue
+            try:
+                result = _maybe_retry_failed_tasks(db, phase, logger, cycle_start=cycle_start)
+            finally:
+                _release_phase_task_creation_claim(db, phase.id)
+            if result is not None:
+                logger.info(f"[PHASE-ADVANCE] {phase.name} has {done_count} done but {failed_count} failed — retrying failed tasks")
+                return result
+            # If retry returned None, all failed tasks are past retry cap
+            # — let the phase complete with what we have
+
         # Phase is complete — fire transition. mark_phase_complete's engine
         # evaluation can take minutes (an LLM call in phase_manager.py), and
         # nothing previously stopped a concurrent poll (this same
