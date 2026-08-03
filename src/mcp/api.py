@@ -1207,6 +1207,8 @@ class FrontendAPI:
             result["cost_total_usd"] = round(task_cost, 4)
 
             return result
+        finally:
+            session.close()
 
     async def get_guardian_analyses(
         self, agent_id: str, limit: int = 50
