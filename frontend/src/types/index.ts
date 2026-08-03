@@ -10,6 +10,7 @@ export interface Agent {
   created_at: string;
   terminated_at: string | null;
   last_activity: string | null;
+  cost_total_usd?: number;
   workflow?: {
     id: string;
     name: string;
