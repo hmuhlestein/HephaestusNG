@@ -851,14 +851,34 @@ class TaskCompletionService:
         missing = []
         for declared_output in required_files:
             found = False
-            for candidate in [
-                _Path(wf.working_directory) / CONTEXT_DIR_NAME / phase.name / declared_output,
-                _Path(wf.working_directory) / declared_output,
-                _Path(wf.working_directory) / CONTEXT_DIR_NAME / declared_output,
-            ]:
-                if candidate.exists():
-                    found = True
+            # Map new file names to old names for backward compatibility
+            _old_name_map = {
+                "docs.md": "doc_review_report.md",
+                "summary.md": "code_summary.md",
+                "security.md": "security_report.md",
+                "review.md": "architectural_review_report.md",
+                "adversarial.md": "adversarial_review_report.md",
+                "qa.md": "qa_report.md",
+                "validation.md": "product_validation.md",
+                "requirements.md": "requirements_analysis.md",
+                "scope.md": "scope_review_result.md",
+                "forensics.md": "forensics_report.md",
+            }
+            old_name = _old_name_map.get(declared_output)
+            names_to_check = [declared_output] + ([old_name] if old_name else [])
+
+            for name in names_to_check:
+                if found:
                     break
+                for candidate in [
+                    _Path(wf.working_directory) / CONTEXT_DIR_NAME / phase.name / name,
+                    _Path(wf.working_directory) / name,
+                    _Path(wf.working_directory) / CONTEXT_DIR_NAME / name,
+                    _Path(wf.working_directory) / "docs" / name,
+                ]:
+                    if candidate.exists():
+                        found = True
+                        break
             if not found:
                 missing.append(declared_output)
 
