@@ -511,6 +511,14 @@ class AgentManager:
             # 4. Create tmux session IN THE WORKTREE with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)
             cli_agent.prepare_working_directory(branch_path)
+
+            # Create phase-specific output directory in .hephaestus/ so agents
+            # don't have to create it themselves
+            if task.phase_id:
+                from pathlib import Path as _Path
+                phase_output_dir = _Path(branch_path) / ".hephaestus" / (phase_name or task.phase_id)
+                phase_output_dir.mkdir(parents=True, exist_ok=True)
+
             session_name = f"{self.config.tmux_session_prefix}_{agent_id[:8]}"
             tmux_session = self._create_tmux_session(
                 session_name, working_directory=branch_path, env_vars=env_vars
@@ -1915,6 +1923,14 @@ class AgentManager:
             cli_agent = get_cli_agent(agent.cli_type)
             if restart_wd:
                 cli_agent.prepare_working_directory(restart_wd)
+
+                # Create phase-specific output directory in .hephaestus/ so agents
+                # don't have to create it themselves
+                if task.phase_id:
+                    from pathlib import Path as _Path
+                    phase_output_dir = _Path(restart_wd) / ".hephaestus" / (restart_phase_name or task.phase_id)
+                    phase_output_dir.mkdir(parents=True, exist_ok=True)
+
             tmux_session = self._create_tmux_session(
                 new_session_name, working_directory=restart_wd, env_vars=env_vars
             )
