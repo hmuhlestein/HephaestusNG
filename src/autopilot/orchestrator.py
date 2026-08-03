@@ -4701,14 +4701,56 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             if not _claim_phase_task_creation(db, phase.id):
                 continue
             try:
-                result = _maybe_retry_failed_tasks(db, phase, logger, cycle_start=cycle_start)
+                # _maybe_retry_failed_tasks only retries when ALL tasks are failed.
+                # When we have done + failed, we need to retry the failed ones directly.
+                failed_tasks = (
+                    db.query(Task)
+                    .filter(
+                        Task.phase_id == phase.id,
+                        Task.status == "failed",
+                        ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+                        *cycle_filter,
+                    )
+                    .all()
+                )
+                # Filter to retryable tasks (orphaned and session limits are always retryable)
+                max_retry_count = 2
+                _limit_failure = lambda r: "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
+                retryable_tasks = [
+                    t for t in failed_tasks
+                    if (t.retry_count or 0) < max_retry_count
+                    or "Orphaned" in (t.failure_reason or "")
+                    or _limit_failure(t.failure_reason)
+                ]
+                if retryable_tasks:
+                    logger.info(f"[PHASE-ADVANCE] {phase.name} has {done_count} done but {len(retryable_tasks)} failed tasks to retry")
+                    for task in retryable_tasks:
+                        if task.failure_reason:
+                            base = task.enriched_description or task.raw_description or ""
+                            task.enriched_description = f"{base}\n\n--- RETRY: your previous attempt failed ---\n{task.failure_reason}"
+                        task.status = "pending"
+                        task.failure_reason = None
+                        task.retry_count = (task.retry_count or 0) + 1
+                    db.commit()
+                    # Dispatch agents for the retried tasks
+                    for task in retryable_tasks:
+                        try:
+                            agent_data = create_agent_for_task_direct(
+                                task.id, phase.workflow_id, phase.id
+                            )
+                            if agent_data:
+                                task.assigned_agent_id = agent_data.get("agent_id")
+                                task.status = "in_progress"
+                                task.started_at = datetime.utcnow()
+                        except Exception as e:
+                            logger.error(f"[PHASE-ADVANCE] Failed to dispatch retry agent for task {task.id[:8]}: {e}")
+                    db.commit()
+                    return True
+                else:
+                    # All failed tasks past retry cap — let phase complete
+                    logger.warning(f"[PHASE-ADVANCE] {phase.name} has {failed_count} failed tasks all past retry cap — letting phase complete")
             finally:
                 _release_phase_task_creation_claim(db, phase.id)
-            if result is not None:
-                logger.info(f"[PHASE-ADVANCE] {phase.name} has {done_count} done but {failed_count} failed — retrying failed tasks")
-                return result
-            # If retry returned None, all failed tasks are past retry cap
-            # — let the phase complete with what we have
 
         # Phase is complete — fire transition. mark_phase_complete's engine
         # evaluation can take minutes (an LLM call in phase_manager.py), and
