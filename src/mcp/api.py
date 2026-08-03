@@ -15,6 +15,7 @@ from src.core.database import (
     Agent,
     AgentLog,
     AgentResult,
+    CostEntry,
     DatabaseManager,
     Memory,
     Phase,
