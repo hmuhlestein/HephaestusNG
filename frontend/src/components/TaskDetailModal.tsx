@@ -22,6 +22,7 @@ import {
   Eye,
   GitBranch,
   Target,
+  History,
   Navigation,
   ArrowUp,
   ArrowDown,
@@ -501,6 +502,14 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                     >
                       {taskDetails.id.slice(0, 12)}...
                       <Copy className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => navigate(`/tasks?search=${taskDetails.id}`)}
+                      className="ml-2 text-xs text-violet-600 dark:text-violet-400 hover:underline flex items-center gap-1"
+                      title="View task history"
+                    >
+                      <History className="w-3 h-3" />
+                      History
                     </button>
                   </div>
 
