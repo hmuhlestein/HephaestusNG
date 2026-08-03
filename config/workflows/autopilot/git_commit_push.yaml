@@ -12,6 +12,7 @@ description: |
   4. Record commit hash and PR URL
 done_definitions:
   - "Current branch and remote confirmed (or no-remote noted)"
+  - "No open bug tickets blocking the merge"
   - "All eligible changes staged (git add -A or explicit file list)"
   - "Descriptive commit message created (or nothing to commit confirmed)"
   - "Commit created on feature branch (or confirmed already committed)"
@@ -170,6 +171,27 @@ additional_notes: |
   - Create a new feature branch — you are already on one
   - Commit secrets or API keys
   - Force push without explicit instructions
+  - Attempt to fix bugs or code issues yourself — if there are open bug tickets,
+    mark the task as FAILED with a message indicating bugs need to be fixed first.
+    The orchestrator will route back to development to resolve them.
+
+  ═══════════════════════════════════════════════════════════════════════
+  BUG TICKET HANDLING
+  ═══════════════════════════════════════════════════════════════════════
+
+  Before attempting to merge, check for open bug tickets:
+  ```bash
+  # Check via MCP if available
+  heph_search_tickets(status="open", ticket_type="bug")
+  ```
+
+  If open bug tickets exist:
+  1. Do NOT attempt to fix the bugs yourself
+  2. Do NOT merge code with known bugs
+  3. Mark the task as FAILED with reason: "Open bug tickets must be resolved before merge: <ticket details>"
+  4. The orchestrator will automatically route back to development to fix the bugs
+
+  If no open bug tickets exist, proceed with the merge normally.
   
   ═══════════════════════════════════════════════════════════════════════
   WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
