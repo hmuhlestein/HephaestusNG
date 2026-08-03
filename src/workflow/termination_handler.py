@@ -76,8 +76,9 @@ class WorkflowTerminationHandler:
                 f"Performed {len(cleanup_actions)} cleanup actions for workflow {workflow_id}"
             )
 
-            # 4. Mark workflow as completed by result
-            workflow.status = "completed"
+            # 4. Mark workflow as failed (not completed) - this was a termination
+            workflow.status = "failed"
+            workflow.status_reason = workflow.status_reason or "Workflow terminated"
             workflow.completed_by_result = True
             session.commit()
 
