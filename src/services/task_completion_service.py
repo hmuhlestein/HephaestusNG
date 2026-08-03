@@ -171,6 +171,9 @@ class TaskCompletionService:
                     # dir as an internal orchestration artifact rather than
                     # a phase-scoped deliverable.
                     _Path(wf.working_directory) / CONTEXT_DIR_NAME / declared_output,
+                    # Also check docs/ directory — agents sometimes write
+                    # there despite instructions to use .hephaestus/
+                    _Path(wf.working_directory) / "docs" / declared_output,
                 ]:
                     if candidate.exists():
                         found_path = candidate
