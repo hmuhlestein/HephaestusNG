@@ -504,9 +504,9 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                       <Copy className="w-3 h-3" />
                     </button>
                     <button
-                      onClick={() => navigate(`/tasks?search=${taskDetails.id}`)}
+                      onClick={() => navigate(`/tasks?workflow=${taskDetails.workflow_id}&phase=${taskDetails.phase_info?.name || ''}`)}
                       className="ml-2 text-xs text-violet-600 dark:text-violet-400 hover:underline flex items-center gap-1"
-                      title="View task history"
+                      title="View all tasks for this phase"
                     >
                       <History className="w-3 h-3" />
                       History
