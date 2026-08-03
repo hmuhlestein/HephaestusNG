@@ -414,6 +414,13 @@ class FrontendAPI:
                                     "order": phase.order,
                                 }
 
+                # Get cost data for this agent
+                from sqlalchemy import func
+                agent_cost = session.query(func.sum(CostEntry.cost_usd)).filter(
+                    CostEntry.agent_id == agent.id
+                ).scalar() or 0.0
+                agent_data["cost_total_usd"] = round(agent_cost, 4)
+
                 result.append(agent_data)
 
             return result
