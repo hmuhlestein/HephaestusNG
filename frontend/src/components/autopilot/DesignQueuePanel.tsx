@@ -550,6 +550,19 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
   });
   const [features, setFeatures] = useState<any[]>([]);
 
+  // Calculate elapsed time from features' tasks
+  const designElapsedSeconds = features.reduce((acc: number, f: any) => {
+    const tasks = f.tasks || [];
+    return acc + tasks.reduce((taskAcc: number, t: any) => {
+      if (t.created_at) {
+        const start = new Date(t.created_at).getTime();
+        const end = t.completed_at ? new Date(t.completed_at).getTime() : Date.now();
+        return taskAcc + Math.max(0, (end - start) / 1000);
+      }
+      return taskAcc;
+    }, 0);
+  }, 0);
+
   const fetchFeatures = async () => {
     if (!projectId) return;
     try {
@@ -679,6 +692,11 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                 <CostDisplay currentCost={costTotal} showProgress={false} className="text-xs" />
               )
             )}
+            {designElapsedSeconds > 0 && (
+              <span className="text-xs text-gray-400">
+                {formatElapsed(designElapsedSeconds)}
+              </span>
+            )}
             {status && status !== 'pending' && (
               <StatusBadge status={status} pausedBy={pausedBy} />
             )}
@@ -776,6 +794,14 @@ export const FeatureStatusBadge: React.FC<{ status: string }> = ({ status }) => 
   );
 };
 
+const formatElapsed = (seconds: number): string => {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+};
+
 const FeatureRow: React.FC<{
   feature: any;
   onTaskClick: (taskId: string) => void;
@@ -799,6 +825,16 @@ const FeatureRow: React.FC<{
   const tasks = feature.tasks || [];
   const doneCount = tasks.filter((t: any) => t.status === 'done').length;
   const activeCount = tasks.filter((t: any) => ['in_progress', 'assigned'].includes(t.status)).length;
+
+  // Calculate elapsed time from tasks
+  const elapsedSeconds = tasks.reduce((acc: number, t: any) => {
+    if (t.created_at) {
+      const start = new Date(t.created_at).getTime();
+      const end = t.completed_at ? new Date(t.completed_at).getTime() : Date.now();
+      return acc + Math.max(0, (end - start) / 1000);
+    }
+    return acc;
+  }, 0);
 
   // The Feature Architect (Phase 0) and placeholder entries aren't real
   // `Feature` DB rows (see the synthetic ids built in autopilot_api.py), so
@@ -896,6 +932,11 @@ const FeatureRow: React.FC<{
           <span className="text-xs text-gray-400">
             {doneCount}/{tasks.length} tasks
           </span>
+          {elapsedSeconds > 0 && (
+            <span className="text-xs text-gray-400">
+              {formatElapsed(elapsedSeconds)}
+            </span>
+          )}
           {activeCount > 0 && (
             <span className="text-xs text-blue-500">
               {activeCount} active
