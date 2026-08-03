@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, CheckCircle2, RotateCcw, Clock, DollarSign, Layers, Eye } from 'lucide-react';
+import { X, CheckCircle2, RotateCcw, Clock, DollarSign, Layers, Eye, FileText, ListChecks } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { StatusBadge, StatusIcon, formatTime } from '@/pages/Autopilot';
 import toast from 'react-hot-toast';
@@ -18,6 +18,7 @@ interface FeatureReviewModalProps {
 const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feature, projectId, onClose }) => {
   const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState('');
+  const [activeTab, setActiveTab] = useState<'report' | 'requirements'>('report');
 
   // Only load docs (to detect report presence); metadata comes from `feature` prop.
   const { data: featureDocs } = useQuery({
@@ -28,6 +29,23 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
   const reportDoc = featureDocs?.docs.find((d: any) => d.name === 'feature_report.html');
   // Also accept has_report from the feature prop as a fallback while docs load
   const hasReport = !!reportDoc || !!feature?.has_report;
+
+  // Fetch requirements document
+  const { data: requirementsDoc } = useQuery({
+    queryKey: ['autopilot-feature-requirements', featureId],
+    queryFn: async () => {
+      try {
+        const docs = await apiService.getFeatureRecordDocs(featureId!);
+        const reqDoc = docs.docs.find((d: any) => d.name === 'requirements.md' || d.name === 'requirements_analysis.md');
+        if (reqDoc) {
+          const result = await apiService.getFeatureRecordDoc(featureId!, reqDoc.name);
+          return result.content;
+        }
+      } catch {}
+      return null;
+    },
+    enabled: !!featureId && activeTab === 'requirements',
+  });
 
   const reviewMutation = useMutation({
     mutationFn: ({ action, fb }: { action: 'approve' | 'request_changes'; fb?: string }) =>
@@ -102,20 +120,65 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
 
           {/* Body — split pane */}
           <div className="flex-1 flex overflow-hidden min-h-0">
-            {/* Left: HTML report iframe */}
-            <div className="flex-1 min-w-0 border-r border-gray-100 bg-gray-950">
-              {hasReport ? (
-                <iframe
-                  src={`/api/autopilot/feature-records/${encodeURIComponent(featureId)}/report`}
-                  className="w-full h-full border-0"
-                  title="Feature Report"
-                />
-              ) : (
-                <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-3">
-                  <Eye className="w-10 h-10 text-gray-600" />
-                  <p className="text-sm">Report not yet available</p>
-                </div>
-              )}
+            {/* Left: content area with tabs */}
+            <div className="flex-1 min-w-0 border-r border-gray-100 bg-gray-950 flex flex-col">
+              {/* Tab bar */}
+              <div className="flex-none flex border-b border-gray-800">
+                <button
+                  onClick={() => setActiveTab('report')}
+                  className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                    activeTab === 'report'
+                      ? 'text-white border-b-2 border-amber-500 bg-gray-900'
+                      : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  <Eye className="w-4 h-4" />
+                  Report
+                </button>
+                <button
+                  onClick={() => setActiveTab('requirements')}
+                  className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                    activeTab === 'requirements'
+                      ? 'text-white border-b-2 border-amber-500 bg-gray-900'
+                      : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  <ListChecks className="w-4 h-4" />
+                  Requirements
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 min-h-0">
+                {activeTab === 'report' ? (
+                  hasReport ? (
+                    <iframe
+                      src={`/api/autopilot/feature-records/${encodeURIComponent(featureId)}/report`}
+                      className="w-full h-full border-0"
+                      title="Feature Report"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-3">
+                      <Eye className="w-10 h-10 text-gray-600" />
+                      <p className="text-sm">Report not yet available</p>
+                    </div>
+                  )
+                ) : (
+                  /* Requirements tab */
+                  <div className="h-full overflow-y-auto p-6">
+                    {requirementsDoc ? (
+                      <div className="prose prose-sm prose-invert max-w-none">
+                        <pre className="whitespace-pre-wrap text-sm text-gray-300 leading-relaxed">{requirementsDoc}</pre>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-3">
+                        <FileText className="w-10 h-10 text-gray-600" />
+                        <p className="text-sm">Requirements not yet available</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Right: review panel */}

@@ -413,7 +413,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
 const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
   pending: { color: 'bg-gray-100 text-gray-600', icon: <Clock className="w-3 h-3" />, label: 'Pending' },
   active: { color: 'bg-blue-100 text-blue-700', icon: <Loader2 className="w-3 h-3 animate-spin" />, label: 'Active' },
-  paused: { color: 'bg-yellow-100 text-yellow-700', icon: <Clock className="w-3 h-3" />, label: 'Paused' },
+  paused: { color: 'bg-yellow-100 text-yellow-700', icon: <Pause className="w-3 h-3" />, label: 'Paused' },
   completed: { color: 'bg-green-100 text-green-700', icon: <CheckCircle2 className="w-3 h-3" />, label: 'Done' },
   failed: { color: 'bg-red-100 text-red-700', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
 };
@@ -761,6 +761,7 @@ const FEATURE_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNo
   active: { color: 'bg-blue-100 text-blue-700', icon: <Loader2 className="w-3 h-3 animate-spin" />, label: 'Active' },
   completed: { color: 'bg-green-100 text-green-700', icon: <CheckCircle2 className="w-3 h-3" />, label: 'Done' },
   failed: { color: 'bg-red-100 text-red-700', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
+  paused: { color: 'bg-yellow-100 text-yellow-700', icon: <Pause className="w-3 h-3" />, label: 'Paused' },
   skipped: { color: 'bg-gray-100 text-gray-500', icon: <Clock className="w-3 h-3" />, label: 'Skipped' },
 };
 
@@ -902,7 +903,7 @@ const FeatureRow: React.FC<{
           )}
           <FeatureCostBadge cost={feature.cost_total_usd ?? 0} />
           <FeatureStatusBadge status={feature.status} />
-          {reviewPending && (
+          {reviewPending && feature.status === 'completed' && (
             <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-100 text-amber-700 border border-amber-300 animate-pulse">
               Review
             </span>
@@ -940,7 +941,7 @@ const FeatureRow: React.FC<{
               <FileBarChart2 className="w-3.5 h-3.5" />
             </button>
           )}
-          {reviewPending && onReviewFeature && (
+          {reviewPending && feature.status === 'completed' && onReviewFeature && (
             <button
               onClick={(e) => { e.stopPropagation(); onReviewFeature(feature.id, feature); }}
               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-sm transition-colors"
