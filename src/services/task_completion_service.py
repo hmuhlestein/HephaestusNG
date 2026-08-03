@@ -879,6 +879,17 @@ class TaskCompletionService:
                     if candidate.exists():
                         found = True
                         break
+                # Also check if file exists in git (already committed)
+                if not found:
+                    try:
+                        from git import Repo
+                        repo = Repo(wf.working_directory)
+                        # Check all commits for this file
+                        for commit in repo.iter_commits(paths=f"**/{name}", max_count=5):
+                            found = True
+                            break
+                    except Exception:
+                        pass
             if not found:
                 missing.append(declared_output)
 
