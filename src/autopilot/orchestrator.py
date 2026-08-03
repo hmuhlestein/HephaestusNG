@@ -7202,7 +7202,7 @@ def _pause_feature_for_review(feature_id: str, logger: "OrchestratorLogger") -> 
             feat = db.query(Feature).filter_by(id=feature_id).first()
             if feat and feat.workflow_id:
                 wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
-                if wf and wf.paused_by != "review":
+                if wf and wf.paused_by != "review" and wf.status not in ("failed", "completed"):
                     wf.status = "paused"
                     wf.paused_by = "review"
                     feat.status = "paused"
