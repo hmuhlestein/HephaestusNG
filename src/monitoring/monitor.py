@@ -329,11 +329,11 @@ class MonitoringLoop:
                             # Fall back to global config defaults
                             if not fallback_tool:
                                 cfg = get_config()
-                                if cfg.default_fallback_cli_tool and cfg.default_fallback_cli_tool != agent.cli_type:
+                                if cfg.default_fallback_cli_tool and (cfg.default_fallback_cli_tool != agent.cli_type or cfg.default_fallback_cli_model != agent.cli_model):
                                     fallback_tool = cfg.default_fallback_cli_tool
                                     fallback_model = cfg.default_fallback_cli_model
 
-                            if fallback_tool and fallback_tool != agent.cli_type:
+                            if fallback_tool and (fallback_tool != agent.cli_type or fallback_model != agent.cli_model):
                                 logger.warning(
                                     f"[SESSION-LIMIT] Re-dispatching with fallback: "
                                     f"{fallback_tool}/{fallback_model or 'default'}"
@@ -497,7 +497,7 @@ class MonitoringLoop:
                                 fallback_model = getattr(phase, "fallback_cli_model", None)
                         if not fallback_tool:
                             cfg = get_config()
-                            if cfg.default_fallback_cli_tool and cfg.default_fallback_cli_tool != agent.cli_type:
+                            if cfg.default_fallback_cli_tool and (cfg.default_fallback_cli_tool != agent.cli_type or cfg.default_fallback_cli_model != agent.cli_model):
                                 fallback_tool = cfg.default_fallback_cli_tool
                                 fallback_model = cfg.default_fallback_cli_model
 
@@ -1459,7 +1459,7 @@ class MonitoringLoop:
                         fallback_model = getattr(phase, "fallback_cli_model", None)
                 if not fallback_tool:
                     cfg = get_config()
-                    if cfg.default_fallback_cli_tool and cfg.default_fallback_cli_tool != agent.cli_type:
+                    if cfg.default_fallback_cli_tool and (cfg.default_fallback_cli_tool != agent.cli_type or cfg.default_fallback_cli_model != agent.cli_model):
                         fallback_tool = cfg.default_fallback_cli_tool
                         fallback_model = cfg.default_fallback_cli_model
 
