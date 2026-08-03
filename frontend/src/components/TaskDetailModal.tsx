@@ -370,6 +370,19 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                   </>
                 )}
 
+
+              {/* Failure Reason Banner */}
+              {taskDetails?.failure_reason && taskDetails.status === 'failed' && (
+                <div className="mt-3 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700">
+                  <div className="flex items-start gap-2">
+                    <XCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-xs font-semibold text-red-700 dark:text-red-300 uppercase tracking-wide mb-1">Failure Reason</p>
+                      <p className="text-sm text-red-800 dark:text-red-200">{taskDetails.failure_reason}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
                 {taskDetails?.status === 'queued' && (
                   <button
                     onClick={handleBumpPriority}
