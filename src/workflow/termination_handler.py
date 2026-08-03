@@ -321,9 +321,18 @@ class WorkflowTerminationHandler:
                             Task.phase_id == execution.phase_id,
                             Task.status == "done"
                         ).count()
-                        if done_tasks > 0:
+                        # Check if there are still pending/active tasks
+                        pending_tasks = session.query(Task).filter(
+                            Task.phase_id == execution.phase_id,
+                            Task.status.in_(["pending", "assigned", "in_progress"])
+                        ).count()
+                        
+                        if done_tasks > 0 and pending_tasks == 0:
                             execution.status = "completed"
                             execution.completion_summary = "Completed due to workflow termination"
+                        elif pending_tasks > 0:
+                            # Keep in_progress so pending tasks can be dispatched
+                            execution.completion_summary = "In-progress at workflow termination (pending tasks remain)"
                         else:
                             execution.status = "failed"
                             execution.completion_summary = "Failed due to workflow termination (no completed work)"
