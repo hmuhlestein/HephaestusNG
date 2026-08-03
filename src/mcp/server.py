@@ -571,7 +571,7 @@ async def _resume_interrupted_workflows(
 
     Returns {"resumed": int, "workflows": [ids]}.
     """
-    from src.core.database import Agent, Task, Workflow
+    from src.core.database import Agent, Feature, Task, Workflow
 
     session = server_state.db_manager.get_session()
     result = {"resumed": 0, "workflows": []}
@@ -597,6 +597,10 @@ async def _resume_interrupted_workflows(
                 if wf.status in ("paused", "failed"):
                     wf.status = "active"
                     wf.paused_by = None
+                    # Also update the associated feature status
+                    feature = session.query(Feature).filter_by(workflow_id=wf.id).first()
+                    if feature and feature.status in ("paused", "failed"):
+                        feature.status = "active"
             session.commit()
 
         resumed = 0
