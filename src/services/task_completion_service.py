@@ -156,28 +156,47 @@ class TaskCompletionService:
             # only the "has a workflow_id but no working_directory" case
             # above is treated as an error).
             if wf and wf.working_directory:
-                for candidate in [
-                    # .hephaestus/<phase.name>/ is the one sanctioned
-                    # subdirectory this phase's own CRITICAL PATH RULE tells
-                    # it to write to -- checked first, not guessed at:
-                    # iterating every subdirectory of .hephaestus/ risked
-                    # treating a DIFFERENT feature's (or an earlier retry
-                    # pass's) leftover file as proof this task's own agent
-                    # produced its required output.
-                    _Path(wf.working_directory) / CONTEXT_DIR_NAME / phase.name / declared_output,
-                    _Path(wf.working_directory) / declared_output,
-                    # Some phases (e.g. Phase 0's Feature Architect) write
-                    # their declared output to the git-excluded .hephaestus/
-                    # dir as an internal orchestration artifact rather than
-                    # a phase-scoped deliverable.
-                    _Path(wf.working_directory) / CONTEXT_DIR_NAME / declared_output,
-                    # Also check docs/ directory — agents sometimes write
-                    # there despite instructions to use .hephaestus/
-                    _Path(wf.working_directory) / "docs" / declared_output,
-                ]:
-                    if candidate.exists():
-                        found_path = candidate
+                # Map new file names to old names for backward compatibility
+                _old_name_map = {
+                    "docs.md": "doc_review_report.md",
+                    "summary.md": "code_summary.md",
+                    "security.md": "security_report.md",
+                    "review.md": "architectural_review_report.md",
+                    "adversarial.md": "adversarial_review_report.md",
+                    "qa.md": "qa_report.md",
+                    "validation.md": "product_validation.md",
+                    "requirements.md": "requirements_analysis.md",
+                    "scope.md": "scope_review_result.md",
+                    "forensics.md": "forensics_report.md",
+                }
+                old_name = _old_name_map.get(declared_output)
+                names_to_check = [declared_output] + ([old_name] if old_name else [])
+
+                for name in names_to_check:
+                    if found_path:
                         break
+                    for candidate in [
+                        # .hephaestus/<phase.name>/ is the one sanctioned
+                        # subdirectory this phase's own CRITICAL PATH RULE tells
+                        # it to write to -- checked first, not guessed at:
+                        # iterating every subdirectory of .hephaestus/ risked
+                        # treating a DIFFERENT feature's (or an earlier retry
+                        # pass's) leftover file as proof this task's own agent
+                        # produced its required output.
+                        _Path(wf.working_directory) / CONTEXT_DIR_NAME / phase.name / name,
+                        _Path(wf.working_directory) / name,
+                        # Some phases (e.g. Phase 0's Feature Architect) write
+                        # their declared output to the git-excluded .hephaestus/
+                        # dir as an internal orchestration artifact rather than
+                        # a phase-scoped deliverable.
+                        _Path(wf.working_directory) / CONTEXT_DIR_NAME / name,
+                        # Also check docs/ directory — agents sometimes write
+                        # there despite instructions to use .hephaestus/
+                        _Path(wf.working_directory) / "docs" / name,
+                    ]:
+                        if candidate.exists():
+                            found_path = candidate
+                            break
             # 2. Check feature folder
             if found_path is None and feature_dir.exists():
                 for d in sorted(feature_dir.iterdir(), reverse=True):
