@@ -595,7 +595,7 @@ if [ ! -f "$OPENCODE_CONFIG" ] || ! grep -q "hephaestusNG" "$OPENCODE_CONFIG" 2>
 {
   "\$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "hephaestus": {
+    "heph": {
       "type": "local",
       "command": ["$PYTHON_PATH", "$MCP_SCRIPT"]
     }
@@ -716,7 +716,7 @@ if command -v pi >/dev/null 2>&1; then
             cat > "$PI_MCP_CONFIG" << MCPEOF
 {
   "mcpServers": {
-    "hephaestus": {
+    "heph": {
       "command": "$MCP_PYTHON",
       "args": ["$MCP_SCRIPT_PATH"]
     }
@@ -730,11 +730,11 @@ MCPEOF
             fi
         else
             # Check if hephaestus is already configured
-            if grep -q '"hephaestus"' "$PI_MCP_CONFIG" 2>/dev/null; then
+            if grep -q '"heph"' "$PI_MCP_CONFIG" 2>/dev/null; then
                 ok "Hephaestus MCP already configured"
             else
                 # Add hephaestus to existing config using python for safe JSON merge
-                log "Adding hephaestus to existing MCP config..."
+                log "Adding heph to existing MCP config..."
                 "$MCP_PYTHON" -c "
 import json
 import sys
@@ -764,7 +764,7 @@ if 'mcpServers' not in config:
     config['mcpServers'] = {}
 
 # Add hephaestus server
-config['mcpServers']['hephaestus'] = {
+config['mcpServers']['heph'] = {
     'command': '$MCP_PYTHON',
     'args': ['$MCP_SCRIPT_PATH']
 }
@@ -776,7 +776,7 @@ with open(config_path, 'w') as f:
 print('OK')
 " 2>/dev/null
                 if [ $? -eq 0 ]; then
-                    ok "Added hephaestus to MCP config"
+                    ok "Added heph to MCP config"
                 else
                     warn "Failed to update MCP config"
                     # Restore backup if it exists
@@ -793,7 +793,7 @@ print('OK')
     mkdir -p "$PI_AGENTS_DIR"
     
     # MCP tools to add to pi agents
-    MCP_TOOLS="mcp:hephaestus/save_memory, mcp:hephaestus/search_memory, mcp:hephaestus/get_task_status, mcp:hephaestus/create_task, mcp:hephaestus/update_task_status"
+    MCP_TOOLS="mcp:heph/save_memory, mcp:heph/search_memory, mcp:heph/get_task_status, mcp:heph/create_task, mcp:heph/update_task_status"
     
     # Function to add MCP tools to agent file
     add_mcp_tools() {
@@ -806,7 +806,7 @@ print('OK')
         fi
         
         # Check if already has MCP tools
-        if grep -q 'mcp:hephaestus' "$agent_file" 2>/dev/null; then
+        if grep -q 'mcp:heph' "$agent_file" 2>/dev/null; then
             ok "$agent_name already has MCP tools"
             return
         fi
