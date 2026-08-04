@@ -3733,11 +3733,19 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             # Check if all tasks are done — if so, mark as completed
             from src.core.database import Task as _Task
             from src.autopilot.spec import DIAGNOSTIC_TASK_PREFIX
+            from src.core.database import PhaseExecution as _PhaseExecution
             all_tasks = db.query(_Task).filter(
                 _Task.workflow_id == wf.id,
                 ~_Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%")
             ).all()
-            if all_tasks and all(t.status == "done" for t in all_tasks):
+            # Check all tasks are done AND all phases are completed
+            all_phases_done = db.query(_PhaseExecution).join(
+                _Phase, _PhaseExecution.phase_id == _Phase.id
+            ).filter(
+                _Phase.workflow_id == wf.id,
+                _PhaseExecution.status != "completed"
+            ).count() == 0
+            if all_tasks and all(t.status == "done" for t in all_tasks) and all_phases_done:
                 wf.status = "completed"
                 feature.status = "completed"
                 db.commit()

@@ -1293,10 +1293,20 @@ def _workflow_appears_abandoned(workflow_id: str) -> bool:
         for status in non_terminal_statuses:
             if get_tasks(status=status, workflow_id=workflow_id):
                 return False
-        # If all tasks are done, the workflow is completed, not abandoned
+        # If all tasks are done AND all phases are completed, the workflow is completed, not abandoned
         all_tasks = get_tasks(workflow_id=workflow_id)
         if all_tasks and all(t.get("status") == "done" for t in all_tasks):
-            return False
+            # Also check that all phases are completed
+            from src.core.database import PhaseExecution, Phase
+            with get_db() as db:
+                incomplete_phases = db.query(PhaseExecution).join(
+                    Phase, PhaseExecution.phase_id == Phase.id
+                ).filter(
+                    Phase.workflow_id == workflow_id,
+                    PhaseExecution.status != "completed"
+                ).count()
+                if incomplete_phases == 0:
+                    return False
         return True
     except Exception:
         # Can't verify either signal -- treat as NOT abandoned (don't risk
