@@ -3729,6 +3729,19 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             # doesn't short-circuit on "paused" forever after approval.
             feature.status = "active"
             db.commit()
+
+            # Check if all tasks are done — if so, mark as completed
+            from src.core.database import Task as _Task
+            from src.autopilot.spec import DIAGNOSTIC_TASK_PREFIX
+            all_tasks = db.query(_Task).filter(
+                _Task.workflow_id == wf.id,
+                ~_Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%")
+            ).all()
+            if all_tasks and all(t.status == "done" for t in all_tasks):
+                wf.status = "completed"
+                feature.status = "completed"
+                db.commit()
+
             _invalidate("status")
             return {"success": True, "message": f"Feature {feature.name} approved"}
 
