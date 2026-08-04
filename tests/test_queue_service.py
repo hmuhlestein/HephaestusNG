@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from src.core.database import Agent, Base, Phase, Task, Workflow
 from src.services.queue_service import QueueService
@@ -14,8 +15,20 @@ from src.services.queue_service import QueueService
 
 @pytest.fixture
 def db_manager():
-    """Create a test database manager with in-memory SQLite."""
-    engine = create_engine("sqlite:///:memory:")
+    """Create a test database manager with in-memory SQLite.
+
+    StaticPool + check_same_thread=False: a bare `sqlite:///:memory:` gives
+    each connection checkout its own separate, empty in-memory database
+    (fine for every other test here, all single-threaded) -- but
+    TestReservationAtomicity's concurrent-threads test needs every thread
+    to see the SAME database, which requires pinning the whole engine to
+    one shared connection.
+    """
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(engine)
     # expire_on_commit=False matches the real DatabaseManager (core/database.py) --
     # without it, session_scope()'s commit expires every loaded object's
@@ -389,6 +402,170 @@ class TestCliModelConcurrencyLimit:
 
         assert task is not None
         assert task.id == task_id
+
+
+class TestReservationAtomicity:
+    """Regression: get_active_agent_count_for_cli_model's check-then-act was
+    not atomic against the other four dispatch call sites that share the
+    same limit (process_queue, create_task, restart_task_endpoint,
+    bump_task_priority_endpoint, and orchestrator.py's
+    create_agent_for_task_direct) -- worktree setup + prompt generation
+    take seconds between the check and the real Agent row landing in the
+    DB, during which a second, independent dispatch call could run its own
+    check, also see room, and double-book a single-inference-slot combo.
+    try_reserve_cli_model_slot/release_cli_model_slot close that gap with
+    an in-memory reservation counted alongside real active agents, guarded
+    by a lock."""
+
+    def test_second_reservation_fails_while_first_is_outstanding(self, db_manager):
+        qs = QueueService(db_manager, max_concurrent_agents=10, cli_model_concurrency_limits={"pi/qwen-local": 1})
+
+        first = qs.try_reserve_cli_model_slot("pi", "qwen-local")
+        second = qs.try_reserve_cli_model_slot("pi", "qwen-local")
+
+        assert first is True
+        assert second is False
+
+    def test_release_frees_the_slot_for_a_later_reservation(self, db_manager):
+        qs = QueueService(db_manager, max_concurrent_agents=10, cli_model_concurrency_limits={"pi/qwen-local": 1})
+
+        qs.try_reserve_cli_model_slot("pi", "qwen-local")
+        qs.release_cli_model_slot("pi", "qwen-local")
+        third = qs.try_reserve_cli_model_slot("pi", "qwen-local")
+
+        assert third is True
+
+    def test_reservation_counts_against_real_active_agents_too(self, db_manager):
+        """A real Agent row already occupying the combo's only slot must
+        block a reservation just as effectively as a pending reservation
+        does -- the two are counted together against the limit."""
+        create_test_agent(db_manager, status="working", cli_type="pi", cli_model="qwen-local")
+        qs = QueueService(db_manager, max_concurrent_agents=10, cli_model_concurrency_limits={"pi/qwen-local": 1})
+
+        result = qs.try_reserve_cli_model_slot("pi", "qwen-local")
+
+        assert result is False
+
+    def test_unconfigured_combo_always_succeeds_and_reserves_nothing(self, db_manager):
+        """No limit configured for this combo -- try_reserve is a pure
+        no-op (always True), and release on it must not raise or corrupt
+        state for a combo that IS configured."""
+        qs = QueueService(db_manager, max_concurrent_agents=10, cli_model_concurrency_limits={"pi/qwen-local": 1})
+
+        result = qs.try_reserve_cli_model_slot("claude", "sonnet")
+        qs.release_cli_model_slot("claude", "sonnet")  # must not raise
+
+        assert result is True
+        # The configured combo is unaffected.
+        assert qs.try_reserve_cli_model_slot("pi", "qwen-local") is True
+
+    def test_release_without_a_prior_reservation_is_a_safe_noop(self, db_manager):
+        qs = QueueService(db_manager, max_concurrent_agents=10, cli_model_concurrency_limits={"pi/qwen-local": 1})
+
+        qs.release_cli_model_slot("pi", "qwen-local")  # must not raise or go negative
+
+        assert qs.try_reserve_cli_model_slot("pi", "qwen-local") is True
+        assert qs.try_reserve_cli_model_slot("pi", "qwen-local") is False
+
+    def test_concurrent_reservation_attempts_only_let_one_through(self, db_manager):
+        """The actual race this fix closes: many threads all seeing 'room'
+        under a naive read-then-write check. With the lock, exactly
+        `limit` of N concurrent attempts must succeed."""
+        import threading
+
+        qs = QueueService(db_manager, max_concurrent_agents=10, cli_model_concurrency_limits={"pi/qwen-local": 2})
+        results = []
+        results_lock = threading.Lock()
+
+        def attempt():
+            ok = qs.try_reserve_cli_model_slot("pi", "qwen-local")
+            with results_lock:
+                results.append(ok)
+
+        threads = [threading.Thread(target=attempt) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert results.count(True) == 2
+        assert results.count(False) == 18
+
+
+class TestResolveCliModelDispatch:
+    """Tests for the consolidated decision+reservation method every
+    dispatch call site uses -- resolve_cli_and_model +
+    try_reserve_cli_model_slot + resolve_fallback_model rolled into one,
+    replacing five independent copies of the same decision tree."""
+
+    def test_no_limits_configured_is_a_full_noop(self, db_manager, queue_service):
+        phase_id = create_test_phase(db_manager, cli_tool="pi", cli_model="qwen-local")
+        task_id = create_test_task(db_manager, phase_id=phase_id)
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            result = queue_service.resolve_cli_model_dispatch(session, task)
+        finally:
+            session.close()
+
+        assert result == (None, None, None, False)
+
+    def test_free_slot_reserves_primary_with_no_override(self, db_manager):
+        qs = QueueService(db_manager, max_concurrent_agents=10, cli_model_concurrency_limits={"pi/qwen-local": 1})
+        phase_id = create_test_phase(db_manager, cli_tool="pi", cli_model="qwen-local")
+        task_id = create_test_task(db_manager, phase_id=phase_id)
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            cli_override, model_override, reservation, saturated = qs.resolve_cli_model_dispatch(session, task)
+        finally:
+            session.close()
+
+        assert cli_override is None
+        assert model_override is None
+        assert reservation == ("pi", "qwen-local")
+        assert saturated is False
+        # Primary combo's slot is genuinely reserved now.
+        assert qs.try_reserve_cli_model_slot("pi", "qwen-local") is False
+
+    def test_saturated_primary_with_fallback_returns_override_and_reserves_fallback(self, db_manager):
+        create_test_agent(db_manager, status="working", cli_type="pi", cli_model="qwen-local")
+        qs = QueueService(
+            db_manager, max_concurrent_agents=10,
+            cli_model_concurrency_limits={"pi/qwen-local": 1},
+            default_cli_tool="pi", default_cli_model="qwen-local",
+            cli_model_fallback="mimo-v2.5-pro",
+        )
+        phase_id = create_test_phase(db_manager, cli_tool="pi", cli_model="qwen-local")
+        task_id = create_test_task(db_manager, phase_id=phase_id)
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            cli_override, model_override, reservation, saturated = qs.resolve_cli_model_dispatch(session, task)
+        finally:
+            session.close()
+
+        assert (cli_override, model_override) == ("pi", "mimo-v2.5-pro")
+        assert reservation == ("pi", "mimo-v2.5-pro")
+        assert saturated is False
+
+    def test_saturated_with_no_usable_fallback_returns_saturated_true(self, db_manager):
+        create_test_agent(db_manager, status="working", cli_type="pi", cli_model="qwen-local")
+        qs = QueueService(
+            db_manager, max_concurrent_agents=10,
+            cli_model_concurrency_limits={"pi/qwen-local": 1},
+            default_cli_tool="pi", default_cli_model="qwen-local",
+        )
+        phase_id = create_test_phase(db_manager, cli_tool="pi", cli_model="qwen-local")
+        task_id = create_test_task(db_manager, phase_id=phase_id)
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            result = qs.resolve_cli_model_dispatch(session, task)
+        finally:
+            session.close()
+
+        assert result == (None, None, None, True)
 
 
 class TestCliModelConcurrencyFallback:
