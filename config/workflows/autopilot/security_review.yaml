@@ -256,7 +256,7 @@ additional_notes: |
   For EVERY medium or low vulnerability you did NOT fix (documented in Step 7's
   "Medium Vulnerabilities" / "Low Vulnerabilities" sections), file a ticket so it
   doesn't just sit in a report nobody revisits. Search for an existing open ticket
-  (heph_search_tickets) on the same issue first (avoid duplicates).
+  (search_tickets) on the same issue first (avoid duplicates).
 
   ```
   heph_create_ticket(
@@ -323,12 +323,12 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
-  You MUST call the heph_complete_my_task tool. The system CANNOT detect you finished
+  You MUST call the complete_my_task tool. The system CANNOT detect you finished
   without this call. The pipeline WILL get stuck.
   
   After writing all your output files, call:
   
-  heph_complete_my_task({
+  complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was accomplished>",
     "key_learnings": ["<key findings or decisions>"]

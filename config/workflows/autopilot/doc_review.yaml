@@ -90,4 +90,4 @@ additional_notes: |
 
   ═══ MARK DONE ═══
 
-  Call heph_complete_my_task with status="done" and a brief summary.
+  Call complete_my_task with status="done" and a brief summary.

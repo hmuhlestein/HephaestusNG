@@ -348,7 +348,7 @@ additional_notes: |
   Save improvements to memory, scoped to this feature:
   
   ```python
-  heph_save_memory({
+  save_memory({
       "content": f"Forensics [{feature_name}] Phase [N]: [finding]. Proposed fix: [fix].",
       "memory_type": "learning"
   })
@@ -387,12 +387,12 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
-  You MUST call the heph_complete_my_task tool. The system CANNOT detect you finished
+  You MUST call the complete_my_task tool. The system CANNOT detect you finished
   without this call. The pipeline WILL get stuck.
   
   After writing all your output files, call:
   
-  heph_complete_my_task({
+  complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was accomplished>",
     "key_learnings": ["<key findings or decisions>"]

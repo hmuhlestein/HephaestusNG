@@ -138,7 +138,7 @@ additional_notes: |
   problems and filed tickets for them (tagged "qa-finding" or similar,
   ticket_type="bug"). Check before assuming this is a first-time build:
 
-    heph_search_tickets(workflow_id="<your workflow id>", status="open", ticket_type="bug")
+    search_tickets(workflow_id="<your workflow id>", status="open", ticket_type="bug")
 
   If open bug tickets exist: fixing them is your priority for this pass —
   read each one, fix the underlying issue, then change its status to
@@ -155,7 +155,7 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
 
   SUBTASKS FIRST: If the implementation spans multiple files or >3
-  distinct components, use heph_create_task to create one subtask
+  distinct components, use create_task to create one subtask
   per component BEFORE writing any code. Each subtask = one file or one
   logical unit ("Add Feature class to database.py", "Add run_phase0 to
   orchestrator.py"). Implement them one at a time: implement → commit → next.
@@ -324,12 +324,12 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
-  You MUST call the heph_complete_my_task tool. The system CANNOT detect you finished
+  You MUST call the complete_my_task tool. The system CANNOT detect you finished
   without this call. The pipeline WILL get stuck.
   
   After writing all your output files, call:
   
-  heph_complete_my_task({
+  complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was accomplished>",
     "key_learnings": ["<key findings or decisions>"]
