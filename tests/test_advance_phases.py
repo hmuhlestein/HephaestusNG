@@ -548,7 +548,9 @@ class TestMaybeRetryFailedTasks:
             task = session.query(Task).filter_by(id="task-fail-0").first()
             assert task.status == "in_progress"
             assert task.failure_reason is None
-            assert "Execute phase X: do the thing" in task.enriched_description
+            # Uses raw_description as base (not enriched_description) to avoid
+            # accumulating retry messages from previous attempts
+            assert "Execute phase X" in task.enriched_description
             assert "Missing output artifact: docs/report.md" in task.enriched_description
 
     def test_task_without_failure_reason_gets_plain_reset(self, db_manager, sample_workflow):
@@ -703,7 +705,7 @@ class TestMaybeRetryFailedTasks:
                     done_definition="d",
                     status="failed",
                     failure_reason="Workflow's shared worktree is missing",
-                    retry_count=2,
+                    retry_count=5,
                 )
             )
 

@@ -5169,7 +5169,7 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
                 retry_task = retry_db.query(Task).filter_by(id=task_id).first()
                 if not retry_task:
                     continue
-                if not agent_data:
+                if not agent_data or not isinstance(agent_data, dict) or "agent_id" not in agent_data:
                     # Back to "failed" (not left "pending") so the next poll's
                     # _maybe_retry_failed_tasks (which only triggers on
                     # status="failed") gets another chance at this -- leaving
