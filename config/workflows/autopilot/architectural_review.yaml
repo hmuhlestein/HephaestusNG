@@ -34,7 +34,7 @@ done_definitions:
   - "Component boundaries verified"
   - "Interface contracts verified"
   - "Data flow verified against design"
-  - "Integration with existing system verified - API endpoints registered, DB migrations exist, config read"
+  - "Integration with existing system verified - API endpoints registered, UI components rendered, DB migrations exist, config read"
   - "Design patterns and naming conventions checked"
   - "All BLOCKER and FIX findings documented with file:line and recommended fix"
   - "DEFER issues documented"
@@ -164,6 +164,14 @@ additional_notes: |
   - Route handlers are imported and included in the app
   - Endpoint paths match what clients expect
   - Request/response formats match the architecture spec
+
+  **UI/Frontend Integration:**
+  - New components are imported and rendered in the UI
+  - Navigation/routing connects to new UI elements
+  - Buttons/links trigger the correct actions
+  - New data is displayed in the UI (not just available in API)
+  - Modals, forms, and inputs are wired to handlers
+  - State management connects to new features
 
   **Database Integration:**
   - New tables/columns have migrations
