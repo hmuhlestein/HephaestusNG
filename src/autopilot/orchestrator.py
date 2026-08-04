@@ -3317,17 +3317,26 @@ def _retry_exhausted_paused_workflows(logger: OrchestratorLogger) -> int:
                 continue
 
             # For system-exhausted workflows, only retry if there are actually
-            # failed tasks in in_progress phases (conditions may have changed)
+            # failed or pending tasks in in_progress phases (conditions may have changed)
             if wf.paused_by == "system-exhausted":
                 in_progress_phase_ids = {
                     pid for (pid,) in db.query(PhaseExecution.phase_id).join(Phase, PhaseExecution.phase_id == Phase.id).filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress").all()
                 }
-                failed_tasks = db.query(Task).filter(Task.workflow_id == wf.id, Task.status == "failed", Task.phase_id.in_(in_progress_phase_ids)).all() if in_progress_phase_ids else []
-                if not failed_tasks:
-                    continue  # No failed tasks to retry, leave as system-exhausted
-                # Has failed tasks — reset and retry
-                for task in failed_tasks:
+                # Check for failed OR pending tasks (pending with no agent = stuck)
+                stuck_tasks = db.query(Task).filter(
+                    Task.workflow_id == wf.id,
+                    Task.phase_id.in_(in_progress_phase_ids),
+                    Task.status.in_(["failed", "pending"]),
+                ).all() if in_progress_phase_ids else []
+                # Filter pending tasks to only those with no assigned agent (truly stuck)
+                stuck_tasks = [t for t in stuck_tasks if t.status == "failed" or (t.status == "pending" and not t.assigned_agent_id)]
+                if not stuck_tasks:
+                    continue  # No stuck tasks to retry, leave as system-exhausted
+                # Has stuck tasks — reset and retry
+                for task in stuck_tasks:
                     task.retry_count = 0
+                    if task.status == "pending":
+                        task.failure_reason = None
                 wf.status = "active"
                 wf.paused_by = None
                 wf.status_reason = None
@@ -3335,7 +3344,7 @@ def _retry_exhausted_paused_workflows(logger: OrchestratorLogger) -> int:
                 wf.paused_retry_count = 0
                 logger.warning(
                     f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} was system-exhausted but has "
-                    f"{len(failed_tasks)} failed task(s) in in_progress phase -- retrying"
+                    f"{len(stuck_tasks)} stuck task(s) in in_progress phase -- retrying"
                 )
                 recovered += 1
                 continue
