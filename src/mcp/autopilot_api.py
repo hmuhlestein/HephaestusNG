@@ -3777,12 +3777,18 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             )
             if review_phase:
                 import uuid
+                # Include phase description in enriched_description so the
+                # agent gets the full architectural review system prompt
+                phase_desc = review_phase.description or ""
+                feedback_section = f"\n\n## Human Review Feedback\n\n{req.feedback.strip()}\n\nPlease address the above feedback and make necessary changes."
+                full_description = phase_desc + feedback_section
+
                 new_task = Task(
                     id=str(uuid.uuid4()),
                     workflow_id=workflow_id,
                     phase_id=review_phase.id,
                     raw_description=f"Address review feedback for {feature_name}",
-                    enriched_description=f"## Human Review Feedback\n\n{req.feedback.strip()}\n\nPlease address the above feedback and make necessary changes.",
+                    enriched_description=full_description,
                     done_definition="Review feedback addressed",
                     status="pending",
                     priority="high",
