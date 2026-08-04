@@ -1293,6 +1293,10 @@ def _workflow_appears_abandoned(workflow_id: str) -> bool:
         for status in non_terminal_statuses:
             if get_tasks(status=status, workflow_id=workflow_id):
                 return False
+        # If all tasks are done, the workflow is completed, not abandoned
+        all_tasks = get_tasks(workflow_id=workflow_id)
+        if all_tasks and all(t.get("status") == "done" for t in all_tasks):
+            return False
         return True
     except Exception:
         # Can't verify either signal -- treat as NOT abandoned (don't risk

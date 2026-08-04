@@ -4769,12 +4769,32 @@ class TestWorkflowAppearsAbandoned:
                     id="t1",
                     raw_description="r",
                     done_definition="d",
-                    status="done",
+                    status="failed",
                     workflow_id="wf-1",
                 )
             )
 
         assert _workflow_appears_abandoned("wf-1") is True
+
+    def test_false_when_all_tasks_done(self, orch_db_env):
+        from src.autopilot.orchestrator import _workflow_appears_abandoned
+        from src.core.database import Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+            )
+            session.add(
+                Task(
+                    id="t1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    workflow_id="wf-1",
+                )
+            )
+
+        assert _workflow_appears_abandoned("wf-1") is False
 
     def test_false_with_pending_task(self, orch_db_env):
         from src.autopilot.orchestrator import _workflow_appears_abandoned
