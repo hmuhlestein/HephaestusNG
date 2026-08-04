@@ -266,7 +266,7 @@ additional_notes: |
 
   ```
   ---
-  type: adversarial_review_result
+  type: adversarial_review
   blocker_count: <int>
   warning_count: <int>
   nit_count: <int>

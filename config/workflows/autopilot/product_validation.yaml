@@ -260,7 +260,7 @@ additional_notes: |
 
   ```
   ---
-  type: product_validation_result
+  type: product_validation
   verdict: PASS
   unmet_requirements: []
   agent_score: 0.0

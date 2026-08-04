@@ -108,7 +108,7 @@ additional_notes: |
 
   ```
   ---
-  type: scope_review_result
+  type: scope_review
   verdict: PASS
   out_of_scope: []
   missing: []

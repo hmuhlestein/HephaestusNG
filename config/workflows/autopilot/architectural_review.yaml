@@ -295,7 +295,7 @@ additional_notes: |
   STEP 7: PREPEND STRUCTURED RESULT TO review.md (NOT OPTIONAL)
   ═══════════════════════════════════════════════════════════════════════
 
-  ⚠️  THE TYPE MUST BE EXACTLY 'architectural_review_result' — NOT 'architectural_review'. ⚠️
+  ⚠️  THE TYPE MUST BE EXACTLY 'architectural_review'. ⚠️
 
   review.md is ONE file: a YAML frontmatter block
   followed by the full report above. The frontmatter is what drives the
@@ -309,7 +309,7 @@ additional_notes: |
 
   ```
   ---
-  type: architectural_review_result
+  type: architectural_review
   blocker_count: <int>
   fix_count: <int>
   defer_count: <int>

@@ -1301,7 +1301,7 @@ def validate_gate_result_schema(
     required = GATE_RESULT_REQUIRED_KEYS.get(phase_name)
     if not required or result is None:
         return None
-    expected_type = f"{phase_name}_result"
+    expected_type = phase_name
     actual_type = result.get("type")
     if actual_type != expected_type:
         return (
