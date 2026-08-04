@@ -428,7 +428,6 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
 
     log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_dir / "backend.log", "a")
 
     try:
         proc = subprocess.Popen(
@@ -436,7 +435,15 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
             cwd=str(HEPHAESTUS_DIR),
             env=env,
             stdin=subprocess.DEVNULL,
-            stdout=log_file,
+            # run_server.py owns backend.log directly via a daily-rotating
+            # handler (src/core/logging_config.py) -- a raw stdout redirect
+            # here could never rotate (that has to happen from inside the
+            # writing process), which is exactly how backend.log reached
+            # 253MB unattended. Only output from before configure_logging()
+            # runs (a handful of import lines) is invisible now; everything
+            # after, including uncaught exceptions, still reaches
+            # backend.log via logging_config's sys.excepthook.
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
             start_new_session=True,  # detach into own session — survives launcher/shell exit
         )
@@ -469,7 +476,6 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
 def _start_monitor(python: str) -> bool:
     log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_dir / "monitor.log", "a")
     try:
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
@@ -477,7 +483,10 @@ def _start_monitor(python: str) -> bool:
             [python, str(HEPHAESTUS_DIR / "run_monitor.py")],
             cwd=str(HEPHAESTUS_DIR),
             stdin=subprocess.DEVNULL,
-            stdout=log_file,
+            # run_monitor.py owns monitor.log directly via a daily-rotating
+            # handler (src/core/logging_config.py) -- see _start_backend's
+            # identical comment for why the raw redirect was removed.
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
             env=env,
             start_new_session=True,  # detach into own session — survives launcher/shell exit (else reaped by SIGKILL)
@@ -513,14 +522,16 @@ def _start_watchdog(port: int, args) -> bool:
 
     log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_dir / "watchdog.log", "a")
 
     try:
         proc = subprocess.Popen(
             cmd,
             cwd=str(HEPHAESTUS_DIR),
             stdin=subprocess.DEVNULL,
-            stdout=log_file,
+            # run_watchdog.py owns watchdog.log directly via a daily-rotating
+            # handler (src/core/logging_config.py) -- see _start_backend's
+            # identical comment for why the raw redirect was removed.
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
             start_new_session=True,  # detach into own session — survives launcher/shell exit
         )
