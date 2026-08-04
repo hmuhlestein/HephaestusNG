@@ -277,31 +277,6 @@ additional_notes: |
   DEFER (minor) = style, documentation gap, optimization opportunity, minor naming deviation
   
   ═══════════════════════════════════════════════════════════════════════
-  HUMAN REVIEW FEEDBACK (IF PRESENT IN YOUR TASK DESCRIPTION)
-  ═══════════════════════════════════════════════════════════════════════
-
-  If your task description contains a "## Human Review Feedback" section:
-  1. Read the feedback carefully — it takes priority over your own findings
-  2. Also read the feature report for full context:
-     ```bash
-     cat ./.hephaestus/feature_report.html 2>/dev/null || cat ./docs/feature_report.html 2>/dev/null
-     ```
-  3. Address each feedback item in your review
-  4. If the feedback requires code changes (not just documentation):
-     - Create a task for the development phase to fix the issues:
-       ```
-       heph_create_task({
-         "task_description": "Fix issues from architectural review feedback: [list specific fixes needed]",
-         "done_definition": "All feedback items addressed",
-         "workflow_id": "<current workflow_id>",
-         "phase_id": "<development phase_id>",
-         "priority": "high"
-       })
-       ```
-     - Then mark your own task as done with a summary of what needs to be fixed
-  5. If the feedback only requires documentation/report updates, make them directly
-
-  ═══════════════════════════════════════════════════════════════════════
   CRITICAL RULES
   ═══════════════════════════════════════════════════════════════════════
   
