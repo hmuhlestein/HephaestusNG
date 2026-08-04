@@ -567,8 +567,8 @@ class TestScoreAdversarialReview:
         score, meta = score_adversarial_review(
             {"blocker_count": 0, "warning_count": 3, "nit_count": 0}
         )
-        assert score >= 0.6
-        assert meta["band"] == "pass"
+        assert score < 0.6
+        assert meta["band"] == "development"
 
     def test_clean(self):
         score, meta = score_adversarial_review(
@@ -618,8 +618,8 @@ class TestScoreArchitecturalReview:
         score, meta = score_architectural_review(
             {"blocker_count": 0, "fix_count": 2, "defer_count": 0}
         )
-        assert score >= 0.6
-        assert meta["band"] == "pass"
+        assert score < 0.6
+        assert meta["band"] == "development"
 
     def test_clean(self):
         score, meta = score_architectural_review(

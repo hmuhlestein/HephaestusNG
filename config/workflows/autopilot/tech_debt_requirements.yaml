@@ -1,4 +1,4 @@
-id: 13
+id: 14
 name: tech_debt_requirements
 thinking_level: high
 description: |
@@ -135,7 +135,7 @@ additional_notes: |
 
   Save the requirements document:
   - Primary: .hephaestus/product_requirements/requirements.md
-  - Fallback: ./docs/requirements.md
+  -  as 
 
   Save key findings to memory:
   ```bash

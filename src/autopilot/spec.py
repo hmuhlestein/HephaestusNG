@@ -959,11 +959,16 @@ def score_adversarial_review(
             "reason": reason,
         }
     if warnings > 0:
-        return 0.7, {
+        reason = (
+            f"{warnings} WARNING(s) found in adversarial review:\n\n{report_text}"
+            if report_text
+            else f"{warnings} WARNING(s) found — returning to development"
+        )
+        return 0.5, {
             "gate": "adversarial_review",
-            "band": "pass",
+            "band": "development",
             "warning_count": warnings,
-            "reason": f"no BLOCKERs, {warnings} WARNING(s) — proceeding",
+            "reason": reason,
         }
     return 0.9, {"gate": "adversarial_review", "band": "pass", "reason": "clean"}
 
@@ -1014,11 +1019,16 @@ def score_architectural_review(
             "reason": reason,
         }
     if fixes > 0:
-        return 0.7, {
+        reason = (
+            f"{fixes} FIX item(s) found in architectural review:\n\n{report_text}"
+            if report_text
+            else f"{fixes} FIX item(s) found — returning to development"
+        )
+        return 0.5, {
             "gate": "architectural_review",
-            "band": "pass",
+            "band": "development",
             "fix_count": fixes,
-            "reason": f"no BLOCKERs, {fixes} FIX item(s) — proceeding",
+            "reason": reason,
         }
     return 0.9, {"gate": "architectural_review", "band": "pass", "reason": "clean"}
 
