@@ -7389,6 +7389,22 @@ def _run_one_feature(
 
     logger.info(f"Starting feature pipeline: {feature_name} ({feature_key})")
 
+    # Check if all dependencies are completed before starting
+    depends_on = feature.get("depends_on", [])
+    if depends_on:
+        with get_db() as db:
+            for dep_key in depends_on:
+                dep_feature = db.query(Feature).filter_by(
+                    design_id=design_entry.db_id,
+                    feature_key=dep_key,
+                ).first()
+                if not dep_feature:
+                    logger.warning(f"[DEPENDENCY] Feature {feature_key} depends on {dep_key} which doesn't exist — skipping")
+                    return "skipped"
+                if dep_feature.status not in ("completed", "active"):
+                    logger.warning(f"[DEPENDENCY] Feature {feature_key} depends on {dep_key} which is {dep_feature.status} — skipping")
+                    return "skipped"
+
     # Set structured log context for this feature's lifetime
     from src.core.log_context import set_log_context
     set_log_context(workflow=feature_key, phase="feature_pipeline")
