@@ -1758,6 +1758,75 @@ class TestProjectDesigns:
         assert body["features"][0]["cost_total_usd"] == 1.5
         assert body["cost_total_usd"] == 1.5
 
+    def test_design_status_ignores_stale_active_workflow_whose_feature_is_done(
+        self, project_client
+    ):
+        """Regression, observed live on BACKEND_DESIGN.md: matching_workflows
+        is deliberately broad (LIKE-matched on the bare design filename), so
+        it also catches every OTHER feature's workflow that happened to
+        originate from the same design document -- a design gets re-run
+        once per decomposed feature, and each feature's own workflow
+        references the same design_document path in its launch_params. One
+        such sibling workflow (Credit Management System) had its Feature
+        row correctly flip to "completed" but its own Workflow.status was
+        never cleaned up from "active" -- the endpoint's "any workflow
+        active wins" rule then made the WHOLE design look permanently
+        "Active" in the UI, forever, even after every feature (including
+        this design's actual current one) had genuinely finished."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, Feature, Workflow, get_db
+
+        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        (design_dir / "stale-design.md").write_text("# Design")
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-test-stale",
+                    project_id=pid,
+                    filename="stale-design.md",
+                    name="Stale Design",
+                    ordinal=14,
+                    size_bytes=10,
+                    extension=".md",
+                    status="active",
+                )
+            )
+            db.add(
+                Workflow(
+                    id="wf-stale-active",
+                    name="autopilot",
+                    definition_id="autopilot",
+                    phases_folder_path="/tmp",
+                    status="active",  # stale -- never cleaned up
+                    launch_params={
+                        "design_document": str(design_dir / "stale-design.md"),
+                        "project_path": str(dirs["project_dir"]),
+                    },
+                )
+            )
+
+        with get_db() as db:
+            db.add(
+                Feature(
+                    id="feat-stale-1",
+                    design_id="des-test-stale",
+                    feature_key="credit-system",
+                    name="Credit Management System",
+                    scope="s",
+                    status="completed",
+                    workflow_id="wf-stale-active",
+                )
+            )
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/stale-design.md/status")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] != "active"
+
     def test_design_status_surfaces_budget_pause_reason(self, project_client):
         """A budget-triggered pause must be distinguishable from a plain
         user pause: the design-status endpoint (polled by DesignQueuePanel)
