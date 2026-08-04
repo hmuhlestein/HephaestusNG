@@ -34,6 +34,7 @@ done_definitions:
   - "Component boundaries verified"
   - "Interface contracts verified"
   - "Data flow verified against design"
+  - "Integration with existing system verified - API endpoints registered, DB migrations exist, config read"
   - "Design patterns and naming conventions checked"
   - "All BLOCKER and FIX findings documented with file:line and recommended fix"
   - "DEFER issues documented"
@@ -150,7 +151,47 @@ additional_notes: |
   to check.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: VERIFY FINDINGS BEFORE REPORTING
+  STEP 2B: VERIFY INTEGRATION WITH EXISTING SYSTEM (MANDATORY)
+  ═══════════════════════════════════════════════════════════════════════
+
+  ⚠️  THIS STEP CATCHES FEATURES THAT "WORK" BUT AREN'T PROPERLY INTEGRATED. ⚠️
+
+  Even if the implementation follows the architecture, it must be properly
+  integrated with the existing system. Verify ALL of the following:
+
+  **API/Endpoint Integration:**
+  - New endpoints are registered in the router
+  - Route handlers are imported and included in the app
+  - Endpoint paths match what clients expect
+  - Request/response formats match the architecture spec
+
+  **Database Integration:**
+  - New tables/columns have migrations
+  - ORM models are imported and used
+  - API endpoints read/write to new tables
+  - Foreign keys and relationships are correct
+
+  **Configuration Integration:**
+  - Config options are read from config files
+  - Defaults are sensible
+  - Config is documented or visible in settings UI
+
+  **Import/Module Integration:**
+  - New modules are importable
+  - Import paths don't conflict with existing modules
+  - Circular imports are avoided
+
+  **Data Flow Integration:**
+  - Data actually flows through the new components
+  - API responses include the new data
+  - Frontend receives and displays the data
+  - No "dead code" paths where data is computed but never used
+
+  If ANY integration issues exist, classify as BLOCKER or FIX with specific
+  file:line evidence.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 4: VERIFY FINDINGS BEFORE REPORTING
   ═══════════════════════════════════════════════════════════════════════
 
   **Before classifying any issue as BLOCKER/FIX:** re-read the exact file and line
@@ -164,7 +205,7 @@ additional_notes: |
   - If you cannot confirm the issue is real, downgrade to DEFER with a note
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: WRITE THE REPORT
+  STEP 5: WRITE THE REPORT
   ═══════════════════════════════════════════════════════════════════════
 
   Write review.md to the Docs Path. This is your ONLY output.
@@ -234,7 +275,7 @@ additional_notes: |
   [What was implemented well]
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: SAVE TO MEMORY
+  STEP 6: SAVE TO MEMORY
   ═══════════════════════════════════════════════════════════════════════
   
   Save review findings to memory:
@@ -243,7 +284,7 @@ additional_notes: |
   - Common deviation patterns to watch for
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6: PREPEND STRUCTURED RESULT TO review.md (NOT OPTIONAL)
+  STEP 7: PREPEND STRUCTURED RESULT TO review.md (NOT OPTIONAL)
   ═══════════════════════════════════════════════════════════════════════
 
   review.md is ONE file: a YAML frontmatter block
