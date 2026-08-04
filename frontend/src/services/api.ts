@@ -892,7 +892,7 @@ export const apiService = {
   // ── Cost Endpoints ──────────────────────────────────────────────────────
 
   getProjectCosts: async (projectId: string): Promise<any> => {
-    const { data } = await api.get(`/projects/${encodeURIComponent(projectId)}/costs`, {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/costs`, {
       headers: { 'X-Agent-ID': 'ui-user' },
     });
     return data;
