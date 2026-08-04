@@ -31,6 +31,7 @@ done_definitions:
   - "Non-functional requirements checked (performance, security)"
   - "Integration with existing system validated"
   - "User experience flows verified"
+  - "Feature exposure verified - API endpoints registered, UI components rendered, routes connected"
   - "Edge cases from design doc confirmed handled"
   - "validation.md created with a YAML frontmatter block (structured verdict + unmet_requirements, gate input) followed by the validation report"
   - "Validation report includes recommendations for human reviewer"
@@ -144,6 +145,56 @@ additional_notes: |
   - Can a user actually do what the design describes?
   - Are error messages helpful?
   - Is the workflow intuitive?
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 5B: VERIFY FEATURE IS FULLY EXPOSED AND ACCESSIBLE (MANDATORY)
+  ═══════════════════════════════════════════════════════════════════════
+
+  ⚠️  THIS STEP CATCHES FEATURES THAT "WORK" BUT AREN'T ACCESSIBLE. ⚠️
+
+  Many features are implemented correctly but fail because they're not
+  properly exposed to users. You MUST verify ALL of the following:
+
+  **API/Endpoint Exposure:**
+  - If the feature adds API endpoints, verify they are registered in the router
+  - Check that route handlers are imported and included in the app
+  - Verify the endpoint path matches what the frontend/client expects
+  - Test that the endpoint actually responds (curl if possible)
+
+  **Frontend/UI Exposure:**
+  - If the feature adds UI elements, verify they are imported and rendered
+  - Check that new components are actually used (not just created)
+  - Verify navigation/routing connects to the new UI
+  - Check that the feature appears in menus, sidebars, or navigation
+  - Verify buttons/links actually trigger the feature
+
+  **Configuration Exposure:**
+  - If the feature adds config options, verify they're read from config
+  - Check that config defaults are sensible
+  - Verify the config is documented or visible in settings UI
+
+  **CLI/Command Exposure:**
+  - If the feature adds CLI commands, verify they're registered
+  - Check that the command appears in --help output
+  - Verify the command actually executes
+
+  **Database/Model Exposure:**
+  - If the feature adds DB tables/columns, verify migrations exist
+  - Check that the ORM models are imported and used
+  - Verify API endpoints read/write to the new tables
+
+  **Common Failure Patterns to Check:**
+  - Component created but never imported/rendered anywhere
+  - API endpoint defined but not added to router
+  - Config option defined but never read
+  - Database model created but never queried
+  - Feature works in isolation but not connected to the system
+  - Feature accessible only via direct URL, not via navigation
+  - Data computed but never included in API response (e.g. cost calculated but not in result dict)
+  - Return statement before data enrichment code runs
+  - Frontend component exists but parent never passes required props
+
+  If ANY of these checks fail, mark as UNMET and include in report.
   
   ═══════════════════════════════════════════════════════════════════════
   STEP 6: CREATE VALIDATION REPORT
