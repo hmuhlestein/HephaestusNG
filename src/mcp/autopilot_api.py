@@ -3762,41 +3762,37 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 if not agent or agent.status == "terminated":
                     restartable.append(t)
 
-        # If no restartable tasks, create a new architectural_review task
-        # to address the feedback
+        # If no restartable tasks, create a new development task
+        # to address the feedback directly
         if not restartable:
             from src.core.database import Phase
-            # Find the architectural_review phase
-            review_phase = (
+            # Find the development phase
+            dev_phase = (
                 db.query(Phase)
                 .filter(
                     Phase.workflow_id == workflow_id,
-                    Phase.name == "architectural_review",
+                    Phase.name == "development",
                 )
                 .first()
             )
-            if review_phase:
+            if dev_phase:
                 import uuid
-                # Simple feedback prefix - the YAML prompt handles the instructions
-                feedback_prefix = f"## Human Review Feedback\n\n{req.feedback.strip()}\n\n" if req.feedback else ""
-                full_description = feedback_prefix + (review_phase.description or "")
-
                 new_task = Task(
                     id=str(uuid.uuid4()),
                     workflow_id=workflow_id,
-                    phase_id=review_phase.id,
+                    phase_id=dev_phase.id,
                     raw_description=f"Address review feedback for {feature_name}",
-                    enriched_description=full_description,
-                    done_definition="Review feedback addressed",
+                    enriched_description=f"## Human Review Feedback\n\n{req.feedback.strip()}\n\nRead the feature report for context: .hephaestus/feature_report.html\n\nAddress all feedback items and make the necessary code changes.",
+                    done_definition="All review feedback addressed",
                     status="pending",
                     priority="high",
                 )
                 db.add(new_task)
-                db.flush()  # Ensure new_task.id is populated
+                db.flush()
                 restartable.append(new_task)
-                logger.info(f"[REVIEW] Created new architectural_review task {new_task.id} for feedback")
+                logger.info(f"[REVIEW] Created new development task {new_task.id} for feedback")
             else:
-                logger.warning(f"[REVIEW] No architectural_review phase found for workflow {workflow_id}")
+                logger.warning(f"[REVIEW] No development phase found for workflow {workflow_id}")
 
         to_restart = [(t.id, t.phase_id) for t in restartable]
         for t in restartable:
