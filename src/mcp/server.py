@@ -1602,6 +1602,7 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         _resync_pipeline_registry,
         _retry_exhausted_paused_workflows,
         _retry_failed_tasks,
+        _sync_stale_design_statuses,
         _sync_stale_feature_statuses,
         heal_orphaned_agent_branches,
     )
@@ -1613,6 +1614,15 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         _sync_stale_feature_statuses(sweep_logger)
     except Exception as e:
         logger.error(f"[PHASE-SWEEP] Feature-status sync error: {e}")
+
+    # Design-table-wide, same reasoning as the feature-status sync above --
+    # a design whose last feature just finished has nothing left to ever
+    # call pick_next_design for it again, so its own status sticks "active"
+    # without this.
+    try:
+        _sync_stale_design_statuses(sweep_logger)
+    except Exception as e:
+        logger.error(f"[PHASE-SWEEP] Design-status sync error: {e}")
 
     if loop is not None:
         try:

@@ -3759,6 +3759,159 @@ class TestSyncStaleFeatureStatuses:
             assert feat.completed_at is not None
 
 
+class TestSyncStaleDesignStatuses:
+    """_sync_stale_design_statuses: the Design-table-wide self-heal for the
+    same class of bug TestSyncStaleFeatureStatuses covers one level up --
+    pick_next_design's own "all features done -> mark completed" decision
+    only runs as a side effect of picking the NEXT design, so a design
+    whose last feature finishes with nothing else ever needing to pick a
+    new design again stays "active" forever without this."""
+
+    def test_flips_design_to_completed_when_all_features_done(self, orch_db_env):
+        from src.autopilot.orchestrator import _sync_stale_design_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename="d.md", name="D",
+                    status="active",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1", design_id="design-1", feature_key="feat-a",
+                    name="Feature A", scope="s", status="completed",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-2", design_id="design-1", feature_key="feat-b",
+                    name="Feature B", scope="s", status="skipped",
+                )
+            )
+
+        repaired = _sync_stale_design_statuses(MagicMock())
+
+        assert repaired == 1
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "completed"
+
+    def test_leaves_design_alone_when_a_feature_is_still_incomplete(self, orch_db_env):
+        from src.autopilot.orchestrator import _sync_stale_design_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename="d.md", name="D",
+                    status="active",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1", design_id="design-1", feature_key="feat-a",
+                    name="Feature A", scope="s", status="completed",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-2", design_id="design-1", feature_key="feat-b",
+                    name="Feature B", scope="s", status="active",
+                )
+            )
+
+        repaired = _sync_stale_design_statuses(MagicMock())
+
+        assert repaired == 0
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "active"
+
+    def test_leaves_design_alone_when_a_feature_has_failed(self, orch_db_env):
+        """A "failed" feature is neither completed nor skipped -- must not
+        be treated as "done" just because nothing is actively in flight."""
+        from src.autopilot.orchestrator import _sync_stale_design_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename="d.md", name="D",
+                    status="active",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1", design_id="design-1", feature_key="feat-a",
+                    name="Feature A", scope="s", status="completed",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-2", design_id="design-1", feature_key="feat-b",
+                    name="Feature B", scope="s", status="failed",
+                )
+            )
+
+        repaired = _sync_stale_design_statuses(MagicMock())
+
+        assert repaired == 0
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "active"
+
+    def test_leaves_design_without_features_alone(self, orch_db_env):
+        """A design not yet decomposed into features has zero Feature rows
+        -- must not be mistaken for "all done" by an empty-set vacuous
+        truth."""
+        from src.autopilot.orchestrator import _sync_stale_design_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename="d.md", name="D",
+                    status="active",
+                )
+            )
+
+        repaired = _sync_stale_design_statuses(MagicMock())
+
+        assert repaired == 0
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "active"
+
+    def test_leaves_non_active_design_alone(self, orch_db_env):
+        """Only "active" designs are candidates -- a "pending" design that
+        happens to have zero features (not yet decomposed) must not be
+        touched."""
+        from src.autopilot.orchestrator import _sync_stale_design_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename="d.md", name="D",
+                    status="pending",
+                )
+            )
+
+        repaired = _sync_stale_design_statuses(MagicMock())
+
+        assert repaired == 0
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "pending"
+
+
 class TestInterruptibleSleep:
     """docs/SAFE_RESTART_DESIGN.md §3.3: run_continuous_pipeline's loop used
     a plain time.sleep(N) at its two longest waits, making a stop request
