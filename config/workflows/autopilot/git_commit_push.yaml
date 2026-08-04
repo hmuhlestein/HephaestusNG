@@ -98,7 +98,30 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   STEP 3: PUSH FEATURE BRANCH
   ═══════════════════════════════════════════════════════════════════════
-  
+
+  Before pushing, merge main into the feature branch to catch conflicts early:
+  ```bash
+  REMOTE=$(git remote | head -1)
+  DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/$REMOTE/HEAD 2>/dev/null | sed "s@refs/remotes/$REMOTE/@@" || echo "main")
+  FEATURE_BRANCH=$(git branch --show-current)
+
+  # Fetch latest main
+  git fetch $REMOTE $DEFAULT_BRANCH
+
+  # Merge main into feature branch to resolve conflicts here
+  git merge $REMOTE/$DEFAULT_BRANCH -m "Merge $DEFAULT_BRANCH into $FEATURE_BRANCH to stay current"
+  ```
+
+  If merge conflicts occur:
+  ```bash
+  # Resolve conflicts in each file
+  git status  # see conflicted files
+  # Edit files to resolve conflicts, then:
+  git add -A
+  git commit --no-verify -m "Resolve merge conflicts with $DEFAULT_BRANCH"
+  ```
+
+  Now push:
   ```bash
   git push $REMOTE $FEATURE_BRANCH
   ```
