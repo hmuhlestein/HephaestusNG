@@ -148,6 +148,12 @@ ticket_tracking:
 
 monitoring:
   # Minutes of inactivity before an agent is considered stuck
-  stuck_detection_minutes: 15
+  # Be patient - agents can be working for a long time before producing output
+  stuck_detection_minutes: 30
   # Minutes before a guardian nudge is sent
-  guardian_nudge_delay_minutes: 10
+  guardian_nudge_delay_minutes: 15
+  # Max nudges before considering agent stuck
+  max_stuck_nudges: 5
+
+# Local model needs more time - it's slower than cloud models
+local_model_timeout_multiplier: 3
