@@ -513,6 +513,55 @@ class TestDeriveWorkflowStatus:
             result = derive_workflow_status(session, "wf-1")
         assert result == "completed"
 
+    def test_completes_despite_an_old_superseded_failed_task(self, db_manager):
+        """Regression, observed live: a long goto/retry history leaves old
+        "failed" Task rows behind as real history even after a later retry
+        of the same phase succeeded (nothing ever deletes them). Every
+        Phase's own PhaseExecution having reached completed/skipped is the
+        authoritative "did the whole pipeline finish" signal -- mirrors
+        derive_feature_status's identical, already-proven protection for
+        this exact class of artifact. Without it, a single harmless
+        leftover failed task anywhere in history permanently blocks a
+        genuinely finished workflow from ever deriving "completed" again."""
+        from src.core.database import Phase, PhaseExecution
+
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(id="wf-1", name="Test", status="active", phases_folder_path="/tmp/phases")
+            session.add(wf)
+            session.add(
+                Phase(
+                    id="phase-deploy", workflow_id="wf-1", order=13,
+                    name="deploy", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-deploy", phase_id="phase-deploy",
+                    workflow_execution_id="wf-1", status="completed",
+                )
+            )
+            # An early attempt at this phase failed; a later retry (below)
+            # succeeded. The failed row is real history, never deleted.
+            session.add(
+                Task(
+                    id="task-deploy-attempt-1", workflow_id="wf-1", phase_id="phase-deploy",
+                    raw_description="deploy", done_definition="Done",
+                    status="failed",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-deploy-attempt-2", workflow_id="wf-1", phase_id="phase-deploy",
+                    raw_description="deploy", done_definition="Done",
+                    status="done",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            result = derive_workflow_status(session, "wf-1")
+        assert result == "completed"
+
 
 class TestDeriveDesignStatus:
     """Tests for derive_design_status function."""

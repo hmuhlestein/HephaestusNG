@@ -337,20 +337,31 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
     if not tasks:
         return workflow.status
 
-    # Derive from task statuses
-    task_statuses = {t.status for t in tasks}
-
-    if task_statuses == {TaskStatus.DONE}:
-        # "every task that exists is done" is NOT the same as "every phase
-        # ran" -- a phase that hasn't been dispatched yet has ZERO tasks,
-        # invisible to task_statuses entirely, so this alone can't tell
-        # "genuinely finished" apart from "stopped partway through, with
-        # nothing yet created for the remaining phases." Require every
-        # Phase's own PhaseExecution to have reached completed/skipped too.
-        # Observed live: a workflow with product_validation's task "done"
-        # but doc_review/forensics_analysis/git_commit_push/deploy all
-        # still "pending" (zero tasks ever created) derived "completed"
-        # purely because the one task that existed happened to be done.
+    # PhaseExecution completeness is the authoritative "did the whole
+    # pipeline actually finish" signal for a phase-tracked workflow (the
+    # normal autopilot/feature_architect case) -- checked FIRST, before any
+    # task-status heuristic, for two reasons a plain task_statuses set
+    # can't distinguish on its own:
+    #   1. "every task that exists is done" isn't "every phase ran" -- a
+    #      phase that hasn't been dispatched yet has ZERO tasks, invisible
+    #      to task_statuses entirely. Observed live: a workflow with
+    #      product_validation's task "done" but doc_review/forensics_
+    #      analysis/git_commit_push/deploy all still "pending" (zero tasks
+    #      ever created) derived "completed" purely because the one task
+    #      that existed happened to be done.
+    #   2. An old, superseded "failed" Task row from an early attempt that
+    #      a later retry fixed doesn't mean the workflow isn't done --
+    #      mirrors derive_feature_status's identical, already-proven
+    #      protection for the exact same class of stale-history artifact
+    #      (see its own "elif wf and wf.status == 'completed'" branch).
+    #      Without this, a single harmless leftover "failed" task anywhere
+    #      in a long goto/retry history permanently blocks a genuinely
+    #      finished workflow from ever deriving "completed" again.
+    # Only applies when this workflow actually has Phase rows tracked --
+    # a plain task-only workflow (no phase structure at all) falls through
+    # to the task-status heuristics below unchanged.
+    has_phases = db.query(Phase).filter_by(workflow_id=workflow_id).first() is not None
+    if has_phases:
         incomplete_phase = (
             db.query(PhaseExecution)
             .join(Phase, PhaseExecution.phase_id == Phase.id)
@@ -360,7 +371,27 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
             )
             .first()
         )
-        derived = WorkflowStatus.ACTIVE if incomplete_phase else WorkflowStatus.COMPLETED
+        if not incomplete_phase:
+            derived = WorkflowStatus.COMPLETED
+            if write_back and derived != workflow.status:
+                logger.info(
+                    f"[STATUS-HEAL] Workflow {workflow_id[:8]} status: "
+                    f"{workflow.status} -> {derived}"
+                )
+                workflow.status = derived
+                db.commit()
+            return derived
+
+    # Derive from task statuses. Reaching this point with has_phases True
+    # means the block above already found a genuinely incomplete phase --
+    # task_statuses == {DONE} here must NOT translate to "completed" (that's
+    # exactly the vacuous-truth case #1 above exists to rule out), only to
+    # "active" (real, tracked work remains; the tasks that do exist just
+    # haven't hit it yet).
+    task_statuses = {t.status for t in tasks}
+
+    if task_statuses == {TaskStatus.DONE}:
+        derived = WorkflowStatus.ACTIVE if has_phases else WorkflowStatus.COMPLETED
     elif TaskStatus.IN_PROGRESS in task_statuses or TaskStatus.ASSIGNED in task_statuses:
         derived = WorkflowStatus.ACTIVE
     elif TaskStatus.FAILED in task_statuses:
