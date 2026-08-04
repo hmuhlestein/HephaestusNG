@@ -789,6 +789,8 @@ def pause_workflow_direct(workflow_id: str) -> bool:
             wf = session.query(Workflow).filter_by(id=workflow_id).first()
             if wf:
                 wf.status = "paused"
+                wf.paused_by = "user"
+                wf.paused_at = datetime.utcnow()
                 return True
         return False
     except Exception as e:
