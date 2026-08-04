@@ -171,6 +171,16 @@ additional_notes: |
     code that should have created the file?
   - Is every exception and error logged with enough context to diagnose it?
 
+  ### 2k. UI/Frontend Integration
+  - Are new UI components actually imported and rendered anywhere?
+  - Do buttons/links trigger the correct API calls?
+  - Is data from the API actually displayed in the UI (not just fetched)?
+  - Are loading/error states handled in the UI?
+  - Do forms submit to the correct endpoints?
+  - Is navigation/routing wired correctly?
+  - Are modals/dialogs opened and closed properly?
+  - Is state management connected to UI updates?
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 3: CONFIRM BEFORE REPORTING
   ═══════════════════════════════════════════════════════════════════════

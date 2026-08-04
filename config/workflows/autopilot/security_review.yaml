@@ -137,14 +137,24 @@ additional_notes: |
   - File uploads
   - Query strings
   - WebSocket messages
-  
+
+  **UI/Frontend Input Points:**
+  - Form inputs (text fields, dropdowns, checkboxes)
+  - URL parameters read by frontend
+  - Local storage / session storage data
+  - Data from API responses rendered in UI
+  - User-uploaded files
+  - Rich text editors / markdown inputs
+
   Verify:
   - Validation at entry points (not deep in code)
   - Type checking and sanitization
   - Length limits enforced
   - Format validation (email, URL, etc.)
   - SQL injection prevention
-  - XSS prevention
+  - XSS prevention in UI rendering
+  - Content Security Policy headers
+  - Sanitization of user-generated content displayed in UI
   
   ═══════════════════════════════════════════════════════════════════════
   STEP 6: DATA HANDLING
