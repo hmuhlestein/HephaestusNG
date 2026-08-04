@@ -4085,7 +4085,28 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
         with get_db() as db:
             # Get workflow
             wf = db.query(Workflow).filter_by(id=workflow_id).first()
-            if not wf or wf.status not in ("active", "paused"):
+            if not wf:
+                return False
+
+            # Mark pending/in_progress tasks as failed when workflow is failed
+            if wf.status == "failed":
+                orphaned_tasks = (
+                    db.query(Task)
+                    .filter(
+                        Task.workflow_id == workflow_id,
+                        Task.status.in_(["pending", "in_progress", "assigned"]),
+                    )
+                    .all()
+                )
+                for t in orphaned_tasks:
+                    logger.warning(f"[PHASE-ADVANCE] Task {t.id[:8]} is {t.status} but workflow is failed — marking failed")
+                    t.status = "failed"
+                    t.failure_reason = f"Workflow failed: {wf.status_reason or 'unknown reason'}"
+                if orphaned_tasks:
+                    db.commit()
+                return False
+
+            if wf.status not in ("active", "paused"):
                 return False
 
             # Auto-resume paused workflow if it has a done task in the stalled phase
