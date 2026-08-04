@@ -2729,13 +2729,35 @@ class MonitoringLoop:
                 # If the agent called update_task_status(done) but the session
                 # was killed before the response was processed, completion_notes
                 # will be set. Promote to done instead of failing.
+                # BUT: for gated phases, we must validate the gate result
+                # before promoting to done, otherwise invalid results bypass
+                # the gate validation.
                 if task.completion_notes:
-                    logger.info(
-                        f"[HEALTH] Task {task.id[:8]} stuck in_progress but has "
-                        f"completion_notes — promoting to done (agent finished then crashed)"
-                    )
-                    task.status = "done"
-                    task.completed_at = datetime.utcnow()
+                    from src.autopilot.spec import GATED_PHASES
+                    from src.core.database import Phase as _Phase
+                    
+                    phase = session.query(_Phase).filter_by(id=task.phase_id).first() if task.phase_id else None
+                    is_gated = phase and phase.name in GATED_PHASES
+                    
+                    if is_gated:
+                        # For gated phases, don't promote to done without gate validation
+                        # Mark as failed so the gate can be re-evaluated properly
+                        logger.warning(
+                            f"[HEALTH] Task {task.id[:8]} stuck in_progress in gated phase '{phase.name}' — "
+                            f"marking failed (gate validation required, cannot promote directly to done)"
+                        )
+                        task.status = "failed"
+                        task.failure_reason = (
+                            f"Task stuck in gated phase '{phase.name}' — agent finished but "
+                            f"gate validation was not completed. Retry to re-run with proper validation."
+                        )
+                    else:
+                        logger.info(
+                            f"[HEALTH] Task {task.id[:8]} stuck in_progress but has "
+                            f"completion_notes — promoting to done (agent finished then crashed)"
+                        )
+                        task.status = "done"
+                        task.completed_at = datetime.utcnow()
                 else:
                     logger.warning(
                         f"[HEALTH] Task {task.id[:8]} stuck in_progress with no "
