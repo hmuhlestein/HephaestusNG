@@ -17,6 +17,7 @@ done_definitions:
   - "Component interfaces defined (APIs, data models, contracts)"
   - "Data flow documented"
   - "Infrastructure requirements specified"
+  - "Architecture verified against existing code - no file/interface/dependency conflicts"
   - "Task breakdown with blocking relationships documented in architecture.md"
   - "Each task has detailed acceptance criteria"
   - "architecture.md created with complete technical design"
@@ -199,7 +200,41 @@ additional_notes: |
   - Environment setup
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: WRITE THE TASK BREAKDOWN INTO architecture.md (documentation only —
+  STEP 4B: VERIFY ARCHITECTURE AGAINST EXISTING CODE (MANDATORY)
+  ═══════════════════════════════════════════════════════════════════════
+
+  ⚠️  THIS STEP CATCHES ARCHITECTURE THAT CONFLICTS WITH EXISTING CODE. ⚠️
+
+  Before finalizing the architecture, verify it doesn't conflict with the
+  existing codebase:
+
+  **File Path Conflicts:**
+  - Check that new files don't overwrite existing files
+  - Verify import paths don't conflict with existing modules
+  - Check that new directories don't shadow existing ones
+
+  **Interface Conflicts:**
+  - Verify new APIs don't conflict with existing endpoints
+  - Check that new database tables don't have naming conflicts
+  - Verify new config options don't shadow existing ones
+
+  **Dependency Conflicts:**
+  - Check for circular dependencies between components
+  - Verify new dependencies don't conflict with existing ones
+  - Check that new imports don't create import cycles
+
+  **Pattern Conflicts:**
+  - Verify the new architecture follows existing patterns
+  - Check that new code style matches existing code
+  - Verify naming conventions are consistent
+
+  If ANY conflicts exist, document them in architecture.md and either:
+  - Adjust the architecture to avoid the conflict
+  - Document the conflict as a known issue that needs resolution
+  - Flag it as a blocker that must be addressed before implementation
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 6: WRITE THE TASK BREAKDOWN INTO architecture.md (documentation only —
   do not call create_task here, see STEP 7)
   ═══════════════════════════════════════════════════════════════════════
 
@@ -227,7 +262,7 @@ additional_notes: |
   **Estimated Complexity:** simple / moderate / complex
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6: CREATE TICKETS WITH BLOCKING RELATIONSHIPS
+  STEP 7: CREATE TICKETS WITH BLOCKING RELATIONSHIPS
   ═══════════════════════════════════════════════════════════════════════
   
   Create Kanban tickets for each component:
@@ -243,7 +278,7 @@ additional_notes: |
   - Tags for categorization
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 7: DOCUMENT THE DEVELOPMENT TASK BREAKDOWN IN architecture.md
+  STEP 8: DOCUMENT THE DEVELOPMENT TASK BREAKDOWN IN architecture.md
   ═══════════════════════════════════════════════════════════════════════
 
   Do NOT call create_task for Phase 3 (development) work. The
@@ -333,7 +368,7 @@ additional_notes: |
   ```
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 8: SAVE TO MEMORY
+  STEP 9: SAVE TO MEMORY
   ═══════════════════════════════════════════════════════════════════════
   
   Save architectural decisions to memory:
@@ -343,7 +378,7 @@ additional_notes: |
   - Critical implementation notes
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 9: CREATE ARCHITECTURE DOCUMENT
+  STEP 10: CREATE ARCHITECTURE DOCUMENT
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
@@ -400,7 +435,7 @@ additional_notes: |
   ...
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 10: OBJECT-ORIENTED DESIGN PASS
+  STEP 11: OBJECT-ORIENTED DESIGN PASS
   ═══════════════════════════════════════════════════════════════════════
   
   Before finalizing the architecture, perform an OO design pass:
