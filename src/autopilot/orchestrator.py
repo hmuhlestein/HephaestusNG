@@ -4706,6 +4706,32 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
         if orphaned_pending:
             db.commit()
 
+        # Mark pending tasks with retry_count past cap as failed
+        # These are stuck in pending state but have been retried too many times
+        try:
+            from src.autopilot.spec import load_workflow_definition
+            _wf_def = load_workflow_definition(phase.workflow_id)
+            _max_retry = _wf_def.get("orchestrator", {}).get("max_task_retries", 5)
+        except Exception:
+            _max_retry = 5
+        stale_retry_tasks = (
+            db.query(Task)
+            .filter(
+                Task.phase_id == phase.id,
+                Task.status == "pending",
+                Task.retry_count >= _max_retry,
+                ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+                *cycle_filter,
+            )
+            .all()
+        )
+        for t in stale_retry_tasks:
+            logger.warning(f"[PHASE-ADVANCE] {phase.name} has pending task {t.id[:8]} with retry_count={t.retry_count} (>= {_max_retry}) -- marking failed")
+            t.status = "failed"
+            t.failure_reason = t.failure_reason or "Exceeded retry cap"
+        if stale_retry_tasks:
+            db.commit()
+
         incomplete = (
             db.query(Task)
             .filter(
