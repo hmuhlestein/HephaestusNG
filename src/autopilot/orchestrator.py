@@ -973,8 +973,18 @@ def create_agent_for_task_direct(
             # tasks (scope_review, development, etc.) in a live run. Reuses
             # QueueService's resolution/count helpers rather than
             # re-deriving the same formula a second place to drift from.
-            phase_cli_tool_override = None
-            phase_cli_model_override = None
+            # Bug: this block used to assign straight into
+            # phase_cli_tool_override/phase_cli_model_override -- the same
+            # names as this function's own parameters (added after this
+            # concurrency gate, for the session-limit escalation retry at
+            # this function's other call site). That unconditional
+            # `= None` reset silently discarded any caller-supplied
+            # override before the "only run if none was passed" check
+            # below ever got to see it, breaking session-limit escalation's
+            # fallback dispatch outright. Computed into separate names and
+            # merged with the caller's value afterward instead.
+            _concurrency_cli_override = None
+            _concurrency_model_override = None
             phase_glm_token_env = None
             phase_thinking_level = None
             qs = getattr(server_state, "queue_service", None)
@@ -993,8 +1003,8 @@ def create_agent_for_task_direct(
                                 else 0
                             )
                             if fallback_limit is None or fallback_active < fallback_limit:
-                                phase_cli_tool_override = cli_type
-                                phase_cli_model_override = fallback_model
+                                _concurrency_cli_override = cli_type
+                                _concurrency_model_override = fallback_model
                                 # Passing phase_cli_tool/_model explicitly
                                 # below short-circuits create_agent_for_task's
                                 # own auto-fetch-from-Phase-row block (it
@@ -1013,7 +1023,7 @@ def create_agent_for_task_direct(
                                     f"{cli_type}/{model} at its concurrency limit -- dispatching on "
                                     f"fallback model {fallback_model} instead"
                                 )
-                        if phase_cli_tool_override is None:
+                        if _concurrency_cli_override is None:
                             # No usable fallback -- dispatch on the primary
                             # anyway rather than block this phase transition
                             # entirely (this function has no "queue and
@@ -1022,6 +1032,12 @@ def create_agent_for_task_direct(
                                 f"[create_agent_for_task_direct] Task {task_id[:8]}'s combo {cli_type}/{model} "
                                 "at its concurrency limit with no usable fallback -- dispatching anyway"
                             )
+
+            # A caller-supplied override (e.g. session-limit escalation)
+            # wins; the concurrency gate above only fills in when the
+            # caller didn't already decide.
+            phase_cli_tool_override = phase_cli_tool_override or _concurrency_cli_override
+            phase_cli_model_override = phase_cli_model_override or _concurrency_model_override
 
             agent = asyncio.run(
                 server_state.agent_manager.create_agent_for_task(
