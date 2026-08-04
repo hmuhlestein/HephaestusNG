@@ -1753,8 +1753,11 @@ async def create_task(
             if has_ticket_tracking and not request.ticket_id:
                 # Check if this is an SDK agent (allowed to create tasks without tickets)
                 is_sdk_agent = agent_id == "main-session-agent" or "sdk" in agent_id.lower() or "main" in agent_id.lower()
+                # Phase agents creating tasks within a workflow are also exempt
+                # (they're part of the pipeline, not external callers)
+                is_phase_agent = request.workflow_id is not None and request.phase_id is not None
 
-                if not is_sdk_agent:
+                if not is_sdk_agent and not is_phase_agent:
                     session.close()
                     raise HTTPException(
                         status_code=400,
