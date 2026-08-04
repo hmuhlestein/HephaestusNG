@@ -436,22 +436,12 @@ async def complete_my_task(
 ) -> str:
     """Mark YOUR OWN currently-assigned task done or failed.
 
-    No task_id or agent_id needed -- unlike update_task_status, this tool
-    doesn't even accept them as parameters, so there's nothing to mistype
-    or truncate. Both are read directly from this session's own
-    environment (HEPHAESTUS_AGENT_ID / HEPHAESTUS_TASK_ID, set when this
-    agent was created) -- the same values update_task_status falls back to
-    when they're omitted, except here that's the ONLY path, not a fallback
-    a wrong-but-present value can silently bypass.
-
-    Use this for the normal case of finishing your own work.
-    update_task_status still exists for the rare case of updating a task
-    that isn't your current one.
+    IMPORTANT: Do NOT pass agent_id or task_id — this tool doesn't accept them.
+    They are read from environment variables automatically.
 
     Args:
         status: New status (done/failed/in_progress)
-        summary: Summary of what was accomplished. REQUIRED for done status --
-            describe what you actually did, not just that you finished.
+        summary: Summary of what was accomplished. REQUIRED for done status.
         failure_reason: Reason for failure (for failed status)
         key_learnings: List of key learnings from the task
 

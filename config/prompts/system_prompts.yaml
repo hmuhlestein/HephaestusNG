@@ -309,6 +309,7 @@ task_assignment_header: |
   🔑 Your Agent ID: {agent_id}
      ⚠️  CRITICAL: Use this EXACT ID when calling MCP tools that require it (e.g. save_memory) — complete_my_task and create_task do NOT take an agent_id, omit it there
      ⚠️  DO NOT use 'agent-mcp' or any other placeholder - it will fail authorization!
+     ⚠️  DO NOT pass agent_id to complete_my_task — it will be REJECTED. Only pass status, summary, key_learnings.
 
   📋 Task ID: {task_id}
   🔄 Workflow ID: {workflow_id_display}
