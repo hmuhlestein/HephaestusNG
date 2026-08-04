@@ -1154,7 +1154,7 @@ class FrontendAPI:
                 end_time = task.completed_at or datetime.utcnow()
                 runtime_seconds = int((end_time - task.started_at).total_seconds())
 
-            return {
+            result = {
                 "id": task.id,
                 "raw_description": task.raw_description,
                 "enriched_description": task.enriched_description,
