@@ -434,6 +434,85 @@ class TestDeriveWorkflowStatus:
             result = derive_workflow_status(session, "wf-1")
         assert result == "active"
 
+    def test_stays_active_when_a_later_phase_has_no_task_yet(self, db_manager):
+        """Regression, observed live: task_statuses == {"done"} only looks
+        at tasks that EXIST -- a phase that hasn't been dispatched yet has
+        ZERO tasks, invisible to that check entirely. A workflow whose only
+        task (for product_validation) is "done" while doc_review,
+        forensics_analysis, git_commit_push, and deploy are all still
+        "pending" with no task ever created for them must NOT derive
+        "completed" -- that's a workflow that hasn't reached the phase
+        that actually merges to main, not a finished one."""
+        from src.core.database import Phase, PhaseExecution
+
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(id="wf-1", name="Test", status="active", phases_folder_path="/tmp/phases")
+            session.add(wf)
+            session.add(
+                Phase(
+                    id="phase-pv", workflow_id="wf-1", order=9,
+                    name="product_validation", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-doc", workflow_id="wf-1", order=10,
+                    name="doc_review", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-doc", phase_id="phase-doc",
+                    workflow_execution_id="wf-1", status="pending",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-pv", workflow_id="wf-1", phase_id="phase-pv",
+                    raw_description="product_validation", done_definition="Done",
+                    status="done",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            result = derive_workflow_status(session, "wf-1")
+        assert result == "active"
+
+    def test_completes_when_every_phase_execution_is_done(self, db_manager):
+        """Sanity check the fix isn't overbroad: a genuinely finished
+        workflow (every Phase's own PhaseExecution reached completed) with
+        all tasks done must still derive "completed"."""
+        from src.core.database import Phase, PhaseExecution
+
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(id="wf-1", name="Test", status="active", phases_folder_path="/tmp/phases")
+            session.add(wf)
+            session.add(
+                Phase(
+                    id="phase-deploy", workflow_id="wf-1", order=13,
+                    name="deploy", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-deploy", phase_id="phase-deploy",
+                    workflow_execution_id="wf-1", status="completed",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-deploy", workflow_id="wf-1", phase_id="phase-deploy",
+                    raw_description="deploy", done_definition="Done",
+                    status="done",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            result = derive_workflow_status(session, "wf-1")
+        assert result == "completed"
+
 
 class TestDeriveDesignStatus:
     """Tests for derive_design_status function."""

@@ -742,7 +742,7 @@ class PhaseManager:
         """Start the next phase, or complete the workflow if there isn't one."""
         next_started = self._start_next_phase(session, phase_id)
         if not next_started:
-            self._complete_workflow(session)
+            self._complete_workflow(session, current_phase_id=phase_id)
             return {
                 "action": "continue",
                 "target_phase": None,
@@ -774,7 +774,7 @@ class PhaseManager:
         """
         next_phase = self._start_next_phase(session, phase_id)
         if not next_phase:
-            self._complete_workflow(session)
+            self._complete_workflow(session, current_phase_id=phase_id)
             return {
                 "action": "continue",
                 "target_phase": None,
@@ -881,7 +881,7 @@ class PhaseManager:
         logger.info(f"Skipping past phase {phase.name}: {evaluation.reason}")
         next_phase = self._start_next_phase(session, phase.id)
         if not next_phase:
-            self._complete_workflow(session)
+            self._complete_workflow(session, current_phase_id=phase.id)
             return {
                 "action": "continue",
                 "target_phase": None,
@@ -1565,10 +1565,45 @@ class PhaseManager:
 
         return None
 
-    def _complete_workflow(self, session) -> None:
-        """Mark the workflow as completed when the last phase finishes."""
+    def _complete_workflow(self, session, current_phase_id: Optional[str] = None) -> None:
+        """Mark the workflow as completed when the last phase finishes.
+
+        current_phase_id: the phase whose completion triggered this call, if
+        known -- used as a safety check. Every caller treats ANY None return
+        from _start_next_phase as "no more phases," but that function also
+        returns None for two other, non-terminal reasons: the workflow isn't
+        active/paused, or another phase is already in_progress (e.g. stale
+        state left over from goto/retry churn). Refuse to complete the
+        workflow if a higher-order Phase genuinely still exists -- that's
+        real, unstarted work, not a finished pipeline. Observed live: a
+        goto-limit-exceeded forced "continue" past product_validation got
+        treated as full workflow completion while doc_review,
+        forensics_analysis, git_commit_push, and deploy were all still
+        "pending" and had never run -- the workflow never actually reached
+        the phase that merges to main.
+        """
         if not self.workflow_id:
             return
+
+        if current_phase_id:
+            current_phase = session.query(Phase).filter_by(id=current_phase_id).first()
+            if current_phase:
+                remaining = (
+                    session.query(Phase)
+                    .filter(
+                        Phase.workflow_id == self.workflow_id,
+                        Phase.order > current_phase.order,
+                    )
+                    .first()
+                )
+                if remaining:
+                    logger.warning(
+                        f"[PHASE] _complete_workflow refused for workflow "
+                        f"{self.workflow_id[:8]} -- phase {remaining.name} "
+                        f"(order {remaining.order}) still remains after "
+                        f"{current_phase.name} (order {current_phase.order})"
+                    )
+                    return
 
         workflow = session.query(Workflow).filter_by(id=self.workflow_id).first()
         if workflow and workflow.status == "active":
