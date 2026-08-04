@@ -265,6 +265,15 @@ additional_notes: |
   - Hit key API endpoints
   - Verify responses are correct
   - Check error handling
+
+  **UI/Frontend Smoke Tests (if applicable):**
+  - Navigate to the feature's UI location
+  - Verify the feature is visible and accessible
+  - Click through the primary user flows
+  - Verify data displays correctly
+  - Check that forms/inputs work
+  - Verify error states display properly
+  - Check that the feature integrates with existing UI (navigation, menus)
   
   ═══════════════════════════════════════════════════════════════════════
   STEP 9: CREATE TICKETS FOR ISSUES FOUND
