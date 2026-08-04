@@ -1389,11 +1389,19 @@ async def process_queue(project_id: Optional[str] = None):
             dispatch_context["phase_cli_tool"] = override_cli_tool
             dispatch_context["phase_cli_model"] = override_cli_model
 
-        agent = await AgentDispatchService.dispatch(
-            task=task_for_agent,
-            enriched_data=enriched_data_for_agent,
-            dispatch_context=dispatch_context,
-        )
+        # get_next_queued_task reserved this combo's slot (if a limit is
+        # configured for it) to close the check-then-act race -- must be
+        # released once this dispatch attempt finishes, success or not, or
+        # the reservation permanently steals a slot from this combo.
+        try:
+            agent = await AgentDispatchService.dispatch(
+                task=task_for_agent,
+                enriched_data=enriched_data_for_agent,
+                dispatch_context=dispatch_context,
+            )
+        finally:
+            if hasattr(next_task, "_reserved_cli_model"):
+                server_state.queue_service.release_cli_model_slot(*next_task._reserved_cli_model)
         logger.info(f"Created agent {agent.id} for queued task {next_task.id}")
 
         # Agent is now working — "in_progress" (not "assigned" like the
@@ -2216,57 +2224,53 @@ async def create_task(
                     # already does for the global cap, rather than dispatch
                     # into a slot that isn't actually free.
                     qs = server_state.queue_service
+                    _reservation = None
                     if qs.cli_model_concurrency_limits:
                         with qs.db_manager.session_scope() as _qsession:
-                            _cli_type, _model = qs._resolve_cli_and_model(_qsession, temp_task)
-                        if _cli_type and _model:
-                            _limit = qs.cli_model_concurrency_limits.get(f"{_cli_type}/{_model}")
-                            if _limit is not None and qs.get_active_agent_count_for_cli_model(_cli_type, _model) >= _limit:
-                                _fallback_model = qs._resolve_fallback_model(_cli_type)
-                                _use_fallback = False
-                                if _fallback_model and _fallback_model != _model:
-                                    _fb_limit = qs.cli_model_concurrency_limits.get(f"{_cli_type}/{_fallback_model}")
-                                    _fb_active = (
-                                        qs.get_active_agent_count_for_cli_model(_cli_type, _fallback_model)
-                                        if _fb_limit is not None
-                                        else 0
-                                    )
-                                    _use_fallback = _fb_limit is None or _fb_active < _fb_limit
-                                if _use_fallback:
-                                    logger.info(
-                                        f"Task {task_id}'s primary combo {_cli_type}/{_model} at its "
-                                        f"concurrency limit -- dispatching on fallback model {_fallback_model} instead"
-                                    )
-                                    dispatch_context["phase_cli_tool"] = _cli_type
-                                    dispatch_context["phase_cli_model"] = _fallback_model
-                                else:
-                                    logger.info(
-                                        f"Task {task_id}'s combo {_cli_type}/{_model} at its concurrency "
-                                        "limit with no usable fallback -- queueing instead of dispatching"
-                                    )
-                                    qs.enqueue_task(task_id)
-                                    queue_status = qs.get_queue_status()
-                                    from src.core.database import resolve_project_for_workflow
+                            _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(
+                                _qsession, temp_task
+                            )
+                        if _saturated:
+                            logger.info(
+                                f"Task {task_id}'s combo is already at its concurrency limit with no "
+                                "usable fallback -- queueing instead of dispatching"
+                            )
+                            qs.enqueue_task(task_id)
+                            queue_status = qs.get_queue_status()
+                            from src.core.database import resolve_project_for_workflow
 
-                                    bcast_project_id, bcast_project_name = resolve_project_for_workflow(request.workflow_id)
-                                    await server_state.broadcast_update(
-                                        {
-                                            "type": "task_queued",
-                                            "task_id": task_id,
-                                            "description": enriched_task["enriched_description"][:200],
-                                            "queue_position": queue_status.get("queued_tasks_count", 0),
-                                            "slots_available": queue_status.get("slots_available", 0),
-                                        },
-                                        project_id=bcast_project_id,
-                                        project_name=bcast_project_name,
-                                    )
-                                    return
+                            bcast_project_id, bcast_project_name = resolve_project_for_workflow(request.workflow_id)
+                            await server_state.broadcast_update(
+                                {
+                                    "type": "task_queued",
+                                    "task_id": task_id,
+                                    "description": enriched_task["enriched_description"][:200],
+                                    "queue_position": queue_status.get("queued_tasks_count", 0),
+                                    "slots_available": queue_status.get("slots_available", 0),
+                                },
+                                project_id=bcast_project_id,
+                                project_name=bcast_project_name,
+                            )
+                            return
+                        if _cli_override:
+                            logger.info(
+                                f"Task {task_id}'s primary combo at its concurrency limit -- "
+                                f"dispatching on fallback model {_model_override} instead"
+                            )
+                            dispatch_context["phase_cli_tool"] = _cli_override
+                            dispatch_context["phase_cli_model"] = _model_override
 
-                    agent = await AgentDispatchService.dispatch(
-                        task=temp_task,
-                        enriched_data=enriched_task,
-                        dispatch_context=dispatch_context,
-                    )
+                    # _reservation (if any) must be released once this
+                    # dispatch attempt finishes, success or not.
+                    try:
+                        agent = await AgentDispatchService.dispatch(
+                            task=temp_task,
+                            enriched_data=enriched_task,
+                            dispatch_context=dispatch_context,
+                        )
+                    finally:
+                        if _reservation:
+                            qs.release_cli_model_slot(*_reservation)
 
                     # Store agent ID immediately (before session issues)
                     agent_id_str = str(agent.id) if agent else None
@@ -2873,12 +2877,47 @@ async def bump_task_priority_endpoint(
             phase_id=task.phase_id,
         )
 
-        # Create agent immediately (bypassing agent limit)
-        agent = await AgentDispatchService.dispatch(
-            task=task,
-            enriched_data={"enriched_description": task.enriched_description},
-            dispatch_context=dispatch_context,
-        )
+        # This endpoint's whole point is "start now, bypassing the global
+        # max_concurrent_agents cap" -- but a per-cli/model concurrency
+        # limit (e.g. a local model's single inference slot) is a different
+        # kind of constraint: forcing a 2nd agent onto it doesn't actually
+        # start it any sooner, it just sits frozen waiting its turn like
+        # any other agent would. Dispatch on the fallback model instead
+        # when saturated; if no fallback is usable, dispatch on the primary
+        # anyway (with a warning) rather than silently queue it -- queueing
+        # would contradict this endpoint's "start immediately" contract.
+        qs = server_state.queue_service
+        _reservation = None
+        if qs.cli_model_concurrency_limits:
+            with qs.db_manager.session_scope() as _qsession:
+                _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(
+                    _qsession, task
+                )
+            if _saturated:
+                logger.warning(
+                    f"Task {task_id}'s combo is at its concurrency limit with no usable "
+                    "fallback -- dispatching anyway (bump-priority bypasses limits)"
+                )
+            elif _cli_override:
+                logger.info(
+                    f"Task {task_id}'s primary combo at its concurrency limit -- "
+                    f"dispatching on fallback model {_model_override} instead"
+                )
+                dispatch_context["phase_cli_tool"] = _cli_override
+                dispatch_context["phase_cli_model"] = _model_override
+
+        # Create agent immediately (bypassing agent limit). _reservation
+        # (if any) must be released once this dispatch attempt finishes,
+        # success or not.
+        try:
+            agent = await AgentDispatchService.dispatch(
+                task=task,
+                enriched_data={"enriched_description": task.enriched_description},
+                dispatch_context=dispatch_context,
+            )
+        finally:
+            if _reservation:
+                qs.release_cli_model_slot(*_reservation)
 
         # Update task status
         AgentDispatchService.mark_assigned(task_id, agent.id, status="assigned")
@@ -3279,52 +3318,47 @@ async def restart_task_endpoint(
             # global cap). Fall back to the fallback model if the primary
             # combo is saturated; queue the task if no fallback is usable.
             qs = server_state.queue_service
+            _reservation = None
             if qs.cli_model_concurrency_limits:
                 with qs.db_manager.session_scope() as _qsession:
-                    _cli_type, _model = qs._resolve_cli_and_model(_qsession, task)
-                if _cli_type and _model:
-                    _limit = qs.cli_model_concurrency_limits.get(f"{_cli_type}/{_model}")
-                    if _limit is not None and qs.get_active_agent_count_for_cli_model(_cli_type, _model) >= _limit:
-                        _fallback_model = qs._resolve_fallback_model(_cli_type)
-                        _use_fallback = False
-                        if _fallback_model and _fallback_model != _model:
-                            _fb_limit = qs.cli_model_concurrency_limits.get(f"{_cli_type}/{_fallback_model}")
-                            _fb_active = (
-                                qs.get_active_agent_count_for_cli_model(_cli_type, _fallback_model)
-                                if _fb_limit is not None
-                                else 0
-                            )
-                            _use_fallback = _fb_limit is None or _fb_active < _fb_limit
-                        if _use_fallback:
-                            logger.info(
-                                f"Task {task_id}'s primary combo {_cli_type}/{_model} at its "
-                                f"concurrency limit -- dispatching on fallback model {_fallback_model} instead"
-                            )
-                            dispatch_context["phase_cli_tool"] = _cli_type
-                            dispatch_context["phase_cli_model"] = _fallback_model
-                        else:
-                            logger.info(
-                                f"Task {task_id}'s combo {_cli_type}/{_model} at its concurrency limit "
-                                "with no usable fallback -- queueing instead of dispatching"
-                            )
-                            qs.enqueue_task(task_id)
-                            await server_state.broadcast_update(
-                                {"type": "task_restarted", "task_id": task_id, "status": "queued"},
-                                project_id=bcast_project_id,
-                                project_name=bcast_project_name,
-                            )
-                            return {
-                                "success": True,
-                                "message": f"Task {task_id[:8]} restarted and added to queue",
-                                "status": "queued",
-                            }
+                    _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(
+                        _qsession, task
+                    )
+                if _saturated:
+                    logger.info(
+                        f"Task {task_id}'s combo is already at its concurrency limit with no "
+                        "usable fallback -- queueing instead of dispatching"
+                    )
+                    qs.enqueue_task(task_id)
+                    await server_state.broadcast_update(
+                        {"type": "task_restarted", "task_id": task_id, "status": "queued"},
+                        project_id=bcast_project_id,
+                        project_name=bcast_project_name,
+                    )
+                    return {
+                        "success": True,
+                        "message": f"Task {task_id[:8]} restarted and added to queue",
+                        "status": "queued",
+                    }
+                if _cli_override:
+                    logger.info(
+                        f"Task {task_id}'s primary combo at its concurrency limit -- "
+                        f"dispatching on fallback model {_model_override} instead"
+                    )
+                    dispatch_context["phase_cli_tool"] = _cli_override
+                    dispatch_context["phase_cli_model"] = _model_override
 
-            # Create agent for the task
-            agent = await AgentDispatchService.dispatch(
-                task=task,
-                enriched_data={"enriched_description": task.enriched_description},
-                dispatch_context=dispatch_context,
-            )
+            # Create agent for the task. _reservation (if any) must be
+            # released once this dispatch attempt finishes, success or not.
+            try:
+                agent = await AgentDispatchService.dispatch(
+                    task=task,
+                    enriched_data={"enriched_description": task.enriched_description},
+                    dispatch_context=dispatch_context,
+                )
+            finally:
+                if _reservation:
+                    qs.release_cli_model_slot(*_reservation)
 
             # Update task status
             AgentDispatchService.mark_assigned(task_id, agent.id, status="assigned")
