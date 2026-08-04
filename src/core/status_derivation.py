@@ -130,6 +130,10 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
         # Check if ALL tasks failed (vs mixed)
         if task_statuses == {TaskStatus.FAILED}:
             derived = FeatureStatus.FAILED
+        elif workflow_blocks_completion:
+            # Workflow is paused/failed, so the feature should be failed
+            # even if some tasks are done
+            derived = FeatureStatus.FAILED
         else:
             # Mix of failed and other statuses
             derived = FeatureStatus.ACTIVE  # Still active - has work to do
