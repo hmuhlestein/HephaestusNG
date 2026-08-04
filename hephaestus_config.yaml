@@ -155,5 +155,3 @@ monitoring:
   # Max nudges before considering agent stuck
   max_stuck_nudges: 5
 
-# Local model needs more time - it's slower than cloud models
-local_model_timeout_multiplier: 3
