@@ -1354,3 +1354,105 @@ class TestGetPhaseContextUsesLiveRequiredOutput:
         pm = PhaseManager(db_manager=real_db_with_override)
         ctx = pm.get_phase_context("phase-dev")
         assert ctx.phase.outputs == ["source code in project path"]
+
+
+class TestCompleteWorkflowRefusesWhenPhasesRemain:
+    """Regression, observed live: _start_next_phase returns None for three
+    different reasons (workflow not active/paused; another phase already
+    in_progress -- e.g. stale state from goto/retry churn; or genuinely no
+    higher-order phase exists), but every caller treated ANY None the same
+    way: complete the workflow. A goto-limit-exceeded forced "continue"
+    past product_validation got treated as full completion while
+    doc_review/forensics_analysis/git_commit_push/deploy were all still
+    "pending" and had never run -- the workflow never reached the phase
+    that actually merges to main. _complete_workflow must now independently
+    verify no higher-order phase remains before marking the workflow done."""
+
+    @pytest.fixture
+    def workflow_with_remaining_phase(self, real_db):
+        from src.core.database import Phase, PhaseExecution, Workflow
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1", name="t", phases_folder_path="/tmp", status="active",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-pv", workflow_id="wf-1", order=9,
+                    name="product_validation", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-doc", workflow_id="wf-1", order=10,
+                    name="doc_review", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-doc", phase_id="phase-doc",
+                    workflow_execution_id="wf-1", status="pending",
+                )
+            )
+        return real_db
+
+    def test_refuses_to_complete_when_a_higher_order_phase_exists(
+        self, workflow_with_remaining_phase
+    ):
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=workflow_with_remaining_phase)
+        pm.workflow_id = "wf-1"
+        session = workflow_with_remaining_phase.get_session()
+        try:
+            pm._complete_workflow(session, current_phase_id="phase-pv")
+        finally:
+            session.close()
+
+        with workflow_with_remaining_phase.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"
+
+    def test_completes_when_current_phase_is_genuinely_last(
+        self, workflow_with_remaining_phase
+    ):
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=workflow_with_remaining_phase)
+        pm.workflow_id = "wf-1"
+        session = workflow_with_remaining_phase.get_session()
+        try:
+            # doc_review (order 10) is the last phase here -- nothing has a
+            # higher order than it.
+            pm._complete_workflow(session, current_phase_id="phase-doc")
+        finally:
+            session.close()
+
+        with workflow_with_remaining_phase.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "completed"
+
+    def test_still_completes_when_no_current_phase_id_given(
+        self, workflow_with_remaining_phase
+    ):
+        """Backward-compatible default: callers that genuinely can't supply
+        a phase_id (none currently do) must not be newly broken -- the
+        safety check is opt-in via the parameter, not mandatory."""
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=workflow_with_remaining_phase)
+        pm.workflow_id = "wf-1"
+        session = workflow_with_remaining_phase.get_session()
+        try:
+            pm._complete_workflow(session)
+        finally:
+            session.close()
+
+        with workflow_with_remaining_phase.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "completed"

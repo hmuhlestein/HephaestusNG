@@ -22,6 +22,8 @@ from src.core.database import (
     AutopilotDesign,
     Feature,
     FeatureStatus,
+    Phase,
+    PhaseExecution,
     Task,
     TaskStatus,
     Workflow,
@@ -339,7 +341,26 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
     task_statuses = {t.status for t in tasks}
 
     if task_statuses == {TaskStatus.DONE}:
-        derived = WorkflowStatus.COMPLETED
+        # "every task that exists is done" is NOT the same as "every phase
+        # ran" -- a phase that hasn't been dispatched yet has ZERO tasks,
+        # invisible to task_statuses entirely, so this alone can't tell
+        # "genuinely finished" apart from "stopped partway through, with
+        # nothing yet created for the remaining phases." Require every
+        # Phase's own PhaseExecution to have reached completed/skipped too.
+        # Observed live: a workflow with product_validation's task "done"
+        # but doc_review/forensics_analysis/git_commit_push/deploy all
+        # still "pending" (zero tasks ever created) derived "completed"
+        # purely because the one task that existed happened to be done.
+        incomplete_phase = (
+            db.query(PhaseExecution)
+            .join(Phase, PhaseExecution.phase_id == Phase.id)
+            .filter(
+                Phase.workflow_id == workflow_id,
+                PhaseExecution.status.notin_(["completed", "skipped"]),
+            )
+            .first()
+        )
+        derived = WorkflowStatus.ACTIVE if incomplete_phase else WorkflowStatus.COMPLETED
     elif TaskStatus.IN_PROGRESS in task_statuses or TaskStatus.ASSIGNED in task_statuses:
         derived = WorkflowStatus.ACTIVE
     elif TaskStatus.FAILED in task_statuses:

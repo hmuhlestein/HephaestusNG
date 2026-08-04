@@ -3037,6 +3037,19 @@ async def get_project_design_status(project_id: str, filename: str):
             .all()
         )
 
+        # Self-heal each matched workflow's own status before using it below --
+        # derive_workflow_status is the centralized "did every phase actually
+        # finish" check (unlike the coarse task-status heuristics further
+        # down this endpoint), so a workflow that got marked "completed"
+        # prematurely (e.g. a goto-limit-exceeded forced "continue" that
+        # skipped starting the next phase) gets corrected back to "active"
+        # here on every poll, the same way Feature/Design status already
+        # self-heal.
+        from src.core.status_derivation import derive_workflow_status
+
+        for wf in matching_workflows:
+            derive_workflow_status(db, wf.id, write_back=True)
+
         # Get tasks and agents for all matching workflows
         all_tasks = []
         all_agents = []
