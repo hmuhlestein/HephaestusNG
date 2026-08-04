@@ -3296,21 +3296,48 @@ def _retry_exhausted_paused_workflows(logger: OrchestratorLogger) -> int:
     cutoff = datetime.utcnow() - timedelta(seconds=_get_paused_workflow_retry_cooldown_seconds())
     recovered = 0
     with get_db() as db:
+        # Also pick up system-exhausted workflows that may have been manually
+        # fixed or had their blocker resolved (e.g. a phase that was stuck now
+        # has tasks done)
         candidates = (
             db.query(Workflow)
             .filter(
                 Workflow.status == "paused",
-                Workflow.paused_by == "system",
+                Workflow.paused_by.in_(["system", "system-exhausted"]),
                 or_(Workflow.paused_at.is_(None), Workflow.paused_at < cutoff),
             )
             .all()
         )
         for wf in candidates:
-            if wf.paused_retry_count >= max_cycles:
+            if wf.paused_by == "system" and wf.paused_retry_count >= max_cycles:
                 logger.warning(f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} exhausted {max_cycles} auto-retry cycles -- giving up permanently, needs a manual resume")
                 wf.paused_by = "system-exhausted"
                 wf.status_reason = f"{wf.status_reason or ''} (auto-retry gave up after {max_cycles} attempts -- manual resume required)"
                 recovered += 1  # counts as "handled", not "retried"
+                continue
+
+            # For system-exhausted workflows, only retry if there are actually
+            # failed tasks in in_progress phases (conditions may have changed)
+            if wf.paused_by == "system-exhausted":
+                in_progress_phase_ids = {
+                    pid for (pid,) in db.query(PhaseExecution.phase_id).join(Phase, PhaseExecution.phase_id == Phase.id).filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress").all()
+                }
+                failed_tasks = db.query(Task).filter(Task.workflow_id == wf.id, Task.status == "failed", Task.phase_id.in_(in_progress_phase_ids)).all() if in_progress_phase_ids else []
+                if not failed_tasks:
+                    continue  # No failed tasks to retry, leave as system-exhausted
+                # Has failed tasks — reset and retry
+                for task in failed_tasks:
+                    task.retry_count = 0
+                wf.status = "active"
+                wf.paused_by = None
+                wf.status_reason = None
+                wf.paused_at = None
+                wf.paused_retry_count = 0
+                logger.warning(
+                    f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} was system-exhausted but has "
+                    f"{len(failed_tasks)} failed task(s) in in_progress phase -- retrying"
+                )
+                recovered += 1
                 continue
 
             # Scoped to the CURRENTLY in_progress phase only -- see the

@@ -4677,9 +4677,17 @@ class TestRetryExhaustedPausedWorkflows:
             task = session.query(Task).filter_by(id="task-stuck").first()
             assert task.retry_count == 2
 
-        # And it stays excluded on a subsequent pass.
+        # On a subsequent pass, system-exhausted workflows with failed tasks
+        # get retried (conditions may have changed since exhausting retries)
         recovered_again = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
-        assert recovered_again == 0
+        assert recovered_again == 1
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-paused").first()
+            assert wf.status == "active"
+            assert wf.paused_by is None
+            # Retry count on task was reset
+            task = session.query(Task).filter_by(id="task-stuck").first()
+            assert task.retry_count == 0
 
     def test_only_resets_failed_tasks_in_in_progress_phase(self, orch_db_env, tmp_path):
         """Same scoping requirement _recover_abandoned_workflows_missing_worktree
