@@ -303,6 +303,23 @@ additional_notes: |
   
   
   ═══════════════════════════════════════════════════════════════════════
+  UPDATE FEATURE REPORT (IF ADDRESSING REVIEW FEEDBACK)
+  ═══════════════════════════════════════════════════════════════════════
+
+  If your task description contains "## Human Review Feedback":
+  1. After making code changes, update the feature report:
+     ```bash
+     # Read current report
+     cat ./.hephaestus/feature_report.html 2>/dev/null || cat ./docs/feature_report.html 2>/dev/null
+     # Update it with your changes (append a section or regenerate)
+     ```
+  2. Document what feedback items you addressed
+  3. Commit your changes:
+     ```bash
+     git add -A && git commit -m "fix: address review feedback - [brief summary]"
+     ```
+
+  ═══════════════════════════════════════════════════════════════════════
   WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
   ═══════════════════════════════════════════════════════════════════════
   
