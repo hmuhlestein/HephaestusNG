@@ -3776,7 +3776,9 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 .first()
             )
             if review_phase:
+                import uuid
                 new_task = Task(
+                    id=str(uuid.uuid4()),
                     workflow_id=workflow_id,
                     phase_id=review_phase.id,
                     raw_description=f"Address review feedback for {feature_name}",
