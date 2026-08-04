@@ -78,7 +78,7 @@ class TestCreateTaskToolSignature:
             task=_FakeTask(), agent_id="agent-abc"
         )
         create_task_line = next(
-            line for line in message.splitlines() if "hephaestus_create_task(" in line
+            line for line in message.splitlines() if "create_task(" in line
         )
         assert "agent_id=" not in create_task_line
 
@@ -136,16 +136,16 @@ class TestPhaseContextSection:
         assert "Test Phase" in message
 
 
-class TestUpdateTaskStatusToolSignature:
-    """Regression coverage for a real bug found during smoke testing: the
-    prompt's own hephaestus_update_task_status examples omitted agent_id
-    even though the surrounding instructions say "always pass agent_id=...".
-    Agents copied the example verbatim and got
-    "Input validation error: 'agent_id' is a required property" on every
-    completion attempt.
-    """
+class TestCompleteMyTaskToolSignature:
+    """complete_my_task is self-identifying (marks the caller's own current
+    task/agent from server-side context) and its schema rejects agent_id
+    outright -- the task_assignment_header carries an explicit warning
+    ("DO NOT pass agent_id to complete_my_task — it will be REJECTED").
+    This used to be the opposite contract (agent_id was required, and its
+    absence from the example was the bug -- see git history), so every
+    example of the tool call must NOT include agent_id now."""
 
-    def test_phase_agent_examples_include_agent_id(self):
+    def test_phase_agent_examples_omit_agent_id(self):
         builder = AgentPromptBuilder(phase_manager=None)
         message = builder.format_initial_message(
             task=_FakeTask(), agent_id="agent-abc"
@@ -153,13 +153,13 @@ class TestUpdateTaskStatusToolSignature:
         status_lines = [
             line
             for line in message.splitlines()
-            if "hephaestus_update_task_status(" in line
+            if "complete_my_task(" in line
         ]
-        assert status_lines, "expected at least one update_task_status example"
+        assert status_lines, "expected at least one complete_my_task example"
         for line in status_lines:
-            assert 'agent_id="agent-abc"' in line, line
+            assert "agent_id=" not in line, line
 
-    def test_non_phase_agent_examples_include_agent_id(self):
+    def test_non_phase_agent_examples_omit_agent_id(self):
         task = _FakeTask()
         task.phase_id = None
         builder = AgentPromptBuilder(phase_manager=None)
@@ -167,11 +167,11 @@ class TestUpdateTaskStatusToolSignature:
         status_lines = [
             line
             for line in message.splitlines()
-            if "hephaestus_update_task_status(" in line
+            if "complete_my_task(" in line
         ]
-        assert status_lines, "expected at least one update_task_status example"
+        assert status_lines, "expected at least one complete_my_task example"
         for line in status_lines:
-            assert 'agent_id="agent-abc"' in line, line
+            assert "agent_id=" not in line, line
 
 
 class _FakeWorkflowConfig:
@@ -201,7 +201,7 @@ class TestTicketTrackingNote:
             task=_FakeTask(), agent_id="agent-abc"
         )
         assert "ticket_id" in message
-        assert "hephaestus_create_ticket" in message
+        assert "heph_create_ticket" in message
 
     def test_omits_ticket_requirement_when_disabled(self):
         builder = AgentPromptBuilder(phase_manager=_FakePhaseManager(False))
@@ -280,7 +280,7 @@ class TestOpenTicketsInjection:
         assert "OPEN BUG TICKETS" in message
         assert "ticket-abc12345" in message
         assert "Auth bypass on /admin" in message
-        assert "hephaestus_resolve_ticket" in message
+        assert "heph_update_ticket_status" in message
 
     def test_no_injection_on_first_pass_continue(self, ticket_db):
         """action == 'continue' (first-time build from architecture_design)
@@ -522,15 +522,18 @@ class TestResumedSessionTrimming:
         assert "FILE PLACEMENT" not in message
         assert "hephaestus_search_memory" not in message
         assert "unchanged from earlier in this session" in message
+        # complete_my_task is self-identifying (no task_id/agent_id accepted
+        # -- see TestCompleteMyTaskToolSignature) even in the condensed
+        # resumed-session reminder.
         status_lines = [
             line
             for line in message.splitlines()
-            if "hephaestus_update_task_status(" in line
+            if "complete_my_task(" in line
         ]
-        assert status_lines, "expected at least one update_task_status example"
+        assert status_lines, "expected at least one complete_my_task example"
         for line in status_lines:
-            assert 'task_id="task-123"' in line
-            assert 'agent_id="agent-abc"' in line
+            assert "task_id=" not in line
+            assert "agent_id=" not in line
 
     def test_resumed_session_keeps_pipeline_position(self):
         builder = AgentPromptBuilder(
