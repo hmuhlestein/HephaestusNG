@@ -3743,6 +3743,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             wf.paused_by = None
             wf.status_reason = None
 
+        # Find restartable tasks, or create a new one if all are done
         candidates = (
             db.query(Task)
             .filter(
@@ -3760,6 +3761,33 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
                 if not agent or agent.status == "terminated":
                     restartable.append(t)
+
+        # If no restartable tasks, create a new architectural_review task
+        # to address the feedback
+        if not restartable:
+            from src.core.database import Phase
+            # Find the architectural_review phase
+            review_phase = (
+                db.query(Phase)
+                .filter(
+                    Phase.workflow_id == workflow_id,
+                    Phase.name == "architectural_review",
+                )
+                .first()
+            )
+            if review_phase:
+                new_task = Task(
+                    workflow_id=workflow_id,
+                    phase_id=review_phase.id,
+                    raw_description=f"Address review feedback for {feature_name}",
+                    enriched_description=f"## Human Review Feedback\n\n{req.feedback.strip()}\n\nPlease address the above feedback and make necessary changes.",
+                    done_definition="Review feedback addressed",
+                    status="pending",
+                    priority="high",
+                )
+                db.add(new_task)
+                restartable.append(new_task)
+                logger.info(f"[REVIEW] Created new architectural_review task for feedback")
 
         to_restart = [(t.id, t.phase_id) for t in restartable]
         for t in restartable:
