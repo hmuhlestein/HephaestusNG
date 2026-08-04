@@ -128,6 +128,14 @@ else
     MISSING=1
 fi
 
+# timeout (coreutils) - used for agent command timeouts
+if command -v timeout >/dev/null 2>&1; then
+    ok "timeout: $(command -v timeout)"
+else
+    warn "timeout not found (part of coreutils) — agent timeouts will not work"
+    warn "Install with: brew install coreutils (macOS) or apt install coreutils (Linux)"
+fi
+
 # Docker (only needed for qdrant)
 if [ "$SKIP_DOCKER" = false ]; then
     VECTOR_BACKEND="${VECTOR_STORE_BACKEND:-turbovec}"
