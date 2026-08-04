@@ -292,9 +292,10 @@ additional_notes: |
   - Common deviation patterns to watch for
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 7: PREPEND STRUCTURED RESULT TO review.md (NOT OPTIONAL)
+  STEP 7: WRITE review.md WITH FRONTMATTER (NOT OPTIONAL)
   ═══════════════════════════════════════════════════════════════════════
 
+  ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
 
   review.md is ONE file: a YAML frontmatter block
   followed by the full report above. The frontmatter is what drives the
@@ -303,8 +304,7 @@ additional_notes: |
   blocker_count here, the pipeline can't tell BLOCKERs were found at all
   and will silently continue regardless.
 
-  Prepend this to the very top of the file (type first, then a closing
-  `---`, then the report from the steps above immediately after):
+  Write the ENTIRE file at once with frontmatter at the top:
 
   ```
   ---
@@ -314,6 +314,9 @@ additional_notes: |
   defer_count: <int>
   overall: PASS | NEEDS_WORK | FAIL
   ---
+
+  # Architectural Review Report
+  ... (the full report from the steps above) ...
   ```
 
   Counts must match the report's own Summary section exactly.

@@ -64,18 +64,76 @@ class QueueService:
         self.default_cli_model = default_cli_model
         self.cli_model_fallback = cli_model_fallback
         self.secondary_cli_model_fallback = secondary_cli_model_fallback
+        # Guards try_reserve_cli_model_slot/release_cli_model_slot -- closes
+        # the TOCTOU race between "check active agent count for this combo"
+        # and the real Agent row landing in the DB (worktree setup + prompt
+        # generation take seconds, during which a second, independent
+        # dispatch call -- process_queue, create_task, restart_task_endpoint,
+        # bump_task_priority_endpoint, or the orchestrator's own
+        # create_agent_for_task_direct -- could run its own check and also
+        # see room. A threading.Lock (not asyncio.Lock) because
+        # create_agent_for_task_direct's caller runs in a background
+        # thread with its own event loop, not the main asyncio loop these
+        # other call sites share.
+        self._reservation_lock = threading.Lock()
+        self._pending_reservations: Dict[str, int] = {}
         logger.info(
             f"QueueService initialized with max_concurrent_agents={max_concurrent_agents}, "
             f"cli_model_concurrency_limits={self.cli_model_concurrency_limits}"
         )
 
-    def _resolve_fallback_model(self, cli_type: str) -> Optional[str]:
+    def try_reserve_cli_model_slot(self, cli_type: str, model: str) -> bool:
+        """Atomically check AND reserve a slot for (cli_type, model) against
+        its configured concurrency limit -- the fix for the check-then-act
+        race described on self._reservation_lock above. Always succeeds
+        (no-op, no reservation held) for a combo with no configured limit,
+        matching the feature's original no-op-when-unconfigured behavior.
+
+        MUST be paired with exactly one release_cli_model_slot call once
+        the real dispatch attempt this reservation was for finishes --
+        success or failure -- normally from a `finally` block wrapping the
+        actual AgentDispatchService.dispatch/create_agent_for_task call.
+        Reservations don't self-expire; a caller that reserves and never
+        releases permanently steals a slot from this combo.
+        """
+        key = f"{cli_type}/{model}"
+        limit = self.cli_model_concurrency_limits.get(key)
+        if limit is None:
+            return True
+        with self._reservation_lock:
+            active = self.get_active_agent_count_for_cli_model(cli_type, model)
+            pending = self._pending_reservations.get(key, 0)
+            if active + pending >= limit:
+                return False
+            self._pending_reservations[key] = pending + 1
+            return True
+
+    def release_cli_model_slot(self, cli_type: str, model: str) -> None:
+        """Release a reservation made by try_reserve_cli_model_slot. Safe
+        to call even when no reservation is outstanding for this combo
+        (e.g. it has no configured limit, so try_reserve was a no-op) --
+        callers that always reserve-then-release don't need to track
+        whether a given combo actually had a limit configured."""
+        key = f"{cli_type}/{model}"
+        with self._reservation_lock:
+            if key in self._pending_reservations:
+                self._pending_reservations[key] -= 1
+                if self._pending_reservations[key] <= 0:
+                    del self._pending_reservations[key]
+
+    def resolve_fallback_model(self, cli_type: str) -> Optional[str]:
         """The configured fallback model for cli_type, resolved by ROLE
         (primary vs secondary tier) -- mirrors
         CLIAgentInterface.fallback_model's own role lookup exactly, since
         this is used to pick the SAME target that mechanism would switch an
         already-running agent to mid-session, just applied at dispatch time
-        instead."""
+        instead.
+
+        Public: called from every dispatch call site that needs to resolve
+        a fallback for the per-cli/model concurrency gate -- server.py's
+        create_task/restart_task_endpoint/bump_task_priority_endpoint and
+        orchestrator.py's create_agent_for_task_direct, in addition to this
+        class's own get_next_queued_task."""
         is_primary = cli_type == self.default_cli_tool
         return self.cli_model_fallback if is_primary else self.secondary_cli_model_fallback
 
@@ -103,7 +161,7 @@ class QueueService:
             logger.debug(f"Active agent count: {count} (project_id={project_id})")
             return count
 
-    def _resolve_cli_and_model(self, session, task: Task) -> tuple:
+    def resolve_cli_and_model(self, session, task: Task) -> tuple:
         """What AgentManager.create_agent_for_task would resolve task's
         cli_type/model to, without creating an agent. Mirrors that method's
         own phase-then-global-default resolution (manager.py's
@@ -113,6 +171,10 @@ class QueueService:
         explicit `cli_type=` override create_agent_for_task also accepts,
         since that's only ever passed by the session-limit fallback
         redispatch mid-run, never for a fresh queue dispatch like this.
+
+        Public: called from every dispatch call site that needs to resolve
+        a task's effective combo for the per-cli/model concurrency gate --
+        see resolve_fallback_model's docstring for the full list.
         """
         from src.interfaces.cli_interface import get_cli_agent
 
@@ -126,6 +188,51 @@ class QueueService:
         global_model = self.default_cli_model if cli_type == self.default_cli_tool else None
         model = (phase_cli_model if phase_cli_tool else None) or global_model or cli_agent.default_model
         return cli_type, model
+
+    def resolve_cli_model_dispatch(self, session, task: Task) -> tuple:
+        """The single decision + atomic reservation every dispatch call
+        site needs before creating an agent for `task`: which cli_tool/
+        cli_model to actually use, and whether that reservation must be
+        released later. Consolidates resolve_cli_and_model +
+        try_reserve_cli_model_slot + resolve_fallback_model (previously
+        re-derived ad hoc at each of get_next_queued_task, create_task,
+        restart_task_endpoint, bump_task_priority_endpoint, and
+        orchestrator.py's create_agent_for_task_direct -- five copies of
+        the same decision tree to drift out of sync).
+
+        Returns (cli_type_override, model_override, reservation, saturated):
+          - cli_type_override, model_override: None to use the phase's own
+            primary combo unmodified (either no limit is configured for
+            it, or it had a free slot); otherwise the fallback combo the
+            caller should dispatch on instead.
+          - reservation: (cli_type, model) the caller MUST pass to
+            release_cli_model_slot exactly once after the real dispatch
+            attempt finishes (success or failure) -- normally from a
+            `finally` block. None means nothing was reserved (no limit
+            configured for the resolved primary combo), nothing to
+            release.
+          - saturated: True if the primary combo is at its limit and no
+            fallback is usable. The other three return values are all
+            None/None/None in this case -- the caller decides what
+            "saturated with no fallback" means for it (queue the task,
+            dispatch on the primary anyway, etc.), since that varies by
+            call site and isn't this method's concern.
+        """
+        if not self.cli_model_concurrency_limits:
+            return None, None, None, False
+        cli_type, model = self.resolve_cli_and_model(session, task)
+        if not (cli_type and model):
+            return None, None, None, False
+        if self.try_reserve_cli_model_slot(cli_type, model):
+            return None, None, (cli_type, model), False
+        fallback_model = self.resolve_fallback_model(cli_type)
+        if (
+            fallback_model
+            and fallback_model != model
+            and self.try_reserve_cli_model_slot(cli_type, fallback_model)
+        ):
+            return cli_type, fallback_model, (cli_type, fallback_model), False
+        return None, None, None, True
 
     def get_active_agent_count_for_cli_model(self, cli_type: str, model: str) -> int:
         """Count of currently active agents on this exact (cli_type, model)
@@ -363,41 +470,32 @@ class QueueService:
                 # model -- e.g. pi staying pi but Qwen -> mimo-v2.5-pro),
                 # which doesn't share the primary model's slot constraint.
                 # Only skip over the task (not dequeue it) if no fallback is
-                # configured, or the fallback combo is itself saturated --
-                # the next-highest-priority task that fits still gets picked
-                # up this same pass instead of the whole queue stalling
-                # behind one combo.
+                # usable -- the next-highest-priority task that fits still
+                # gets picked up this same pass instead of the whole queue
+                # stalling behind one combo. resolve_cli_model_dispatch
+                # atomically reserves whichever combo it picks (closing the
+                # check-then-act race against every other dispatch call
+                # site sharing this limit); task._reserved_cli_model tells
+                # process_queue which reservation it must release once the
+                # real dispatch attempt (success or failure) finishes.
                 if self.cli_model_concurrency_limits:
-                    cli_type, model = self._resolve_cli_and_model(session, task)
-                    if cli_type and model:
-                        limit = self.cli_model_concurrency_limits.get(f"{cli_type}/{model}")
-                        if limit is not None:
-                            active = self.get_active_agent_count_for_cli_model(cli_type, model)
-                            if active >= limit:
-                                fallback_model = self._resolve_fallback_model(cli_type)
-                                if fallback_model and fallback_model != model:
-                                    fallback_limit = self.cli_model_concurrency_limits.get(
-                                        f"{cli_type}/{fallback_model}"
-                                    )
-                                    fallback_active = (
-                                        self.get_active_agent_count_for_cli_model(cli_type, fallback_model)
-                                        if fallback_limit is not None
-                                        else 0
-                                    )
-                                    if fallback_limit is None or fallback_active < fallback_limit:
-                                        logger.info(
-                                            f"Task {task.id}'s primary combo {cli_type}/{model} at its "
-                                            f"concurrency limit ({active}/{limit}) -- dispatching on "
-                                            f"fallback model {fallback_model} instead"
-                                        )
-                                        task._dispatch_cli_override = (cli_type, fallback_model)
-                                        return task
-                                logger.debug(
-                                    f"Task {task.id} would dispatch on {cli_type}/{model}, already at "
-                                    f"its concurrency limit ({active}/{limit}) with no usable fallback "
-                                    "-- skipping for now"
-                                )
-                                continue
+                    cli_override, model_override, reservation, saturated = self.resolve_cli_model_dispatch(
+                        session, task
+                    )
+                    if saturated:
+                        logger.debug(
+                            f"Task {task.id}'s combo is already at its concurrency limit with no "
+                            "usable fallback -- skipping for now"
+                        )
+                        continue
+                    if cli_override:
+                        logger.info(
+                            f"Task {task.id}'s primary combo at its concurrency limit -- "
+                            f"dispatching on fallback model {model_override} instead"
+                        )
+                        task._dispatch_cli_override = (cli_override, model_override)
+                    if reservation:
+                        task._reserved_cli_model = reservation
 
                 # Task is valid, return it
                 logger.info(

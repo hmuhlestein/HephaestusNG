@@ -970,89 +970,71 @@ def create_agent_for_task_direct(
             # dispatch path for phase transitions, entirely bypassing
             # QueueService.get_next_queued_task's equivalent check, even
             # though this is the path that actually creates most phase
-            # tasks (scope_review, development, etc.) in a live run. Reuses
-            # QueueService's resolution/count helpers rather than
-            # re-deriving the same formula a second place to drift from.
-            # Bug: this block used to assign straight into
-            # phase_cli_tool_override/phase_cli_model_override -- the same
-            # names as this function's own parameters (added after this
-            # concurrency gate, for the session-limit escalation retry at
-            # this function's other call site). That unconditional
-            # `= None` reset silently discarded any caller-supplied
-            # override before the "only run if none was passed" check
-            # below ever got to see it, breaking session-limit escalation's
-            # fallback dispatch outright. Computed into separate names and
-            # merged with the caller's value afterward instead.
-            _concurrency_cli_override = None
-            _concurrency_model_override = None
+            # tasks (scope_review, development, etc.) in a live run.
+            # resolve_cli_model_dispatch atomically reserves whichever
+            # combo it picks -- the caller-supplied phase_cli_tool_override
+            # (e.g. session-limit escalation) always wins and skips this
+            # gate entirely, since it's a bug for this gate's own decision
+            # to overwrite one the caller already made (see the regression
+            # test test_caller_supplied_override_is_respected_not_discarded
+            # for the incident this guards against).
+            _reservation = None
             phase_glm_token_env = None
             phase_thinking_level = None
             qs = getattr(server_state, "queue_service", None)
-            # Only run concurrency check if no explicit overrides were passed
             if qs and qs.cli_model_concurrency_limits and not phase_cli_tool_override:
-                cli_type, model = qs._resolve_cli_and_model(session, task)
-                if cli_type and model:
-                    limit = qs.cli_model_concurrency_limits.get(f"{cli_type}/{model}")
-                    if limit is not None and qs.get_active_agent_count_for_cli_model(cli_type, model) >= limit:
-                        fallback_model = qs._resolve_fallback_model(cli_type)
-                        if fallback_model and fallback_model != model:
-                            fallback_limit = qs.cli_model_concurrency_limits.get(f"{cli_type}/{fallback_model}")
-                            fallback_active = (
-                                qs.get_active_agent_count_for_cli_model(cli_type, fallback_model)
-                                if fallback_limit is not None
-                                else 0
-                            )
-                            if fallback_limit is None or fallback_active < fallback_limit:
-                                _concurrency_cli_override = cli_type
-                                _concurrency_model_override = fallback_model
-                                # Passing phase_cli_tool/_model explicitly
-                                # below short-circuits create_agent_for_task's
-                                # own auto-fetch-from-Phase-row block (it
-                                # only fires when all four phase_* args are
-                                # None) -- fetch glm_token_env/thinking_level
-                                # here too so overriding the CLI/model
-                                # doesn't also silently drop this phase's
-                                # other config for this one dispatch.
-                                if task.phase_id:
-                                    _phase_row = session.query(Phase).filter_by(id=task.phase_id).first()
-                                    if _phase_row:
-                                        phase_glm_token_env = _phase_row.glm_api_token_env
-                                        phase_thinking_level = _phase_row.thinking_level
-                                logger.info(
-                                    f"[create_agent_for_task_direct] Task {task_id[:8]}'s primary combo "
-                                    f"{cli_type}/{model} at its concurrency limit -- dispatching on "
-                                    f"fallback model {fallback_model} instead"
-                                )
-                        if _concurrency_cli_override is None:
-                            # No usable fallback -- dispatch on the primary
-                            # anyway rather than block this phase transition
-                            # entirely (this function has no "queue and
-                            # retry later" path the way process_queue does).
-                            logger.warning(
-                                f"[create_agent_for_task_direct] Task {task_id[:8]}'s combo {cli_type}/{model} "
-                                "at its concurrency limit with no usable fallback -- dispatching anyway"
-                            )
-
-            # A caller-supplied override (e.g. session-limit escalation)
-            # wins; the concurrency gate above only fills in when the
-            # caller didn't already decide.
-            phase_cli_tool_override = phase_cli_tool_override or _concurrency_cli_override
-            phase_cli_model_override = phase_cli_model_override or _concurrency_model_override
-
-            agent = asyncio.run(
-                server_state.agent_manager.create_agent_for_task(
-                    task=task,
-                    enriched_data=enriched_data,
-                    memories=[],
-                    project_context="",
-                    agent_type=agent_type,
-                    use_existing_worktree=True,
-                    phase_cli_tool=phase_cli_tool_override,
-                    phase_cli_model=phase_cli_model_override,
-                    phase_glm_token_env=phase_glm_token_env,
-                    phase_thinking_level=phase_thinking_level,
+                cli_override, model_override, _reservation, saturated = qs.resolve_cli_model_dispatch(
+                    session, task
                 )
-            )
+                if saturated:
+                    # No usable fallback -- dispatch on the primary anyway
+                    # rather than block this phase transition entirely
+                    # (this function has no "queue and retry later" path
+                    # the way process_queue does).
+                    logger.warning(
+                        f"[create_agent_for_task_direct] Task {task_id[:8]}'s combo is at its "
+                        "concurrency limit with no usable fallback -- dispatching anyway"
+                    )
+                elif cli_override:
+                    phase_cli_tool_override = cli_override
+                    phase_cli_model_override = model_override
+                    # Passing phase_cli_tool/_model explicitly below
+                    # short-circuits create_agent_for_task's own
+                    # auto-fetch-from-Phase-row block (it only fires when
+                    # all four phase_* args are None) -- fetch
+                    # glm_token_env/thinking_level here too so overriding
+                    # the CLI/model doesn't also silently drop this
+                    # phase's other config for this one dispatch.
+                    if task.phase_id:
+                        _phase_row = session.query(Phase).filter_by(id=task.phase_id).first()
+                        if _phase_row:
+                            phase_glm_token_env = _phase_row.glm_api_token_env
+                            phase_thinking_level = _phase_row.thinking_level
+                    logger.info(
+                        f"[create_agent_for_task_direct] Task {task_id[:8]}'s primary combo at its "
+                        f"concurrency limit -- dispatching on fallback model {model_override} instead"
+                    )
+
+            # _reservation (if any) must be released once this dispatch
+            # attempt finishes, success or not.
+            try:
+                agent = asyncio.run(
+                    server_state.agent_manager.create_agent_for_task(
+                        task=task,
+                        enriched_data=enriched_data,
+                        memories=[],
+                        project_context="",
+                        agent_type=agent_type,
+                        use_existing_worktree=True,
+                        phase_cli_tool=phase_cli_tool_override,
+                        phase_cli_model=phase_cli_model_override,
+                        phase_glm_token_env=phase_glm_token_env,
+                        phase_thinking_level=phase_thinking_level,
+                    )
+                )
+            finally:
+                if _reservation and qs:
+                    qs.release_cli_model_slot(*_reservation)
             # create_agent_for_task mutates task.assigned_agent_id/status on
             # THIS object, but commits its own separate session (which owns
             # the new Agent row) -- not this one. Without committing here
