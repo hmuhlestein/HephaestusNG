@@ -4093,6 +4093,27 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
             # is invisible to every dispatch case below otherwise.
             _release_pending_phases_with_done_tasks(db, workflow_id, logger)
 
+            # Self-heal: tasks that are "done" but have a failure_reason
+            # indicate gate validation failed after the task completed.
+            # Reset these to "failed" so they can be properly retried
+            # with correct gate evaluation.
+            inconsistent_tasks = (
+                db.query(Task)
+                .filter(
+                    Task.workflow_id == workflow_id,
+                    Task.status == "done",
+                    Task.failure_reason.isnot(None),
+                    Task.failure_reason != "",
+                )
+                .all()
+            )
+            for t in inconsistent_tasks:
+                logger.warning(f"[PHASE-ADVANCE] Task {t.id[:8]} is 'done' but has failure_reason — resetting to 'failed' for proper gate evaluation")
+                t.status = "failed"
+                t.completed_at = None
+            if inconsistent_tasks:
+                db.commit()
+
             # Get all phases and their statuses
             phase_statuses = _get_phase_statuses(db, workflow_id)
 
