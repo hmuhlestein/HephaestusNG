@@ -326,12 +326,38 @@ class MonitoringLoop:
                                     fallback_tool = getattr(phase, "fallback_cli_tool", None)
                                     fallback_model = getattr(phase, "fallback_cli_model", None)
 
+                            cfg = get_config()
+
                             # Fall back to global config defaults
                             if not fallback_tool:
-                                cfg = get_config()
                                 if cfg.default_fallback_cli_tool and (cfg.default_fallback_cli_tool != agent.cli_type or cfg.default_fallback_cli_model != agent.cli_model):
                                     fallback_tool = cfg.default_fallback_cli_tool
                                     fallback_model = cfg.default_fallback_cli_model
+
+                            # Last resort: default_fallback_cli_tool/_model can
+                            # resolve to the exact same cli+model that just hit
+                            # the limit (e.g. default_cli_tool and
+                            # default_fallback_cli_tool both "pi" on the same
+                            # model) -- nothing to actually switch to via that
+                            # pair. secondary_cli_model_fallback is normally
+                            # reserved for a non-primary cli_type via the
+                            # role-based lookup in CLIAgentInterface.fallback_model,
+                            # so it's unreachable through THAT path when the
+                            # stuck agent's cli_type IS the primary (the common
+                            # case here -- every phase agent runs as "pi") --
+                            # but it's still a real, different MODEL on the
+                            # same CLI harness (pi understands "sonnet" as a
+                            # model string), worth trying before giving up and
+                            # pausing the whole workflow. Observed live: this
+                            # exact case paused a workflow with a viable
+                            # secondary_cli_model_fallback configured and
+                            # never consulted.
+                            if (
+                                not fallback_tool
+                                or (fallback_tool == agent.cli_type and fallback_model == agent.cli_model)
+                            ) and cfg.secondary_cli_model_fallback and cfg.secondary_cli_model_fallback != agent.cli_model:
+                                fallback_tool = agent.cli_type
+                                fallback_model = cfg.secondary_cli_model_fallback
 
                             if fallback_tool and (fallback_tool != agent.cli_type or fallback_model != agent.cli_model):
                                 logger.warning(

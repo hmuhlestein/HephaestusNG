@@ -99,6 +99,14 @@ additional_notes: |
   grep -r "EXHAUSTED\|STUCK\|FAILED" ~/.hephaestus/logs/ | tail -20
   ```
 
+  Check for orphaned agent branches the automated healer couldn't fast-forward
+  on its own (real, committed work from a stranded agent, left unmerged
+  because the branch has diverged from main and needs a human to resolve --
+  see heal_orphaned_agent_branches in src/autopilot/orchestrator.py):
+  ```bash
+  grep -r "\[BRANCH-HEAL\] FAILED" ~/.hephaestus/logs/ | tail -20
+  ```
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 4: CREATE PRIORITIZED FIX PLAN
   ═══════════════════════════════════════════════════════════════════════

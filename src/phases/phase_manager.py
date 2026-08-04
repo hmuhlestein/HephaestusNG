@@ -610,16 +610,18 @@ class PhaseManager:
             session.close()
 
     def phase_role_previously_completed(self, phase_id: str, role: str) -> bool:
-        """Check whether an EARLIER phase in this same workflow shares the
-        given session role and has already completed.
+        """Check whether a genuine prior pi conversation for this role
+        already exists in this workflow -- either an EARLIER-ordered phase
+        sharing the role that has completed, or THIS SAME phase having
+        already run at least once before (a goto or retry sending it back
+        to itself).
 
         Session IDs are deterministic per (project, design, role, model) --
-        see get_session_id in src.autopilot.phases -- so a phase only
-        resumes a genuine prior pi conversation if an earlier-ordered phase
-        mapped to the same role actually ran before it. A role appearing
-        more than once in the pipeline config is not by itself evidence of
-        reuse: the *first* phase to use a shared role has no prior session
-        either.
+        see get_session_id in src.autopilot.phases -- so both cases resume
+        the exact same pi session/conversation with full memory. A role
+        appearing more than once in the pipeline config is not by itself
+        evidence of reuse: the *first* phase to use a shared role has no
+        prior session either.
         """
         from src.autopilot.phases import SESSION_ROLES
 
@@ -642,18 +644,40 @@ class PhaseManager:
                 for p in earlier_phases
                 if SESSION_ROLES.get(p.name, p.name) == role
             ]
-            if not earlier_same_role_ids:
-                return False
-
-            completed = (
-                session.query(PhaseExecution)
-                .filter(
-                    PhaseExecution.phase_id.in_(earlier_same_role_ids),
-                    PhaseExecution.status == "completed",
+            if earlier_same_role_ids:
+                completed = (
+                    session.query(PhaseExecution)
+                    .filter(
+                        PhaseExecution.phase_id.in_(earlier_same_role_ids),
+                        PhaseExecution.status == "completed",
+                    )
+                    .first()
                 )
-                .first()
-            )
-            return completed is not None
+                if completed is not None:
+                    return True
+
+            # A goto/retry back to THIS SAME phase (e.g. adversarial_review
+            # finds issues and sends the pipeline back to development) is
+            # not "an earlier phase" in the Phase.order sense above -- it's
+            # the identical phase_id, re-run. get_session_id keys purely on
+            # (project, design, role, model), so this new task's agent
+            # resumes the exact same conversation as the phase's first
+            # pass regardless. A goto also resets this phase's own
+            # PhaseExecution.status back to "pending" (see
+            # _handle_evaluation_goto), erasing the "completed" evidence a
+            # status check would need -- count prior Task rows for this
+            # phase_id instead, which a goto never resets. The current
+            # task's own row is already committed by the time this runs
+            # (see AgentPromptBuilder.format_initial_message's caller), so
+            # more than one row means a real earlier attempt exists.
+            if SESSION_ROLES.get(phase.name, phase.name) == role:
+                prior_task_count = (
+                    session.query(Task).filter(Task.phase_id == phase_id).count()
+                )
+                if prior_task_count > 1:
+                    return True
+
+            return False
         finally:
             session.close()
 
