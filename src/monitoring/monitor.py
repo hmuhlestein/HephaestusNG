@@ -1984,7 +1984,7 @@ class MonitoringLoop:
                 finally:
                     session.close()
             except Exception as e:
-                logger.debug(f"[WORKFLOW-SWITCH] Check failed: {e}")
+                logger.error(f"[WORKFLOW-SWITCH] Check failed: {e}")
 
         # Propagate phase_manager to agent_manager so spawned agents get phase context
         if self.phase_manager and self.agent_manager and not self.agent_manager.phase_manager:
@@ -2314,7 +2314,7 @@ class MonitoringLoop:
                             transcript_dir / f"{agent.tmux_session_name}.clean.log",
                         )
                 except Exception as e:
-                    logger.debug(f"[STABLE-TRANSCRIPT] Final flush before auto-restart failed: {e}")
+                    logger.error(f"[STABLE-TRANSCRIPT] Final flush before auto-restart failed: {e}")
 
                 self.agent_manager.tmux_server.kill_session(agent.tmux_session_name)
                 logger.info(f"Killed tmux session {agent.tmux_session_name}")
@@ -2612,7 +2612,7 @@ class MonitoringLoop:
             manifest[f"{phase_name}_{agent_id[:8]}"] = str(log_file)
             manifest_path.write_text(_json.dumps(manifest, indent=2))
         except Exception as e:
-            logger.debug(f"[TMUX-LOG] Failed to write log for {agent_id[:8]}: {e}")
+            logger.error(f"[TMUX-LOG] Failed to write log for {agent_id[:8]}: {e}")
 
     async def _audit_system_health(self):
         """Audit system health across all autopilot workflows.
@@ -2775,7 +2775,7 @@ class MonitoringLoop:
                                     pm.workflow_id = task.workflow_id
                                     pm.mark_phase_complete(_phase.id, "Phase completed (monitor promoted stuck task)", phase_output=phase_output)
                         except Exception as e:
-                            logger.debug(f"[HEALTH] Failed to fire spec gate for task {task.id[:8]}: {e}")
+                            logger.error(f"[HEALTH] Failed to fire spec gate for task {task.id[:8]}: {e}")
                 else:
                     logger.warning(
                         f"[HEALTH] Task {task.id[:8]} stuck in_progress with no "
@@ -2795,7 +2795,7 @@ class MonitoringLoop:
                     from src.services.cost_collection_service import collect_task_cost
                     collect_task_cost(task.id)
                 except Exception as e:
-                    logger.debug(f"[COST-COLLECT] Failed for stuck task {task.id[:8]}: {e}")
+                    logger.error(f"[COST-COLLECT] Failed for stuck task {task.id[:8]}: {e}")
         except Exception as e:
             logger.error(f"Error in task stuck detection: {e}")
         finally:
