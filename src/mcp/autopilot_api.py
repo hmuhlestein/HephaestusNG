@@ -3737,11 +3737,9 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
         workflow_id = feature.workflow_id
         feature_name = feature.name
 
-        # Resume the workflow (same logic as resume_feature endpoint)
-        if wf.status in ("paused", "failed"):
-            wf.status = "active"
-            wf.paused_by = None
-            wf.status_reason = None
+        # Keep workflow paused for review - the feature stays yellow
+        # until user approves after development fixes are done
+        # Don't resume the workflow here, just create the task
 
         # Find restartable tasks, or create a new one if all are done
         candidates = (
@@ -3777,11 +3775,24 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             )
             if dev_phase:
                 import uuid
+                # Load feedback prompt template from YAML
+                feedback_prompt = f"## Human Review Feedback\n\n{req.feedback.strip()}\n\nRead the feature report for context: .hephaestus/feature_report.html\n\nAddress all feedback items and make the necessary code changes."
+                try:
+                    import yaml as _yaml
+                    from pathlib import Path as _Path
+                    prompt_file = _Path(__file__).parent.parent.parent / "config" / "prompts" / "review_feedback.yaml"
+                    if prompt_file.exists():
+                        with open(prompt_file) as f:
+                            prompt_config = _yaml.safe_load(f)
+                            feedback_prompt = prompt_config.get("review_feedback_prompt", feedback_prompt).format(feedback=req.feedback.strip())
+                except Exception:
+                    pass  # Use default prompt
+
                 new_task = Task(
                     id=str(uuid.uuid4()),
                     workflow_id=workflow_id,
                     phase_id=dev_phase.id,
-                    raw_description=f"## Human Review Feedback\n\n{req.feedback.strip()}\n\nRead the feature report for context: .hephaestus/feature_report.html\n\nAddress all feedback items and make the necessary code changes.",
+                    raw_description=feedback_prompt,
                     enriched_description=None,
                     done_definition="All review feedback addressed",
                     status="pending",
@@ -3818,7 +3829,8 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                         updated_by="ui-user",
                     ))
 
-        feature.status = "active"
+        # Keep feature paused for review - user must approve after fixes
+        # feature.status stays "paused" and wf.paused_by stays "review"
         db.commit()
 
     # Spawn agents for restarted tasks (out of DB session, same as resume_feature)
