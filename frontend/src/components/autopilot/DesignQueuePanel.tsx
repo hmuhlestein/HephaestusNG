@@ -944,7 +944,7 @@ const FeatureRow: React.FC<{
           )}
           <FeatureCostBadge cost={feature.cost_total_usd ?? 0} />
           <FeatureStatusBadge status={feature.status} />
-          {reviewPending && feature.status === 'completed' && (
+          {reviewPending && (feature.status === 'completed' || feature.status === 'paused') && (
             <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-100 text-amber-700 border border-amber-300 animate-pulse">
               Review
             </span>
@@ -982,7 +982,7 @@ const FeatureRow: React.FC<{
               <FileBarChart2 className="w-3.5 h-3.5" />
             </button>
           )}
-          {reviewPending && feature.status === 'completed' && onReviewFeature && (
+          {reviewPending && (feature.status === 'completed' || feature.status === 'paused') && onReviewFeature && (
             <button
               onClick={(e) => { e.stopPropagation(); onReviewFeature(feature.id, feature); }}
               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-sm transition-colors"
