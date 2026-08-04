@@ -1709,7 +1709,7 @@ class AgentManager:
             stray_tasks = (
                 session.query(Task)
                 .filter_by(assigned_agent_id=agent_id)
-                .filter(Task.status.in_(["assigned", "in_progress"]))
+                .filter(Task.status.in_(["assigned", "in_progress", "pending"]))
                 .all()
             )
             for stray in stray_tasks:

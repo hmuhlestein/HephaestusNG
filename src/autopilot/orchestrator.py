@@ -4706,6 +4706,31 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
         if orphaned_pending:
             db.commit()
 
+        # Also check for pending tasks with terminated agents (regardless of age)
+        terminated_pending = (
+            db.query(Task)
+            .filter(
+                Task.phase_id == phase.id,
+                Task.status == "pending",
+                Task.assigned_agent_id.isnot(None),
+                ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+                *cycle_filter,
+            )
+            .all()
+        )
+        terminated_tasks = []
+        for t in terminated_pending:
+            agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
+            if agent and agent.status == "terminated":
+                terminated_tasks.append(t)
+        for t in terminated_tasks:
+            logger.warning(f"[PHASE-ADVANCE] {phase.name} has pending task {t.id[:8]} with terminated agent -- marking failed")
+            t.status = "failed"
+            t.failure_reason = "Agent terminated"
+            t.assigned_agent_id = None
+        if terminated_tasks:
+            db.commit()
+
         # Mark pending tasks with retry_count past cap as failed
         # These are stuck in pending state but have been retried too many times
         try:
