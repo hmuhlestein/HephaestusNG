@@ -7285,6 +7285,39 @@ def _wait_for_review_clearance(
         time.sleep(poll_interval)
 
 
+def _wait_for_pending_reviews(
+    project_id: str,
+    logger: "OrchestratorLogger",
+    poll_interval: int = 30,
+) -> None:
+    """Block until all features pending review are approved.
+
+    Called before starting new features to ensure review mode gates
+    the entire pipeline, not just individual features.
+    """
+    from src.core.database import Feature, Workflow, get_db
+
+    while True:
+        try:
+            with get_db() as db:
+                pending_reviews = (
+                    db.query(Feature)
+                    .join(Workflow, Feature.workflow_id == Workflow.id)
+                    .filter(
+                        Workflow.project_id == project_id,
+                        Workflow.paused_by == "review",
+                        Workflow.status == "paused",
+                    )
+                    .count()
+                )
+                if pending_reviews == 0:
+                    return
+                logger.info(f"[REVIEW] Waiting for {pending_reviews} feature(s) pending review before starting new features")
+        except Exception as e:
+            logger.error(f"[REVIEW] Error checking pending reviews: {e}")
+        time.sleep(poll_interval)
+
+
 def _run_one_feature(
     sdk,
     design_entry: DesignEntry,
@@ -7499,6 +7532,10 @@ def _run_one_feature(
         if wf_status == "completed":
             # Check if product validation passed
             # For now, mark as completed if workflow completed
+            # Review mode: pause for human approval BEFORE marking completed
+            if project_id and feature_id and _should_pause_for_review(project_id):
+                _pause_feature_for_review(feature_id, logger)
+                _wait_for_review_clearance(feature_id, logger, project_id=project_id)
             final_status = "completed"
         elif wf_status == "paused":
             # Not a failure -- run_single_workflow returns "paused" for a
@@ -7648,6 +7685,10 @@ def run_feature_pipelines(
 
         if not features_to_run:
             continue
+
+        # Review mode: wait for any pending reviews before starting new features
+        if project_id and _should_pause_for_review(project_id):
+            _wait_for_pending_reviews(project_id, logger)
 
         # Run features in this group
         if len(features_to_run) == 1:
