@@ -3300,7 +3300,8 @@ async def get_project_design_status(project_id: str, filename: str):
                             Task.status == "done",
                         ).first()
                         if doc_review_done:
-                            has_report = (Path(feat_wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html").is_file()
+                            has_report = (Path(feat_wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html").is_file() or \
+                                         (Path(feat_wf.working_directory) / "docs" / "feature_report.html").is_file()
 
             features.append(
                 {
@@ -3458,6 +3459,9 @@ async def get_workflow_feature_report(workflow_id: str):
         working_directory = wf.working_directory
 
     report_path = Path(working_directory) / CONTEXT_DIR_NAME / "feature_report.html"
+    if not report_path.is_file():
+        # Also check docs/ directory
+        report_path = Path(working_directory) / "docs" / "feature_report.html"
     if not report_path.is_file():
         raise HTTPException(404, "Report not found")
     return HTMLResponse(content=report_path.read_text(errors="replace"))
@@ -4191,6 +4195,9 @@ async def get_feature_record_report(feature_id: str):
             raise HTTPException(404, "Feature's workflow has no known working directory")
 
     report_path = Path(base_dir) / CONTEXT_DIR_NAME / "feature_report.html"
+    if not report_path.is_file():
+        # Also check docs/ directory
+        report_path = Path(base_dir) / "docs" / "feature_report.html"
     if not report_path.is_file():
         raise HTTPException(404, "Report not found")
     return HTMLResponse(content=report_path.read_text(errors="replace"))
