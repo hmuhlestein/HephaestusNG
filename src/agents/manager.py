@@ -787,18 +787,6 @@ class AgentManager:
             )
             logger.info(f"Initial message length: {len(initial_message)} characters")
 
-            # Save the full prompt to /tmp for debugging
-            debug_prompt_path = f"/tmp/hephaestus_debug_prompt_{agent_id}.txt"
-            with open(debug_prompt_path, "w") as f:
-                f.write("=== FULL INITIAL MESSAGE DEBUG ===\n")
-                f.write(f"Agent ID: {agent_id}\n")
-                f.write(f"Task ID: {task.id}\n")
-                f.write(f"Message length: {len(initial_message)} characters\n")
-                f.write(f"Timestamp: {datetime.utcnow()}\n")
-                f.write(f"{'=' * 50}\n\n")
-                f.write(initial_message)
-            logger.info(f"🔍 DEBUG: Full initial message saved to: {debug_prompt_path}")
-
             # Wait for CLI to initialize first
             wait_time = 25
             logger.info(
