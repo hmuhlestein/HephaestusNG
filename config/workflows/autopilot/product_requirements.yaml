@@ -81,12 +81,12 @@ additional_notes: |
       - features/*/docs/ (design docs for previous features)
 
   4. Search the vector database for existing knowledge:
-     NOTE: heph_search_memory is OPTIONAL. Try it once — if it returns empty results
+     NOTE: search_memory is OPTIONAL. Try it once — if it returns empty results
      or errors, SKIP IT and proceed. Do NOT retry failed searches.
 
      ```python
      # Try once — if empty or error, skip and move on
-     result = heph_search_memory({"query": "project decisions", "limit": 5})
+     result = search_memory({"query": "project decisions", "limit": 5})
      # If result is empty or tool errors → skip, proceed to Step 1
      ```
 
@@ -234,14 +234,14 @@ additional_notes: |
   - ...
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 7: SAVE TO MEMORY (using heph_save_memory MCP tool)
+  STEP 7: SAVE TO MEMORY (using save_memory MCP tool)
   ═══════════════════════════════════════════════════════════════════════
 
-  Save key findings to the vector database using heph_save_memory().
+  Save key findings to the vector database using save_memory().
   Make ONE comprehensive call instead of multiple separate calls:
 
   ```python
-  heph_save_memory({
+  save_memory({
       "content": f"Requirements for {feature_name}: Stack=[list]. Components=[list]. Constraints=[list]. Integration=[list].",
       "memory_type": "decision",
       "tags": ["requirements", "architecture"]
@@ -281,12 +281,12 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
 
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
-  You MUST call the heph_complete_my_task tool. The system CANNOT detect you finished
+  You MUST call the complete_my_task tool. The system CANNOT detect you finished
   without this call. The pipeline WILL get stuck.
 
   After writing all your output files, call:
 
-  heph_complete_my_task({
+  complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was accomplished>",
     "key_learnings": ["<key findings or decisions>"]

@@ -40,8 +40,8 @@ additional_notes: |
   Search for all open tickets and issues:
   ```bash
   # Use MCP tools if available
-  heph_search_tickets(status="open")
-  heph_search_tickets(status="open", ticket_type="bug")
+  search_tickets(status="open")
+  search_tickets(status="open", ticket_type="bug")
   ```
 
   Also check for:
@@ -157,7 +157,7 @@ additional_notes: |
 
   Save key findings to memory:
   ```bash
-  heph_save_memory({
+  save_memory({
     "content": "Tech debt analysis: [summary of findings]",
     "type": "discovery"
   })
@@ -165,7 +165,7 @@ additional_notes: |
 
   Mark task complete:
   ```bash
-  heph_complete_my_task({
+  complete_my_task({
     "status": "done",
     "summary": "Analyzed open tickets and tech debt. Created prioritized fix plan.",
     "key_learnings": ["[key finding 1]", "[key finding 2]"]

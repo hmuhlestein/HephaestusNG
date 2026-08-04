@@ -307,10 +307,10 @@ additional_notes: |
   WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
   ═══════════════════════════════════════════════════════════════════════
 
-  CRITICAL: You MUST call the heph_complete_my_task tool. The pipeline will stall
+  CRITICAL: You MUST call the complete_my_task tool. The pipeline will stall
   without it.
 
-  heph_complete_my_task(
+  complete_my_task(
     status="done",
     summary="<brief summary: N BLOCKERs found, M WARNINGs found — see adversarial.md>",
     key_learnings=["<specific failure modes found>"]

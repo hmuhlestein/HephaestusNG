@@ -205,7 +205,7 @@ additional_notes: |
   Before attempting to merge, check for open bug tickets:
   ```bash
   # Check via MCP if available
-  heph_search_tickets(status="open", ticket_type="bug")
+  search_tickets(status="open", ticket_type="bug")
   ```
 
   If open bug tickets exist:
@@ -221,12 +221,12 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
-  You MUST call the heph_complete_my_task tool. The system CANNOT detect you finished
+  You MUST call the complete_my_task tool. The system CANNOT detect you finished
   without this call. The pipeline WILL get stuck.
   
   After all git operations complete, call:
   
-  heph_complete_my_task({
+  complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was committed and merged>",
     "key_learnings": ["<commit hash>", "<PR URL if created>"]
