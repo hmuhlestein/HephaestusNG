@@ -277,6 +277,27 @@ additional_notes: |
   DEFER (minor) = style, documentation gap, optimization opportunity, minor naming deviation
   
   ═══════════════════════════════════════════════════════════════════════
+  HUMAN REVIEW FEEDBACK (IF PRESENT IN YOUR TASK DESCRIPTION)
+  ═══════════════════════════════════════════════════════════════════════
+
+  If your task description contains a "## Human Review Feedback" section:
+  1. Read the feedback carefully — it takes priority over your own findings
+  2. Address each feedback item in your review
+  3. If the feedback requires code changes (not just documentation):
+     - Mark the task as FAILED with a summary of what needs to be fixed
+     - Use heph_complete_my_task with status="failed" and include the specific
+       code changes needed in the failure_reason
+     - The orchestrator will automatically route back to development to fix
+  4. If the feedback only requires documentation/report updates, make them directly
+
+  Example when code changes are needed:
+  ```
+  heph_complete_my_task({
+    "status": "failed",
+    "failure_reason": "Review feedback requires code changes: (1) Fix JWT validation in src/auth/jwt.py:45 to handle expired tokens, (2) Add rate limiting to /api/login endpoint"
+  })
+  ```
+  ═══════════════════════════════════════════════════════════════════════
   CRITICAL RULES
   ═══════════════════════════════════════════════════════════════════════
   

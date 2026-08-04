@@ -3777,11 +3777,9 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             )
             if review_phase:
                 import uuid
-                # Include phase description in enriched_description so the
-                # agent gets the full architectural review system prompt
-                phase_desc = review_phase.description or ""
-                feedback_section = f"\n\n## Human Review Feedback\n\n{req.feedback.strip()}\n\nPlease address the above feedback and make necessary changes."
-                full_description = phase_desc + feedback_section
+                # Simple feedback prefix - the YAML prompt handles the instructions
+                feedback_prefix = f"## Human Review Feedback\n\n{req.feedback.strip()}\n\n" if req.feedback else ""
+                full_description = feedback_prefix + (review_phase.description or "")
 
                 new_task = Task(
                     id=str(uuid.uuid4()),
