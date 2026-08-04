@@ -104,9 +104,12 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
     workflow_blocks_completion = bool(wf and wf.status in ("failed", "paused"))
 
     if task_statuses == {TaskStatus.DONE} and workflow_blocks_completion:
-        # Keep active so retry/resume logic can pick it back up, instead of
-        # the UI showing a falsely "done" feature.
-        derived = FeatureStatus.ACTIVE
+        # If workflow is failed, the feature should be failed too
+        # If workflow is paused, keep active so retry/resume logic can pick it back up
+        if wf and wf.status == "failed":
+            derived = FeatureStatus.FAILED
+        else:
+            derived = FeatureStatus.ACTIVE
     elif task_statuses == {TaskStatus.DONE}:
         derived = FeatureStatus.COMPLETED
     elif wf and wf.status == "completed":
