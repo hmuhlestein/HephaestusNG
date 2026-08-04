@@ -3141,7 +3141,33 @@ async def get_project_design_status(project_id: str, filename: str):
         # being paused mid-run. Without this, design_status stays 'active'
         # forever after a pause, the pause/resume button never flips to
         # 'resume', and clicking pause looks like it did nothing.
-        _wf_statuses = [wf.status for wf in matching_workflows]
+        #
+        # BUT matching_workflows is deliberately broad (LIKE-matched on the
+        # bare design filename), so it also catches every OTHER feature's
+        # workflow that happened to originate from the same design document
+        # -- a design gets re-run once per decomposed feature, and each
+        # feature's own workflow references the same design_document path
+        # in its launch_params. A workflow whose OWN linked Feature has
+        # already reached completed/skipped is not a live in-flight run no
+        # matter what its own (potentially stale, never-cleaned-up)
+        # Workflow.status says -- trusting it here made the WHOLE design
+        # look permanently "Active". Observed live: BACKEND_DESIGN.md's
+        # Credit Management System feature completed 2026-07-29 but its
+        # workflow (f1b3c0e0) never got its status flipped from "active",
+        # so every later feature's design-status view showed a permanent
+        # spinner even after the design (and every feature) genuinely
+        # finished.
+        _feature_status_by_wf = {}
+        _wf_ids_for_feature_check = [wf.id for wf in matching_workflows]
+        if _wf_ids_for_feature_check:
+            with get_db() as _db:
+                for feat in _db.query(Feature).filter(Feature.workflow_id.in_(_wf_ids_for_feature_check)).all():
+                    _feature_status_by_wf[feat.workflow_id] = feat.status
+        _wf_statuses = [
+            wf.status
+            for wf in matching_workflows
+            if _feature_status_by_wf.get(wf.id) not in ("completed", "skipped")
+        ]
         if any(s == "active" for s in _wf_statuses):
             overall_status = "active"
         elif _wf_statuses and any(s == "paused" for s in _wf_statuses):
