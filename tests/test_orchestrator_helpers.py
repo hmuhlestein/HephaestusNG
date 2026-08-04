@@ -2058,6 +2058,34 @@ class TestCreateAgentForTaskDirectCliModelConcurrencyLimit:
         assert kwargs["phase_cli_tool"] is None
         assert kwargs["phase_cli_model"] is None
 
+    def test_caller_supplied_override_is_respected_not_discarded(self, orch_db_env):
+        """Regression: create_agent_for_task_direct also accepts
+        phase_cli_tool_override/phase_cli_model_override as explicit
+        parameters (used by the session-limit escalation retry at this
+        function's other call site). This concurrency gate's own working
+        variables used to share those exact names, and unconditionally
+        reset them to None near the top of the function -- silently
+        discarding whatever the caller passed in before the "only run if
+        no override was passed" check ever saw it, breaking session-limit
+        escalation's fallback dispatch outright. A caller-supplied override
+        must win even when the primary combo has a free slot (no
+        concurrency-driven override would fire on its own)."""
+        from src.autopilot.orchestrator import create_agent_for_task_direct
+
+        self._seed(orch_db_env, saturate=False)
+        server_state = self._server_state(orch_db_env)  # no concurrency limits configured
+
+        with patch("src.core.app_context.get_app_state", return_value=server_state):
+            create_agent_for_task_direct(
+                "task-1", "wf-1", "phase-1",
+                phase_cli_tool_override="claude",
+                phase_cli_model_override="sonnet",
+            )
+
+        _, kwargs = server_state.agent_manager.create_agent_for_task.call_args
+        assert kwargs["phase_cli_tool"] == "claude"
+        assert kwargs["phase_cli_model"] == "sonnet"
+
 
 class TestCreateCorrectiveTask:
     """Regression: a phase's output failing validation used to discard the
