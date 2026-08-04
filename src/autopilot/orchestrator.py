@@ -4821,7 +4821,8 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                     logger.info(f"[PHASE-ADVANCE] {phase.name} has {done_count} done but {len(retryable_tasks)} failed tasks to retry")
                     for task in retryable_tasks:
                         if task.failure_reason:
-                            base = task.enriched_description or task.raw_description or ""
+                            # Use raw_description as base to avoid accumulating retry messages
+                            base = task.raw_description or ""
                             task.enriched_description = f"{base}\n\n--- RETRY: your previous attempt failed ---\n{task.failure_reason}"
                         task.status = "pending"
                         task.failure_reason = None
@@ -5006,7 +5007,8 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
         reset_task_ids = []
         for task in retryable_tasks:
             if task.failure_reason:
-                base = task.enriched_description or task.raw_description or ""
+                # Use raw_description as base to avoid accumulating retry messages
+                base = task.raw_description or ""
                 task.enriched_description = f"{base}\n\n--- RETRY: your previous attempt failed with this specific error, fix it rather than repeating the same mistake ---\n{task.failure_reason}"
             task.status = "pending"
             task.failure_reason = None
