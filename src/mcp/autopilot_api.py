@@ -3786,8 +3786,11 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                     priority="high",
                 )
                 db.add(new_task)
+                db.flush()  # Ensure new_task.id is populated
                 restartable.append(new_task)
-                logger.info(f"[REVIEW] Created new architectural_review task for feedback")
+                logger.info(f"[REVIEW] Created new architectural_review task {new_task.id} for feedback")
+            else:
+                logger.warning(f"[REVIEW] No architectural_review phase found for workflow {workflow_id}")
 
         to_restart = [(t.id, t.phase_id) for t in restartable]
         for t in restartable:
@@ -3818,6 +3821,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
 
     # Spawn agents for restarted tasks (out of DB session, same as resume_feature)
     for task_id, phase_id in to_restart:
+        logger.info(f"[REVIEW] Spawning agent for task {task_id} (phase {phase_id})")
         asyncio.create_task(_spawn_agent_for_task(task_id, phase_id))
 
     _invalidate("status")

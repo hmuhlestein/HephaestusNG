@@ -7597,9 +7597,10 @@ def _run_one_feature(
 
         # Review mode: if the project has review_mode enabled, pause here and
         # wait for explicit human approval before returning to the caller.
+        # Only pause for review if the feature completed successfully.
         # _wait_for_review_clearance polls every 30 s and respects the
         # pipeline's stop_event so Stop/restart work cleanly.
-        if project_id and feature_id and _should_pause_for_review(project_id):
+        if project_id and feature_id and final_status == "completed" and _should_pause_for_review(project_id):
             _pause_feature_for_review(feature_id, logger)
             _wait_for_review_clearance(feature_id, logger, project_id=project_id)
 
