@@ -406,9 +406,12 @@ class LangChainLLMClient:
             model = self._get_model_for_component(ComponentType.TASK_ENRICHMENT)
             if model is None:
                 return "medium"
-            prompt = get_prompt("classify_complexity", {
-                "design_text": (design_text or "")[:4000],
-            })
+            prompt = get_prompt(
+                "classify_complexity",
+                {
+                    "design_text": (design_text or "")[:4000],
+                },
+            )
             resp = await self._invoke_and_record(
                 model,
                 [
@@ -755,16 +758,16 @@ class LangChainLLMClient:
         phase_context: Optional[str] = None,
     ) -> str:
         """Build prompt for task enrichment."""
-        return get_prompt("task_enrichment", {
-            "task_description": task_description,
-            "done_definition": done_definition,
-            "context": " ".join(context[:10]),
-            "phase_context_section": f"\n\nPhase Context:\n{phase_context}" if phase_context else "",
-            "phase_context_hint": (
-                "\nConsider the phase context when determining complexity and requirements."
-                if phase_context else ""
-            ),
-        })
+        return get_prompt(
+            "task_enrichment",
+            {
+                "task_description": task_description,
+                "done_definition": done_definition,
+                "context": " ".join(context[:10]),
+                "phase_context_section": f"\n\nPhase Context:\n{phase_context}" if phase_context else "",
+                "phase_context_hint": ("\nConsider the phase context when determining complexity and requirements." if phase_context else ""),
+            },
+        )
 
     def _build_ticket_clarification_prompt(
         self,
@@ -853,14 +856,17 @@ class LangChainLLMClient:
         """Fallback prompt when template is unavailable."""
         solutions_text = "\n".join([f"{i + 1}. {sol}" for i, sol in enumerate(potential_solutions)]) if potential_solutions else "No solutions provided"
 
-        return get_prompt("fallback_ticket_clarification", {
-            "ticket_id": ticket_id,
-            "ticket_title": ticket_details.get("title", "Unknown"),
-            "ticket_description": ticket_details.get("description", "No description"),
-            "conflict_description": conflict_description,
-            "context": context if context else "None provided",
-            "solutions_text": solutions_text,
-        })
+        return get_prompt(
+            "fallback_ticket_clarification",
+            {
+                "ticket_id": ticket_id,
+                "ticket_title": ticket_details.get("title", "Unknown"),
+                "ticket_description": ticket_details.get("description", "No description"),
+                "conflict_description": conflict_description,
+                "context": context if context else "None provided",
+                "solutions_text": solutions_text,
+            },
+        )
 
     # Default/fallback methods
     def _default_task_enrichment(self, task_description: str, done_definition: str) -> Dict[str, Any]:

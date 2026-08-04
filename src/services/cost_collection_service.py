@@ -652,9 +652,7 @@ def collect_task_cost(task_id: str) -> None:
         # session already reported in, which would suppress its real cost
         # data entirely.
         if cli_type == "pi":
-            has_realtime_entries = (
-                db.query(CostEntry).filter_by(task_id=task_id, agent_id=agent.id, source="pi").first() is not None
-            )
+            has_realtime_entries = db.query(CostEntry).filter_by(task_id=task_id, agent_id=agent.id, source="pi").first() is not None
             if has_realtime_entries:
                 logger.debug(f"[COST-COLLECT] Task {task_id[:8]} already has real-time pi cost entries — skipping JSONL fallback to avoid double-counting")
                 return
@@ -689,7 +687,7 @@ def collect_task_cost(task_id: str) -> None:
                     # Claude Code sanitizes cwd to a directory name by replacing
                     # / -> -, . -> -, _ -> -.  This matches the observed directory
                     # names in ~/.claude/projects/.
-                    sanitized = cwd.replace('/', '-').replace('.', '-').replace('_', '-')
+                    sanitized = cwd.replace("/", "-").replace(".", "-").replace("_", "-")
                     claude_dir = Path.home() / ".claude" / "projects" / sanitized
 
                     # SECURITY: Verify the resolved path is within expected directory
@@ -832,6 +830,7 @@ def _extract_session_id(agent: Any, task: Any) -> Optional[str]:
 
             model = agent.cli_model or ""
             from src.autopilot.phases import get_session_id
+
             return get_session_id(project_id, design_slug, phase_name, model=model)
     except Exception as e:
         logger.debug(f"Could not reconstruct session ID for agent {agent.id[:8]}: {e}")
