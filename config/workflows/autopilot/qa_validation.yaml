@@ -413,17 +413,17 @@ additional_notes: |
   2. [Problem 2]
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 11: PREPEND STRUCTURED QA RESULT (REQUIRED — drives the pipeline gate)
+  STEP 11: WRITE qa.md WITH FRONTMATTER (REQUIRED — drives the pipeline gate)
   ═══════════════════════════════════════════════════════════════════════
+
+  ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
 
   qa.md is ONE file: a YAML frontmatter block (machine-readable,
   scored against the project spec to decide whether to continue, return to
   development, or return to architecture) followed immediately by the full
   narrative report from the steps above. Use REAL numbers from your run.
 
-  Prepend this frontmatter block to the very top of ./.hephaestus/qa_validation/qa.md,
-  with EXACTLY this schema (type first, then a closing `---`, then the
-  narrative report immediately after):
+  Write the ENTIRE file at once with frontmatter at the top:
 
   ```
   ---
