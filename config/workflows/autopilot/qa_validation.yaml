@@ -427,7 +427,7 @@ additional_notes: |
 
   ```
   ---
-  type: qa_validation_result
+  type: qa_validation
   failed_tests: 0
   failed_test_names: []
   passed_tests: 0
