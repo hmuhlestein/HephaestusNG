@@ -1615,6 +1615,45 @@ class MonitoringLoop:
             logger.warning(f"[BAD-MODEL] check failed for {agent.id[:8]}: {e}")
         return False
 
+    async def _detect_orphaned_idle_agent(self, agent) -> bool:
+        """Detect idle agents whose tmux session no longer exists.
+
+        An agent marked 'idle' with no tmux session is orphaned -- the
+        session died (backend restart, manual kill, etc.) but the agent
+        status wasn't updated. Mark it terminated and fail its task so
+        it can be retried.
+        """
+        if agent.status != "idle":
+            return False
+        if not agent.tmux_session_name:
+            return False
+        try:
+            session_exists = any(
+                s.name == agent.tmux_session_name
+                for s in self.agent_manager.tmux_server.sessions
+            )
+            if not session_exists:
+                logger.warning(
+                    f"[ORPHAN] Agent {agent.id[:8]} is idle but tmux session "
+                    f"'{agent.tmux_session_name}' not found -- terminating"
+                )
+                with self.db_manager.session_scope() as session:
+                    from src.core.database import Agent, Task
+                    db_agent = session.query(Agent).filter_by(id=agent.id).first()
+                    if db_agent:
+                        db_agent.status = "terminated"
+                        db_agent.terminated_at = datetime.utcnow()
+                    if db_agent and db_agent.current_task_id:
+                        task = session.query(Task).filter_by(id=db_agent.current_task_id).first()
+                        if task and task.status in ("in_progress", "assigned"):
+                            task.status = "failed"
+                            task.failure_reason = "Agent orphaned - tmux session not found"
+                            task.assigned_agent_id = None
+                return True
+        except Exception as e:
+            logger.error(f"[ORPHAN] check failed for {agent.id[:8]}: {e}")
+        return False
+
     async def _detect_credit_exhausted(self, agent) -> bool:
         """Detect OpenRouter's 402 "requires more credits" error and pause
         the workflow immediately, instead of nudging/retrying a task that
@@ -1819,6 +1858,9 @@ class MonitoringLoop:
         #      invoke that slash command itself
         mechanically_intervened = set()
         for agent in agents:
+            if await self._detect_orphaned_idle_agent(agent):
+                mechanically_intervened.add(agent.id)
+                continue
             if await self._detect_credit_exhausted(agent):
                 mechanically_intervened.add(agent.id)
                 continue
