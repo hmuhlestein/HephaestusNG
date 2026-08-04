@@ -7240,6 +7240,10 @@ def _pause_feature_for_review(feature_id: str, logger: "OrchestratorLogger") -> 
         with get_db() as db:
             feat = db.query(Feature).filter_by(id=feature_id).first()
             if feat and feat.workflow_id:
+                # Don't pause for review if feature was already approved
+                if feat.review_status == "approved":
+                    logger.debug(f"[REVIEW] Feature {feature_id} already approved — skipping review pause")
+                    return
                 wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
                 if wf and wf.paused_by != "review" and wf.status not in ("failed", "completed"):
                     wf.status = "paused"
