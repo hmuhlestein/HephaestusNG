@@ -3191,6 +3191,62 @@ def _sync_stale_feature_statuses(logger: OrchestratorLogger) -> int:
     return repaired
 
 
+def _sync_stale_design_statuses(logger: OrchestratorLogger) -> int:
+    """Self-heal: flip AutopilotDesign.status to "completed" for any
+    "active" design whose every Feature has reached completed/skipped.
+
+    Mirrors pick_next_design's own "all features done -> mark completed"
+    decision (this file, ~line 2316) -- but that check only ever runs as a
+    side effect of the orchestrator picking its NEXT design to work on. A
+    design whose last feature finishes without anything else in the
+    pipeline ever needing to pick a new design again (the common case once
+    every feature has already been queued) has its AutopilotDesign.status
+    stuck "active" indefinitely, with nothing left to ever call
+    pick_next_design for it again. Observed live: a design's UI showed
+    every one of its features as done while the design itself still
+    showed "active".
+
+    Deliberately narrower than pick_next_design's full branch: only the
+    unambiguous "nothing left to do" case is handled here (and note
+    "nothing left to do" already implies no feature is stuck "failed"
+    either, since "failed" is neither "completed" nor "skipped" and would
+    itself count as incomplete). pick_next_design's failed-workflow
+    retry/give-up branches have real side effects (retry-count bookkeeping
+    tied to picking the next design) that belong to that call path, not an
+    unrelated background sweep.
+
+    Runs from the same generic, restart-safe background sweep as
+    _sync_stale_feature_statuses.
+
+    Returns the number of designs repaired.
+    """
+    from src.core.database import AutopilotDesign, Feature, get_db
+
+    repaired = 0
+    with get_db() as db:
+        active_designs = db.query(AutopilotDesign).filter_by(status="active").all()
+        for design in active_designs:
+            total = db.query(Feature).filter(Feature.design_id == design.id).count()
+            if total == 0:
+                continue  # not decomposed into features yet -- nothing to sync
+            incomplete = (
+                db.query(Feature)
+                .filter(
+                    Feature.design_id == design.id,
+                    Feature.status.notin_(["completed", "skipped"]),
+                )
+                .count()
+            )
+            if incomplete > 0:
+                continue
+            logger.info(f"[DESIGN-SYNC] Design {design.id[:8]} ({design.name}) has all {total} feature(s) completed/skipped but status was 'active' -- syncing to completed")
+            design.status = "completed"
+            repaired += 1
+        if repaired:
+            db.commit()
+    return repaired
+
+
 def _resync_pipeline_registry(logger: OrchestratorLogger, loop: "asyncio.AbstractEventLoop") -> int:
     """Self-heal for a project whose persisted "was running" marker
     (AutopilotService.enumerate_persisted_states) says its pipeline should
