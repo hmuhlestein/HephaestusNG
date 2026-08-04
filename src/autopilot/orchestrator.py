@@ -4764,8 +4764,13 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                     db.commit()
                     return True
                 else:
-                    # All failed tasks past retry cap — let phase complete
-                    logger.warning(f"[PHASE-ADVANCE] {phase.name} has {failed_count} failed tasks all past retry cap — letting phase complete")
+                    # All failed tasks past retry cap — mark phase as failed
+                    # so the pipeline can continue (don't leave it in_progress forever)
+                    logger.warning(f"[PHASE-ADVANCE] {phase.name} has {failed_count} failed tasks all past retry cap — marking phase as failed")
+                    if execution:
+                        execution.status = "failed"
+                        execution.completed_at = datetime.utcnow()
+                    db.commit()
             finally:
                 _release_phase_task_creation_claim(db, phase.id)
 
