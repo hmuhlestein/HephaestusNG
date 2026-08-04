@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.core.database import DatabaseManager, Workflow
+from src.core.database import Agent, DatabaseManager, Task, Workflow
 
 
 @pytest.fixture
@@ -158,6 +158,63 @@ class TestSweepCompletedWorkflowWorktrees:
                 definition_id="autopilot",
                 working_directory=str(worktree),
                 launch_params={"project_path": str(project_path)},
+            )
+        )
+        session.commit()
+        session.close()
+
+        monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
+
+        with patch("src.autopilot.orchestrator._cleanup_worktree") as mock_cleanup:
+            removed = sweep_completed_workflow_worktrees(MagicMock())
+
+        assert removed == 0
+        mock_cleanup.assert_not_called()
+
+    def test_skips_completed_workflow_with_a_live_agent_still_working(
+        self, tmp_path, test_db, config, monkeypatch
+    ):
+        """A goto-triggered re-run of an earlier phase can still be
+        in-flight, with its agent still 'working', even after the
+        workflow's overall status has already flipped to 'completed'
+        through a different path. Force-removing the worktree in that
+        case destroys the live agent's in-progress work and leaves it
+        stuck forever with a deleted cwd."""
+        from src.autopilot.orchestrator import sweep_completed_workflow_worktrees
+
+        worktree = _make_worktree(tmp_path, ".worktrees/wt_feature-straggler")
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+
+        session = test_db.get_session()
+        session.add(
+            Workflow(
+                id="wf-done-straggler",
+                name="Feature Straggler",
+                phases_folder_path="/tmp",
+                status="completed",
+                definition_id="autopilot",
+                working_directory=str(worktree),
+                launch_params={"project_path": str(project_path)},
+            )
+        )
+        session.add(
+            Task(
+                id="task-straggler",
+                raw_description="security_review re-run",
+                done_definition="n/a",
+                status="in_progress",
+                workflow_id="wf-done-straggler",
+                assigned_agent_id="agent-straggler",
+            )
+        )
+        session.add(
+            Agent(
+                id="agent-straggler",
+                system_prompt="n/a",
+                status="working",
+                cli_type="pi",
+                current_task_id="task-straggler",
             )
         )
         session.commit()

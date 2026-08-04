@@ -3,7 +3,7 @@
 import hashlib
 import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from jose import JWTError, jwt
@@ -58,14 +58,15 @@ def create_access_token(
         Encoded JWT token string
     """
     to_encode = data.copy()
+    now = datetime.now(timezone.utc)
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(
+        expire = now + timedelta(
             minutes=config.access_token_expire_minutes
         )
 
-    to_encode.update({"exp": expire, "type": "access", "iat": datetime.utcnow()})
+    to_encode.update({"exp": expire, "type": "access", "iat": now})
 
     encoded_jwt = jwt.encode(
         to_encode, config.jwt_secret_key, algorithm=config.jwt_algorithm
@@ -83,13 +84,14 @@ def create_refresh_token(data: Dict[str, Any]) -> str:
         Encoded JWT refresh token string
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=config.refresh_token_expire_days)
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(days=config.refresh_token_expire_days)
 
     to_encode.update(
         {
             "exp": expire,
             "type": "refresh",
-            "iat": datetime.utcnow(),
+            "iat": now,
             "jti": secrets.token_urlsafe(32),  # Unique token ID for tracking
         }
     )

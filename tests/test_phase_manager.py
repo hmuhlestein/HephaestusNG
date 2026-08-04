@@ -615,6 +615,98 @@ class TestPhaseRolePreviouslyCompleted:
         ) is False
 
 
+@pytest.fixture
+def single_unique_role_phase(real_db):
+    """A phase whose name isn't in the real session_roles config, so its
+    role falls back to its own name (SESSION_ROLES.get(name, name)) --
+    used for the "goto/retry back to the SAME phase" resume case, distinct
+    from two_architect_phases' cross-phase role-sharing case."""
+    from src.core.database import Phase, Workflow
+
+    with real_db.session_scope() as session:
+        session.add(
+            Workflow(id="wf-2", name="t", phases_folder_path="/tmp", status="active")
+        )
+        session.add(
+            Phase(
+                id="phase-dev", workflow_id="wf-2", order=4,
+                name="zzz_unmapped_test_phase", description="d", done_definitions=["x"],
+            )
+        )
+    return real_db
+
+
+class TestPhaseRolePreviouslyCompletedSelfGoto:
+    """A goto (e.g. adversarial_review finds issues and sends the pipeline
+    back to development) or a retry sends work back to the SAME phase_id --
+    not "an earlier phase" in the Phase.order sense
+    TestPhaseRolePreviouslyCompleted covers, but get_session_id resumes the
+    identical pi conversation regardless, since it keys purely on (project,
+    design, role, model). Before this fix, phase_role_previously_completed
+    never recognized this case, so every goto/retry redo resent the full
+    tool-instructions boilerplate to an agent whose pi session already had
+    it from the phase's first pass."""
+
+    def test_false_on_first_ever_task_for_this_phase(self, single_unique_role_phase):
+        from src.core.database import Task
+        from src.phases.phase_manager import PhaseManager
+
+        with single_unique_role_phase.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-1", phase_id="phase-dev", workflow_id="wf-2",
+                    raw_description="d", done_definition="d", status="pending",
+                )
+            )
+
+        pm = PhaseManager(db_manager=single_unique_role_phase)
+        pm.workflow_id = "wf-2"
+
+        assert pm.phase_role_previously_completed(
+            "phase-dev", "zzz_unmapped_test_phase"
+        ) is False
+
+    def test_true_when_a_prior_task_already_ran_for_this_phase(
+        self, single_unique_role_phase
+    ):
+        """The current (goto-created) task's own row already exists in DB
+        by the time this check runs -- a second row for the same phase_id
+        is the evidence a real prior attempt/session exists. Also confirms
+        this doesn't depend on PhaseExecution.status == "completed": a
+        goto resets this phase's own execution back to "pending" (see
+        _handle_evaluation_goto), which would erase that evidence if the
+        check relied on it the way the cross-phase case does."""
+        from src.core.database import PhaseExecution, Task
+        from src.phases.phase_manager import PhaseManager
+
+        with single_unique_role_phase.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-1", phase_id="phase-dev", workflow_id="wf-2",
+                    raw_description="d", done_definition="d", status="failed",
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-dev", phase_id="phase-dev",
+                    workflow_execution_id="wf-2", status="pending",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-2", phase_id="phase-dev", workflow_id="wf-2",
+                    raw_description="d", done_definition="d", status="pending",
+                )
+            )
+
+        pm = PhaseManager(db_manager=single_unique_role_phase)
+        pm.workflow_id = "wf-2"
+
+        assert pm.phase_role_previously_completed(
+            "phase-dev", "zzz_unmapped_test_phase"
+        ) is True
+
+
 class TestEvaluationGotoConsumesGateArtifacts:
     """Regression: _handle_evaluation_goto acted on a gate's findings but
     left the result files the score came from on disk -- a later re-run of

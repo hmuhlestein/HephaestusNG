@@ -2098,13 +2098,18 @@ class TestSessionLimitPause:
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
         # No fallback anywhere -- phase.fallback_cli_tool=None above, and
-        # the global config default must also be unset here, or this
+        # both global config defaults must also be unset here, or this
         # "no fallback configured" scenario silently depends on whatever
         # hephaestus_config.yaml happens to contain on the machine running
         # the test (the make_monitoring_loop fixture's own get_config patch
         # only stays active during MonitoringLoop.__init__, not here).
+        # secondary_cli_model_fallback specifically: a bare Mock() without
+        # this auto-vivifies a truthy child Mock for any attribute access,
+        # which the last-resort fallback tier below would treat as a real,
+        # different model and use it -- silently defeating "no fallback"
+        # unless explicitly nulled out.
         with patch("src.monitoring.monitor.get_config") as mock_cfg:
-            mock_cfg.return_value = Mock(default_fallback_cli_tool=None)
+            mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
 
             # Unlike the frozen/stuck detection elsewhere in this function,
             # the spend/session-limit check fires immediately on the first
@@ -2161,6 +2166,59 @@ class TestSessionLimitPause:
 
         assert task.status == "pending"
         assert task.assigned_agent_id is None
+        assert workflow.status == "active"
+        assert workflow.paused_by is None
+        mock_agent_manager.terminate_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_secondary_cli_model_when_default_fallback_is_identical(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Live incident: default_cli_tool and default_fallback_cli_tool
+        were both "pi" on the identical model -- the "fall back to global
+        config defaults" branch found a "fallback" that was actually the
+        same cli+model that just hit the limit, so the outer
+        `fallback_tool != agent.cli_type or fallback_model != agent.cli_model`
+        check correctly refused it, and the workflow paused with a real,
+        different secondary_cli_model_fallback ("sonnet") sitting
+        configured and never consulted. Must now try it as a last resort
+        before giving up."""
+        agent = Agent(id="a1", cli_type="pi", cli_model="openrouter/xiaomi/mimo-v2.5-pro")
+        mock_agent_manager.get_agent_output.return_value = (
+            "You've hit your session limit"
+        )
+        self._wire_tmux_pane_output(
+            mock_agent_manager, mock_db, "a1", "You've hit your session limit"
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
+        new_agent = Mock(id="a2")
+        mock_agent_manager.create_agent_for_task = AsyncMock(return_value=new_agent)
+
+        task = Mock(
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1",
+            enriched_description="do the thing", done_definition="done",
+        )
+        # No phase-level override -- forces the global-config path.
+        phase = Mock(fallback_cli_tool=None, fallback_cli_model=None)
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+            mock_cfg.return_value = Mock(
+                default_fallback_cli_tool="pi",
+                default_fallback_cli_model="openrouter/xiaomi/mimo-v2.5-pro",
+                secondary_cli_model_fallback="sonnet",
+            )
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        mock_agent_manager.create_agent_for_task.assert_called_once()
+        call_kwargs = mock_agent_manager.create_agent_for_task.call_args.kwargs
+        assert call_kwargs["cli_type"] == "pi"
+        assert call_kwargs["phase_cli_model"] == "sonnet"
+
+        assert task.status == "pending"
         assert workflow.status == "active"
         assert workflow.paused_by is None
         mock_agent_manager.terminate_agent.assert_called_once()
@@ -2252,7 +2310,7 @@ class TestSessionLimitPause:
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
         with patch("src.monitoring.monitor.get_config") as mock_cfg:
-            mock_cfg.return_value = Mock(default_fallback_cli_tool=None)
+            mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
             await make_monitoring_loop._mechanical_recovery_for_agent(agent)
             await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
@@ -2391,7 +2449,7 @@ class TestDetectConnectionErrors:
         mock_db.session_scope = mock_session_scope
 
         with patch("src.monitoring.monitor.get_config") as mock_cfg:
-            mock_cfg.return_value = Mock(default_fallback_cli_tool=None)
+            mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
             result = await make_monitoring_loop._detect_connection_errors(agent)
 
         assert result is True
@@ -2413,7 +2471,7 @@ class TestDetectConnectionErrors:
         mock_db.session_scope = mock_session_scope
 
         with patch("src.monitoring.monitor.get_config") as mock_cfg:
-            mock_cfg.return_value = Mock(default_fallback_cli_tool=None)
+            mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
             result = await make_monitoring_loop._detect_connection_errors(agent)
 
         assert result is True

@@ -2703,6 +2703,7 @@ def sweep_completed_workflow_worktrees(logger: OrchestratorLogger) -> int:
 
     Returns the number of worktrees removed.
     """
+    from src.core.database import Agent, Task
     from src.core.database import DatabaseManager as DbManager
     from src.core.database import Workflow
     from src.core.simple_config import get_config
@@ -2720,6 +2721,37 @@ def sweep_completed_workflow_worktrees(logger: OrchestratorLogger) -> int:
                 )
                 if wf.working_directory and ".worktrees/" in wf.working_directory
             ]
+
+            # A workflow can reach "completed" while a straggler task from a
+            # goto-triggered re-run of an earlier phase is still being worked
+            # by a live agent in this same worktree (observed live: a
+            # security_review task re-fired via goto stayed "in_progress"
+            # with its agent still "working" while the workflow completed
+            # through a different path). Force-removing the worktree out
+            # from under that agent destroys its in-progress work and
+            # leaves it permanently stuck with a deleted cwd -- skip those
+            # and let a later sweep pass (once the straggler finishes) pick
+            # them up instead.
+            if targets:
+                live_workflow_ids = {
+                    wf_id
+                    for (wf_id,) in session.query(Task.workflow_id)
+                    .join(Agent, Agent.current_task_id == Task.id)
+                    .filter(
+                        Task.workflow_id.in_([t[0] for t in targets]),
+                        Task.status == "in_progress",
+                        Agent.status != "terminated",
+                    )
+                    .all()
+                }
+                for wf_id, _, _ in targets:
+                    if wf_id in live_workflow_ids:
+                        logger.warning(
+                            f"[SWEEP] Skipping worktree removal for completed "
+                            f"workflow {wf_id[:8]} -- a live agent is still "
+                            "working an in-progress task under it"
+                        )
+                targets = [t for t in targets if t[0] not in live_workflow_ids]
 
         for wf_id, working_directory, launch_params in targets:
             worktree = Path(working_directory)
@@ -2757,6 +2789,179 @@ def sweep_completed_workflow_worktrees(logger: OrchestratorLogger) -> int:
             except Exception:
                 pass
     return removed
+
+
+def heal_orphaned_agent_branches(logger: OrchestratorLogger) -> int:
+    """Detect and heal agent-branch worktrees left behind by a stranded
+    agent: real, committed work that never got merged because the task
+    that owned it ended up "failed" instead of "done" -- e.g. its worktree
+    was force-removed out from under it by a race in
+    sweep_completed_workflow_worktrees (see that function's live-agent
+    guard, added after this exact incident: a goto-triggered straggler
+    task's worktree got deleted while its agent was still working, the
+    agent's own uncommitted fixes had already landed in commits on its
+    branch, and nothing ever merged that branch since the task it belonged
+    to was never going to report "done" again).
+
+    A branch matching the configured agent branch_prefix, with no live
+    `git worktree` checkout, is unambiguously orphaned -- a live agent can
+    only write to its branch through an active worktree checkout, so "no
+    worktree has this branch checked out" already proves no agent is still
+    using it, with no need to cross-reference Task/Agent DB state (which,
+    for this per-agent-worktree path, doesn't reliably map branch name back
+    to a specific task anyway -- a retried task can inherit an older
+    agent's branch/worktree wholesale).
+
+    Healing is deliberately conservative: only a clean fast-forward of the
+    CURRENT base branch tip is merged. If nothing has base_branch checked
+    out anywhere, that's a compare-and-swap `update-ref` (no working tree
+    to desync). If base_branch IS checked out somewhere -- typically the
+    project's own primary checkout -- a bare ref move would desync that
+    checkout's index/working tree from its new HEAD (confirmed live: `git
+    status` then shows every changed file as locally modified), so this
+    does a real `git merge --ff-only` there instead, and only when that
+    checkout is clean. Anything that isn't a clean fast-forward (base
+    branch moved on since the orphaned branch diverged) is left alone and
+    logged with "FAILED" so it surfaces via tech_debt_requirements.yaml's
+    existing `grep -r "EXHAUSTED|STUCK|FAILED" ~/.hephaestus/logs/` step
+    for manual review -- resolving real conflicts unattended is a materially
+    different risk than fast-forwarding a branch nothing else was touching.
+
+    Returns the number of branches auto-merged.
+    """
+    from src.core.database import AutopilotProject
+    from src.core.database import DatabaseManager as DbManager
+    from src.core.simple_config import get_config
+
+    cfg = get_config()
+    db = DbManager(str(cfg.database_path))
+    healed = 0
+    try:
+        with db.session_scope() as session:
+            project_dirs = {
+                proj.base_dir
+                for proj in session.query(AutopilotProject).all()
+                if proj.base_dir and Path(proj.base_dir).is_dir()
+            }
+
+        for project_dir in project_dirs:
+            try:
+                healed += _heal_orphaned_branches_for_project(Path(project_dir), cfg, logger)
+            except Exception as e:
+                logger.warning(f"[BRANCH-HEAL] Failed to scan {project_dir}: {e}")
+    except Exception as e:
+        logger.warning(f"[BRANCH-HEAL] Failed to enumerate projects: {e}")
+    return healed
+
+
+def _heal_orphaned_branches_for_project(project_dir: Path, cfg, logger: OrchestratorLogger) -> int:
+    try:
+        repo = _git.Repo(project_dir)
+    except Exception:
+        return 0
+
+    base_branch = cfg.base_branch
+    prefix = cfg.branch_prefix
+    if base_branch not in repo.heads:
+        return 0
+    base_sha = repo.heads[base_branch].commit.hexsha
+
+    # Map branch name -> worktree path for every branch currently checked
+    # out anywhere (this always includes the project's own primary
+    # checkout, listed by git as an ordinary worktree entry). Branches
+    # still checked out are in active use -- never touch those as heal
+    # candidates. base_branch itself being checked out somewhere (the
+    # common case: a project's primary checkout normally sits on main)
+    # instead changes HOW it gets healed, below.
+    try:
+        porcelain = repo.git.worktree("list", "--porcelain")
+    except Exception:
+        porcelain = ""
+    checked_out_branches: dict = {}
+    current_path = None
+    for line in porcelain.splitlines():
+        if line.startswith("worktree "):
+            current_path = line[len("worktree "):]
+        elif line.startswith("branch ") and current_path:
+            branch_name = line.split(" ", 1)[1].removeprefix("refs/heads/")
+            checked_out_branches[branch_name] = current_path
+
+    healed = 0
+    for head in repo.heads:
+        name = head.name
+        if not name.startswith(prefix) or name == base_branch or name in checked_out_branches:
+            continue
+
+        try:
+            ahead = repo.git.rev_list(f"{base_branch}..{name}", "--count").strip()
+        except Exception:
+            continue
+        if ahead == "0":
+            continue  # already fully merged, or never advanced past base
+
+        try:
+            repo.git.merge_base("--is-ancestor", base_branch, name)
+            is_ff = True
+        except _git.GitCommandError:
+            is_ff = False
+
+        branch_sha = head.commit.hexsha
+        if not is_ff:
+            logger.warning(
+                f"[BRANCH-HEAL] FAILED to auto-heal orphaned branch {name} in "
+                f"{project_dir} -- {ahead} commit(s) not on {base_branch}, but not "
+                f"a clean fast-forward (base branch has diverged since). Needs "
+                f"manual review: git diff {base_branch}...{name}"
+            )
+            continue
+
+        base_worktree_path = checked_out_branches.get(base_branch)
+        if base_worktree_path:
+            # base_branch is actively checked out somewhere (typically the
+            # project's own primary checkout) -- a bare `update-ref` would
+            # move that checkout's HEAD commit forward without touching its
+            # index/working tree, leaving `git status` showing every
+            # changed file as locally modified (reverted to the pre-merge
+            # content) until someone notices and resets. Confirmed by
+            # direct reproduction. Do a real merge in that checkout
+            # instead, so the ref and the working tree move together, and
+            # only when it's clean -- a dirty checkout is left alone rather
+            # than risking an unattended merge on top of someone's
+            # in-progress edits.
+            try:
+                base_repo = _git.Repo(base_worktree_path)
+                if base_repo.is_dirty(untracked_files=False):
+                    logger.warning(
+                        f"[BRANCH-HEAL] FAILED to heal {name} in {project_dir} -- "
+                        f"{base_branch} is checked out at {base_worktree_path} with "
+                        "uncommitted changes; skipping rather than risking an "
+                        "unattended merge there. Needs manual review."
+                    )
+                    continue
+                base_repo.git.merge(name, "--ff-only")
+                logger.info(
+                    f"[BRANCH-HEAL] Fast-forwarded {base_branch} to {branch_sha[:8]} "
+                    f"({ahead} commit(s) from orphaned branch {name}, project {project_dir})"
+                )
+                healed += 1
+            except Exception as e:
+                logger.warning(f"[BRANCH-HEAL] FAILED to heal {name} in {project_dir}: {e}")
+        else:
+            try:
+                # Nobody has base_branch checked out anywhere, so no
+                # working tree can be desynced -- a bare compare-and-swap
+                # ref update is safe (and only advances if base_branch is
+                # still exactly base_sha, so this can't clobber a commit
+                # that landed on it between the read above and this write).
+                repo.git.update_ref(f"refs/heads/{base_branch}", branch_sha, base_sha)
+                logger.info(
+                    f"[BRANCH-HEAL] Fast-forwarded {base_branch} to {branch_sha[:8]} "
+                    f"({ahead} commit(s) from orphaned branch {name}, project {project_dir})"
+                )
+                healed += 1
+            except Exception as e:
+                logger.warning(f"[BRANCH-HEAL] FAILED to heal {name} in {project_dir}: {e}")
+    return healed
 
 
 def _create_designs_folder(
