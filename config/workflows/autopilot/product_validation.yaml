@@ -246,17 +246,17 @@ additional_notes: |
   [NEEDS_WORK: [specific issues that need addressing]]
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 8: PREPEND STRUCTURED VALIDATION RESULT (REQUIRED — drives the pipeline gate)
+  STEP 8: WRITE validation.md WITH FRONTMATTER (REQUIRED — drives the pipeline gate)
   ═══════════════════════════════════════════════════════════════════════
+
+  ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
 
   validation.md is ONE file: a YAML frontmatter block (machine-
   readable, scored to decide whether to ship, return to development, or
   return to architecture) followed immediately by the full narrative
   report from the steps above.
 
-  Prepend this frontmatter block to the very top of ./.hephaestus/product_validation/validation.md,
-  with EXACTLY this schema (type first, then a closing `---`, then the
-  narrative report immediately after):
+  Write the ENTIRE file at once with frontmatter at the top:
 
   ```
   ---
