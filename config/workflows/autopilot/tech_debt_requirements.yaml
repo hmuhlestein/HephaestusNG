@@ -60,6 +60,24 @@ additional_notes: |
   4. Documentation that's outdated or missing
   5. Configuration that's hardcoded when it should be configurable
 
+  Also scan for code quality issues:
+  - Unnecessary fallbacks (workaround logic added to handle edge cases that should be fixed properly)
+  - Silent errors (try/except that swallow errors without handling, bare except, pass on error)
+  - Unarchitected patterns (ad-hoc solutions instead of using existing abstractions)
+  - Unnecessary complexity (over-engineered solutions)
+  - Dead code (unused imports, unreachable branches)
+  - Inconsistent patterns (different approaches to same problem)
+  - Missing error handling (operations that can fail without recovery)
+  - TODO/FIXME/HACK comments left in the codebase
+  - Leaky abstractions (high-level modules exposing low-level details)
+  - Internals leaking (internal state/logic exposed through public interfaces)
+  - Conditionals where polymorphism should be used (if/elif chains instead of strategy pattern)
+
+  Check for TODO/FIXME comments:
+  ```bash
+  grep -rn "TODO\|FIXME\|HACK\|XXX" src/ --include="*.py" | grep -v __pycache__ | head -20
+  ```
+
   Check git log for patterns:
   ```bash
   git log --oneline -20 | grep -i "fix\|bug\|workaround\|hack"
