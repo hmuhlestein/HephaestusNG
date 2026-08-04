@@ -1,6 +1,7 @@
 """Queue service for managing agent concurrency and task queueing."""
 
 import logging
+import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
