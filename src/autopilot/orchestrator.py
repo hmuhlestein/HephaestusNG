@@ -4906,13 +4906,35 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                     db.commit()
                     return True
                 else:
-                    # All failed tasks past retry cap — mark phase as failed
-                    # so the pipeline can continue (don't leave it in_progress forever)
-                    logger.warning(f"[PHASE-ADVANCE] {phase.name} has {failed_count} failed tasks all past retry cap — marking phase as failed")
+                    # All failed tasks past retry cap. Bug: this used to
+                    # only set execution.status = "failed" and fall
+                    # straight through into the "phase complete, fire
+                    # transition" section below -- _fire_phase_transition
+                    # calls PhaseManager.mark_phase_complete, which
+                    # evaluates the engine decision from the failed task's
+                    # own stale action/completion data (e.g. "continue",
+                    # written by the agent's own self-report before the
+                    # output validator rejected it), NOT from
+                    # execution.status. Observed live: architectural_review
+                    # exhausted its retry cap on a real frontmatter-schema
+                    # defect and the pipeline advanced straight to
+                    # qa_validation as if the review had passed. Mirror
+                    # _trigger_arbitration's own exhausted-retry-budget
+                    # handling (wf.status = "failed" + status_reason, then
+                    # stop) instead of silently continuing.
+                    logger.warning(f"[PHASE-ADVANCE] {phase.name} has {failed_count} failed tasks all past retry cap — marking phase and workflow as failed")
                     if execution:
                         execution.status = "failed"
                         execution.completed_at = datetime.utcnow()
+                    wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                    if wf and wf.status != "failed":
+                        wf.status = "failed"
+                        wf.status_reason = (
+                            f"{phase.name}: {failed_count} task(s) exhausted the retry cap "
+                            "without producing a valid output"
+                        )
                     db.commit()
+                    continue
             finally:
                 _release_phase_task_creation_claim(db, phase.id)
 

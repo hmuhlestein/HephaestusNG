@@ -378,9 +378,9 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                 <div className="mt-3 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700">
                   <div className="flex items-start gap-2">
                     <XCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <p className="text-xs font-semibold text-red-700 dark:text-red-300 uppercase tracking-wide mb-1">Failure Reason</p>
-                      <p className="text-sm text-red-800 dark:text-red-200">{taskDetails.failure_reason}</p>
+                      <p className="text-sm text-red-800 dark:text-red-200 max-h-64 overflow-y-auto whitespace-pre-wrap break-words">{taskDetails.failure_reason}</p>
                     </div>
                   </div>
                 </div>
@@ -1321,12 +1321,12 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                     <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300">
                       {taskDetails.completion_notes ? 'Completion Notes' : 'Failure Reason'}
                     </h4>
-                    <div className={`p-3 rounded-lg ${
+                    <div className={`p-3 rounded-lg max-h-64 overflow-y-auto ${
                       taskDetails.completion_notes
                         ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700'
                         : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700'
                     }`}>
-                      <MarkdownRenderer content={taskDetails.completion_notes || taskDetails.failure_reason || ''} className="text-sm prose prose-sm prose-violet max-w-none" />
+                      <MarkdownRenderer content={taskDetails.completion_notes || taskDetails.failure_reason || ''} className="text-sm prose prose-sm prose-violet max-w-none break-words" />
                     </div>
                   </div>
                 )}

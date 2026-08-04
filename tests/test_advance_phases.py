@@ -1263,6 +1263,51 @@ class TestCaseInProgressComplete:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is None  # released, not stranded
 
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    def test_exhausted_retry_cap_fails_the_workflow_instead_of_firing_transition(
+        self, mock_fire, db_manager, sample_workflow
+    ):
+        """Regression, found live: once every failed task in a phase (that
+        also has a done task from an earlier cycle) is past the retry cap,
+        this used to only set execution.status = "failed" and fall
+        straight through into firing a transition anyway --
+        _fire_phase_transition's engine evaluation reads the failed task's
+        own stale action/completion data, not execution.status, so it
+        would advance to the next phase as if the failed one had passed.
+        Observed live: architectural_review exhausted its retry cap on a
+        real frontmatter-schema defect and the pipeline advanced straight
+        to qa_validation as if the review had passed."""
+        from src.autopilot.orchestrator import _case_in_progress_complete, _get_phase_statuses
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-exhausted-1",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="architectural_review's report has the wrong frontmatter type",
+                    retry_count=5,
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        mock_fire.assert_not_called()
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "failed"
+            assert "phase-1" not in wf.status_reason  # uses phase.name, not phase.id
+            assert "requirements" in wf.status_reason  # phase-1's name, from sample_workflow
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "failed"
+
 
 class TestReleaseStaleTaskCreationClaims:
     """Regression, found live: _case_in_progress_complete's own claim check
