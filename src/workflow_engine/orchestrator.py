@@ -196,6 +196,7 @@ class WorkflowOrchestrator:
         "forensics_analysis": 11,
         "git_commit_push": 12,
         "deploy": 13,
+        "tech_debt_requirements": 14,
     }
 
     def __init__(
