@@ -1924,18 +1924,7 @@ class AgentManager:
             if restart_wd:
                 cli_agent.prepare_working_directory(restart_wd)
 
-                # Create phase-specific output directory in .hephaestus/ so agents
-                # don't have to create it themselves
-                if task.phase_id:
-                    from pathlib import Path as _Path
-                    phase_output_dir = _Path(restart_wd) / ".hephaestus" / (restart_phase_name or task.phase_id)
-                    phase_output_dir.mkdir(parents=True, exist_ok=True)
-
-            tmux_session = self._create_tmux_session(
-                new_session_name, working_directory=restart_wd, env_vars=env_vars
-            )
-
-            # Resolve phase_name + per-phase thinking budget for the relaunch
+            # Resolve phase_name for the relaunch (needed for output dir and prompt)
             restart_phase_name = None
             restart_thinking_level = None
             if task.phase_id:
@@ -1947,23 +1936,30 @@ class AgentManager:
                         restart_phase = (
                             restart_session.query(Phase)
                             .filter_by(
-                                order=int(task.phase_id), workflow_id=task.workflow_id
+                                order=int(task.phase_id),
+                                workflow_id=task.workflow_id,
                             )
                             .first()
                         )
                     else:
-                        restart_phase = (
-                            restart_session.query(Phase)
-                            .filter_by(id=task.phase_id)
-                            .first()
-                        )
+                        restart_phase = restart_session.query(Phase).filter_by(id=task.phase_id).first()
                     if restart_phase:
                         restart_phase_name = restart_phase.name
-                        restart_thinking_level = (
-                            restart_phase.thinking_level
-                        )  # preserve budget across restart
+                except Exception:
+                    pass
                 finally:
                     restart_session.close()
+
+            # Create phase-specific output directory in .hephaestus/ so agents
+            # don't have to create it themselves
+            if task.phase_id and restart_wd:
+                from pathlib import Path as _Path
+                phase_output_dir = _Path(restart_wd) / ".hephaestus" / (restart_phase_name or task.phase_id)
+                phase_output_dir.mkdir(parents=True, exist_ok=True)
+
+            tmux_session = self._create_tmux_session(
+                new_session_name, working_directory=restart_wd, env_vars=env_vars
+            )
 
             # Prepend restart context to system prompt so pi sees it immediately
             restart_system_prompt = (
