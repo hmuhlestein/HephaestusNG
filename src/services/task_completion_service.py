@@ -221,6 +221,15 @@ class TaskCompletionService:
                 if read_okf(found_path) is None:
                     invalid_frontmatter.append(f"{declared_output} (no valid OKF frontmatter block)")
 
+                # Security review must include ash scan results
+                if phase.name == "security_review" and declared_output == "security.md":
+                    try:
+                        content = found_path.read_text(errors="replace")
+                        if "Automated Scan Results" not in content and "ash_results" not in content.lower():
+                            invalid_frontmatter.append(f"{declared_output} (missing 'Automated Scan Results' section — ash scan not included)")
+                    except Exception:
+                        pass
+
         if not missing and not invalid_frontmatter:
             return None
 

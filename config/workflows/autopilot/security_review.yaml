@@ -8,6 +8,7 @@ description: |
   authorization bypasses, data handling problems, and FIXES critical security
   issues before they ship.
 done_definitions:
+  - "ash automated scan results read and included in security.md"
   - "Authentication/authorization mechanisms reviewed"
   - "Input validation verified across all endpoints"
   - "Data handling and storage security assessed"
@@ -59,12 +60,13 @@ additional_notes: |
   sections — a single line "Step 2 skipped: no authentication in this feature" is enough.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: AUTOMATED SCAN (ash) — MANDATORY
+  STEP 2: AUTOMATED SCAN (ash) — MANDATORY, DO NOT SKIP
   ═══════════════════════════════════════════════════════════════════════
 
+  ⚠️  THIS STEP IS MANDATORY. YOUR REPORT WILL BE REJECTED WITHOUT IT. ⚠️
+
   The orchestrator already ran the AWS Automated Security Helper against
-  this worktree before you started (guaranteed — not dependent on you
-  remembering this step). Read its results:
+  this worktree before you started. You MUST read its results:
   ```bash
   cat ./.hephaestus/ash_results.txt
   ```
@@ -73,9 +75,14 @@ additional_notes: |
   verbatim in the report and continue — do not attempt to run the scan
   yourself.
 
-  Include a summary of its findings in security.md under
-  "## Automated Scan Results". Fix any HIGH/CRITICAL findings it surfaces.
-  
+  YOU MUST include a "## Automated Scan Results" section in security.md
+  with:
+  1. Summary of findings from ash (HIGH/MEDIUM/LOW counts)
+  2. Any HIGH/CRITICAL findings listed with details
+  3. Whether you fixed them or why they were accepted
+
+  If you skip this section, the gate will FAIL your review.
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 3: READ SECURITY REQUIREMENTS
   ═══════════════════════════════════════════════════════════════════════
