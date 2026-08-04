@@ -560,3 +560,52 @@ class TestResumedSessionTrimming:
         assert "Ticket tracking is ON" in message
         assert "FILE PLACEMENT" in message
         assert "RESUMED SESSION" not in message
+
+
+class _FakePhaseManagerWithProjectRoot:
+    """get_workflow returns a workflow with no project_id (so the
+    AutopilotProject DB lookup is skipped) but a real launch_params --
+    exercises the fallback path format_initial_message actually hits for
+    every autopilot pipeline workflow (project_id is frequently unset;
+    launch_params.project_path is what create the worktree/agent dispatch
+    itself already relies on elsewhere, e.g. sweep_completed_workflow_worktrees)."""
+
+    def get_workflow(self, workflow_id):
+        return type(
+            "W",
+            (),
+            {
+                "description": "",
+                "project_id": None,
+                "launch_params": {"project_path": "/Users/dev/myproject"},
+            },
+        )()
+
+
+class TestProjectRootInjection:
+    """Regression: qa_validation.yaml, deploy.yaml, and forensics_analysis.yaml
+    all instruct the agent to read "Project Root (absolute): <path>" from its
+    own task description (e.g. to locate TESTING.md/DEPLOY.md, which live in
+    the real project root, not the isolated worktree branch_path points at)
+    -- but nothing ever injected that field. Confirmed live: a qa_validation
+    agent's task description had no such field at all, so it couldn't
+    determine where TESTING.md was and skipped straight past the mandatory
+    first step, tripping a steering intervention."""
+
+    def test_project_root_injected_from_launch_params(self):
+        builder = AgentPromptBuilder(
+            phase_manager=_FakePhaseManagerWithProjectRoot()
+        )
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc", branch_path="/worktrees/wt-1"
+        )
+        assert "Project Root (absolute): /Users/dev/myproject" in message
+
+    def test_no_project_root_line_when_unresolvable(self):
+        """No project_id and no launch_params.project_path -- must not
+        inject a bogus/empty "Project Root (absolute):" line."""
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc", branch_path="/worktrees/wt-1"
+        )
+        assert "Project Root (absolute)" not in message

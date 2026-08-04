@@ -2764,7 +2764,10 @@ class MonitoringLoop:
                     if nudged_at is not None and datetime.utcnow() - nudged_at < idle_minutes:
                         continue  # still within the post-nudge grace period
 
-                    max_nudges = getattr(self.config, 'max_stuck_nudges', MAX_STUCK_TASK_NUDGES)
+                    try:
+                        max_nudges = int(getattr(self.config, 'max_stuck_nudges', MAX_STUCK_TASK_NUDGES))
+                    except (TypeError, ValueError):
+                        max_nudges = MAX_STUCK_TASK_NUDGES
                     if nudge_count >= max_nudges:
                         logger.warning(
                             f"[HEALTH] Task {task.id[:8]}: agent {agent.id[:8]} has "

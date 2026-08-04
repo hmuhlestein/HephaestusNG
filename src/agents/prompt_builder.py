@@ -12,7 +12,7 @@ building the message itself.
 import logging
 
 from src.autopilot.phases import SESSION_ROLES
-from src.core.database import Task
+from src.core.database import AutopilotProject, Task
 from src.prompts.loader import (
     get_non_phase_agent_instructions,
     get_phase_agent_instructions,
@@ -84,6 +84,31 @@ class AgentPromptBuilder:
                 workflow = self.phase_manager.get_workflow(workflow_id)
                 if workflow:
                     workflow_description = workflow.description or ""
+
+                    # Several phases (qa_validation, deploy, forensics_analysis)
+                    # need the REAL project root -- e.g. TESTING.md/DEPLOY.md
+                    # live there, not in the isolated worktree branch_path
+                    # points at -- and their prompts tell the agent to read it
+                    # from "Project Root (absolute): <path>" in the task
+                    # description. Nothing ever injected that field (confirmed
+                    # live: every qa_validation task's description was missing
+                    # it, so its STEP 1 "your task description contains..."
+                    # lookup had nothing to find, and TESTING.md could never
+                    # be located), so inject it here for every phase agent --
+                    # cheap and harmless for phases that don't reference it.
+                    project_root = None
+                    if workflow.project_id:
+                        session = self.phase_manager.db_manager.get_session()
+                        try:
+                            proj = session.query(AutopilotProject).filter_by(id=workflow.project_id).first()
+                            if proj and proj.base_dir:
+                                project_root = proj.base_dir
+                        finally:
+                            session.close()
+                    if not project_root and workflow.launch_params:
+                        project_root = workflow.launch_params.get("project_path")
+                    if project_root:
+                        cwd_info += f"\nProject Root (absolute): {project_root}"
             except Exception as e:
                 logger.warning(f"Could not get workflow description: {e}")
 
