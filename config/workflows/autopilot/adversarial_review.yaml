@@ -249,7 +249,6 @@ additional_notes: |
   [Failure modes with no test — state the scenario and the missing assertion]
 
   ═══════════════════════════════════════════════════════════════════════
-  ⚠️  THE TYPE MUST BE EXACTLY 'adversarial_review_result' — NOT 'adversarial_review'. ⚠️
 
   STEP 5: PREPEND STRUCTURED RESULT TO adversarial.md (NOT OPTIONAL)
   ═══════════════════════════════════════════════════════════════════════
