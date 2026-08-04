@@ -110,8 +110,6 @@ class AgentPromptBuilder:
         # criteria rules, and the full tool-call instructions block.
         resumed_session = False
         if hasattr(task, "phase_id") and task.phase_id:
-            base_message += f"\nPhase ID: {task.phase_id}"
-
             logger.info(f"=== PHASE CONTEXT DEBUG for task {task.id} ===")
             logger.info(f"Task has phase_id: {task.phase_id}")
 
