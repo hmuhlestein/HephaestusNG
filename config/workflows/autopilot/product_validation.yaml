@@ -147,7 +147,7 @@ additional_notes: |
   - Is the workflow intuitive?
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5B: VERIFY FEATURE IS FULLY EXPOSED AND ACCESSIBLE (MANDATORY)
+  STEP 6: VERIFY FEATURE IS FULLY EXPOSED AND ACCESSIBLE (MANDATORY)
   ═══════════════════════════════════════════════════════════════════════
 
   ⚠️  THIS STEP CATCHES FEATURES THAT "WORK" BUT AREN'T ACCESSIBLE. ⚠️
@@ -197,7 +197,7 @@ additional_notes: |
   If ANY of these checks fail, mark as UNMET and include in report.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6: CREATE VALIDATION REPORT
+  STEP 7: CREATE VALIDATION REPORT
   ═══════════════════════════════════════════════════════════════════════
   
   Write validation.md:
@@ -246,7 +246,7 @@ additional_notes: |
   [NEEDS_WORK: [specific issues that need addressing]]
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 7: PREPEND STRUCTURED VALIDATION RESULT (REQUIRED — drives the pipeline gate)
+  STEP 8: PREPEND STRUCTURED VALIDATION RESULT (REQUIRED — drives the pipeline gate)
   ═══════════════════════════════════════════════════════════════════════
 
   validation.md is ONE file: a YAML frontmatter block (machine-
@@ -294,7 +294,7 @@ additional_notes: |
     unmet requirements).
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 8: SAVE TO MEMORY
+  STEP 9: SAVE TO MEMORY
   ═══════════════════════════════════════════════════════════════════════
   
   Save validation outcome to memory:
