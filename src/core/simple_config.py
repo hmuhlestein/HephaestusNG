@@ -142,8 +142,9 @@ class Config:
             "guardian_min_agent_age_seconds", 60
         )
         self.max_ignored_steering = monitoring.get("max_ignored_steering", 3)
-        self.stuck_detection_minutes = monitoring.get("stuck_detection_minutes", 15)
-        self.guardian_nudge_delay_minutes = monitoring.get("guardian_nudge_delay_minutes", 10)
+        self.stuck_detection_minutes = monitoring.get("stuck_detection_minutes", 30)
+        self.guardian_nudge_delay_minutes = monitoring.get("guardian_nudge_delay_minutes", 15)
+        self.max_stuck_nudges = monitoring.get("max_stuck_nudges", 5)
 
         # MCP settings
         mcp = config.get("mcp", {})
