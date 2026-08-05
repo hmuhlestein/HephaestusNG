@@ -4452,8 +4452,8 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
 def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: OrchestratorLogger) -> None:
     """Auto-resume paused workflow if it has a done task in the stalled phase.
 
-    Skips workflows deliberately paused by anyone/anything (wf.paused_by is
-    not None — "user", "budget", "system", etc.). Without this check, a
+    Skips workflows deliberately paused by a human or an explicit policy
+    (wf.paused_by == "user", "budget", or "review"). Without this check, a
     deliberate pause could get silently reverted within one sweep tick
     (~20s) whenever the paused workflow's in-progress phase happens to have
     a done task sitting in it -- a state pausing itself commonly produces
@@ -4462,9 +4462,28 @@ def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: Orchestra
     because this function kept flipping the workflow back to "active"
     every cycle until whatever made the phase look stalled resolved on its
     own.
+
+    "system" is deliberately let through, not skipped: it's the one
+    paused_by value nothing but _maybe_retry_failed_tasks's exhausted-
+    retry-cap give-up ever sets. Unlike the other three, it isn't an
+    operator's intent -- it's a heuristic judgment ("this looked
+    unrecoverable") that can be stale the instant it's made, exactly if a
+    still-in-flight attempt (dispatched by a different code path than the
+    one that paused) succeeds moments later. Observed live: a
+    security_review task's final attempt (retry_count 5, its own retry
+    path uncapped at 2) started at 04:46:56 and succeeded at 04:52:12, but
+    _maybe_retry_failed_tasks paused the workflow at 04:47:16 based on the
+    task's still-"failed" state from its prior attempt -- and because
+    paused_by="system" was previously treated the same as "user"/"budget",
+    nothing ever reconsidered the pause once the task actually finished.
+    The phase's PhaseExecution sat "in_progress" and no qa_validation task
+    was ever created, ~22 hours later. Before this function ever ran,
+    every real pause site set paused_by to something non-None (user,
+    budget, review, or system) -- so its "is not None" form made this
+    entire self-heal a no-op for every actual pause, not just this one.
     """
-    if wf.paused_by is not None:
-        return  # Respect any deliberate pause ("user", "budget", etc.)
+    if wf.paused_by not in (None, "system"):
+        return  # Respect any deliberate pause ("user", "budget", "review")
     phases = (
         db.query(Phase)
         .filter_by(workflow_id=workflow_id)
@@ -4478,6 +4497,8 @@ def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: Orchestra
             if done_task:
                 logger.info(f"[PHASE-ADVANCE] Auto-resuming paused workflow — {phase.name} has done task {done_task.id[:8]}")
                 wf.status = "active"
+                wf.paused_by = None
+                wf.status_reason = None
                 db.commit()
                 break
 
