@@ -2680,6 +2680,13 @@ async def update_task_status(
 
             if request.status == "failed":
                 task.failure_reason = request.failure_reason
+            elif request.status == "done":
+                # Clear any failure_reason left over from an earlier failed
+                # attempt on this same task row (goto/retry reuses it) --
+                # otherwise a task that ultimately succeeds keeps showing
+                # its last failure forever, e.g. "Output validation failed:
+                # not valid OKF..." on a task whose status is "done".
+                task.failure_reason = None
 
             session.commit()
 

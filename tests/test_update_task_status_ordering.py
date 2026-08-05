@@ -253,3 +253,69 @@ class TestUpdateTaskStatusTruncatedIdFallback:
         )
 
         assert resp.status_code == 404
+
+
+class TestUpdateTaskStatusClearsStaleFailureReason:
+    """Regression, observed live: a task that failed several retries
+    (goto/retry reuses the same task row, so failure_reason from an
+    earlier attempt sticks around) and then succeeded on a later attempt
+    still showed its old failure_reason forever -- update_task_status only
+    ever wrote failure_reason when status=="failed", never cleared it on
+    status=="done". A task genuinely marked done kept displaying
+    "Output validation failed: ..." with no way to tell it had actually
+    succeeded."""
+
+    def test_success_clears_prior_failure_reason(self, test_db, test_client, tmp_path):
+        task_id, agent_id = _seed(test_db, tmp_path)
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        task.failure_reason = (
+            "Output validation failed: not valid OKF: "
+            "security_review/security.md (no valid OKF frontmatter block)"
+        )
+        session.commit()
+
+        with patch(
+            "src.services.task_completion_service.TaskCompletionService.commit_and_link_ticket",
+            new_callable=AsyncMock,
+        ), patch(
+            "src.services.task_completion_service.TaskCompletionService.fire_spec_gate_if_ready",
+            new_callable=AsyncMock,
+        ):
+            resp = test_client.post(
+                "/update_task_status",
+                json={
+                    "task_id": task_id,
+                    "status": "done",
+                    "summary": "succeeded on retry",
+                    "key_learnings": [],
+                },
+                headers={"X-Agent-ID": agent_id},
+            )
+
+        assert resp.status_code == 200, resp.text
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert task.status == "done"
+        assert task.failure_reason is None
+
+    def test_failure_still_records_failure_reason(self, test_db, test_client, tmp_path):
+        task_id, agent_id = _seed(test_db, tmp_path)
+
+        resp = test_client.post(
+            "/update_task_status",
+            json={
+                "task_id": task_id,
+                "status": "failed",
+                "summary": "s",
+                "failure_reason": "real failure",
+                "key_learnings": [],
+            },
+            headers={"X-Agent-ID": agent_id},
+        )
+
+        assert resp.status_code == 200, resp.text
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert task.status == "failed"
+        assert task.failure_reason == "real failure"
