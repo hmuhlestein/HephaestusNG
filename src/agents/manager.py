@@ -715,15 +715,9 @@ class AgentManager:
                     f"Exporting {len(env_vars)} environment variables for agent {agent_id}: "
                     f"{', '.join(env_vars.keys())}"
                 )
-                # Set via tmux set-environment so vars persist across shell
-                # restarts and are inherited by all child processes.
-                for key, value in env_vars.items():
-                    tmux_session.set_environment(key, value)
-                # Also export in the current shell for immediate availability
-                for key, value in env_vars.items():
-                    pane.send_keys(f'export {key}="{value}"', enter=True)
-                    await asyncio.sleep(0.1)
-                await asyncio.sleep(1.0)
+                await self._export_env_vars_and_verify(
+                    tmux_session, pane, env_vars, label=f"agent {agent_id[:8]}"
+                )
 
             # Echo task info to terminal so we can see what the agent is working on
             task_desc = (task.enriched_description or task.raw_description or "")[:200]
@@ -979,6 +973,42 @@ class AgentManager:
 
             raise
 
+    def _wait_for_shell_ready(
+        self, pane, timeout: float = 2.0, poll_interval: float = 0.1
+    ) -> None:
+        """Block until a freshly-created tmux pane's shell has actually
+        started accepting input, not just until new_session() returns.
+
+        new_session() returns as soon as the pane exists, before the shell
+        inside it (zsh, sourcing .zshrc, initializing the prompt theme,
+        etc.) is done starting up. Sending keys before that finishes races
+        the shell's own startup output -- the first bytes we send can land
+        mid-init and get corrupted (e.g. "export FOO=" arrives as
+        "eexport FOO=", silently failing as an unrecognized command).
+        Observed live: a restarted agent's HEPHAESTUS_* env exports and its
+        PATH-prefixed launch line both corrupted this way, leaving it
+        without its identity env vars and without the agent-safe-bin `rm`
+        guardrail for that entire session.
+
+        Polls the pane's captured content for two consecutive stable reads
+        (same non-empty content twice in a row) as a readiness signal,
+        since the exact prompt string varies by shell/theme. Gives up after
+        `timeout` regardless, so a pane that never stabilizes doesn't block
+        agent creation forever.
+        """
+        deadline = time.monotonic() + timeout
+        last = None
+        while time.monotonic() < deadline:
+            try:
+                captured = pane.cmd("capture-pane", "-p", "-S", "-10").stdout
+                current = "\n".join(captured) if captured else ""
+            except Exception:
+                current = ""
+            if current and current == last:
+                return
+            last = current
+            time.sleep(poll_interval)
+
     def _create_tmux_session(
         self,
         session_name: str,
@@ -1030,6 +1060,7 @@ class AgentManager:
         # never start. Clear it in the new pane before anything runs.
         try:
             pane0 = session.attached_window.attached_pane
+            self._wait_for_shell_ready(pane0)
             pane0.send_keys(
                 "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID "
                 "CLAUDE_CODE_CHILD_SESSION CLAUDE_AGENT_SDK_VERSION",
@@ -1125,6 +1156,55 @@ class AgentManager:
 
         logger.debug(f"Created tmux session: {session_name}")
         return session
+
+    async def _export_env_vars_and_verify(
+        self, tmux_session, pane, env_vars: Optional[Dict[str, str]], label: str
+    ) -> None:
+        """Export env_vars into a pane's shell, then verify one of them
+        actually landed before the caller proceeds to launch the CLI in
+        that same shell.
+
+        _wait_for_shell_ready reduces the startup race this guards against
+        but doesn't eliminate it -- a shell that's still slow past that
+        wait can still swallow/corrupt an export. Re-sends once on a failed
+        readback rather than silently launching the CLI missing its
+        identity env vars (HEPHAESTUS_AGENT_ID etc., which MCP tool calls
+        and the pi cost-tracker extension depend on) and, when env_vars
+        carries a PATH override, the agent-safe-bin `rm` guardrail.
+        """
+        if not env_vars:
+            return
+
+        check_key = (
+            "HEPHAESTUS_AGENT_ID"
+            if "HEPHAESTUS_AGENT_ID" in env_vars
+            else next(iter(env_vars))
+        )
+        expected = env_vars[check_key]
+
+        for attempt in range(2):
+            for key, value in env_vars.items():
+                tmux_session.set_environment(key, value)
+            for key, value in env_vars.items():
+                pane.send_keys(f'export {key}="{value}"', enter=True)
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(1.0)
+
+            sentinel = f"__ENVCHECK_{uuid.uuid4().hex[:8]}__"
+            pane.send_keys(f'echo "{sentinel}:${check_key}"', enter=True)
+            await asyncio.sleep(0.5)
+            try:
+                captured = pane.cmd("capture-pane", "-p", "-S", "-20").stdout
+                output = "\n".join(captured) if captured else ""
+            except Exception:
+                output = ""
+            if f"{sentinel}:{expected}" in output:
+                return
+            logger.warning(
+                f"[ENV-EXPORT] {label}: readback for {check_key} didn't match "
+                f"on attempt {attempt + 1} -- "
+                f"{'retrying' if attempt == 0 else 'giving up, launching anyway'}"
+            )
 
     def _gather_worktree_context(self, task: Task) -> Dict[str, str]:
         """Collect inbound context to copy into the worktree's .hephaestus/ dir.
@@ -2027,15 +2107,9 @@ class AgentManager:
                     f"Exporting {len(env_vars)} environment variables for restarted agent {agent_id}: "
                     f"{', '.join(env_vars.keys())}"
                 )
-                # Set via tmux set-environment so vars persist across shell
-                # restarts and are inherited by all child processes.
-                for key, value in env_vars.items():
-                    tmux_session.set_environment(key, value)
-                # Also export in the current shell for immediate availability
-                for key, value in env_vars.items():
-                    pane.send_keys(f'export {key}="{value}"', enter=True)
-                    await asyncio.sleep(0.1)
-                await asyncio.sleep(1.0)
+                await self._export_env_vars_and_verify(
+                    tmux_session, pane, env_vars, label=f"restarted agent {agent_id[:8]}"
+                )
 
             # Launch the CLI (pi/claude/etc.) in the fresh session
             pane.send_keys(launch_command, enter=True)
