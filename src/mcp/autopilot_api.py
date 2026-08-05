@@ -30,7 +30,12 @@ from src.core.constants import (
 )
 
 # Import authentication function from server module
-from src.mcp.server import _check_rate_limit, verify_agent_authentication
+from src.mcp.server import (
+    KNOWN_SYSTEM_AGENTS,
+    _check_rate_limit,
+    verify_agent_authentication,
+)
+from src.prompts.loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +394,9 @@ class PipelineStatus(BaseModel):
     # hitting the concurrency cap can identify and stop EXACTLY the
     # project(s) blocking it instead of resorting to a bare stop-all call.
     running_projects: List[Dict[str, Any]] = Field(default_factory=list)
+    # Review mode
+    review_mode: bool = False
+    features_awaiting_review: int = 0
 
 
 class MessageItem(BaseModel):
@@ -639,6 +647,33 @@ async def get_pipeline_status(
         ),
         running_projects=running_projects_list,
     )
+
+    # Populate review_mode and features_awaiting_review for the requested project
+    if project_id:
+        try:
+            from src.core.database import AutopilotProject, Feature, Workflow
+            from src.core.database import get_db as _get_db
+
+            with _get_db() as _db:
+                _proj = _db.query(AutopilotProject).get(project_id)
+                result.review_mode = bool(_proj and getattr(_proj, "review_mode", False))
+                # Count features whose workflow is paused_by="review"
+                proj_wf_ids = [
+                    wf.id for wf in _db.query(Workflow).filter_by(project_id=project_id).all()
+                ]
+                if proj_wf_ids:
+                    result.features_awaiting_review = (
+                        _db.query(Feature)
+                        .join(Workflow, Feature.workflow_id == Workflow.id)
+                        .filter(
+                            Feature.workflow_id.in_(proj_wf_ids),
+                            Workflow.paused_by == "review",
+                        )
+                        .count()
+                    )
+        except Exception:
+            pass
+
     return _store(cache_key, result)
 
 
@@ -943,6 +978,7 @@ async def rerun_design(request: dict):
         from src.core.database import (
             AgentResult,
             BoardConfig,
+            CostEntry,
             DiagnosticRun,
             Memory,
             PhaseExecution,
@@ -952,6 +988,7 @@ async def rerun_design(request: dict):
             WorkflowResult,
         )
 
+        worktrees_to_clean: List[Tuple[str, dict]] = []
         with get_db() as db:
             matching_wfs = (
                 db.query(Workflow)
@@ -978,15 +1015,35 @@ async def rerun_design(request: dict):
                     db.query(AgentResult).filter(AgentResult.task_id.in_(task_ids)).delete(synchronize_session=False)
                     db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
                     db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    # CostEntry.task_id/workflow_id are also enforced FKs -- a
+                    # workflow that ever recorded real LLM cost (the common
+                    # case now that cost tracking exists) would otherwise
+                    # fail this delete with an IntegrityError.
+                    db.query(CostEntry).filter(CostEntry.task_id.in_(task_ids)).delete(synchronize_session=False)
 
                 # Delete workflow-level dependents
                 db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(WorkflowResult).filter(WorkflowResult.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(BoardConfig).filter(BoardConfig.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(Ticket).filter(Ticket.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                db.query(CostEntry).filter(CostEntry.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Delete phase executions
                 db.query(PhaseExecution).filter(PhaseExecution.workflow_execution_id.in_(wf_ids)).delete(synchronize_session=False)
+
+                # Collect worktree info before the Workflow rows are gone.
+                # Without this, _create_integration_worktree's deterministic
+                # per-design path (design_id-derived, unchanged by rerun)
+                # finds the OLD worktree still sitting there and reuses it
+                # as-is (it only creates fresh `if not wt_path.exists()`) --
+                # "rerun" would silently continue from stale commits instead
+                # of actually starting over. Step 2 above already terminated
+                # every active agent and paused every active workflow, so
+                # nothing is still writing to these worktrees by this point.
+                for wf in db.query(Workflow).filter(Workflow.id.in_(wf_ids)).all():
+                    if wf.working_directory and ".worktrees/" in wf.working_directory:
+                        lp = wf.launch_params if isinstance(wf.launch_params, dict) else {}
+                        worktrees_to_clean.append((wf.working_directory, lp))
 
                 # Delete tasks
                 db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
@@ -1006,6 +1063,32 @@ async def rerun_design(request: dict):
 
             db.commit()
             logger.info(f"[RERUN] Cleaned up {len(wf_ids)} workflows and features for {filename}")
+
+        # Best-effort worktree cleanup, now that the DB transaction above
+        # has committed -- not fatal if any single one can't be resolved.
+        for working_directory, launch_params in worktrees_to_clean:
+            try:
+                wt_path = Path(working_directory)
+                if not (wt_path / ".git").exists():
+                    continue
+                project_path_str = launch_params.get("project_path")
+                if not project_path_str:
+                    logger.warning(
+                        f"[RERUN] {wt_path} has no launch_params.project_path "
+                        "to scope cleanup to -- left in place"
+                    )
+                    continue
+                import git as _git
+
+                from src.autopilot.orchestrator import _cleanup_worktree
+
+                try:
+                    branch = _git.Repo(wt_path).active_branch.name
+                except Exception:
+                    branch = ""
+                _cleanup_worktree(wt_path, branch, Path(project_path_str), logger)
+            except Exception as e:
+                logger.warning(f"[RERUN] Failed to clean up worktree {working_directory}: {e}")
     except Exception as e:
         logger.error(f"Error cleaning up design state for rerun: {e}")
 
@@ -1016,6 +1099,12 @@ async def rerun_design(request: dict):
 
         db_manager = DatabaseManager()
         bm = WorktreeManager(db_manager)
+        # Without this, WorktreeManager operates on whatever project happens
+        # to be config.main_repo_path's current global default -- wrong
+        # project entirely once more than one project exists (see the other
+        # WorktreeManager(...).reload(...) call sites in orchestrator.py,
+        # which already do this for the same reason).
+        bm.reload(project)
         # Run cleanup in background thread to not block pipeline start
         import threading
 
@@ -1186,47 +1275,17 @@ def spawn_repair_review_agent(wf_id: str, filename: str, project: Path, reason: 
             desc = (t.get("enriched_description") or t.get("raw_description") or "")[:80]
             task_summary.append(f"  IN_PROGRESS: {t.get('id', '')[:8]} - {desc}")
 
-        review_instructions = f"""REPAIR AGENT: Design '{filename}' needs systematic repair.
-
-CRITICAL RULE: The design document is the SOURCE OF TRUTH. Do NOT modify it.
-If implementation differs from design, fix the implementation to match the design.
-If you cannot resolve a discrepancy or need to deviate from the design,
-send an inbox message to the human for approval using the message tool.
-Only deviate from the design with explicit human approval.
-
-Workflow {wf_id[:8]} status: {reason}
-Completed: {len(done_tasks)} | Failed: {len(failed_tasks)} | Pending: {len(pending_tasks)} | In Progress: {len(in_progress_tasks)}
-
-Tasks:
-{chr(10).join(task_summary) if task_summary else "No tasks found"}
-
-YOUR JOB:
-1. Read the design doc at {project / DESIGN_CONTEXT_SUBDIR / filename} (READ ONLY - do not modify)
-2. Check what has been completed so far in the feature folder
-3. Identify what's blocking progress
-4. You have FULL AUTHORITY to:
-   - Create tasks and spawn agents via create_task + create_agent_for_task
-   - Merge branches via MCP tools
-   - Fix code to match design (NOT the other way around)
-5. For EACH failed task:
-   a. Read the error and understand why it failed
-   b. Determine: can it be retried? does it need rework? is it blocked?
-   c. If retryable: reset to pending, spawn agent to relaunch
-   d. If needs rework: create new task with corrected instructions, spawn agent
-   e. If blocked: document the blocker and move on
-   f. MONITOR: after spawning, check get_task_status until done or failed
-6. For EACH pending task:
-   a. Check if dependencies are met (depends_on tasks are done)
-   b. If dependencies met: spawn agent via create_agent_for_task
-   c. If not met: skip and come back later
-   d. MONITOR: check status after spawning
-7. For EACH in_progress task:
-   a. Check agent output via get_agent_output
-   b. If stuck (no progress): nudge agent or terminate and respawn
-   c. If progressing: let it continue
-8. MERGE: after all tasks complete, merge branches to main
-9. WRITE repair_report.md summarizing actions taken
-10. Mark your task done when ALL tasks are resolved"""
+        review_instructions = get_prompt("repair_agent_instructions", {
+            "filename": filename,
+            "wf_id_short": wf_id[:8],
+            "reason": reason,
+            "done_count": len(done_tasks),
+            "failed_count": len(failed_tasks),
+            "pending_count": len(pending_tasks),
+            "in_progress_count": len(in_progress_tasks),
+            "task_summary": chr(10).join(task_summary) if task_summary else "No tasks found",
+            "design_doc_path": project / DESIGN_CONTEXT_SUBDIR / filename,
+        })
 
         # Create the task
         logger.info(f"[REPAIR-AGENT] Creating task for workflow {wf_id[:8]}")
@@ -2174,6 +2233,26 @@ async def create_cost_entry(
             detail="Rate limit exceeded. Maximum 60 cost entries per minute.",
         )
 
+    # SECURITY (ticket-5a75167a): verify_agent_authentication only checks
+    # that agent_id names a real/trusted caller -- it never binds that
+    # identity to the entry being written. A caller authenticated as one
+    # real agent could otherwise supply a *different* agent_id in the body
+    # and post a cost entry that impersonates another agent's task, which
+    # src/services/cost_collection_service.py's real-time-suppression logic
+    # (see ticket-9259f) treats as proof that task's own session reported in
+    # real time -- permanently hiding its real JSONL-derived cost. System/
+    # SDK identities (KNOWN_SYSTEM_AGENTS, sdk-*/mcp-* prefixes) have no
+    # single agent to bind to and post cost entries on behalf of whichever
+    # agent/task they're servicing, so only a real per-agent UUID identity
+    # is bound here.
+    if agent_id not in KNOWN_SYSTEM_AGENTS and not agent_id.startswith(("sdk-", "mcp-")):
+        if req.agent_id and req.agent_id != agent_id:
+            raise HTTPException(
+                status_code=403,
+                detail="agent_id does not match authenticated X-Agent-ID",
+            )
+        req.agent_id = agent_id
+
     from src.core.cost_derivation import record_cost
     from src.core.database import get_db
 
@@ -2706,6 +2785,7 @@ async def remove_project_design(project_id: str, filename: str):
         AutopilotDesign,
         AutopilotProject,
         BoardConfig,
+        CostEntry,
         DiagnosticRun,
         Feature,
         Memory,
@@ -2721,6 +2801,7 @@ async def remove_project_design(project_id: str, filename: str):
 
     # Delete DB record first, then file (atomic rollback if file delete fails)
     found = False
+    worktrees_to_clean: List[Tuple[str, dict]] = []
     with get_db() as db:
         proj = db.query(AutopilotProject).get(project_id)
         if not proj:
@@ -2792,15 +2873,33 @@ async def remove_project_design(project_id: str, filename: str):
                     db.query(AgentResult).filter(AgentResult.task_id.in_(task_ids)).delete(synchronize_session=False)
                     db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
                     db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    # CostEntry.task_id/workflow_id are also enforced FKs -- a
+                    # workflow that ever recorded real LLM cost (the common
+                    # case now that cost tracking exists) would otherwise
+                    # fail this delete with an IntegrityError.
+                    db.query(CostEntry).filter(CostEntry.task_id.in_(task_ids)).delete(synchronize_session=False)
 
                 # Delete workflow-level dependents
                 db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(WorkflowResult).filter(WorkflowResult.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(BoardConfig).filter(BoardConfig.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(Ticket).filter(Ticket.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                db.query(CostEntry).filter(CostEntry.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Delete phase executions
                 db.query(PhaseExecution).filter(PhaseExecution.workflow_execution_id.in_(wf_ids)).delete(synchronize_session=False)
+
+                # Collect worktree info before the Workflow rows are gone --
+                # otherwise these directories orphan permanently: they're
+                # deterministic per-feature paths (_create_integration_worktree),
+                # and nothing else will ever find them once the DB row
+                # pointing at one no longer exists -- not even the startup
+                # completion-worktree sweep, which only looks at "completed"
+                # workflows.
+                for wf in db.query(Workflow).filter(Workflow.id.in_(wf_ids)).all():
+                    if wf.working_directory and ".worktrees/" in wf.working_directory:
+                        lp = wf.launch_params if isinstance(wf.launch_params, dict) else {}
+                        worktrees_to_clean.append((wf.working_directory, lp))
 
                 # Delete tasks
                 db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
@@ -2814,6 +2913,32 @@ async def remove_project_design(project_id: str, filename: str):
             # Delete the design itself
             db.delete(d)
             found = True
+
+    # Best-effort worktree cleanup, now that the DB transaction above has
+    # committed -- not fatal if any single one can't be resolved.
+    for working_directory, launch_params in worktrees_to_clean:
+        try:
+            wt_path = Path(working_directory)
+            if not (wt_path / ".git").exists():
+                continue
+            project_path_str = launch_params.get("project_path")
+            if not project_path_str:
+                logger.warning(
+                    f"[DELETE-DESIGN] {wt_path} has no launch_params.project_path "
+                    "to scope cleanup to -- left in place"
+                )
+                continue
+            import git as _git
+
+            from src.autopilot.orchestrator import _cleanup_worktree
+
+            try:
+                branch = _git.Repo(wt_path).active_branch.name
+            except Exception:
+                branch = ""
+            _cleanup_worktree(wt_path, branch, Path(project_path_str), logger)
+        except Exception as e:
+            logger.warning(f"[DELETE-DESIGN] Failed to clean up worktree {working_directory}: {e}")
 
     design_dir = _get_design_queue_dir(base_dir)
     filepath = _safe_path(str(design_dir), filename)
@@ -2912,6 +3037,19 @@ async def get_project_design_status(project_id: str, filename: str):
             .all()
         )
 
+        # Self-heal each matched workflow's own status before using it below --
+        # derive_workflow_status is the centralized "did every phase actually
+        # finish" check (unlike the coarse task-status heuristics further
+        # down this endpoint), so a workflow that got marked "completed"
+        # prematurely (e.g. a goto-limit-exceeded forced "continue" that
+        # skipped starting the next phase) gets corrected back to "active"
+        # here on every poll, the same way Feature/Design status already
+        # self-heal.
+        from src.core.status_derivation import derive_workflow_status
+
+        for wf in matching_workflows:
+            derive_workflow_status(db, wf.id, write_back=True)
+
         # Get tasks and agents for all matching workflows
         all_tasks = []
         all_agents = []
@@ -2948,6 +3086,7 @@ async def get_project_design_status(project_id: str, filename: str):
                         "completed_at": t.completed_at.isoformat() if t.completed_at else None,
                         "agent_id": t.assigned_agent_id,
                         "agent_status": agent.status if agent else None,
+                        "cost_total_usd": t.cost_total_usd or 0.0,
                     }
                 )
 
@@ -3015,7 +3154,33 @@ async def get_project_design_status(project_id: str, filename: str):
         # being paused mid-run. Without this, design_status stays 'active'
         # forever after a pause, the pause/resume button never flips to
         # 'resume', and clicking pause looks like it did nothing.
-        _wf_statuses = [wf.status for wf in matching_workflows]
+        #
+        # BUT matching_workflows is deliberately broad (LIKE-matched on the
+        # bare design filename), so it also catches every OTHER feature's
+        # workflow that happened to originate from the same design document
+        # -- a design gets re-run once per decomposed feature, and each
+        # feature's own workflow references the same design_document path
+        # in its launch_params. A workflow whose OWN linked Feature has
+        # already reached completed/skipped is not a live in-flight run no
+        # matter what its own (potentially stale, never-cleaned-up)
+        # Workflow.status says -- trusting it here made the WHOLE design
+        # look permanently "Active". Observed live: BACKEND_DESIGN.md's
+        # Credit Management System feature completed 2026-07-29 but its
+        # workflow (f1b3c0e0) never got its status flipped from "active",
+        # so every later feature's design-status view showed a permanent
+        # spinner even after the design (and every feature) genuinely
+        # finished.
+        _feature_status_by_wf = {}
+        _wf_ids_for_feature_check = [wf.id for wf in matching_workflows]
+        if _wf_ids_for_feature_check:
+            with get_db() as _db:
+                for feat in _db.query(Feature).filter(Feature.workflow_id.in_(_wf_ids_for_feature_check)).all():
+                    _feature_status_by_wf[feat.workflow_id] = feat.status
+        _wf_statuses = [
+            wf.status
+            for wf in matching_workflows
+            if _feature_status_by_wf.get(wf.id) not in ("completed", "skipped")
+        ]
         if any(s == "active" for s in _wf_statuses):
             overall_status = "active"
         elif _wf_statuses and any(s == "paused" for s in _wf_statuses):
@@ -3143,6 +3308,7 @@ async def get_project_design_status(project_id: str, filename: str):
                             "completed_at": t.completed_at.isoformat() if t.completed_at else None,
                             "agent_id": t.assigned_agent_id,
                             "agent_status": agent_status,
+                            "cost_total_usd": t.cost_total_usd or 0.0,
                         }
                     )
 
@@ -3173,7 +3339,8 @@ async def get_project_design_status(project_id: str, filename: str):
                             Task.status == "done",
                         ).first()
                         if doc_review_done:
-                            has_report = (Path(feat_wf.working_directory) / "docs" / "feature_report.html").is_file()
+                            has_report = (Path(feat_wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html").is_file() or \
+                                         (Path(feat_wf.working_directory) / "docs" / "feature_report.html").is_file()
 
             features.append(
                 {
@@ -3189,6 +3356,16 @@ async def get_project_design_status(project_id: str, filename: str):
                     "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
                     "has_report": has_report,
                     "cost_total_usd": feat.cost_total_usd or 0.0,
+                    # Review mode fields
+                    "review_pending": (
+                        feat_wf_id is not None
+                        and any(
+                            wf.id == feat_wf_id and wf.paused_by == "review"
+                            for wf in matching_workflows
+                        )
+                    ),
+                    "review_status": getattr(feat, "review_status", None),
+                    "review_feedback": getattr(feat, "review_feedback", None),
                 }
             )
 
@@ -3229,7 +3406,7 @@ async def get_project_design_status(project_id: str, filename: str):
                         "tasks": phase0_tasks,
                         "created_at": phase0_wf.created_at.isoformat() if phase0_wf.created_at else None,
                         "completed_at": None,
-                        "cost_total_usd": 0.0,
+                        "cost_total_usd": phase0_wf.cost_total_usd or 0.0,
                     },
                 )
 
@@ -3320,7 +3497,10 @@ async def get_workflow_feature_report(workflow_id: str):
             raise HTTPException(404, "Workflow not found or has no working directory")
         working_directory = wf.working_directory
 
-    report_path = Path(working_directory) / "docs" / "feature_report.html"
+    report_path = Path(working_directory) / CONTEXT_DIR_NAME / "feature_report.html"
+    if not report_path.is_file():
+        # Also check docs/ directory
+        report_path = Path(working_directory) / "docs" / "feature_report.html"
     if not report_path.is_file():
         raise HTTPException(404, "Report not found")
     return HTMLResponse(content=report_path.read_text(errors="replace"))
@@ -3336,6 +3516,17 @@ def _scan_features() -> List[Dict[str, Any]]:
 
     if not FEATURES_DIR or not Path(FEATURES_DIR).exists():
         return _store("features", [])
+
+    # Enrich with DB cost data (cost_entries ledger) which is more accurate
+    # than pipeline_metrics.json (the old LiteLLM tracker).
+    db_costs = {}
+    try:
+        from src.core.database import Feature as DBFeature, get_db
+        with get_db() as db:
+            for f in db.query(DBFeature).filter(DBFeature.cost_total_usd > 0).all():
+                db_costs[f.feature_key or f.id] = f.cost_total_usd
+    except Exception:
+        pass
 
     features = []
     features_path = Path(FEATURES_DIR)
@@ -3356,6 +3547,10 @@ def _scan_features() -> List[Dict[str, Any]]:
         else:
             name = dir_name
 
+        # Prefer DB cost over metrics file cost
+        feature_key = dir_name.split("_", 1)[1] if "_" in dir_name else dir_name
+        cost_total = db_costs.get(feature_key) or db_costs.get(dir_name) or metrics.get("cost_total", 0)
+
         features.append(
             {
                 "id": feature_dir.name,
@@ -3364,7 +3559,7 @@ def _scan_features() -> List[Dict[str, Any]]:
                 "iterations": metrics.get("iterations", 0),
                 "total_time_seconds": metrics.get("total_time_seconds", 0),
                 "stop_reason": metrics.get("stop_reason", "unknown"),
-                "cost_total": metrics.get("cost_total", 0),
+                "cost_total": cost_total,
                 "cost_currency": metrics.get("cost_currency", "USD"),
                 "created_at": created_at,
                 "has_report": report_path.exists(),
@@ -3503,6 +3698,342 @@ async def resume_feature(feature_id: str):
     }
 
 
+# ── Review Mode ───────────────────────────────────────────────────────────────
+
+
+class ReviewModeUpdate(BaseModel):
+    review_mode: bool
+
+
+class FeatureReviewRequest(BaseModel):
+    action: str  # "approve" or "request_changes"
+    feedback: Optional[str] = None
+
+
+@router.patch("/projects/{project_id}/review-mode")
+async def set_review_mode(project_id: str, req: ReviewModeUpdate):
+    """Toggle review mode for a project. When enabled, the pipeline pauses
+    after each feature's deploy phase and waits for explicit approval."""
+    from src.core.database import AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Project not found")
+        proj.review_mode = req.review_mode
+        db.commit()
+    _invalidate("status")
+    return {"review_mode": req.review_mode}
+
+
+@router.post("/features/{feature_id}/review")
+async def review_feature(feature_id: str, req: FeatureReviewRequest):
+    """Approve a feature or request changes.
+
+    approve:          clears the review pause, pipeline advances.
+    request_changes:  saves feedback, resumes iteration, pipeline advances.
+    """
+    if req.action not in ("approve", "request_changes"):
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'request_changes'")
+    if req.action == "request_changes" and not (req.feedback or "").strip():
+        raise HTTPException(status_code=400, detail="feedback is required when requesting changes")
+
+    from src.core.database import Feature, Task, Workflow, get_db
+
+    with get_db() as db:
+        feature = db.query(Feature).filter_by(id=feature_id).first()
+        if not feature:
+            raise HTTPException(status_code=404, detail="Feature not found")
+        if not feature.workflow_id:
+            raise HTTPException(status_code=400, detail="Feature has no linked workflow")
+
+        wf = db.query(Workflow).filter_by(id=feature.workflow_id).first()
+        if not wf:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        if wf.paused_by != "review":
+            # Idempotent — already cleared (user double-clicked, or pipeline
+            # advanced on its own). Return success rather than an error.
+            return {"success": True, "message": "Feature was not awaiting review"}
+
+        feature.review_status = "approved" if req.action == "approve" else "changes_requested"
+        feature.reviewed_at = datetime.utcnow()
+        feature.reviewed_by = "ui-user"
+
+        if req.action == "approve":
+            # Clear the review pause — orchestrator's _wait_for_review_clearance
+            # polls paused_by; setting it to None unblocks the loop.
+            wf.status = "active"
+            wf.paused_by = None
+            # Restore Feature.status to "active" so derive_feature_status
+            # doesn't short-circuit on "paused" forever after approval.
+            feature.status = "active"
+            db.commit()
+
+            # Check if all tasks are done — if so, mark as completed
+            from src.core.database import Task as _Task
+            from src.autopilot.spec import DIAGNOSTIC_TASK_PREFIX
+            from src.core.database import PhaseExecution as _PhaseExecution
+            all_tasks = db.query(_Task).filter(
+                _Task.workflow_id == wf.id,
+                ~_Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%")
+            ).all()
+            # Check all tasks are done AND all phases are completed
+            all_phases_done = db.query(_PhaseExecution).join(
+                _Phase, _PhaseExecution.phase_id == _Phase.id
+            ).filter(
+                _Phase.workflow_id == wf.id,
+                _PhaseExecution.status != "completed"
+            ).count() == 0
+            if all_tasks and all(t.status == "done" for t in all_tasks) and all_phases_done:
+                wf.status = "completed"
+                feature.status = "completed"
+                db.commit()
+
+            _invalidate("status")
+            return {"success": True, "message": f"Feature {feature.name} approved"}
+
+        # request_changes path
+        feature.review_feedback = req.feedback
+        workflow_id = feature.workflow_id
+        feature_name = feature.name
+
+        # Keep workflow paused for review - the feature stays yellow
+        # until user approves after development fixes are done
+        # Don't resume the workflow here, just create the task
+
+        # Find restartable tasks, or create a new one if all are done
+        candidates = (
+            db.query(Task)
+            .filter(
+                Task.workflow_id == workflow_id,
+                Task.status.in_(["blocked", "failed", "assigned", "in_progress"]),
+            )
+            .all()
+        )
+        restartable = []
+        for t in candidates:
+            if t.status in ("blocked", "failed"):
+                restartable.append(t)
+            elif t.assigned_agent_id:
+                from src.core.database import Agent
+                agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
+                if not agent or agent.status == "terminated":
+                    restartable.append(t)
+
+        # If no restartable tasks, create a new development task
+        # to address the feedback directly
+        if not restartable:
+            from src.core.database import Phase
+            # Find the development phase
+            dev_phase = (
+                db.query(Phase)
+                .filter(
+                    Phase.workflow_id == workflow_id,
+                    Phase.name == "development",
+                )
+                .first()
+            )
+            if dev_phase:
+                import uuid
+                # Load feedback prompt template from YAML
+                feedback_prompt = f"## Human Review Feedback\n\n{req.feedback.strip()}\n\nRead the feature report for context: .hephaestus/feature_report.html\n\nAddress all feedback items and make the necessary code changes."
+                try:
+                    import yaml as _yaml
+                    from pathlib import Path as _Path
+                    prompt_file = _Path(__file__).parent.parent.parent / "config" / "prompts" / "review_feedback.yaml"
+                    if prompt_file.exists():
+                        with open(prompt_file) as f:
+                            prompt_config = _yaml.safe_load(f)
+                            feedback_prompt = prompt_config.get("review_feedback_prompt", feedback_prompt).format(feedback=req.feedback.strip())
+                except Exception:
+                    pass  # Use default prompt
+
+                new_task = Task(
+                    id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    phase_id=dev_phase.id,
+                    raw_description=feedback_prompt,
+                    enriched_description=None,
+                    done_definition="All review feedback addressed",
+                    status="pending",
+                    priority="high",
+                )
+                db.add(new_task)
+                db.flush()
+                restartable.append(new_task)
+                logger.info(f"[REVIEW] Created new development task {new_task.id} for feedback")
+            else:
+                logger.warning(f"[REVIEW] No development phase found for workflow {workflow_id}")
+
+        to_restart = [(t.id, t.phase_id) for t in restartable]
+        for t in restartable:
+            t.status = "pending"
+            t.failure_reason = None
+            t.assigned_agent_id = None
+
+        # Inject feedback into each restarted task via TaskPromptOverride
+        if req.feedback and to_restart:
+            from src.core.database import TaskPromptOverride
+            feedback_prefix = (
+                f"## Human Review Feedback\n\n{req.feedback.strip()}\n\n"
+                "Please address the above feedback in your implementation.\n\n---\n\n"
+            )
+            for task_id, _ in to_restart:
+                existing = db.query(TaskPromptOverride).filter_by(task_id=task_id).first()
+                if existing:
+                    existing.user_prompt = feedback_prefix + (existing.user_prompt or "")
+                else:
+                    db.add(TaskPromptOverride(
+                        task_id=task_id,
+                        user_prompt=feedback_prefix,
+                        updated_by="ui-user",
+                    ))
+
+        # Keep feature paused for review - user must approve after fixes
+        # feature.status stays "paused" and wf.paused_by stays "review"
+        db.commit()
+
+    # Spawn agents for restarted tasks (out of DB session, same as resume_feature)
+    for task_id, phase_id in to_restart:
+        logger.info(f"[REVIEW] Spawning agent for task {task_id} (phase {phase_id})")
+        asyncio.create_task(_spawn_agent_for_task(task_id, phase_id))
+
+    _invalidate("status")
+    return {
+        "success": True,
+        "message": f"Changes requested for {feature_name} — restarting {len(to_restart)} task(s)",
+    }
+
+
+@router.delete("/features/{feature_id}")
+async def delete_feature(feature_id: str):
+    """Permanently delete a feature: terminate any agent still working its
+    tasks, remove its worktree (if any), and delete the feature, its
+    workflow, and every dependent record. For an old/stuck feature run
+    that has no path back to "done" and just clutters the queue -- mirrors
+    rerun_design's own cleanup (Step 2b above), scoped to one feature
+    instead of an entire design.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.app_context import get_app_state
+    from src.core.database import (
+        AgentResult,
+        BoardConfig,
+        CostEntry,
+        DiagnosticRun,
+        Feature,
+        Memory,
+        PhaseExecution,
+        Task,
+        TaskPromptOverride,
+        Ticket,
+        ValidationReview,
+        Workflow,
+        WorkflowResult,
+        get_db,
+    )
+
+    with get_db() as db:
+        feature = db.query(Feature).filter_by(id=feature_id).first()
+        if not feature:
+            raise HTTPException(status_code=404, detail="Feature not found")
+
+        workflow_id = feature.workflow_id
+        working_directory = None
+        launch_params: dict = {}
+        agent_ids_to_terminate: List[str] = []
+        if workflow_id:
+            wf = db.query(Workflow).filter_by(id=workflow_id).first()
+            if wf:
+                working_directory = wf.working_directory
+                launch_params = wf.launch_params if isinstance(wf.launch_params, dict) else {}
+            agent_ids_to_terminate = [
+                t.assigned_agent_id
+                for t in db.query(Task).filter(
+                    Task.workflow_id == workflow_id,
+                    Task.assigned_agent_id.isnot(None),
+                )
+                if t.assigned_agent_id
+            ]
+
+    # Terminate before deleting: Agent.current_task_id is a foreign key
+    # (foreign_keys=ON) and terminate_agent is what clears it, same
+    # reasoning as the single-task DELETE endpoint (server.py).
+    if agent_ids_to_terminate:
+        server_state = get_app_state()
+        for agent_id in agent_ids_to_terminate:
+            await server_state.agent_manager.terminate_agent(agent_id)
+
+    try:
+        with get_db() as db:
+            feature = db.query(Feature).filter_by(id=feature_id).first()
+            if not feature:
+                raise HTTPException(status_code=404, detail="Feature not found")
+
+            if workflow_id:
+                task_ids = [t.id for t in db.query(Task).filter(Task.workflow_id == workflow_id).all()]
+                if task_ids:
+                    db.query(TaskPromptOverride).filter(TaskPromptOverride.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(ValidationReview).filter(ValidationReview.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(AgentResult).filter(AgentResult.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    # CostEntry.task_id/workflow_id are also enforced FKs -- a
+                    # feature that ever recorded real LLM cost (the common
+                    # case, not the exception) would otherwise fail to delete.
+                    db.query(CostEntry).filter(CostEntry.task_id.in_(task_ids)).delete(synchronize_session=False)
+
+                db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id == workflow_id).delete(synchronize_session=False)
+                db.query(WorkflowResult).filter(WorkflowResult.workflow_id == workflow_id).delete(synchronize_session=False)
+                db.query(BoardConfig).filter(BoardConfig.workflow_id == workflow_id).delete(synchronize_session=False)
+                db.query(Ticket).filter(Ticket.workflow_id == workflow_id).delete(synchronize_session=False)
+                db.query(CostEntry).filter(CostEntry.workflow_id == workflow_id).delete(synchronize_session=False)
+                db.query(PhaseExecution).filter(PhaseExecution.workflow_execution_id == workflow_id).delete(synchronize_session=False)
+                db.query(Task).filter(Task.workflow_id == workflow_id).delete(synchronize_session=False)
+                db.query(Workflow).filter_by(id=workflow_id).delete(synchronize_session=False)
+
+            db.delete(feature)
+    except IntegrityError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete feature {feature_id}: other records still reference it -- {e}",
+        )
+
+    # Best-effort worktree cleanup. Not fatal if it can't be resolved --
+    # the startup sweep (sweep_completed_workflow_worktrees) only catches
+    # "completed" workflows, and this Workflow row is now gone entirely,
+    # so this is the one chance to reclaim the directory.
+    if working_directory and ".worktrees/" in working_directory:
+        try:
+            wt_path = Path(working_directory)
+            if (wt_path / ".git").exists():
+                project_path_str = launch_params.get("project_path")
+                if project_path_str:
+                    import git as _git
+
+                    from src.autopilot.orchestrator import _cleanup_worktree
+
+                    try:
+                        branch = _git.Repo(wt_path).active_branch.name
+                    except Exception:
+                        branch = ""
+                    # _cleanup_worktree only calls .info/.warning -- this
+                    # module's own logger satisfies that without needing
+                    # OrchestratorLogger's real log-file machinery here.
+                    _cleanup_worktree(wt_path, branch, Path(project_path_str), logger)
+                else:
+                    logger.warning(
+                        f"[DELETE-FEATURE] {feature_id}'s worktree {wt_path} has no "
+                        "launch_params.project_path to scope cleanup to -- left in place"
+                    )
+        except Exception as e:
+            logger.warning(f"[DELETE-FEATURE] Failed to clean up worktree for {feature_id}: {e}")
+
+    _invalidate("queue", "features", "status")
+    return {"success": True, "feature_id": feature_id}
+
+
 async def _spawn_agent_for_task(task_id: str, phase_id: Optional[str]) -> None:
     """Create an agent for a task, mirroring /api/create_agent_for_task in server.py."""
     from src.core.app_context import get_app_state
@@ -3578,12 +4109,12 @@ async def get_feature_detail(feature_id: str):
 
     summaries = {}
     summary_files = {
-        "requirements_summary": "requirements_analysis.md",
+        "requirements_summary": "requirements.md",
         "architecture_summary": "architecture.md",
-        "security_summary": "security_report.md",
-        "qa_summary": "qa_report.md",
-        "product_validation_summary": "product_validation.md",
-        "forensics_summary": "forensics_report.md",
+        "security_summary": "security.md",
+        "qa_summary": "qa.md",
+        "product_validation_summary": "validation.md",
+        "forensics_summary": "forensics.md",
     }
     for key, fname in summary_files.items():
         fpath = docs_dir / fname
@@ -3655,7 +4186,7 @@ async def list_feature_record_docs(feature_id: str):
     pipeline). This one reads from a Feature row's own workflow's
     working_directory/docs -- the storage location every current multi-
     feature design pipeline actually writes to (architecture.md,
-    qa_report.md, etc., same files task_completion_service verifies).
+    qa.md, etc., same files task_completion_service verifies).
     """
     from src.core.database import AutopilotDesign, Feature, Workflow, get_db
 
@@ -3769,7 +4300,10 @@ async def get_feature_record_report(feature_id: str):
         if not base_dir:
             raise HTTPException(404, "Feature's workflow has no known working directory")
 
-    report_path = Path(base_dir) / "docs" / "feature_report.html"
+    report_path = Path(base_dir) / CONTEXT_DIR_NAME / "feature_report.html"
+    if not report_path.is_file():
+        # Also check docs/ directory
+        report_path = Path(base_dir) / "docs" / "feature_report.html"
     if not report_path.is_file():
         raise HTTPException(404, "Report not found")
     return HTMLResponse(content=report_path.read_text(errors="replace"))
@@ -4251,7 +4785,7 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
         project_id: If provided, only stop workflows for this project
     """
     from src.autopilot.service import get_autopilot_service, get_registry
-    from src.core.database import get_db
+    from src.core.database import AutopilotProject, get_db
 
     # Stop the service(s) (this stops the pipeline task). With project_id,
     # stop just that project's service; without one, preserve the old
@@ -4286,6 +4820,10 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
             for pid in stopped_project_ids:
                 paused = pause_project_workflows(db, pid, paused_by="user")
                 terminated_count += paused
+                # Deactivate the project so UI no longer shows it as Active
+                proj = db.query(AutopilotProject).filter_by(id=pid).first()
+                if proj:
+                    proj.is_active = False
             db.commit()
     except Exception as e:
         logger.error(f"Error cleaning up autopilot agents: {e}")
@@ -4310,16 +4848,41 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
 
 
 @router.post("/cleanup-branches")
-async def cleanup_branches():
-    """Clean up all stale agent branches."""
-    from src.core.database import DatabaseManager
+async def cleanup_branches(project_path: Optional[str] = None):
+    """Clean up all stale agent branches.
+
+    project_path: which project's repo to sweep. Defaults to the active
+    project -- WorktreeManager otherwise operates on whatever project
+    happens to be config.main_repo_path's current global default, which is
+    wrong as soon as more than one project exists (same bug already fixed
+    for the other WorktreeManager(...) call sites -- see orchestrator.py).
+    """
+    from src.core.database import AutopilotProject, DatabaseManager, get_db
     from src.core.worktree_manager import WorktreeManager
 
     try:
+        if not project_path:
+            with get_db() as db:
+                active_id = _get_active_project_id()
+                proj = (
+                    db.query(AutopilotProject).filter_by(id=active_id).first()
+                    if active_id
+                    else None
+                )
+                if not proj:
+                    raise HTTPException(
+                        400,
+                        "project_path is required (no active project to default to)",
+                    )
+                project_path = proj.base_dir
+
         db_manager = DatabaseManager()
         branch_manager = WorktreeManager(db_manager)
+        branch_manager.reload(project_path)
         result = branch_manager.cleanup_all_stale_branches()
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to cleanup branches: {e}")
         raise HTTPException(500, str(e))

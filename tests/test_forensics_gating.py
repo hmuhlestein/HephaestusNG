@@ -45,7 +45,7 @@ def forensics_workflow(db_manager, tmp_path):
         name="forensics_analysis",
         order=11,
         description="Analyze pipeline run",
-        done_definitions=["forensics_report.md created"],
+        done_definitions=["forensics.md created"],
     )
     session.add(phase)
     execution = PhaseExecution(

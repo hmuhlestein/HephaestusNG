@@ -12,15 +12,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import uvicorn
 
+from src.core.constants import HEPHAESTUS_LOGS_DIR
 from src.core.logging_config import configure_logging
 from src.core.simple_config import get_config
 
-# Configure logging using shared helper (L-2 fix)
-# Only log to stdout — the process is launched with stdout
-# redirected to ~/.hephaestus/logs/backend.log (see src/cli/commands/start.py),
-# so a second FileHandler here would just duplicate every line into a stray
-# hephaestus_server.log at the repo root.
-configure_logging()
+# Configure logging using shared helper (L-2 fix). Logs to backend.log
+# directly via a daily-rotating handler -- start.py no longer redirects
+# this process's stdout to that same path (rotation has to happen from
+# inside the writing process; a second FileHandler here would also just
+# duplicate every line into a stray hephaestus_server.log at the repo root).
+configure_logging(log_file=str(Path(HEPHAESTUS_LOGS_DIR) / "backend.log"))
 
 logger = logging.getLogger(__name__)
 
@@ -87,16 +88,6 @@ def main():
 
     # Run the server
     try:
-        # Log to file so we can trace API events (tmux scrollback is limited)
-        log_dir = Path(__file__).parent / "logs"
-        log_dir.mkdir(exist_ok=True)
-        file_handler = logging.FileHandler(log_dir / "server.log")
-        file_handler.setLevel(logging.INFO)
-        file_handler.setFormatter(
-            logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
-        )
-        logging.getLogger().addHandler(file_handler)
-
         uvicorn.run(
             "src.mcp.server:app",
             host=config.mcp_host,

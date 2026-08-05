@@ -222,7 +222,7 @@ class TestBrowserAutomation:
     @pytest.mark.asyncio
     async def test_page_loads(self, browser):
         await browser.connect()
-        await browser.navigate("http://localhost:5173")
+        await browser.navigate("http://localhost:5300")
         title = await browser.evaluate("document.title")
         assert title is not None
         await browser.close()
@@ -232,7 +232,7 @@ class TestBrowserAutomation:
         await browser.connect()
         errors = []
         await browser.enable_console(lambda msg: errors.append(msg))
-        await browser.navigate("http://localhost:5173")
+        await browser.navigate("http://localhost:5300")
         await asyncio.sleep(3)
         assert len(errors) == 0, f"Console errors: {errors}"
         await browser.close()
@@ -242,7 +242,7 @@ class TestBrowserAutomation:
         await browser.connect()
         failed_requests = []
         await browser.enable_network(lambda req: failed_requests.append(req))
-        await browser.navigate("http://localhost:5173")
+        await browser.navigate("http://localhost:5300")
         await asyncio.sleep(5)
         assert len(failed_requests) == 0
         await browser.close()

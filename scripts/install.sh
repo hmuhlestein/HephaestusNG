@@ -128,6 +128,14 @@ else
     MISSING=1
 fi
 
+# timeout (coreutils) - used for agent command timeouts
+if command -v timeout >/dev/null 2>&1; then
+    ok "timeout: $(command -v timeout)"
+else
+    warn "timeout not found (part of coreutils) — agent timeouts will not work"
+    warn "Install with: brew install coreutils (macOS) or apt install coreutils (Linux)"
+fi
+
 # Docker (only needed for qdrant)
 if [ "$SKIP_DOCKER" = false ]; then
     VECTOR_BACKEND="${VECTOR_STORE_BACKEND:-turbovec}"
@@ -332,7 +340,7 @@ else
 
     if $_install_ash; then
         log "Installing ash wrapper (uvx local mode)..."
-        cp "$REPO_DIR/scripts/ash" "$ASH_WRAPPER" \
+        cp "$PREFIX/scripts/ash" "$ASH_WRAPPER" \
           && chmod +x "$ASH_WRAPPER" \
           && ok "ash wrapper installed → $ASH_WRAPPER" \
           || warn "ash wrapper install failed — security phase will skip automated scan"
@@ -453,7 +461,49 @@ if [ "$SKIP_FRONTEND" = false ]; then
     fi
 fi
 
-# ─── 10. Verify ───────────────────────────────────────────────────
+# ─── 10. Pi Extension (Cost Tracker) ─────────────────────────────
+
+header "Pi Extension (Cost Tracker)"
+
+EXT_SRC="$PREFIX/extensions/hephaestus-cost-tracker"
+PI_EXT_DIR="$HOME/.pi/agent/extensions"
+
+if [ -d "$EXT_SRC" ]; then
+    # Build the extension if needed
+    if [ -f "$EXT_SRC/package.json" ]; then
+        log "Building cost tracker extension..."
+        cd "$EXT_SRC"
+        if [ ! -d "node_modules" ]; then
+            npm install --silent 2>/dev/null
+        fi
+        npx tsc 2>/dev/null && ok "Extension built" || warn "Extension build failed (npm/npx required)"
+        cd "$PREFIX"
+    fi
+
+    # Symlink into pi's global extensions directory.
+    # Pi auto-discovers *.ts files -- the compiled .js is NOT discovered.
+    # Symlink the source .ts so pi can load it directly (pi runs TS natively).
+    if [ -f "$EXT_SRC/src/index.ts" ]; then
+        mkdir -p "$PI_EXT_DIR"
+        ln -sf "$EXT_SRC/src/index.ts" "$PI_EXT_DIR/hephaestus-cost-tracker.ts"
+        ok "Cost tracker symlinked → $PI_EXT_DIR/hephaestus-cost-tracker.ts"
+    elif [ -f "$EXT_SRC/dist/index.js" ]; then
+        mkdir -p "$PI_EXT_DIR"
+        ln -sf "$EXT_SRC/dist/index.js" "$PI_EXT_DIR/hephaestus-cost-tracker.js"
+        ok "Cost tracker symlinked → $PI_EXT_DIR/hephaestus-cost-tracker.js"
+    else
+        warn "Extension source/dist not found — build may have failed"
+    fi
+else
+    warn "Extension source not found at $EXT_SRC — skipping"
+fi
+
+# ─── 11. Update Model Pricing ──────────────────────────────────────
+
+log "Updating model pricing from OpenRouter API..."
+python3 "$PREFIX/scripts/update_model_pricing.py" 2>/dev/null && ok "Model pricing updated" || warn "Could not update pricing (using defaults)"
+
+# ─── 12. Verify ───────────────────────────────────────────────────
 
 header "Installation complete"
 
@@ -545,7 +595,7 @@ if [ ! -f "$OPENCODE_CONFIG" ] || ! grep -q "hephaestusNG" "$OPENCODE_CONFIG" 2>
 {
   "\$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "hephaestus": {
+    "heph": {
       "type": "local",
       "command": ["$PYTHON_PATH", "$MCP_SCRIPT"]
     }
@@ -565,8 +615,8 @@ PI_AGENTS_DIR="$HOME/.pi/agent/agents"
 PI_MCP_CONFIG="$HOME/.config/mcp/mcp.json"
 PI_MCP_BACKUP="$HOME/.config/mcp/mcp.json.bak"
 
-# Check if pi is installed
-if command -v pi >/dev/null 2>&1 || [ -d "$HOME/.pi" ]; then
+# Check if pi CLI is installed (must be on PATH — just having ~/.pi is not enough)
+if command -v pi >/dev/null 2>&1; then
     log "Pi detected — configuring MCP tools"
     
     # Check if pi-mcp-adapter is installed (wraps MCP servers for pi without context overhead)
@@ -582,6 +632,31 @@ if command -v pi >/dev/null 2>&1 || [ -d "$HOME/.pi" ]; then
         fi
     else
         ok "pi-mcp-adapter already installed"
+    fi
+
+    # Offer to install pi-codegraph-extension
+    if ! pi list 2>/dev/null | grep -q 'pi-codegraph-extension'; then
+        _install_codegraph=true
+        if [ -t 0 ]; then
+            printf "${BLUE}[heph]${NC} Install pi-codegraph-extension (codebase indexing for pi)? [Y/n] "
+            read -r _cg_reply </dev/tty
+            case "${_cg_reply:-Y}" in
+                [Nn]*) _install_codegraph=false ;;
+            esac
+        fi
+        if $_install_codegraph; then
+            log "Installing pi-codegraph-extension..."
+            if pi install npm:pi-codegraph-extension 2>&1 | tail -3; then
+                ok "pi-codegraph-extension installed"
+            else
+                warn "Failed to install pi-codegraph-extension"
+                warn "Install manually: pi install npm:pi-codegraph-extension"
+            fi
+        else
+            ok "pi-codegraph-extension skipped"
+        fi
+    else
+        ok "pi-codegraph-extension already installed"
     fi
     
     # Generate and install Hephaestus pi agents from phase files
@@ -641,7 +716,7 @@ if command -v pi >/dev/null 2>&1 || [ -d "$HOME/.pi" ]; then
             cat > "$PI_MCP_CONFIG" << MCPEOF
 {
   "mcpServers": {
-    "hephaestus": {
+    "heph": {
       "command": "$MCP_PYTHON",
       "args": ["$MCP_SCRIPT_PATH"]
     }
@@ -655,11 +730,11 @@ MCPEOF
             fi
         else
             # Check if hephaestus is already configured
-            if grep -q '"hephaestus"' "$PI_MCP_CONFIG" 2>/dev/null; then
+            if grep -q '"heph"' "$PI_MCP_CONFIG" 2>/dev/null; then
                 ok "Hephaestus MCP already configured"
             else
                 # Add hephaestus to existing config using python for safe JSON merge
-                log "Adding hephaestus to existing MCP config..."
+                log "Adding heph to existing MCP config..."
                 "$MCP_PYTHON" -c "
 import json
 import sys
@@ -689,7 +764,7 @@ if 'mcpServers' not in config:
     config['mcpServers'] = {}
 
 # Add hephaestus server
-config['mcpServers']['hephaestus'] = {
+config['mcpServers']['heph'] = {
     'command': '$MCP_PYTHON',
     'args': ['$MCP_SCRIPT_PATH']
 }
@@ -701,7 +776,7 @@ with open(config_path, 'w') as f:
 print('OK')
 " 2>/dev/null
                 if [ $? -eq 0 ]; then
-                    ok "Added hephaestus to MCP config"
+                    ok "Added heph to MCP config"
                 else
                     warn "Failed to update MCP config"
                     # Restore backup if it exists
@@ -718,7 +793,7 @@ print('OK')
     mkdir -p "$PI_AGENTS_DIR"
     
     # MCP tools to add to pi agents
-    MCP_TOOLS="mcp:hephaestus/save_memory, mcp:hephaestus/search_memory, mcp:hephaestus/get_task_status, mcp:hephaestus/create_task, mcp:hephaestus/update_task_status"
+    MCP_TOOLS="mcp:heph/save_memory, mcp:heph/search_memory, mcp:heph/get_task_status, mcp:heph/create_task, mcp:heph/update_task_status"
     
     # Function to add MCP tools to agent file
     add_mcp_tools() {
@@ -731,7 +806,7 @@ print('OK')
         fi
         
         # Check if already has MCP tools
-        if grep -q 'mcp:hephaestus' "$agent_file" 2>/dev/null; then
+        if grep -q 'mcp:heph' "$agent_file" 2>/dev/null; then
             ok "$agent_name already has MCP tools"
             return
         fi
@@ -778,32 +853,6 @@ print('OK')
     # Cleanup backup files
     rm -f "$PI_MCP_BACKUP" 2>/dev/null
     rm -f "$PI_AGENTS_DIR"/*.bak 2>/dev/null
-
-    # Install/update the real-time cost tracking extension
-    EXT_SRC_DIR="$PREFIX/extensions/hephaestus-cost-tracker"
-    EXT_DEST_DIR="$HOME/.pi/agent/extensions/hephaestus-cost-tracker"
-
-    if [ -d "$EXT_SRC_DIR" ]; then
-        log "Installing Hephaestus cost tracker extension..."
-        if command -v npm >/dev/null 2>&1; then
-            if ! rm -rf "$EXT_DEST_DIR" 2>/dev/null || ! mkdir -p "$EXT_DEST_DIR" 2>/dev/null || ! cp -r "$EXT_SRC_DIR"/* "$EXT_DEST_DIR/" 2>/dev/null; then
-                warn "Could not write to $EXT_DEST_DIR — skipping cost tracker extension"
-                warn "Cost data will still be collected via task-completion fallback"
-            else
-                if EXT_BUILD_OUTPUT=$(cd "$EXT_DEST_DIR" && npm install --silent 2>&1 && npm run build 2>&1); then
-                    ok "Cost tracker extension installed"
-                else
-                    warn "Cost tracker extension build failed — real-time cost tracking disabled"
-                    warn "Cost data will still be collected via task-completion fallback"
-                    echo "$EXT_BUILD_OUTPUT" | tail -6
-                fi
-            fi
-        else
-            warn "npm not found — skipping cost tracker extension (fallback collection still works)"
-        fi
-    else
-        warn "Extension source not found at $EXT_SRC_DIR — skipping"
-    fi
 
     log "Restart Pi after installation for MCP tools to take effect"
     log "pi-mcp-adapter reads from ~/.config/mcp/mcp.json automatically"

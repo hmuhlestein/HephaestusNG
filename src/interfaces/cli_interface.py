@@ -13,7 +13,7 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +154,51 @@ class CLIAgentInterface(ABC):
         with a safe default so the monitor stays harness-agnostic; override
         per CLI (polymorphic)."""
         return ""
+
+    def fallback_model(self, config, is_primary: bool) -> Optional[str]:
+        """The configured model to switch to when model_fallback_keystrokes
+        fires, resolved by ROLE, not by which CLI product this is:
+        config.cli_model_fallback is whichever CLI is currently the
+        *primary* default_cli_tool's fallback; config.secondary_cli_model_fallback
+        is whichever CLI is currently the *secondary*/default_fallback_cli_tool's.
+        Swapping default_cli_tool/default_fallback_cli_tool (e.g. running
+        Claude as primary against a local model, pi as the fallback tier)
+        must not silently keep reading the old role's config key just
+        because it's still the same CLI class. Shared here, not overridden
+        per subclass -- this is a role lookup, not a CLI-specific concern
+        (each CLI's own valid model *strings* are model_fallback_keystrokes'
+        job, not this method's). None = unset -- the monitor should not
+        guess a default.
+
+        is_primary: whether this agent's cli_type is the currently
+        configured default_cli_tool (the caller already computes this for
+        its own gate check, so it's passed in rather than re-derived here).
+        """
+        key = "cli_model_fallback" if is_primary else "secondary_cli_model_fallback"
+        return getattr(config, key, None)
+
+    def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
+        """Literal pane inputs (not chat messages) to switch this CLI's
+        active model to `model` via its own model-switching UI, as a list
+        of (text_to_send, seconds_to_wait_after_sending) pairs, sent in
+        order. Empty = no known in-session model-switch mechanism for this
+        CLI -- the monitor should not guess, since a model-switch slash
+        command is typically client-side (intercepted before it reaches the
+        model) and wrong syntax for the wrong CLI does nothing useful.
+        Concrete with a safe default so the monitor stays harness-agnostic;
+        override per CLI (polymorphic)."""
+        return []
+
+    def model_fallback_confirmed(self, output: str, model: str) -> Optional[bool]:
+        """Check recent pane/transcript output for confirmation that a
+        model_fallback_keystrokes switch to `model` actually landed.
+        Returns True if confirmed, False if there's a specific reason to
+        believe it didn't, None if this CLI has no known way to tell (skip
+        verification silently rather than guess). Concrete with a safe
+        default so the monitor stays harness-agnostic; override per CLI
+        (polymorphic) -- only meaningful for a CLI that also overrides
+        model_fallback_keystrokes."""
+        return None
 
     # ── Shared helpers ───────────────────────────────────────────────────
 
@@ -406,17 +451,49 @@ class ClaudeCodeAgent(CLIAgentInterface):
             # requires a UUID and splits this into two flags that each only
             # work once: --session-id errors "already in use" on a repeat
             # id, --resume errors "no conversation found" on a fresh one.
-            # Try create-new first, fall back to resume -- covers both the
-            # first launch and every goto/retry that reuses this id.
+            # Try the one that should actually work first (see
+            # _claude_session_exists), falling back to the other -- this
+            # still covers both the first launch and every goto/retry that
+            # reuses this id even if the existence check is wrong (stale
+            # sanitization heuristic, race, permissions), it just no longer
+            # prints the "already in use" error in the common case.
             session_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, session_id))
+            working_directory = kwargs.get("working_directory", "")
+            first, second = "--session-id", "--resume"
+            if working_directory and self._claude_session_exists(
+                working_directory, session_uuid
+            ):
+                first, second = "--resume", "--session-id"
             command = (
-                f"(claude --session-id {session_uuid} {base_flags} || "
-                f"claude --resume {session_uuid} {base_flags})"
+                f"(claude {first} {session_uuid} {base_flags} || "
+                f"claude {second} {session_uuid} {base_flags})"
             )
         else:
             command = f"claude {base_flags}"
 
         return command
+
+    @staticmethod
+    def _claude_session_exists(working_directory: str, session_uuid: str) -> bool:
+        """Best-effort check for whether Claude Code already has a stored
+        session for this uuid in this working directory, so the launch
+        command can try the branch that will actually succeed first instead
+        of always eating an "already in use" failure on every resumed
+        session. Mirrors Claude Code's own project-key sanitization
+        (verified empirically against ~/.claude/projects/ directory names:
+        every '/', '.', and '_' in the canonical path becomes '-'). If this
+        heuristic is ever wrong, the caller's || fallback still covers it --
+        this only affects which branch is tried first.
+        """
+        try:
+            canonical = os.path.realpath(working_directory)
+            project_key = re.sub(r"[/._]", "-", canonical)
+            session_file = (
+                Path.home() / ".claude" / "projects" / project_key / f"{session_uuid}.jsonl"
+            )
+            return session_file.exists()
+        except Exception:
+            return False
 
     def get_health_check_pattern(self) -> str:
         return r"(Assistant:|Human:|›)"
@@ -434,6 +511,12 @@ class ClaudeCodeAgent(CLIAgentInterface):
             r"Failed to connect",
             r"Maximum retries exceeded",
         ]
+
+    def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
+        # Same one-line `/model <name>` syntax already confirmed working
+        # for Claude Code in _detect_bad_model_error (monitor.py) -- unlike
+        # pi, no picker/search step.
+        return [(f"/model {model}", 0.0)]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
         lines = output.strip().split("\n")
@@ -634,7 +717,7 @@ class PiAgent(CLIAgentInterface):
 
     display_name = "Pi"
     needs_chunked_delivery = True
-    default_model = "openrouter/xiaomi/mimo-v2.5-pro"
+    default_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
 
     def get_session_args(self, session_id: str) -> str:
         """Pi uses --session-id to resume or create a named session.
@@ -783,6 +866,28 @@ class PiAgent(CLIAgentInterface):
             f"Run `mcp connect {server_name}` to reconnect before calling "
             f"any {server_name}_* tool. Verify with `mcp status` afterward."
         )
+
+    def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
+        # The two-step form ("/model" alone, wait for the picker, then the
+        # search text as a second send) never confirmed a single successful
+        # switch across 80 attempts system-wide (0 cli_model_fallback_confirmed
+        # vs 58 unconfirmed + 6 abandoned) -- the wait window is exactly
+        # where a busy/slow-to-respond agent lets the second send land as a
+        # queued chat "Steering" message instead of picker input, since the
+        # picker hadn't actually opened yet. pi's `/model` accepts the search
+        # text as a trailing argument on the same line, pre-filtering the
+        # picker to a single match in one atomic send -- no wait window for
+        # the agent to be mid-turn in.
+        return [(f"/model {model}", 0.0)]
+
+    def model_fallback_confirmed(self, output: str, model: str) -> Optional[bool]:
+        # Confirmed live: a successful pick echoes "Model: <provider>/<name>"
+        # (e.g. "Model: xiaomi/mimo-v2.5-pro" for search text
+        # "mimo-v2.5-pro"). Requiring the "Model: " prefix (not just a bare
+        # substring search for `model`) avoids a false positive from the
+        # search text merely being echoed back as typed input if the picker
+        # never actually opened.
+        return re.search(rf"Model:\s*\S*{re.escape(model)}", output) is not None
 
     def parse_output(self, output: str) -> Dict[str, Any]:
         lines = output.strip().split("\n")

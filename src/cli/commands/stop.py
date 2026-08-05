@@ -6,6 +6,7 @@ import subprocess
 import time
 
 from src.cli.utils import is_process_running, output, read_pid, remove_pid
+from src.cli.utils.ports import get_port_listeners, kill_port_listeners
 
 
 def register(subparsers):
@@ -17,16 +18,20 @@ def register(subparsers):
 def run(args):
     stopped = {}
 
-    # Read port from config
-    try:
-        from src.core.simple_config import Config
+    port = getattr(args, "port", None)
+    if not port:
+        try:
+            from src.core.simple_config import get_config
 
-        config = Config()
-        port = config.mcp_port or 8300
-    except Exception:
-        port = 8300
+            port = get_config().mcp_port
+        except Exception:
+            port = 8300
 
-    # First, kill ALL processes on the backend port to prevent stale processes.
+    # First, kill ALL python processes LISTENING on the backend port to
+    # prevent stale processes. Uses get_port_listeners to filter by command
+    # name so VS Code Remote SSH port-forwarding proxies (also LISTEN
+    # sockets, also `node`) are never killed.
+    #
     # Block until the processes themselves fully exit instead of a flat
     # sleep(1) or a port-LISTEN check -- a graceful ASGI shutdown unbinds the
     # listening socket quickly but can keep the process alive much longer
@@ -38,11 +43,8 @@ def run(args):
     # state a legitimately-running agent (started by the NEW process after
     # the restart) had just changed. Checking actual process liveness
     # (is_process_running), not just the port, closes that gap.
+    pids = get_port_listeners(port, {"python", "uvicorn"})
     try:
-        result = subprocess.run(
-            ["lsof", "-ti", f":{port}"], capture_output=True, text=True
-        )
-        pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
         if pids:
             for pid in pids:
                 try:

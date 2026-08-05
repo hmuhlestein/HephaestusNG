@@ -84,7 +84,7 @@ const AgentCard: React.FC<{
             <p className="font-semibold text-gray-800">
               {agentTitle(agent)}
             </p>
-            <p className="text-xs text-gray-500">{agent.agent_type === 'orchestrator' ? 'orchestrator' : agent.cli_type}</p>
+            <p className="text-xs text-gray-500">{agent.agent_type === 'orchestrator' ? 'orchestrator' : agent.cli_type}{agent.cli_model ? ` / ${agent.cli_model}` : ''}</p>
             {agent.workflow && (
               <p className="text-xs text-violet-600 mt-0.5">
                 {agent.workflow.name || agent.workflow.id.substring(0, 8)}
@@ -99,7 +99,14 @@ const AgentCard: React.FC<{
             )}
           </div>
         </div>
-        <StatusBadge status={agent.status} size="sm" />
+        <div className="flex items-center gap-2">
+          {agent.cost_total_usd != null && agent.cost_total_usd > 0 && (
+            <span className="text-xs font-mono text-gray-500">
+              ${agent.cost_total_usd.toFixed(2)}
+            </span>
+          )}
+          <StatusBadge status={agent.status} size="sm" />
+        </div>
       </div>
 
       {/* Current Task Section */}

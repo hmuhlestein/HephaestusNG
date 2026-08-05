@@ -3,12 +3,14 @@ export interface Agent {
   status: 'idle' | 'working' | 'stuck' | 'terminated';
   agent_type: 'phase' | 'validator' | 'result_validator' | 'monitor' | 'diagnostic' | 'orchestrator';
   cli_type: string;
+  cli_model: string | null;
   current_task_id: string | null;
   tmux_session_name: string | null;
   health_check_failures: number;
   created_at: string;
   terminated_at: string | null;
   last_activity: string | null;
+  cost_total_usd?: number;
   workflow?: {
     id: string;
     name: string;
@@ -232,6 +234,7 @@ export interface TaskFullDetails {
   system_prompt: string | null;
   user_prompt: string;
   workflow_id: string | null;
+  cost_total_usd?: number;
   action?: string | null;
   action_target_phase?: string | null;
   // Task deduplication fields
@@ -257,6 +260,7 @@ export interface TaskFullDetails {
     id: string;
     status: string;
     cli_type: string;
+    cli_model: string | null;
     created_at: string | null;
     last_activity: string | null;
   } | null;

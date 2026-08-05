@@ -5,40 +5,43 @@ description: |
   Review and fix all project documentation for accuracy, completeness, and quality.
   Produces a feature report, code summary, and doc review findings.
 done_definitions:
-  - "Stray files organized into Docs Path"
+  - "Stray files organized into Artifacts Path"
   - "Critical inaccuracies fixed"
-  - "feature_report.html written to Docs Path"
-  - "code_summary.md written to Docs Path"
-  - "doc_review_report.md written to Docs Path"
+  - "feature_report.html written to Artifacts Path"
+  - "summary.md written to Artifacts Path"
+  - "docs.md written to Artifacts Path"
   - "Task marked as done"
 outputs:
-  - "doc_review_report.md"
+  - "docs.md"
   - "feature_report.html"
-  - "code_summary.md"
+  - "summary.md"
 additional_notes: |
   OUTPUT STYLE: Terse. Fragments OK. No filler.
 
-  Your working directory IS the project root. Docs Path = ./docs/ (create if missing).
-  ALL reports go in Docs Path. Do NOT write into ./.hephaestus/.
+  Your working directory IS the project root. Artifacts Path = ./.hephaestus/ (create if missing).
+  ALL reports go in Artifacts Path. Do NOT write into ./docs/ (git-tracked).
 
   ═══ STEP 1: CLEAN UP ═══
 
-  Move stray .md/.txt/.log files from project root into Docs Path (skip README.md, AGENTS.md, etc.).
+  Move stray .md/.txt/.log files from project root into Artifacts Path (skip README.md, AGENTS.md, etc.). Artifacts Path (./.hephaestus/) is gitignored, so do NOT use `git mv` -- it re-tracks the destination even when it's ignored. Instead: copy the file to the destination, then `git rm <source>` to stage the removal. If `git rm` fails with "did not match any files", the source was never committed -- just `rm <source>`, nothing to stage.
+
+  Sweep ./docs/ for known agent report filenames left there by mistake (stale reports from before the .hephaestus/ migration, or an agent that ignored these instructions): architecture.md, requirements.md, qa.md, validation.md, scope.md, review.md, adversarial.md, forensics.md, docs.md, feature_report.html, summary.md, pipeline_metrics.json, run_health.json, arbitration_result.json. Same copy-then-`git rm` rule as above (never `git mv`), keeping the same relative path if it's under a phase-named subdirectory (e.g. copy docs/qa_validation/qa.md to .hephaestus/qa_validation/qa.md, then `git rm docs/qa_validation/qa.md`). Leave everything else in ./docs/ alone -- it's human-authored project documentation.
   Delete scratch/temp files agents left behind (*_draft*, *_temp*, *.tmp, *.bak, empty dirs).
 
   ═══ STEP 2: FIX CRITICAL DOC ERRORS ═══
 
-  Read requirements_analysis.md, architecture.md, the adversarial review report,
-  README.md, and skim key source files. Look for:
+  Read requirements.md (contains REQ-XX requirement IDs), architecture.md,
+  the adversarial review report, README.md, and skim key source files. Look for:
   - Forward-looking language now out of date ("will be implemented", "not yet created")
   - Filenames or paths that don't match the actual filesystem
   - Requirements listed as missing that are actually implemented
+  - REQ-XX requirements referenced in docs that don't match requirements.md
 
   Fix critical issues directly. Skip minor style issues.
 
-  ═══ STEP 3: WRITE CODE SUMMARY (code_summary.md) ═══
+  ═══ STEP 3: WRITE CODE SUMMARY (summary.md) ═══
 
-  Start code_summary.md with this frontmatter block, then the content
+  Start summary.md with this frontmatter block, then the content
   immediately after:
   ```
   ---
@@ -47,7 +50,7 @@ additional_notes: |
   ```
 
   Explore the actual code changes (git diff, read new/modified files) and write
-  a standalone code_summary.md that explains to an engineer:
+  a standalone summary.md that explains to an engineer:
 
   - WHAT was built: new files, key classes/functions, what each module does
   - WHY it exists: the problem it solves, design decisions, alternatives considered
@@ -68,13 +71,13 @@ additional_notes: |
   6. Quality — test coverage, security review, known limitations
   7. Changelog — files created/modified, config changes
 
-  The code_summary.md content (WHAT/WHY/HOW) should feed into sections 2-3.
+  The summary.md content (WHAT/WHY/HOW) should feed into sections 2-3.
   Target 200-400 lines. Enough for someone to understand the feature without
   reading source code.
 
-  ═══ STEP 5: WRITE DOC REVIEW REPORT (doc_review_report.md) ═══
+  ═══ STEP 5: WRITE DOC REVIEW REPORT (docs.md) ═══
 
-  Start doc_review_report.md with this frontmatter block, then the content
+  Start docs.md with this frontmatter block, then the content
   immediately after:
   ```
   ---
@@ -87,4 +90,4 @@ additional_notes: |
 
   ═══ MARK DONE ═══
 
-  Call hephaestus_complete_my_task with status="done" and a brief summary.
+  Call complete_my_task with status="done" and a brief summary.

@@ -16,11 +16,11 @@ done_definitions:
   - "Component dependencies mapped"
   - "Technology constraints noted (respecting existing stack)"
   - "Integration points with existing system identified"
-  - "requirements_analysis.md created in Docs Path location"
+  - "requirements.md created in Docs Path location"
   - "Memory saved with key decisions and project context"
   - "Task marked as done"
 outputs:
-  - "requirements_analysis.md"
+  - "requirements.md"
 next_steps:
   - "Requirements extracted and saved"
 additional_notes: |
@@ -28,7 +28,7 @@ additional_notes: |
   Technical terms exact. No pleasantries (sure/certainly/happy to).
   Not: "I'll now proceed to extract requirements." Yes: "Extract requirements from design doc."
 
-  Start requirements_analysis.md with this frontmatter block, then the
+  Start requirements.md with this frontmatter block, then the
   report immediately after:
   ```
   ---
@@ -44,7 +44,7 @@ additional_notes: |
   within the context of the larger project vision.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 0: GATHER PROJECT CONTEXT (CRITICAL)
+  STEP 1: GATHER PROJECT CONTEXT (CRITICAL)
   ═══════════════════════════════════════════════════════════════════════
 
   The design document is the AUTHORITATIVE source of truth. Read it FIRST
@@ -71,7 +71,7 @@ additional_notes: |
      - Security and configuration tips
 
   2. Check for existing project docs:
-      - requirements_analysis.md (from previous features)
+      - requirements.md (from previous features)
       - architecture.md (existing system design)
       - features/ directory (previously completed features)
       - README.md (project overview)
@@ -86,7 +86,7 @@ additional_notes: |
 
      ```python
      # Try once — if empty or error, skip and move on
-     result = hephaestus_search_memory({"query": "project decisions", "limit": 5})
+     result = search_memory({"query": "project decisions", "limit": 5})
      # If result is empty or tool errors → skip, proceed to Step 1
      ```
 
@@ -106,14 +106,14 @@ additional_notes: |
      ```
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 0.5: CHECK FOR SCOPE REVIEW FEEDBACK (CRITICAL ON RETRY)
+  STEP 2: CHECK FOR SCOPE REVIEW FEEDBACK (CRITICAL ON RETRY)
   ═══════════════════════════════════════════════════════════════════════
 
   Before writing or rewriting requirements, check whether a prior scope
   review already ran and failed:
 
   ```bash
-  cat ./docs/scope_review/scope_review_result.md 2>/dev/null || echo "NO_PRIOR_REVIEW"
+  cat ./.hephaestus/scope_review/scope.md 2>/dev/null || echo "NO_PRIOR_REVIEW"
   ```
 
   This file starts with a YAML frontmatter block (`---` ... `---`) followed
@@ -128,7 +128,7 @@ additional_notes: |
   remove it even if it seems reasonable from the design doc.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 1: READ THE DESIGN DOCUMENT
+  STEP 3: READ THE DESIGN DOCUMENT
   ═══════════════════════════════════════════════════════════════════════
 
   Read the design document provided in the task description.
@@ -139,7 +139,7 @@ additional_notes: |
   - Any related design documents in the features/ directory
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: EXTRACT REQUIREMENTS WITH CONTEXT
+  STEP 4: EXTRACT REQUIREMENTS WITH CONTEXT
   ═══════════════════════════════════════════════════════════════════════
 
   For each requirement, consider:
@@ -157,7 +157,7 @@ additional_notes: |
      - What capabilities does it unlock?
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: RESPECT EXISTING TECHNOLOGY STACK
+  STEP 5: RESPECT EXISTING TECHNOLOGY STACK
   ═══════════════════════════════════════════════════════════════════════
 
   CRITICAL: If the project already has a technology stack:
@@ -170,24 +170,32 @@ additional_notes: |
   and flag it for the architect to resolve.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: CREATE REQUIREMENTS DOCUMENT
+  STEP 6: CREATE REQUIREMENTS DOCUMENT WITH REQ-XX TRACKING
   ═══════════════════════════════════════════════════════════════════════
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
-  - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
-  - ALWAYS use the "Docs Path:" value for ALL generated docs (.md, .json, .txt).
-  - ALWAYS use the "Project Path:" value for ALL implementation code.
+  - Do NOT use absolute paths outside your working directory.
+  - ALWAYS use the "Artifacts Path" value for ALL generated docs (.md, .json, .txt).
+  - ALWAYS use the "Project Path" value for ALL implementation code.
   - Your task description contains the exact paths — copy them exactly.
 
   Read your task description for the correct paths:
   - "Design Document:" tells you where the design doc is
-  - "Docs Path:" tells you where to write requirements_analysis.md
+  - "Docs Path:" tells you where to write requirements.md
   - "Project Path:" tells you where implementation code goes
 
-  Write requirements_analysis.md to the "Docs Path" location from your task description.
+  Write requirements.md to the "Docs Path" location from your task description.
+
+  **REQUIREMENT NUMBERING (MANDATORY):**
+  Every functional requirement MUST be assigned a unique ID:
+  - Format: `REQ-XX` where XX is a zero-padded number (REQ-01, REQ-02, ...)
+  - Number sequentially as you decompose requirements
+  - Include the ID in ALL references to that requirement throughout the document
+  - These IDs will be tracked by reviewers and product validation
+  - Non-functional requirements use `NFR-XX` format
 
   # Requirements Analysis: [Feature Name]
 
@@ -200,14 +208,16 @@ additional_notes: |
   ## Feature Requirements (from design document)
 
   ### Functional Requirements
-  1. [Requirement] - Acceptance: [criteria]
-     - Integration with existing: [which components]
-     - Is new: [yes/no]
+  | REQ ID | Requirement | Acceptance Criteria | Priority | Integration |
+  |--------|-------------|---------------------|----------|-------------|
+  | REQ-01 | [Requirement] | [criteria] | High/Med/Low | [components] |
+  | REQ-02 | [Requirement] | [criteria] | High/Med/Low | [components] |
 
   ### Non-Functional Requirements
-  - Performance: [targets]
-  - Security: [requirements]
-  - ...
+  | REQ ID | Category | Requirement | Target |
+  |--------|----------|-------------|--------|
+  | NFR-01 | Performance | [requirement] | [target] |
+  | NFR-02 | Security | [requirement] | [target] |
 
   ## Integration Points
   - [Component A] needs [modification] to support [new feature]
@@ -219,19 +229,19 @@ additional_notes: |
   - Must not: [constraints from project context]
 
   ## Success Criteria
-  - [ ] [Criterion 1]
-  - [ ] [Criterion 2]
+  - [ ] REQ-01: [Criterion 1]
+  - [ ] REQ-02: [Criterion 2]
   - ...
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: SAVE TO MEMORY (using save_memory MCP tool)
+  STEP 7: SAVE TO MEMORY (using save_memory MCP tool)
   ═══════════════════════════════════════════════════════════════════════
 
   Save key findings to the vector database using save_memory().
   Make ONE comprehensive call instead of multiple separate calls:
 
   ```python
-  hephaestus_save_memory({
+  save_memory({
       "content": f"Requirements for {feature_name}: Stack=[list]. Components=[list]. Constraints=[list]. Integration=[list].",
       "memory_type": "decision",
       "tags": ["requirements", "architecture"]
@@ -241,13 +251,13 @@ additional_notes: |
   These memories will be searchable by future Phase 1 agents processing subsequent designs.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6: MARK TASK COMPLETE
+  STEP 8: MARK TASK COMPLETE
   ═══════════════════════════════════════════════════════════════════════
 
   Your requirements document is complete. Mark your task as done.
   The orchestrator will advance to the next phase automatically.
 
-  Ensure requirements_analysis.md is saved to the "Docs Path" location.
+  Ensure requirements.md is saved to the "Docs Path" location.
 
   ═══════════════════════════════════════════════════════════════════════
   CRITICAL RULES
@@ -276,7 +286,7 @@ additional_notes: |
 
   After writing all your output files, call:
 
-  hephaestus_complete_my_task({
+  complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was accomplished>",
     "key_learnings": ["<key findings or decisions>"]

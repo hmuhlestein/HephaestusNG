@@ -42,11 +42,11 @@ additional_notes: |
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
-  - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
-  - ALL implementation code goes in "Project Path:" (src/, tests/, etc.).
-  - ALL docs/reports go in "Docs Path:" — not the project root.
+  - Do NOT use absolute paths outside your working directory.
+  - ALL implementation code goes in "Project Path" (src/, tests/, etc.).
+  - ALL docs/reports go in "Artifacts Path" — not the project root.
   - Your task description contains the exact paths — copy them exactly.
 
   SCOPE RULE: Before writing any code, read ./.hephaestus/design.md.
@@ -76,7 +76,7 @@ additional_notes: |
   COMMON PATTERNS:
   - Follow this project's own conventions for config access, error handling,
     and resource cleanup (see AGENTS.md and existing code for examples).
-  - Agent communication: use MCP tools (hephaestus_*) not direct imports —
+  - Agent communication: use MCP tools (heph_*) not direct imports —
     this is how you talk to Hephaestus itself, not the project you're building.
 
   PRE-SEEDED TEST FILES: The design doc may reference pre-seeded test files in
@@ -97,18 +97,26 @@ additional_notes: |
 
   Read:
   - ./.hephaestus/design.md — SCOPE AUTHORITY: only implement what this specifies
-  - Your task description for "Docs Path:" and "Project Path:" locations
+  - Your task description for "Artifacts Path" and "Project Path" locations
   - AGENTS.md - Coding style, naming conventions, test commands, commit format
-  - architecture.md (from Docs Path) - Component interfaces and contracts
-  - architectural_review_report.md (from Docs Path, if it exists) — findings from the
+  - architecture.md (from Artifacts Path) - Component interfaces and contracts
+  - requirements.md (from Artifacts Path) - REQ-XX requirements to implement
+  - review.md (from Artifacts Path, if it exists) — findings from the
     architectural reviewer. Fix every BLOCKER and FIX before marking done.
-  - adversarial_review_report.md (from Docs Path, if it exists) — findings from the
+  - adversarial.md (from Artifacts Path, if it exists) — findings from the
     adversarial reviewer. Fix every BLOCKER and WARNING before marking done.
     Each finding includes a "Recommended fix" — follow it precisely.
   - pyproject.toml (if present) — check `requires-python` or `python_requires` before writing
     type hints: `X | Y` union syntax requires Python ≥ 3.10; `list[str]` / `dict[k,v]`
     builtins require ≥ 3.9. Use `Union[X, Y]` / `Optional[X]` / `List[str]` from `typing`
     if the project targets an earlier version.
+
+  **REQUIREMENT TRACKING (MANDATORY):**
+  requirements.md contains REQ-XX numbered requirements. When implementing:
+  - Reference the REQ-XX ID in code comments when implementing each requirement
+  - After implementing a requirement, update requirements.md:
+    - Change `[ ] REQ-XX` to `[x] REQ-XX` in the Success Criteria section
+  - This enables reviewers and product validation to verify requirement coverage
   
   Write implementation code (src/, tests/) to the "Project Path" location.
   
@@ -130,11 +138,11 @@ additional_notes: |
   problems and filed tickets for them (tagged "qa-finding" or similar,
   ticket_type="bug"). Check before assuming this is a first-time build:
 
-    hephaestus_search_tickets(workflow_id="<your workflow id>", status="open", ticket_type="bug")
+    search_tickets(workflow_id="<your workflow id>", status="open", ticket_type="bug")
 
   If open bug tickets exist: fixing them is your priority for this pass —
   read each one, fix the underlying issue, then change its status to
-  resolved (hephaestus_update_ticket_status with new_status="shipped") referencing the commit
+  resolved (heph_update_ticket_status with new_status="shipped") referencing the commit
   that fixed it. Do this INSTEAD OF re-implementing components from
   scratch; only fall through to normal implementation for genuinely new
   work not covered by an open ticket.
@@ -147,7 +155,7 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
 
   SUBTASKS FIRST: If the implementation spans multiple files or >3
-  distinct components, use hephaestus_create_task to create one subtask
+  distinct components, use create_task to create one subtask
   per component BEFORE writing any code. Each subtask = one file or one
   logical unit ("Add Feature class to database.py", "Add run_phase0 to
   orchestrator.py"). Implement them one at a time: implement → commit → next.
@@ -295,6 +303,23 @@ additional_notes: |
   
   
   ═══════════════════════════════════════════════════════════════════════
+  UPDATE FEATURE REPORT (IF ADDRESSING REVIEW FEEDBACK)
+  ═══════════════════════════════════════════════════════════════════════
+
+  If your task description contains "## Human Review Feedback":
+  1. After making code changes, update the feature report:
+     ```bash
+     # Read current report
+     cat ./.hephaestus/feature_report.html 2>/dev/null || cat ./docs/feature_report.html 2>/dev/null
+     # Update it with your changes (append a section or regenerate)
+     ```
+  2. Document what feedback items you addressed
+  3. Commit your changes:
+     ```bash
+     git add -A && git commit -m "fix: address review feedback - [brief summary]"
+     ```
+
+  ═══════════════════════════════════════════════════════════════════════
   WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
   ═══════════════════════════════════════════════════════════════════════
   
@@ -304,7 +329,7 @@ additional_notes: |
   
   After writing all your output files, call:
   
-  hephaestus_complete_my_task({
+  complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was accomplished>",
     "key_learnings": ["<key findings or decisions>"]

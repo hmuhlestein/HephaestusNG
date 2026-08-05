@@ -53,7 +53,7 @@ def register(subparsers):
     p.set_defaults(func=lambda a: p.print_help() or 0)
 
 
-def _resolve_project_id_by_path(project_path):
+def _resolve_project_id_by_path(project_path, api_base):
     """Resolve an AutopilotProject's id from its base_dir (realpath-
     resolved). Returns None if not found or the backend is unreachable --
     callers should decide what "not found" means for them (e.g. stop
@@ -62,7 +62,7 @@ def _resolve_project_id_by_path(project_path):
     import requests
 
     try:
-        resp = requests.get("http://127.0.0.1:8300/api/projects", timeout=5)
+        resp = requests.get(f"{api_base}/api/projects", timeout=5)
         if resp.status_code != 200:
             return None
         resolved = str(Path(project_path).resolve())
@@ -101,7 +101,7 @@ def start_pipeline(args):
     # Call the API to start the pipeline (single spawn path)
     try:
         resp = requests.post(
-            "http://127.0.0.1:8300/api/autopilot/start",
+            f"{args.api_base}/api/autopilot/start",
             params={
                 "project_path": str(project_path),
                 "design_queue": str(design_queue),
@@ -134,7 +134,7 @@ def start_pipeline(args):
             time.sleep(5)
             try:
                 status_resp = requests.get(
-                    "http://127.0.0.1:8300/api/autopilot/status",
+                    f"{args.api_base}/api/autopilot/status",
                     timeout=5,
                 )
                 if status_resp.status_code == 200:
@@ -152,9 +152,11 @@ def start_pipeline(args):
             # fall back to now that projects run concurrently), which would
             # silently kill an unrelated project's pipeline Ctrl+C here was
             # never meant to touch.
-            stop_project_id = _resolve_project_id_by_path(project_path)
+            stop_project_id = _resolve_project_id_by_path(
+                project_path, args.api_base
+            )
             requests.post(
-                "http://127.0.0.1:8300/api/autopilot/stop",
+                f"{args.api_base}/api/autopilot/stop",
                 # /stop's clear_state/project_id are bare scalar params, not
                 # a Pydantic body model -- FastAPI binds those from the
                 # query string, not JSON body.
@@ -173,7 +175,7 @@ def stop_pipeline(args):
     params = {"clear_state": False}
     project_path = getattr(args, "project_path", None)
     if project_path:
-        project_id = _resolve_project_id_by_path(project_path)
+        project_id = _resolve_project_id_by_path(project_path, args.api_base)
         if not project_id:
             print(f"Error: No registered project found for path: {project_path}")
             return 1
@@ -187,7 +189,7 @@ def stop_pipeline(args):
         # Pydantic body model -- FastAPI binds those from the query
         # string, not JSON body.
         resp = requests.post(
-            "http://127.0.0.1:8300/api/autopilot/stop",
+            f"{args.api_base}/api/autopilot/stop",
             params=params,
             timeout=30,
         )
@@ -213,7 +215,7 @@ def pipeline_status(args):
     params = {}
     project_path = getattr(args, "project_path", None)
     if project_path:
-        project_id = _resolve_project_id_by_path(project_path)
+        project_id = _resolve_project_id_by_path(project_path, args.api_base)
         if not project_id:
             print(f"Error: No registered project found for path: {project_path}")
             return 1
@@ -221,7 +223,7 @@ def pipeline_status(args):
 
     try:
         resp = requests.get(
-            "http://127.0.0.1:8300/api/autopilot/status", params=params, timeout=5
+            f"{args.api_base}/api/autopilot/status", params=params, timeout=5
         )
         if resp.status_code == 200:
             data = resp.json()
@@ -313,7 +315,7 @@ def add_to_queue(args):
 
     try:
         resp = requests.post(
-            "http://127.0.0.1:8300/api/autopilot/designs/add",
+            f"{args.api_base}/api/autopilot/designs/add",
             json={
                 "file_path": str(source),
                 "project_path": str(Path(args.project_path).resolve()),

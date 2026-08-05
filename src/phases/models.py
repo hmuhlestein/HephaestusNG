@@ -55,7 +55,23 @@ class PhaseContext(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     def to_prompt_context(self) -> str:
-        """Generate context string for agent prompts."""
+        """Generate context string for agent prompts.
+
+        Includes current.additional_notes -- the phase's own detailed,
+        step-by-step instructions (schema examples, mandatory sub-steps
+        like security_review's ASH scan, "CRITICAL PATH RULE" sections,
+        etc.), authored per-phase in each workflow's YAML. This is the
+        ONLY place in the whole prompt-assembly path
+        (AgentPromptBuilder.format_initial_message ->
+        get_phase_agent_instructions/get_phase_agent_resumed_instructions/
+        get_non_phase_agent_instructions, all templated in
+        config/prompts/system_prompts.yaml with no additional_notes
+        placeholder of their own) that ever surfaces it -- omitting it
+        here left every dispatched agent working from nothing but a
+        one-line description and a plain done_definitions checklist,
+        regardless of how much per-phase detail its YAML's additional_notes
+        actually specified. Observed live: a security_review agent had no
+        idea an ASH automated scan step existed at all."""
         current = self.phase
         context = (
             f"## PHASE: {current.name} (Phase {current.id} of {len(self.all_phases)})\n"
@@ -70,17 +86,18 @@ class PhaseContext(BaseModel):
 
         context += "\nPipeline (use phase=N when creating tasks):\n"
         for phase in self.all_phases:
-            status_indicator = (
-                "✓"
-                if phase.id < current.id
-                else ("→" if phase.id == current.id else "○")
-            )
+            if phase.id > current.id:
+                continue
+            status_indicator = "✓" if phase.id < current.id else "→"
             desc_short = (
                 phase.description[:80].split("\n")[0] if phase.description else ""
             )
             context += (
                 f"  {status_indicator} Phase {phase.id}: {phase.name} — {desc_short}\n"
             )
+
+        if current.additional_notes:
+            context += f"\n## PHASE-SPECIFIC INSTRUCTIONS\n{current.additional_notes}\n"
 
         return context
 

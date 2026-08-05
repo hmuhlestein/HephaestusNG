@@ -171,8 +171,17 @@ def derive_workflow_cost(db: Session, workflow_id: str, write_back: bool = True)
         workflow.cost_total_usd = total
 
     # Roll up to feature/design/project
-    if workflow.feature_id:
-        derive_feature_cost(db, workflow.feature_id, write_back=write_back)
+    # Roll up to feature/design/project.
+    # workflow.feature_id is often NULL -- the FK lives on Feature.workflow_id
+    # instead.  Look up the feature via the reverse relationship when the
+    # forward FK is missing.
+    feature_id = workflow.feature_id
+    if not feature_id:
+        feature = db.query(Feature).filter_by(workflow_id=workflow_id).first()
+        if feature:
+            feature_id = feature.id
+    if feature_id:
+        derive_feature_cost(db, feature_id, write_back=write_back)
     if workflow.design_id:
         derive_design_cost(db, workflow.design_id, write_back=write_back)
     if workflow.project_id:
@@ -197,9 +206,9 @@ def derive_feature_cost(db: Session, feature_id: str, write_back: bool = True) -
         logger.warning(f"Feature {feature_id} not found for cost derivation")
         return 0.0
 
-    # Sum cost entries for all workflows associated with this feature
-    # via the workflow's feature_id
-    total = db.query(func.sum(CostEntry.cost_usd)).join(Workflow, CostEntry.workflow_id == Workflow.id).filter(Workflow.feature_id == feature_id).scalar() or 0.0
+    # Sum cost entries for all workflows associated with this feature.
+    # Feature.workflow_id -> Workflow.id (the FK lives on Feature, not Workflow).
+    total = db.query(func.sum(CostEntry.cost_usd)).join(Workflow, CostEntry.workflow_id == Workflow.id).filter(Workflow.id == feature.workflow_id).scalar() or 0.0
 
     # Self-heal: write back to DB if cost disagrees (no commit — caller handles)
     if write_back and abs(total - feature.cost_total_usd) > 0.0001:
@@ -288,6 +297,18 @@ def derive_project_cost(db: Session, project_id: str, write_back: bool = True) -
     return total
 
 
+def _pause_project_workflows(db: Session, project_id: str, paused_by: str, definition_ids: tuple = None) -> int:
+    """Thin wrapper around orchestrator.pause_project_workflows, imported
+    lazily to avoid a circular import (orchestrator.py imports from this
+    module too). Exists as a module-level name here -- rather than an
+    inline import inside _check_budget_enforcement -- so callers that only
+    need the pause behavior (e.g. budget-enforcement tests) don't have to
+    reach into src.autopilot.orchestrator directly."""
+    from src.autopilot.orchestrator import pause_project_workflows
+
+    return pause_project_workflows(db, project_id, paused_by=paused_by, definition_ids=definition_ids)
+
+
 def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
     """Check if project has exceeded its budget limit and pause if needed.
 
@@ -303,8 +324,12 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 
     # Over budget - pause active workflows
     logger.warning(f"[BUDGET] Project {project.id[:8]} over budget: ${project.cost_total_usd:.2f} >= ${project.cost_limit_usd:.2f}")
-    from src.autopilot.orchestrator import pause_project_workflows
-    pause_project_workflows(db, project.id, paused_by="budget")
+    _pause_project_workflows(db, project.id, paused_by="budget")
+    # Free the project's concurrency slot, matching stop_pipeline's user-stop
+    # path (autopilot_api.py) -- otherwise a budget-paused project keeps
+    # occupying a slot with no agents running, and the UI still shows it as
+    # Active.
+    project.is_active = False
 
 
 def check_budget_before_new_work(db: Session, project_id: str) -> bool:

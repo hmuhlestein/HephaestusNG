@@ -33,11 +33,11 @@ def generate_pi_agent(phase_cfg: dict) -> str:
     agent_name = f"hephaestus-{name.replace('_', '-')}"
 
     mcp_tools = [
-        "mcp:hephaestus/save_memory",
-        "mcp:hephaestus/search_memory",
-        "mcp:hephaestus/update_task_status",
-        "mcp:hephaestus/create_task",
-        "mcp:hephaestus/get_task_status",
+        "mcp:heph/save_memory",
+        "mcp:heph/search_memory",
+        "mcp:heph/update_task_status",
+        "mcp:heph/create_task",
+        "mcp:heph/get_task_status",
         # Ticket tools: only development/qa_validation/security_review's
         # additional_notes actually instruct agents to use these (create+file
         # for QA/security_review, check+resolve for development), but the
@@ -45,11 +45,11 @@ def generate_pi_agent(phase_cfg: dict) -> str:
         # granting access to all phases is simpler than threading a per-phase
         # tool list through this generator, and unused tool access is harmless
         # (a phase whose prompt never mentions tickets just never calls them).
-        "mcp:hephaestus/create_ticket",
-        "mcp:hephaestus/get_tickets",
-        "mcp:hephaestus/search_tickets",
-        "mcp:hephaestus/resolve_ticket",
-        "mcp:hephaestus/change_ticket_status",
+        "mcp:heph/create_ticket",
+        "mcp:heph/get_tickets",
+        "mcp:heph/search_tickets",
+        "mcp:heph/resolve_ticket",
+        "mcp:heph/change_ticket_status",
     ]
 
     tools_str = "read, write, edit, bash, grep, find, ls, " + ", ".join(mcp_tools)

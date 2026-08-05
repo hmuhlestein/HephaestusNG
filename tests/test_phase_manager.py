@@ -615,6 +615,98 @@ class TestPhaseRolePreviouslyCompleted:
         ) is False
 
 
+@pytest.fixture
+def single_unique_role_phase(real_db):
+    """A phase whose name isn't in the real session_roles config, so its
+    role falls back to its own name (SESSION_ROLES.get(name, name)) --
+    used for the "goto/retry back to the SAME phase" resume case, distinct
+    from two_architect_phases' cross-phase role-sharing case."""
+    from src.core.database import Phase, Workflow
+
+    with real_db.session_scope() as session:
+        session.add(
+            Workflow(id="wf-2", name="t", phases_folder_path="/tmp", status="active")
+        )
+        session.add(
+            Phase(
+                id="phase-dev", workflow_id="wf-2", order=4,
+                name="zzz_unmapped_test_phase", description="d", done_definitions=["x"],
+            )
+        )
+    return real_db
+
+
+class TestPhaseRolePreviouslyCompletedSelfGoto:
+    """A goto (e.g. adversarial_review finds issues and sends the pipeline
+    back to development) or a retry sends work back to the SAME phase_id --
+    not "an earlier phase" in the Phase.order sense
+    TestPhaseRolePreviouslyCompleted covers, but get_session_id resumes the
+    identical pi conversation regardless, since it keys purely on (project,
+    design, role, model). Before this fix, phase_role_previously_completed
+    never recognized this case, so every goto/retry redo resent the full
+    tool-instructions boilerplate to an agent whose pi session already had
+    it from the phase's first pass."""
+
+    def test_false_on_first_ever_task_for_this_phase(self, single_unique_role_phase):
+        from src.core.database import Task
+        from src.phases.phase_manager import PhaseManager
+
+        with single_unique_role_phase.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-1", phase_id="phase-dev", workflow_id="wf-2",
+                    raw_description="d", done_definition="d", status="pending",
+                )
+            )
+
+        pm = PhaseManager(db_manager=single_unique_role_phase)
+        pm.workflow_id = "wf-2"
+
+        assert pm.phase_role_previously_completed(
+            "phase-dev", "zzz_unmapped_test_phase"
+        ) is False
+
+    def test_true_when_a_prior_task_already_ran_for_this_phase(
+        self, single_unique_role_phase
+    ):
+        """The current (goto-created) task's own row already exists in DB
+        by the time this check runs -- a second row for the same phase_id
+        is the evidence a real prior attempt/session exists. Also confirms
+        this doesn't depend on PhaseExecution.status == "completed": a
+        goto resets this phase's own execution back to "pending" (see
+        _handle_evaluation_goto), which would erase that evidence if the
+        check relied on it the way the cross-phase case does."""
+        from src.core.database import PhaseExecution, Task
+        from src.phases.phase_manager import PhaseManager
+
+        with single_unique_role_phase.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-1", phase_id="phase-dev", workflow_id="wf-2",
+                    raw_description="d", done_definition="d", status="failed",
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-dev", phase_id="phase-dev",
+                    workflow_execution_id="wf-2", status="pending",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-2", phase_id="phase-dev", workflow_id="wf-2",
+                    raw_description="d", done_definition="d", status="pending",
+                )
+            )
+
+        pm = PhaseManager(db_manager=single_unique_role_phase)
+        pm.workflow_id = "wf-2"
+
+        assert pm.phase_role_previously_completed(
+            "phase-dev", "zzz_unmapped_test_phase"
+        ) is True
+
+
 class TestEvaluationGotoConsumesGateArtifacts:
     """Regression: _handle_evaluation_goto acted on a gate's findings but
     left the result files the score came from on disk -- a later re-run of
@@ -628,9 +720,9 @@ class TestEvaluationGotoConsumesGateArtifacts:
         from src.core.database import Phase, PhaseExecution, Workflow
         from src.phases.phase_manager import PhaseManager
 
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        (docs / "adversarial_review_report.md").write_text(
+        docs = tmp_path / ".hephaestus" / "adversarial_review"
+        docs.mkdir(parents=True)
+        (docs / "adversarial.md").write_text(
             "---\ntype: adversarial_review_result\nblocker_count: 4\n---\n\n# stale report"
         )
 
@@ -683,7 +775,7 @@ class TestEvaluationGotoConsumesGateArtifacts:
 
         assert result["action"] == "goto"
         assert result["target_phase"] == "development"
-        assert not (docs / "adversarial_review_report.md").exists()
+        assert not (docs / "adversarial.md").exists()
 
 
 class TestForceGotoConsumesGateArtifacts:
@@ -697,9 +789,9 @@ class TestForceGotoConsumesGateArtifacts:
         from src.core.database import Phase, PhaseExecution, Workflow
         from src.phases.phase_manager import PhaseManager
 
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        (docs / "qa_report.md").write_text(
+        docs = tmp_path / ".hephaestus" / "qa_validation"
+        docs.mkdir(parents=True)
+        (docs / "qa.md").write_text(
             "---\ntype: qa_validation_result\nfailed_tests: 3\n---\n\n# stale report"
         )
 
@@ -742,7 +834,98 @@ class TestForceGotoConsumesGateArtifacts:
 
         assert result["action"] == "goto"
         assert result["target_phase"] == "architecture_design"
-        assert not (docs / "qa_report.md").exists()
+        assert not (docs / "qa.md").exists()
+
+
+class TestPopulateFeatureFolder:
+    """Regression: _populate_feature_folder swept the worktree's docs/ for
+    production artifacts to archive into the features gallery -- but agents
+    write their reports to .hephaestus/ now (see the docs/ -> .hephaestus/
+    migration), so the sweep silently archived nothing."""
+
+    @pytest.fixture
+    def real_db(self, tmp_path):
+        from src.core.database import DatabaseManager as _DBM
+
+        db = _DBM(str(tmp_path / "test.db"))
+        db.create_tables()
+        return db
+
+    def test_sweeps_hephaestus_not_docs(self, real_db, tmp_path):
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        wt = tmp_path / "project"
+        (wt / ".hephaestus" / "qa_validation").mkdir(parents=True)
+        (wt / ".hephaestus" / "architecture.md").write_text("# Architecture")
+        (wt / ".hephaestus" / "qa_validation" / "qa.md").write_text("# QA")
+        (wt / ".hephaestus" / "feature_report.html").write_text("<html></html>")
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1", name="my_feature", phases_folder_path="/tmp",
+                    status="active", working_directory=str(wt),
+                )
+            )
+
+        pm = PhaseManager(db_manager=real_db)
+        pm.workflow_id = "wf-1"
+
+        session = real_db.get_session()
+        try:
+            workflow = session.query(Workflow).filter_by(id="wf-1").first()
+            pm._populate_feature_folder(session, workflow)
+        finally:
+            session.close()
+
+        feature_dirs = list((wt / ".hephaestus" / "features").iterdir())
+        assert len(feature_dirs) == 1
+        feature_dir = feature_dirs[0]
+        assert (feature_dir / "docs" / "architecture.md").exists()
+        assert (feature_dir / "docs" / "qa_validation" / "qa.md").exists()
+        assert (feature_dir / "feature_report.html").exists()
+
+    def test_excludes_tmux_features_and_scratch_directories(self, real_db, tmp_path):
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        wt = tmp_path / "project"
+        (wt / ".hephaestus" / "tmux").mkdir(parents=True)
+        (wt / ".hephaestus" / "tmux" / "agent.transcript.log").write_text("log")
+        (wt / ".hephaestus" / "features" / "some-feature").mkdir(parents=True)
+        (wt / ".hephaestus" / "features" / "some-feature" / "scope.md").write_text("# Scope")
+        (wt / ".hephaestus" / "scratch").mkdir(parents=True)
+        (wt / ".hephaestus" / "scratch" / "notes.md").write_text("# Notes")
+        (wt / ".hephaestus" / "requirements.md").write_text("# Requirements")
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1", name="my_feature", phases_folder_path="/tmp",
+                    status="active", working_directory=str(wt),
+                )
+            )
+
+        pm = PhaseManager(db_manager=real_db)
+        pm.workflow_id = "wf-1"
+
+        session = real_db.get_session()
+        try:
+            workflow = session.query(Workflow).filter_by(id="wf-1").first()
+            pm._populate_feature_folder(session, workflow)
+        finally:
+            session.close()
+
+        feature_dir = next(
+            d for d in (wt / ".hephaestus" / "features").iterdir()
+            if "my_feature" in d.name
+        )
+        copied = list((feature_dir / "docs").rglob("*"))
+        copied_names = {f.name for f in copied if f.is_file()}
+        # pipeline_metrics.json is always written by _populate_feature_folder
+        # itself (step 5), independent of the .hephaestus/ sweep under test.
+        assert copied_names == {"requirements.md", "pipeline_metrics.json"}
 
 
 class TestGetOrchestratorPhaseOrderMap:
@@ -1105,7 +1288,7 @@ class TestGetPhaseContextUsesLiveRequiredOutput:
         (workflows_dir / "phase_mgr_test_def").mkdir(parents=True)
         (workflows_dir / "phase_mgr_test_def" / "workflow.yaml").write_text(
             "required_output:\n"
-            "  architectural_review: architectural_review_report.md\n"
+            "  architectural_review: review.md\n"
         )
         monkeypatch.setattr("src.workflow_registry._WORKFLOWS_DIR", workflows_dir)
 
@@ -1126,7 +1309,7 @@ class TestGetPhaseContextUsesLiveRequiredOutput:
                     # when the phase still wrote a json+md pair.
                     outputs=_json.dumps(
                         [
-                            "architectural_review_report.md",
+                            "review.md",
                             "architectural_review_result.json",
                         ]
                     ),
@@ -1157,7 +1340,7 @@ class TestGetPhaseContextUsesLiveRequiredOutput:
 
         pm = PhaseManager(db_manager=real_db_with_override)
         ctx = pm.get_phase_context("phase-review")
-        assert ctx.phase.outputs == ["architectural_review_report.md"]
+        assert ctx.phase.outputs == ["review.md"]
 
     def test_non_file_outputs_survive_for_a_phase_with_no_override(
         self, real_db_with_override
@@ -1171,3 +1354,105 @@ class TestGetPhaseContextUsesLiveRequiredOutput:
         pm = PhaseManager(db_manager=real_db_with_override)
         ctx = pm.get_phase_context("phase-dev")
         assert ctx.phase.outputs == ["source code in project path"]
+
+
+class TestCompleteWorkflowRefusesWhenPhasesRemain:
+    """Regression, observed live: _start_next_phase returns None for three
+    different reasons (workflow not active/paused; another phase already
+    in_progress -- e.g. stale state from goto/retry churn; or genuinely no
+    higher-order phase exists), but every caller treated ANY None the same
+    way: complete the workflow. A goto-limit-exceeded forced "continue"
+    past product_validation got treated as full completion while
+    doc_review/forensics_analysis/git_commit_push/deploy were all still
+    "pending" and had never run -- the workflow never reached the phase
+    that actually merges to main. _complete_workflow must now independently
+    verify no higher-order phase remains before marking the workflow done."""
+
+    @pytest.fixture
+    def workflow_with_remaining_phase(self, real_db):
+        from src.core.database import Phase, PhaseExecution, Workflow
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1", name="t", phases_folder_path="/tmp", status="active",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-pv", workflow_id="wf-1", order=9,
+                    name="product_validation", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-doc", workflow_id="wf-1", order=10,
+                    name="doc_review", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-doc", phase_id="phase-doc",
+                    workflow_execution_id="wf-1", status="pending",
+                )
+            )
+        return real_db
+
+    def test_refuses_to_complete_when_a_higher_order_phase_exists(
+        self, workflow_with_remaining_phase
+    ):
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=workflow_with_remaining_phase)
+        pm.workflow_id = "wf-1"
+        session = workflow_with_remaining_phase.get_session()
+        try:
+            pm._complete_workflow(session, current_phase_id="phase-pv")
+        finally:
+            session.close()
+
+        with workflow_with_remaining_phase.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"
+
+    def test_completes_when_current_phase_is_genuinely_last(
+        self, workflow_with_remaining_phase
+    ):
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=workflow_with_remaining_phase)
+        pm.workflow_id = "wf-1"
+        session = workflow_with_remaining_phase.get_session()
+        try:
+            # doc_review (order 10) is the last phase here -- nothing has a
+            # higher order than it.
+            pm._complete_workflow(session, current_phase_id="phase-doc")
+        finally:
+            session.close()
+
+        with workflow_with_remaining_phase.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "completed"
+
+    def test_still_completes_when_no_current_phase_id_given(
+        self, workflow_with_remaining_phase
+    ):
+        """Backward-compatible default: callers that genuinely can't supply
+        a phase_id (none currently do) must not be newly broken -- the
+        safety check is opt-in via the parameter, not mandatory."""
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=workflow_with_remaining_phase)
+        pm.workflow_id = "wf-1"
+        session = workflow_with_remaining_phase.get_session()
+        try:
+            pm._complete_workflow(session)
+        finally:
+            session.close()
+
+        with workflow_with_remaining_phase.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "completed"

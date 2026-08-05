@@ -9,7 +9,7 @@ interface SidebarProjectSelectorProps {
 }
 
 const SidebarProjectSelector: React.FC<SidebarProjectSelectorProps> = ({ collapsed }) => {
-  const { projects, selectedProject, activateProject, deactivateProject, createProject } = useProject();
+  const { projects, selectedProject, selectProject, deactivateProject, createProject } = useProject();
   const [open, setOpen] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
@@ -65,8 +65,8 @@ const SidebarProjectSelector: React.FC<SidebarProjectSelectorProps> = ({ collaps
                   className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors ${
                     proj.id === selectedProject?.id ? 'bg-violet-50' : 'hover:bg-gray-50'
                   }`}
-                  onClick={() => { activateProject(proj.id); setOpen(false); }}
-                  title={proj.is_active ? 'Active — click to view' : 'Click to activate and view'}
+                  onClick={() => { selectProject(proj.id); setOpen(false); }}
+                  title="Click to view"
                 >
                   <span
                     className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${proj.is_active ? 'bg-green-500' : 'bg-gray-300'}`}

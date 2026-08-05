@@ -5,7 +5,7 @@ set -euo pipefail
 # - Qdrant (via docker compose if needed)
 # - Initialize DB and Qdrant collections (via .venv)
 # - Backend server and monitor (nohup)
-# - Frontend (Vite on :5173, strictPort)
+# - Frontend (Vite on :5300, strictPort)
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
@@ -72,20 +72,20 @@ done
 
 # 4) Frontend (Vite)
 FE_DIR="$repo_root/frontend"
-if ! lsof -iTCP:5173 -sTCP:LISTEN -Pn >/dev/null 2>&1; then
-  echo "[start] Starting frontend (Vite) on :5173"
+if ! lsof -iTCP:5300 -sTCP:LISTEN -Pn >/dev/null 2>&1; then
+  echo "[start] Starting frontend (Vite) on :5300"
   if [ -d "$FE_DIR/node_modules" ]; then
     echo "[start] node_modules present; skipping install"
   else
     echo "[start] Installing frontend deps (npm ci)"
     (cd "$FE_DIR" && npm ci)
   fi
-  (cd "$FE_DIR" && nohup npm run dev -- --port 5173 --strictPort > "$LOG_DIR/frontend.out" 2>&1 &)
+  (cd "$FE_DIR" && nohup npm run dev -- --port 5300 --strictPort > "$LOG_DIR/frontend.out" 2>&1 &)
   sleep 1
 fi
 
 echo "[start] Summary:"
 echo "  Backend:  http://localhost:8300/health"
 echo "  Qdrant:   http://localhost:6333/health"
-echo "  Frontend: http://localhost:5173/"
+echo "  Frontend: http://localhost:5300/"
 echo "  Logs:     $LOG_DIR"

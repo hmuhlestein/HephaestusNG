@@ -8,6 +8,7 @@ import {
   X,
   FileText,
   Clock,
+  DollarSign,
   User,
   Bot,
   Copy,
@@ -22,6 +23,7 @@ import {
   Eye,
   GitBranch,
   Target,
+  History,
   Navigation,
   ArrowUp,
   ArrowDown,
@@ -370,6 +372,19 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                   </>
                 )}
 
+
+              {/* Failure Reason Banner */}
+              {taskDetails?.failure_reason && taskDetails.status === 'failed' && (
+                <div className="mt-3 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700">
+                  <div className="flex items-start gap-2">
+                    <XCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-red-700 dark:text-red-300 uppercase tracking-wide mb-1">Failure Reason</p>
+                      <p className="text-sm text-red-800 dark:text-red-200 max-h-64 overflow-y-auto whitespace-pre-wrap break-words">{taskDetails.failure_reason}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
                 {taskDetails?.status === 'queued' && (
                   <button
                     onClick={handleBumpPriority}
@@ -466,6 +481,13 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                   )}
                 </div>
 
+                {taskDetails.cost_total_usd != null && taskDetails.cost_total_usd > 0 && (
+                  <div className="flex items-center text-gray-600 dark:text-gray-400">
+                    <DollarSign className="w-4 h-4 mr-2" />
+                    <span className="font-mono">${taskDetails.cost_total_usd.toFixed(4)}</span>
+                  </div>
+                )}
+
                 <div className="text-gray-600 dark:text-gray-400">
                   Priority: <span className={`font-medium ${
                     taskDetails.priority === 'high' ? 'text-red-600' :
@@ -488,6 +510,14 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                     >
                       {taskDetails.id.slice(0, 12)}...
                       <Copy className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => navigate(`/tasks?workflow=${taskDetails.workflow_id}&phase=${taskDetails.phase_info?.name || ''}`)}
+                      className="ml-2 text-xs text-violet-600 dark:text-violet-400 hover:underline flex items-center gap-1"
+                      title="View all tasks for this phase"
+                    >
+                      <History className="w-3 h-3" />
+                      History
                     </button>
                   </div>
 
@@ -529,6 +559,10 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                           {taskDetails.agent_info!.id.slice(0, 12)}...
                           <Copy className="w-3 h-3" />
                         </button>
+                        <span className="ml-2 text-xs font-mono text-gray-500 dark:text-gray-400">
+                          ({taskDetails.agent_info.cli_type}
+                          {taskDetails.agent_info.cli_model ? ` / ${taskDetails.agent_info.cli_model}` : ''})
+                        </span>
                       </div>
                     )}
                   </div>
@@ -1287,12 +1321,12 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                     <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300">
                       {taskDetails.completion_notes ? 'Completion Notes' : 'Failure Reason'}
                     </h4>
-                    <div className={`p-3 rounded-lg ${
+                    <div className={`p-3 rounded-lg max-h-64 overflow-y-auto ${
                       taskDetails.completion_notes
                         ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700'
                         : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700'
                     }`}>
-                      <MarkdownRenderer content={taskDetails.completion_notes || taskDetails.failure_reason || ''} className="text-sm prose prose-sm prose-violet max-w-none" />
+                      <MarkdownRenderer content={taskDetails.completion_notes || taskDetails.failure_reason || ''} className="text-sm prose prose-sm prose-violet max-w-none break-words" />
                     </div>
                   </div>
                 )}
@@ -1310,6 +1344,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
             status: taskDetails.agent_info.status as any,
             agent_type: 'phase',
             cli_type: taskDetails.agent_info.cli_type,
+            cli_model: taskDetails.agent_info.cli_model,
             current_task_id: taskDetails.id,
             tmux_session_name: null,
             health_check_failures: 0,

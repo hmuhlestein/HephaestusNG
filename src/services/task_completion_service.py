@@ -107,23 +107,31 @@ class TaskCompletionService:
 
         # wf.working_directory missing here is not "the agent didn't write the
         # file" -- it's a worktree-tracking bug (the workflow's shared worktree
-        # got lost or was never recorded). Surface that distinctly instead of
-        # silently searching some other directory for the file: a fallback
-        # here would hide exactly the kind of bug that produced it (see the
-        # cleanup_all_stale_branches race fixed in worktree_manager.py, which
-        # this depended on staying fixed rather than being routed around).
+        # got lost or was never recorded). Try to recover from the agent's
+        # worktree record before giving up.
         if task.workflow_id and not (wf and wf.working_directory):
-            logger.error(
-                f"Task {task.id} (phase {phase.name}): workflow {task.workflow_id} "
-                "has no working_directory -- cannot verify output artifacts. "
-                "This indicates a worktree-tracking bug, not a missing agent output."
-            )
-            return {
-                "status": "failed",
-                "message": (
-                    f"Cannot verify output artifacts: workflow {task.workflow_id} has no recorded working_directory. This is a system error, not something to fix by re-doing the task -- flag it."
-                ),
-            }
+            # Attempt recovery: get working_directory from assigned agent's worktree
+            recovered = False
+            if task.assigned_agent_id:
+                from src.core.database import AgentWorktree
+                wt_record = session.query(AgentWorktree).filter_by(agent_id=task.assigned_agent_id).first()
+                if wt_record and wt_record.worktree_path and _Path(wt_record.worktree_path).is_dir():
+                    if wf:
+                        wf.working_directory = wt_record.worktree_path
+                        logger.info(f"[TASK-COMPLETE] Recovered working_directory for workflow {task.workflow_id[:8]} from agent worktree: {wt_record.worktree_path}")
+                        recovered = True
+            if not recovered:
+                logger.error(
+                    f"Task {task.id} (phase {phase.name}): workflow {task.workflow_id} "
+                    "has no working_directory -- cannot verify output artifacts. "
+                    "This indicates a worktree-tracking bug, not a missing agent output."
+                )
+                return {
+                    "status": "failed",
+                    "message": (
+                        f"Cannot verify output artifacts: workflow {task.workflow_id} has no recorded working_directory. This is a system error, not something to fix by re-doing the task -- flag it."
+                    ),
+                }
 
         # Search the task's own project's feature folder, not whichever
         # project the process-wide singleton currently points at -- with
@@ -148,26 +156,47 @@ class TaskCompletionService:
             # only the "has a workflow_id but no working_directory" case
             # above is treated as an error).
             if wf and wf.working_directory:
-                for candidate in [
-                    # docs/<phase.name>/ is the one sanctioned subdirectory
-                    # this phase's own CRITICAL PATH RULE tells it to write
-                    # to -- checked first, not guessed at: iterating every
-                    # subdirectory of docs/ risked treating a DIFFERENT
-                    # feature's (or an earlier retry pass's) leftover file
-                    # as proof this task's own agent produced its required
-                    # output.
-                    _Path(wf.working_directory) / "docs" / phase.name / declared_output,
-                    _Path(wf.working_directory) / "docs" / declared_output,
-                    _Path(wf.working_directory) / declared_output,
-                    # Some phases (e.g. Phase 0's Feature Architect) write
-                    # their declared output to the git-excluded .hephaestus/
-                    # dir as an internal orchestration artifact rather than
-                    # a docs/ deliverable.
-                    _Path(wf.working_directory) / CONTEXT_DIR_NAME / declared_output,
-                ]:
-                    if candidate.exists():
-                        found_path = candidate
+                # Map new file names to old names for backward compatibility
+                _old_name_map = {
+                    "docs.md": "doc_review_report.md",
+                    "summary.md": "code_summary.md",
+                    "security.md": "security_report.md",
+                    "review.md": "architectural_review_report.md",
+                    "adversarial.md": "adversarial_review_report.md",
+                    "qa.md": "qa_report.md",
+                    "validation.md": "product_validation.md",
+                    "requirements.md": "requirements_analysis.md",
+                    "scope.md": "scope_review_result.md",
+                    "forensics.md": "forensics_report.md",
+                }
+                old_name = _old_name_map.get(declared_output)
+                names_to_check = [declared_output] + ([old_name] if old_name else [])
+
+                for name in names_to_check:
+                    if found_path:
                         break
+                    for candidate in [
+                        # .hephaestus/<phase.name>/ is the one sanctioned
+                        # subdirectory this phase's own CRITICAL PATH RULE tells
+                        # it to write to -- checked first, not guessed at:
+                        # iterating every subdirectory of .hephaestus/ risked
+                        # treating a DIFFERENT feature's (or an earlier retry
+                        # pass's) leftover file as proof this task's own agent
+                        # produced its required output.
+                        _Path(wf.working_directory) / CONTEXT_DIR_NAME / phase.name / name,
+                        _Path(wf.working_directory) / name,
+                        # Some phases (e.g. Phase 0's Feature Architect) write
+                        # their declared output to the git-excluded .hephaestus/
+                        # dir as an internal orchestration artifact rather than
+                        # a phase-scoped deliverable.
+                        _Path(wf.working_directory) / CONTEXT_DIR_NAME / name,
+                        # Also check docs/ directory — agents sometimes write
+                        # there despite instructions to use .hephaestus/
+                        _Path(wf.working_directory) / "docs" / name,
+                    ]:
+                        if candidate.exists():
+                            found_path = candidate
+                            break
             # 2. Check feature folder
             if found_path is None and feature_dir.exists():
                 for d in sorted(feature_dir.iterdir(), reverse=True):
@@ -191,6 +220,15 @@ class TaskCompletionService:
 
                 if read_okf(found_path) is None:
                     invalid_frontmatter.append(f"{declared_output} (no valid OKF frontmatter block)")
+
+                # Security review must include ash scan results
+                if phase.name == "security_review" and declared_output == "security.md":
+                    try:
+                        content = found_path.read_text(errors="replace")
+                        if "Automated Scan Results" not in content and "ash_results" not in content.lower():
+                            invalid_frontmatter.append(f"{declared_output} (missing 'Automated Scan Results' section — ash scan not included)")
+                    except Exception:
+                        pass
 
         if not missing and not invalid_frontmatter:
             return None
@@ -355,7 +393,7 @@ class TaskCompletionService:
 
     @staticmethod
     def _parse_forensics_recommendations(report_text: str) -> list:
-        """Extract actionable recommendations from a forensics_report.md.
+        """Extract actionable recommendations from a forensics.md.
 
         Expected shape (what agents actually produce — see
         forensics_analysis.yaml's own example):
@@ -449,7 +487,9 @@ class TaskCompletionService:
         if not wf or not wf.working_directory:
             return 0
 
-        report_path = _Path(wf.working_directory) / "docs" / "forensics_report.md"
+        from src.core.constants import CONTEXT_DIR_NAME
+
+        report_path = _Path(wf.working_directory) / CONTEXT_DIR_NAME / "forensics.md"
         if not report_path.exists():
             return 0
 
@@ -480,7 +520,7 @@ class TaskCompletionService:
                 created += 1
             except Exception as e:
                 logger.warning(f"[FORENSICS_TICKETS] Failed to create ticket for '{rec['title']}': {e}")
-        logger.info(f"[FORENSICS_TICKETS] Created {created}/{len(recommendations)} tickets from forensics_report.md")
+        logger.info(f"[FORENSICS_TICKETS] Created {created}/{len(recommendations)} tickets from forensics.md")
         return created
 
     @staticmethod
@@ -539,6 +579,37 @@ class TaskCompletionService:
         )
         if result.get("action") == "already_completed":
             logger.info(f"[SPEC-GATE] {phase.name}: already completed by another caller")
+        elif result.get("action") == "arbitrate":
+            # Regression: this branch didn't exist -- mark_phase_complete's
+            # own evaluate() call already incremented total_gotos and
+            # logged "[ARBITRATE] ... requesting LLM arbitration" as a
+            # side effect of being called at all, but nothing here ever
+            # invoked _trigger_arbitration (the thing that actually spawns
+            # a capped arbitration agent and, past the cap, fails the
+            # workflow instead of looping forever). Every other action
+            # this function checks for was handled; "arbitrate" silently
+            # fell through to no-op. Observed live: this path fires once
+            # per task completion (unlike _fire_phase_transition's sweep,
+            # which DOES handle "arbitrate" correctly), so a phase stuck
+            # needing arbitration re-hit this exact leak on every
+            # completion -- 1100+ times over ~30 hours on one workflow,
+            # total_gotos climbing the whole time, zero arbitration tasks
+            # ever actually created.
+            logger.warning(f"[SPEC-GATE] {phase.name}: arbitration needed")
+            reason = result.get("reason") or f"{phase.name} exhausted its retry budget"
+            from src.autopilot.orchestrator import _trigger_arbitration
+
+            await loop.run_in_executor(
+                None,
+                functools.partial(
+                    _trigger_arbitration,
+                    task.workflow_id,
+                    result.get("target_phase_id"),
+                    phase.name,
+                    reason,
+                    logger,
+                ),
+            )
         elif result.get("action") == "goto" and result.get("target_phase_id"):
             logger.info(f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)")
             # task.action/action_target_phase already set by
@@ -789,15 +860,45 @@ class TaskCompletionService:
         missing = []
         for declared_output in required_files:
             found = False
-            for candidate in [
-                _Path(wf.working_directory) / "docs" / phase.name / declared_output,
-                _Path(wf.working_directory) / "docs" / declared_output,
-                _Path(wf.working_directory) / declared_output,
-                _Path(wf.working_directory) / CONTEXT_DIR_NAME / declared_output,
-            ]:
-                if candidate.exists():
-                    found = True
+            # Map new file names to old names for backward compatibility
+            _old_name_map = {
+                "docs.md": "doc_review_report.md",
+                "summary.md": "code_summary.md",
+                "security.md": "security_report.md",
+                "review.md": "architectural_review_report.md",
+                "adversarial.md": "adversarial_review_report.md",
+                "qa.md": "qa_report.md",
+                "validation.md": "product_validation.md",
+                "requirements.md": "requirements_analysis.md",
+                "scope.md": "scope_review_result.md",
+                "forensics.md": "forensics_report.md",
+            }
+            old_name = _old_name_map.get(declared_output)
+            names_to_check = [declared_output] + ([old_name] if old_name else [])
+
+            for name in names_to_check:
+                if found:
                     break
+                for candidate in [
+                    _Path(wf.working_directory) / CONTEXT_DIR_NAME / phase.name / name,
+                    _Path(wf.working_directory) / name,
+                    _Path(wf.working_directory) / CONTEXT_DIR_NAME / name,
+                    _Path(wf.working_directory) / "docs" / name,
+                ]:
+                    if candidate.exists():
+                        found = True
+                        break
+                # Also check if file exists in git (already committed)
+                if not found:
+                    try:
+                        from git import Repo
+                        repo = Repo(wf.working_directory)
+                        # Check all commits for this file
+                        for commit in repo.iter_commits(paths=f"**/{name}", max_count=5):
+                            found = True
+                            break
+                    except Exception:
+                        pass
             if not found:
                 missing.append(declared_output)
 

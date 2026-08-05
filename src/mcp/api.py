@@ -15,6 +15,7 @@ from src.core.database import (
     Agent,
     AgentLog,
     AgentResult,
+    CostEntry,
     DatabaseManager,
     Memory,
     Phase,
@@ -340,6 +341,7 @@ class FrontendAPI:
                     "id": agent.id,
                     "status": agent.status,
                     "cli_type": agent.cli_type,
+                    "cli_model": agent.cli_model,
                     "current_task_id": agent.current_task_id,
                     "tmux_session_name": agent.tmux_session_name,
                     "health_check_failures": agent.health_check_failures,
@@ -412,6 +414,13 @@ class FrontendAPI:
                                     "name": phase.name,
                                     "order": phase.order,
                                 }
+
+                # Get cost data for this agent
+                from sqlalchemy import func
+                agent_cost = session.query(func.sum(CostEntry.cost_usd)).filter(
+                    CostEntry.agent_id == agent.id
+                ).scalar() or 0.0
+                agent_data["cost_total_usd"] = round(agent_cost, 4)
 
                 result.append(agent_data)
 
@@ -931,6 +940,7 @@ class FrontendAPI:
                         "id": agent.id,
                         "status": agent.status,
                         "cli_type": agent.cli_type,
+                        "cli_model": agent.cli_model,
                         "created_at": agent.created_at.isoformat() + "Z"
                         if agent.created_at
                         else None,
@@ -1144,7 +1154,7 @@ class FrontendAPI:
                 end_time = task.completed_at or datetime.utcnow()
                 runtime_seconds = int((end_time - task.started_at).total_seconds())
 
-            return {
+            result = {
                 "id": task.id,
                 "raw_description": task.raw_description,
                 "enriched_description": task.enriched_description,
@@ -1189,6 +1199,15 @@ class FrontendAPI:
                 if task.related_ticket_ids
                 else None,
             }
+
+            # Get cost data for this task
+            from sqlalchemy import func
+            task_cost = session.query(func.sum(CostEntry.cost_usd)).filter(
+                CostEntry.task_id == task.id
+            ).scalar() or 0.0
+            result["cost_total_usd"] = round(task_cost, 4)
+
+            return result
         finally:
             session.close()
 

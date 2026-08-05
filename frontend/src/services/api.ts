@@ -397,6 +397,11 @@ export const apiService = {
     return data;
   },
 
+  deleteTask: async (taskId: string): Promise<{ success: boolean; task_id: string }> => {
+    const { data } = await api.delete(`/tasks/${encodeURIComponent(taskId)}`);
+    return data;
+  },
+
   // Ticket Tracking System Endpoints
 
   createTicket: async (
@@ -832,6 +837,28 @@ export const apiService = {
     return data;
   },
 
+  patchProjectReviewMode: async (projectId: string, reviewMode: boolean): Promise<{ review_mode: boolean }> => {
+    const { data } = await api.patch(`/autopilot/projects/${encodeURIComponent(projectId)}/review-mode`, { review_mode: reviewMode });
+    return data;
+  },
+
+  postFeatureReview: async (
+    featureId: string,
+    action: 'approve' | 'request_changes',
+    feedback?: string,
+  ): Promise<{ success: boolean; message: string }> => {
+    const { data } = await api.post(`/autopilot/features/${encodeURIComponent(featureId)}/review`, {
+      action,
+      feedback: feedback ?? null,
+    });
+    return data;
+  },
+
+  deleteFeature: async (featureId: string): Promise<{ success: boolean; feature_id: string }> => {
+    const { data } = await api.delete(`/autopilot/features/${encodeURIComponent(featureId)}`);
+    return data;
+  },
+
   // Unified Projects
   getProjects: async (): Promise<any[]> => {
     const { data } = await api.get('/projects');
@@ -865,7 +892,7 @@ export const apiService = {
   // ── Cost Endpoints ──────────────────────────────────────────────────────
 
   getProjectCosts: async (projectId: string): Promise<any> => {
-    const { data } = await api.get(`/projects/${encodeURIComponent(projectId)}/costs`, {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/costs`, {
       headers: { 'X-Agent-ID': 'ui-user' },
     });
     return data;

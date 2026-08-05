@@ -41,6 +41,7 @@ def _serialize_agent(session, a) -> dict:
         "terminated_at": getattr(a, 'terminated_at', None).isoformat() if getattr(a, 'terminated_at', None) else None,
         "tmux_session_name": a.tmux_session_name,
         "cli_type": getattr(a, "cli_type", None),
+        "cli_model": getattr(a, "cli_model", None),
         "current_task": None,
         "workflow": None,
     }

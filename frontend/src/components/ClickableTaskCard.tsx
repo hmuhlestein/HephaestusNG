@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FileText, ExternalLink, Clock, User } from 'lucide-react';
+import { FileText, ExternalLink, Clock, User, DollarSign } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { TaskFullDetails } from '@/types';
 import StatusBadge from './StatusBadge';
@@ -21,6 +21,7 @@ const ClickableTaskCard: React.FC<ClickableTaskCardProps> = ({
   showPhaseInfo = true,
 }) => {
   const [task, setTask] = useState<TaskFullDetails | null>(null);
+  const [cost, setCost] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -28,9 +29,15 @@ const ClickableTaskCard: React.FC<ClickableTaskCardProps> = ({
 
     const fetchTask = async () => {
       try {
-        const taskDetails = await apiService.getTaskFullDetails(taskId);
+        const [taskDetails, costData] = await Promise.all([
+          apiService.getTaskFullDetails(taskId),
+          apiService.getTaskCosts(taskId).catch(() => null),
+        ]);
         if (mounted) {
           setTask(taskDetails);
+          if (costData?.cost_total_usd != null) {
+            setCost(costData.cost_total_usd);
+          }
           setLoading(false);
         }
       } catch (error) {
@@ -75,6 +82,12 @@ const ClickableTaskCard: React.FC<ClickableTaskCardProps> = ({
           <div className="flex items-center gap-2 mb-0.5">
             <p className="font-mono text-xs text-gray-500">{taskId.substring(0, 8)}</p>
             <StatusBadge status={task.status} />
+            {cost != null && cost > 0 && (
+              <span className="flex items-center gap-0.5 text-xs text-emerald-600 font-medium">
+                <DollarSign className="w-3 h-3" />
+                {cost < 0.01 ? '<0.01' : cost.toFixed(2)}
+              </span>
+            )}
           </div>
           <p className="text-sm text-gray-800 group-hover:text-green-600 transition-colors truncate">
             {task.enriched_description || task.raw_description}
@@ -112,6 +125,12 @@ const ClickableTaskCard: React.FC<ClickableTaskCardProps> = ({
             }`}>
               {task.priority}
             </span>
+            {cost != null && cost > 0 && (
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold">
+                <DollarSign className="w-3 h-3" />
+                {cost < 0.01 ? '<0.01' : cost.toFixed(2)}
+              </span>
+            )}
           </div>
 
           <p className="text-sm font-medium text-gray-800 group-hover:text-green-600 transition-colors line-clamp-2 mb-2">

@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import StatusBadge from '@/components/StatusBadge';
-import { ExternalLink, Zap } from 'lucide-react';
+import { ExternalLink, Zap, DollarSign } from 'lucide-react';
 
 interface TaskRowProps {
   task: any;
@@ -46,7 +46,13 @@ export default function TaskRow({ task, onTerminateAgent }: TaskRowProps) {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
+          {task.cost_total_usd > 0 && (
+            <span className="inline-flex items-center gap-0.5 text-xs font-mono text-gray-600">
+              <DollarSign className="w-3 h-3" />
+              {task.cost_total_usd < 0.01 ? task.cost_total_usd.toFixed(4) : task.cost_total_usd.toFixed(2)}
+            </span>
+          )}
           <a
             href={`/tasks?highlight=${task.id}`}
             className="text-blue-600 hover:text-blue-800 p-1"

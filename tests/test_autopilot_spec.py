@@ -234,7 +234,7 @@ def test_product_missing_json_falls_back_to_report_text():
 def test_product_missing_json_no_report_text():
     score, meta = S.score_product_validation(None, S.DEFAULT_SPEC)
     assert 0.3 <= score < 0.7
-    assert meta["reason"] == "no product_validation.md found"
+    assert meta["reason"] == "no validation.md found"
 
 
 def test_product_pass_with_minor_gaps_accepted_within_cap():
@@ -289,10 +289,12 @@ def test_non_gated_phase_returns_empty():
     assert S.build_phase_output("development", "/tmp") == {}
 
 
-def test_build_phase_output_reads_docs_dir(tmp_path):
-    docs = tmp_path / "docs"
-    docs.mkdir()
-    (docs / "qa_report.md").write_text(_okf(
+def test_build_phase_output_reads_hephaestus_phase_subdir(tmp_path):
+    """Agents write to .hephaestus/<phase_name>/ (git-excluded), not docs/
+    -- see 5f26488's docs/ -> .hephaestus/ migration."""
+    docs = tmp_path / ".hephaestus" / "qa_validation"
+    docs.mkdir(parents=True)
+    (docs / "qa.md").write_text(_okf(
         "type: qa_validation_result\n"
         "failed_tests: 0\n"
         "passed_tests: 5\n"
@@ -306,7 +308,7 @@ def test_build_phase_output_reads_docs_dir(tmp_path):
 
 
 def test_build_phase_output_root_fallback(tmp_path):
-    (tmp_path / "product_validation.md").write_text(_okf(
+    (tmp_path / "validation.md").write_text(_okf(
         "type: product_validation_result\n"
         "verdict: NEEDS_WORK\n"
         "unmet_requirements: [\"x\"]"
@@ -338,23 +340,27 @@ class TestConsumeGateArtifacts:
     pre-fix result.json (blocker_count=4) and looped the pipeline back to
     development, burning one goto per cycle."""
 
-    def test_deletes_result_and_report_from_docs(self, tmp_path):
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        (docs / "adversarial_review_report.md").write_text("# report")
+    def test_deletes_result_from_project_root_fallback(self, tmp_path):
+        """read_okf_report's candidates are .hephaestus/<phase_name>/<file>
+        then <root>/<file> -- no flat .hephaestus/<file> case exists for a
+        gated phase (that's only for non-gated phases like
+        requirements.md/architecture.md, which aren't scored via
+        this path). Covers the root-fallback candidate specifically;
+        test_deletes_from_phase_scoped_subdirectory covers the primary one."""
+        (tmp_path / "adversarial.md").write_text("# report")
 
         deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
 
         assert len(deleted) == 1
-        assert not (docs / "adversarial_review_report.md").exists()
+        assert not (tmp_path / "adversarial.md").exists()
 
     def test_unknown_phase_is_a_noop(self, tmp_path):
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        (docs / "something.json").write_text("{}")
+        hephaestus = tmp_path / ".hephaestus"
+        hephaestus.mkdir()
+        (hephaestus / "something.json").write_text("{}")
 
         assert S.consume_gate_artifacts("development", tmp_path) == []
-        assert (docs / "something.json").exists()
+        assert (hephaestus / "something.json").exists()
 
     def test_missing_files_return_empty(self, tmp_path):
         assert S.consume_gate_artifacts("adversarial_review", tmp_path) == []
@@ -363,13 +369,13 @@ class TestConsumeGateArtifacts:
         """Guardrail: for each mapped phase, writing then consuming its
         artifacts must leave the gate scorer with nothing stale to read --
         including phases like feature_review that live under a
-        GATE_RESULT_SUBDIR override instead of docs/."""
-        docs = tmp_path / "docs"
-        docs.mkdir()
+        GATE_RESULT_SUBDIR override instead of .hephaestus/<phase_name>/."""
         for phase_name, filenames in S.GATE_RESULT_ARTIFACTS.items():
             subdir = S.GATE_RESULT_SUBDIR.get(phase_name)
-            target_dir = tmp_path / subdir if subdir else docs
-            target_dir.mkdir(exist_ok=True)
+            target_dir = (
+                tmp_path / subdir if subdir else tmp_path / ".hephaestus" / phase_name
+            )
+            target_dir.mkdir(parents=True, exist_ok=True)
             for filename in filenames:
                 (target_dir / filename).write_text("{}")
             S.consume_gate_artifacts(phase_name, tmp_path)
@@ -377,33 +383,53 @@ class TestConsumeGateArtifacts:
                 assert not (target_dir / filename).exists(), (phase_name, filename)
 
     def test_deletes_from_phase_scoped_subdirectory(self, tmp_path):
-        """Agents are told to write to the one sanctioned docs/<phase_name>/
-        subdirectory -- consume_gate_artifacts must find and delete stale
-        results there too, not just flat docs/."""
-        sub = tmp_path / "docs" / "adversarial_review"
+        """Agents are told to write to the one sanctioned
+        .hephaestus/<phase_name>/ subdirectory -- consume_gate_artifacts
+        must find and delete stale results there too, not just flat
+        .hephaestus/, and must mirror read_okf_report's own candidate
+        order exactly (that's what actually decides which file the gate
+        reads)."""
+        sub = tmp_path / ".hephaestus" / "adversarial_review"
         sub.mkdir(parents=True)
-        (sub / "adversarial_review_report.md").write_text("# report")
+        (sub / "adversarial.md").write_text("# report")
 
         deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
 
         assert len(deleted) == 1
-        assert not (sub / "adversarial_review_report.md").exists()
+        assert not (sub / "adversarial.md").exists()
 
     def test_does_not_delete_a_different_phases_subdirectory_file(self, tmp_path):
         """Regression: the old fallback searched EVERY subdirectory of
-        docs/ for a same-named file and deleted the first match -- risking
-        deletion of a DIFFERENT feature's (or phase's) still-needed result
-        file. Consuming adversarial_review's artifacts must never touch a
-        file sitting under an unrelated subdirectory."""
-        docs = tmp_path / "docs"
-        other = docs / "some_other_feature"
+        .hephaestus/ for a same-named file and deleted the first match --
+        risking deletion of a DIFFERENT feature's (or phase's) still-needed
+        result file. Consuming adversarial_review's artifacts must never
+        touch a file sitting under an unrelated subdirectory."""
+        hephaestus = tmp_path / ".hephaestus"
+        other = hephaestus / "some_other_feature"
         other.mkdir(parents=True)
-        (other / "adversarial_review_report.md").write_text("# report")
+        (other / "adversarial.md").write_text("# report")
 
         deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
 
         assert deleted == []
-        assert (other / "adversarial_review_report.md").exists()
+        assert (other / "adversarial.md").exists()
+
+    def test_no_longer_falls_back_to_stale_docs_location(self, tmp_path):
+        """Regression: consume_gate_artifacts used to also check docs/ and
+        docs/<phase_name>/ as fallback locations. Since 5f26488 moved agent
+        artifacts to .hephaestus/ (git-excluded) and read_okf_report no
+        longer checks docs/ at all, a stale result left behind in docs/
+        from before that migration must NOT be found/deleted here either --
+        deleting it would falsely report success while the actual gate
+        (which only reads .hephaestus/) still has nothing fresh to score."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "adversarial.md").write_text("# stale, pre-migration")
+
+        deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
+
+        assert deleted == []
+        assert (docs / "adversarial.md").exists()
 
 
 class TestValidateGateResultSchema:

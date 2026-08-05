@@ -14,15 +14,75 @@ Usage:
 import json
 import logging
 import re
+import subprocess
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _is_claude_pro_account() -> bool:
+    """Detect if Claude Code is authenticated with a Pro/Team subscription.
+
+    Pro and Team accounts have unlimited usage (within rate limits) for a
+    flat monthly fee, so token counting is misleading. We detect this by
+    running `claude auth status` and checking the subscriptionType field.
+
+    Known subscription types:
+    - "pro": $20/mo individual plan (unlimited Sonnet, limited Opus)
+    - "team": $30/mo per seat (unlimited usage)
+    - "enterprise": custom pricing (unlimited usage)
+    - "max": higher-tier Pro with more Opus usage
+
+    Returns True if subscription-based (Pro/Team/Enterprise/Max), False
+    otherwise (API key billing, free tier, etc.)
+    """
+    try:
+        result = subprocess.run(
+            ["claude", "auth", "status"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            status = json.loads(result.stdout)
+            sub_type = (status.get("subscriptionType") or "").lower()
+            # All subscription types have flat-rate usage — don't count tokens
+            if sub_type in ("pro", "max", "team", "enterprise"):
+                logger.info(f"[COST] Claude account detected as '{sub_type}' — token counting disabled (flat-rate subscription)")
+                return True
+            # Also check authMethod — OAuth login (claude.ai) without an
+            # explicit subscriptionType still means the user is on some
+            # managed plan, not pure API key billing.
+            auth_method = (status.get("authMethod") or "").lower()
+            if auth_method == "claude.ai" and not sub_type:
+                logger.info("[COST] Claude authenticated via claude.ai (no subscriptionType) — assuming flat-rate, token counting disabled")
+                return True
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
+        logger.debug(f"[COST] Could not detect Claude subscription: {e}")
+    return False
+
+
+def _is_subscription_cli(cli_type: str) -> bool:
+    """Check if a CLI tool uses a subscription model (flat-rate, no per-token cost).
+
+    Currently detects:
+    - Claude Code Pro/Team/Enterprise/Max
+    - (Future: Cursor, Windsurf, etc. if they expose similar auth status)
+    """
+    if cli_type in ("claude_code", "claude"):
+        return _is_claude_pro_account()
+    # Add other subscription-based CLIs here as they're discovered
+    # if cli_type == "cursor":
+    #     return _is_cursor_pro_account()
+    return False
 
 
 class CostCollector(ABC):
@@ -99,8 +159,8 @@ class PiJsonlCollector(CostCollector):
                     # Extract cost data
                     cost_data = usage.get("cost", {})
                     cost_usd = cost_data.get("total", 0)
-                    if cost_usd <= 0:
-                        continue
+                    if cost_usd < 0:
+                        cost_usd = 0
 
                     # Extract model info
                     model = message.get("model")
@@ -111,6 +171,11 @@ class PiJsonlCollector(CostCollector):
                     cache_read = usage.get("cacheRead", 0)
                     cache_write = usage.get("cacheWrite", 0)
                     reasoning = usage.get("reasoning", 0)
+
+                    # Skip entries with no token usage at all (not just zero
+                    # cost -- local models have zero cost but real tokens).
+                    if cost_usd <= 0 and input_tokens == 0 and output_tokens == 0:
+                        continue
 
                     entries.append(
                         {
@@ -147,31 +212,147 @@ class ClaudeCodeCollector(CostCollector):
     tokens to dollars.
     """
 
-    # Price table: $/M tokens (as of 2026-07-21)
-    # Update these when Anthropic reprices
+    # Price table: $/M tokens (hardcoded fallback; live data in config/model_pricing.json)
     PRICES = {
-        "claude-sonnet-4": {
-            "input": 3.0,
-            "output": 15.0,
-            "cache_write_1h": 3.75,
-            "cache_write_5m": 3.0,
-            "cache_read": 0.30,
-        },
         "claude-opus-4": {
             "input": 15.0,
             "output": 75.0,
-            "cache_write_1h": 18.75,
-            "cache_write_5m": 15.0,
-            "cache_read": 1.50,
+            "cache_write_1h": 30.0,
+            "cache_write_5m": 18.75,
+            "cache_read": 1.5,
         },
-        "claude-haiku-3.5": {
-            "input": 0.80,
-            "output": 4.0,
-            "cache_write_1h": 1.0,
-            "cache_write_5m": 0.80,
-            "cache_read": 0.08,
+        "claude-opus-4.1": {
+            "input": 15.0,
+            "output": 75.0,
+            "cache_write_1h": 30.0,
+            "cache_write_5m": 18.75,
+            "cache_read": 1.5,
+        },
+        "claude-opus-4.5": {
+            "input": 5.0,
+            "output": 25.0,
+            "cache_write_1h": 10.0,
+            "cache_write_5m": 6.25,
+            "cache_read": 0.5,
+        },
+        "claude-opus-4.6": {
+            "input": 5.0,
+            "output": 25.0,
+            "cache_write_1h": 10.0,
+            "cache_write_5m": 6.25,
+            "cache_read": 0.5,
+        },
+        "claude-opus-4.7": {
+            "input": 5.0,
+            "output": 25.0,
+            "cache_write_1h": 10.0,
+            "cache_write_5m": 6.25,
+            "cache_read": 0.5,
+        },
+        "claude-opus-4.7-fast": {
+            "input": 30.0,
+            "output": 150.0,
+            "cache_write_1h": 60.0,
+            "cache_write_5m": 37.5,
+            "cache_read": 3.0,
+        },
+        "claude-opus-4.8": {
+            "input": 5.0,
+            "output": 25.0,
+            "cache_write_1h": 10.0,
+            "cache_write_5m": 6.25,
+            "cache_read": 0.5,
+        },
+        "claude-opus-4.8-fast": {
+            "input": 10.0,
+            "output": 50.0,
+            "cache_write_1h": 20.0,
+            "cache_write_5m": 12.5,
+            "cache_read": 1.0,
+        },
+        "claude-opus-5": {
+            "input": 5.0,
+            "output": 25.0,
+            "cache_write_1h": 10.0,
+            "cache_write_5m": 6.25,
+            "cache_read": 0.5,
+        },
+        "claude-opus-5-fast": {
+            "input": 10.0,
+            "output": 50.0,
+            "cache_write_1h": 20.0,
+            "cache_write_5m": 12.5,
+            "cache_read": 1.0,
+        },
+        "claude-sonnet-4": {
+            "input": 3.0,
+            "output": 15.0,
+            "cache_write_1h": 6.0,
+            "cache_write_5m": 3.75,
+            "cache_read": 0.3,
+        },
+        "claude-sonnet-4.5": {
+            "input": 3.0,
+            "output": 15.0,
+            "cache_write_1h": 6.0,
+            "cache_write_5m": 3.75,
+            "cache_read": 0.3,
+        },
+        "claude-sonnet-4.6": {
+            "input": 3.0,
+            "output": 15.0,
+            "cache_write_1h": 6.0,
+            "cache_write_5m": 3.75,
+            "cache_read": 0.3,
+        },
+        "claude-sonnet-5": {
+            "input": 2.0,
+            "output": 10.0,
+            "cache_write_1h": 4.0,
+            "cache_write_5m": 2.5,
+            "cache_read": 0.2,
+        },
+        "claude-3-haiku": {
+            "input": 0.25,
+            "output": 1.25,
+            "cache_write_1h": 0.5,
+            "cache_write_5m": 0.31,
+            "cache_read": 0.03,
+        },
+        "claude-haiku-4.5": {
+            "input": 1.0,
+            "output": 5.0,
+            "cache_write_1h": 2.0,
+            "cache_write_5m": 1.25,
+            "cache_read": 0.1,
+        },
+        "claude-fable-5": {
+            "input": 10.0,
+            "output": 50.0,
+            "cache_write_1h": 20.0,
+            "cache_write_5m": 12.5,
+            "cache_read": 1.0,
         },
     }
+    _external_prices_loaded = False
+
+    @classmethod
+    def _load_external_prices(cls):
+        """Merge config/model_pricing.json into PRICES (once)."""
+        if cls._external_prices_loaded:
+            return
+        cls._external_prices_loaded = True
+        pricing_file = Path(__file__).parent.parent.parent / "config" / "model_pricing.json"
+        if not pricing_file.exists():
+            return
+        try:
+            data = json.loads(pricing_file.read_text())
+            for model, p in data.get("prices", {}).items():
+                if model not in cls.PRICES:
+                    cls.PRICES[model] = p
+            logger.debug("Loaded external pricing from %s", pricing_file)
+        except Exception:
+            logger.warning("Failed to load %s, using hardcoded prices", pricing_file)
 
     def collect(
         self,
@@ -183,6 +364,7 @@ class ClaudeCodeCollector(CostCollector):
         checkpoint: int,
     ) -> Tuple[List[dict], int]:
         """Collect cost entries from a Claude Code session JSONL file."""
+        self._load_external_prices()
         entries = []
         lines_processed = checkpoint  # Preserve checkpoint if no new lines
 
@@ -200,7 +382,8 @@ class ClaudeCodeCollector(CostCollector):
                         continue
 
                     # Only process assistant messages with usage data
-                    if data.get("type") != "message":
+                    # Claude Code uses type="assistant" (not type="message")
+                    if data.get("type") not in ("assistant", "message"):
                         continue
                     message = data.get("message", {})
                     if message.get("role") != "assistant":
@@ -219,8 +402,16 @@ class ClaudeCodeCollector(CostCollector):
 
                     # Calculate cost using price table
                     # Default to sonnet prices if model unknown
+                    # Normalize model name (e.g. claude-opus-4-8 -> claude-opus-4)
                     model = message.get("model", "claude-sonnet-4")
-                    prices = self.PRICES.get(model, self.PRICES["claude-sonnet-4"])
+                    # Try exact match first, then strip trailing version suffix
+                    prices = self.PRICES.get(model)
+                    if not prices:
+                        model_normalized = re.sub(r"-\d+$", "", model, count=1)
+                        if model_normalized != model:
+                            prices = self.PRICES.get(model_normalized)
+                    if not prices:
+                        prices = self.PRICES["claude-sonnet-4"]
 
                     cost_usd = (
                         input_tokens * prices["input"] / 1_000_000
@@ -429,12 +620,24 @@ def collect_task_cost(task_id: str) -> None:
         if task.assigned_agent_id:
             agent = db.query(Agent).filter_by(id=task.assigned_agent_id).first()
 
+        # Fallback: if assigned_agent_id was cleared (e.g. by terminate_agent
+        # resetting stray tasks), check if any agent still has current_task_id
+        # pointing at this task.
+        if not agent:
+            agent = db.query(Agent).filter_by(current_task_id=task_id).first()
+
         if not agent:
             logger.debug(f"[COST-COLLECT] Task {task_id[:8]} has no assigned agent — skipping")
             return
 
         # Discover session file based on CLI type
         cli_type = agent.cli_type or "pi"
+
+        # Skip token-based cost collection for subscription CLIs (Pro/Team/etc.)
+        # These accounts pay a flat monthly fee — counting tokens is misleading.
+        if _is_subscription_cli(cli_type):
+            logger.debug(f"[COST-COLLECT] Task {task_id[:8]} agent {agent.id[:8]} uses {cli_type} subscription — skipping token cost collection")
+            return
 
         # The pi extension posts costs to /api/autopilot/cost-entries in
         # real time as turns complete (source="pi" CostEntry rows). If any
@@ -449,9 +652,7 @@ def collect_task_cost(task_id: str) -> None:
         # session already reported in, which would suppress its real cost
         # data entirely.
         if cli_type == "pi":
-            has_realtime_entries = (
-                db.query(CostEntry).filter_by(task_id=task_id, agent_id=agent.id, source="pi").first() is not None
-            )
+            has_realtime_entries = db.query(CostEntry).filter_by(task_id=task_id, agent_id=agent.id, source="pi").first() is not None
             if has_realtime_entries:
                 logger.debug(f"[COST-COLLECT] Task {task_id[:8]} already has real-time pi cost entries — skipping JSONL fallback to avoid double-counting")
                 return
@@ -475,7 +676,7 @@ def collect_task_cost(task_id: str) -> None:
             cwd = _get_agent_cwd(db, agent, task)
             if cwd:
                 session_file = _discover_session_file(session_id, cwd)
-        elif cli_type == "claude_code":
+        elif cli_type in ("claude_code", "claude"):
             # Claude Code session files in ~/.claude/projects/<sanitized_cwd>/
             cwd = _get_agent_cwd(db, agent, task)
             if cwd:
@@ -483,8 +684,10 @@ def collect_task_cost(task_id: str) -> None:
                 if ".." in cwd or "~" in cwd:
                     logger.warning(f"Rejected Claude Code session discovery with suspicious cwd: {cwd}")
                 else:
-                    sanitized = re.sub(r"[^a-zA-Z0-9_.\-]", "-", cwd)
-                    sanitized = re.sub(r"-+", "-", sanitized).strip("-")
+                    # Claude Code sanitizes cwd to a directory name by replacing
+                    # / -> -, . -> -, _ -> -.  This matches the observed directory
+                    # names in ~/.claude/projects/.
+                    sanitized = cwd.replace("/", "-").replace(".", "-").replace("_", "-")
                     claude_dir = Path.home() / ".claude" / "projects" / sanitized
 
                     # SECURITY: Verify the resolved path is within expected directory
@@ -495,9 +698,17 @@ def collect_task_cost(task_id: str) -> None:
                             logger.warning(f"Claude Code path escapes base directory: {resolved}")
                         else:
                             if claude_dir.exists():
-                                matches = list(claude_dir.glob(f"*_{session_id}.jsonl"))
-                                if matches:
-                                    session_file = matches[0]
+                                # Claude Code files are named {uuid}.jsonl where
+                                # uuid = uuid5(NAMESPACE_URL, session_id)
+                                session_uuid = _session_id_to_uuid(session_id)
+                                session_file_candidate = claude_dir / f"{session_uuid}.jsonl"
+                                if session_file_candidate.exists():
+                                    session_file = session_file_candidate
+                                else:
+                                    # Fallback: try glob pattern
+                                    matches = list(claude_dir.glob(f"*_{session_id}.jsonl"))
+                                    if matches:
+                                        session_file = matches[0]
                     except (OSError, ValueError):
                         pass
         elif cli_type == "opencode":
@@ -515,6 +726,7 @@ def collect_task_cost(task_id: str) -> None:
         collectors = {
             "pi": PiJsonlCollector(),
             "claude_code": ClaudeCodeCollector(),
+            "claude": ClaudeCodeCollector(),
             "opencode": OpenCodeCollector(),
             "codex": CodexStubCollector(),
         }
@@ -584,26 +796,54 @@ def collect_task_cost(task_id: str) -> None:
 
 
 def _extract_session_id(agent: Any, task: Any) -> Optional[str]:
-    """Extract session ID from agent or task metadata.
+    """Reconstruct the deterministic session ID for this agent/task.
 
-    The session ID is the deterministic ID generated by get_session_id()
-    in src/autopilot/phases.py, passed via --session-id flag at launch.
-    It's stored in the agent's tmux session name or launch params.
+    The session ID is generated by get_session_id() in
+    src/autopilot/phases.py from (project_id, design_slug, phase_name,
+    model) and passed to pi via --session-id.  It is NOT stored on the
+    agent or task rows, so we reconstruct it from the workflow's
+    launch_params and the task's phase.
     """
-    # Try to get from agent's tmux session name
-    # Session name format: hephaestus-<project>-<design>-<role>-<session_id_suffix>
-    if agent.tmux_session_name:
-        # Extract session ID suffix from tmux session name
-        parts = agent.tmux_session_name.split("-")
-        if len(parts) >= 2:
-            # Last part is typically the session ID suffix
-            return "-".join(parts[1:])  # Skip "hephaestus" prefix
+    from src.core.database import Phase, Workflow, get_db
 
-    # Try to reconstruct from task/workflow context
-    # This would need access to get_session_id() logic
-    # For now, return None and log
-    logger.debug(f"Could not extract session ID from agent {agent.id[:8]} (tmux: {agent.tmux_session_name})")
-    return None
+    if not task.workflow_id:
+        return None
+
+    try:
+        with get_db() as db:
+            wf = db.query(Workflow).filter_by(id=task.workflow_id).first()
+            if not wf or not wf.launch_params:
+                return None
+
+            lp = wf.launch_params if isinstance(wf.launch_params, dict) else {}
+            project_id = lp.get("project_id") or lp.get("project_path", "")
+            design_slug = lp.get("design_slug") or lp.get("design_id") or lp.get("feature_id", "")
+
+            phase_name = ""
+            if task.phase_id:
+                phase = db.query(Phase).filter_by(id=task.phase_id).first()
+                if phase:
+                    phase_name = phase.name
+
+            if not project_id or not design_slug or not phase_name:
+                return None
+
+            model = agent.cli_model or ""
+            from src.autopilot.phases import get_session_id
+
+            return get_session_id(project_id, design_slug, phase_name, model=model)
+    except Exception as e:
+        logger.debug(f"Could not reconstruct session ID for agent {agent.id[:8]}: {e}")
+        return None
+
+
+def _session_id_to_uuid(session_id: str) -> str:
+    """Derive the UUID that Claude Code uses as its session file name.
+
+    ClaudeCodeAgent.get_launch_command uses uuid5(NAMESPACE_URL, session_id)
+    to derive a valid UUID from the deterministic session ID.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, session_id))
 
 
 def _get_agent_cwd(db: Session, agent: Any, task: Any) -> Optional[str]:

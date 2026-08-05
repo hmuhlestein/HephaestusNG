@@ -1,5 +1,4 @@
 import React from 'react';
-import { DollarSign } from 'lucide-react';
 import CostDisplay from './CostDisplay';
 
 interface DesignCostRowProps {
@@ -14,7 +13,7 @@ interface DesignCostRowProps {
  * Shows design name and cost with a link to detailed breakdown.
  */
 const DesignCostRow: React.FC<DesignCostRowProps> = ({
-  designId,
+  designId: _designId,
   designName,
   costTotal,
   className = '',

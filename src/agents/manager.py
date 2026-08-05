@@ -341,6 +341,24 @@ class AgentManager:
 
         logger.info(f"Creating {cli_type} agent {agent_id} for task {task.id}")
 
+        # Insert a stub Agent row BEFORE worktree creation so the
+        # agent_worktrees.agent_id FK passes. The full Agent details
+        # (system_prompt, tmux_session_name) are filled in later.
+        session = self.db_manager.get_session()
+        agent = Agent(
+            id=agent_id,
+            system_prompt="(pending: worktree + prompt setup)",
+            status="idle",
+            cli_type=cli_type,
+            agent_type=agent_type,
+            current_task_id=task.id,
+            last_activity=datetime.utcnow(),
+            health_check_failures=0,
+        )
+        session.add(agent)
+        session.commit()
+        session.close()
+
         try:
             # Gather inbound context (design doc, qa_spec, project context) to copy
             # into the worktree's git-excluded .hephaestus/ dir, so the agent never
@@ -484,10 +502,23 @@ class AgentManager:
                 env_vars["HEPHAESTUS_WORKFLOW_ID"] = task.workflow_id
             if task.phase_id:
                 env_vars["HEPHAESTUS_PHASE_ID"] = task.phase_id
+            # Cost tracker extension needs the API URL to post cost entries.
+            import os
+
+            _api_port = os.environ.get("HEPHAESTUS_PORT") or str(getattr(self.config, "mcp_port", 8300))
+            env_vars["HEPHAESTUS_API_URL"] = f"http://localhost:{_api_port}"
 
             # 4. Create tmux session IN THE WORKTREE with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)
             cli_agent.prepare_working_directory(branch_path)
+
+            # Create phase-specific output directory in .hephaestus/ so agents
+            # don't have to create it themselves
+            if task.phase_id:
+                from pathlib import Path as _Path
+                phase_output_dir = _Path(branch_path) / ".hephaestus" / (phase_name or task.phase_id)
+                phase_output_dir.mkdir(parents=True, exist_ok=True)
+
             session_name = f"{self.config.tmux_session_prefix}_{agent_id[:8]}"
             tmux_session = self._create_tmux_session(
                 session_name, working_directory=branch_path, env_vars=env_vars
@@ -552,7 +583,7 @@ class AgentManager:
                                 cands += [
                                     wd / CONTEXT_DIR_NAME / "design.md",
                                     wd / CONTEXT_DIR_NAME / "design_document.md",
-                                    wd / "docs" / "requirements_analysis.md",
+                                    wd / CONTEXT_DIR_NAME / "requirements.md",
                                 ]
                                 for _p in cands:
                                     if _p.is_file():
@@ -568,7 +599,7 @@ class AgentManager:
                                 or ""
                             )
                         complexity = await self.llm_provider.classify_complexity(
-                            design_text
+                            design_text, workflow_id=task.workflow_id
                         )
                         self._complexity_cache[task.workflow_id] = complexity
                     # low complexity → low thinking; medium → medium; high → keep phase base
@@ -671,20 +702,28 @@ class AgentManager:
                 workflow_id=task.workflow_id,
                 phase_id=task.phase_id,
                 session_id=session_id,
+                working_directory=branch_path,
             )
 
             # Send launch command to tmux
             pane = tmux_session.attached_window.attached_pane
 
-            # If using GLM, export env vars in the shell first
+            # Export env vars in the shell first — these are required for
+            # MCP tool authentication (HEPHAESTUS_AGENT_ID etc.) and GLM.
             if env_vars:
                 logger.info(
-                    f"Exporting GLM environment variables in shell for agent {agent_id}"
+                    f"Exporting {len(env_vars)} environment variables for agent {agent_id}: "
+                    f"{', '.join(env_vars.keys())}"
                 )
+                # Set via tmux set-environment so vars persist across shell
+                # restarts and are inherited by all child processes.
+                for key, value in env_vars.items():
+                    tmux_session.set_environment(key, value)
+                # Also export in the current shell for immediate availability
                 for key, value in env_vars.items():
                     pane.send_keys(f'export {key}="{value}"', enter=True)
-                # Brief pause to ensure exports complete
-                await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.1)
+                await asyncio.sleep(1.0)
 
             # Echo task info to terminal so we can see what the agent is working on
             task_desc = (task.enriched_description or task.raw_description or "")[:200]
@@ -700,9 +739,9 @@ class AgentManager:
                 launch_command, enter=True
             )  # enter=True sends Enter key after command
 
-            # 6. Register agent in database
+            # 6. Update the stub agent with full details
             session = self.db_manager.get_session()
-            agent = Agent(
+            agent = session.merge(Agent(
                 id=agent_id,
                 system_prompt=system_prompt,
                 status="working",
@@ -711,10 +750,10 @@ class AgentManager:
                 tmux_session_name=session_name,
                 current_task_id=task.id,
                 last_activity=datetime.utcnow(),
+                launched_at=datetime.utcnow(),
                 health_check_failures=0,
-                agent_type=agent_type,  # Set the agent type
-            )
-            session.add(agent)
+                agent_type=agent_type,
+            ))
 
             # Assign task to agent
             task.assigned_agent_id = agent_id
@@ -747,18 +786,6 @@ class AgentManager:
                 task, agent_id, branch_path, agent_type, enriched_data
             )
             logger.info(f"Initial message length: {len(initial_message)} characters")
-
-            # Save the full prompt to /tmp for debugging
-            debug_prompt_path = f"/tmp/hephaestus_debug_prompt_{agent_id}.txt"
-            with open(debug_prompt_path, "w") as f:
-                f.write("=== FULL INITIAL MESSAGE DEBUG ===\n")
-                f.write(f"Agent ID: {agent_id}\n")
-                f.write(f"Task ID: {task.id}\n")
-                f.write(f"Message length: {len(initial_message)} characters\n")
-                f.write(f"Timestamp: {datetime.utcnow()}\n")
-                f.write(f"{'=' * 50}\n\n")
-                f.write(initial_message)
-            logger.info(f"🔍 DEBUG: Full initial message saved to: {debug_prompt_path}")
 
             # Wait for CLI to initialize first
             wait_time = 25
@@ -1037,27 +1064,45 @@ class AgentManager:
             # Strip terminal control sequences but keep ANSI color codes.
             # Keep: SGR color sequences (\x1b[...m) and \r (for spinner collapsing)
             # Strip: everything else aggressively
-            _ansi_strip = (
-                r"BEGIN{$|=1} "  # Autoflush -- see comment below.
-                r"s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL
-                r"s/\x1b\][^\x1b]*\x1b\\//g; "  # OSC with ST (single backslash)
-                r"s/\x1b\[[?]?[0-9;]*[^0-9;m]//g; "  # All CSI/DEC except m (color)
-                r"s/\x1b[()][A-Za-z0-9]//g; "  # Charset selection
-                r"s/\x1b[^\x1b\x5b\x5d]//g; "  # Any other bare ESC sequences
+            # Perl fully block-buffers STDOUT whenever it isn't a TTY (true
+            # here -- redirected to transcript_path via `>>`), so a plain
+            # `perl -pe '...'` sits on every byte pipe-pane feeds it until
+            # the buffer fills or perl exits. Two fixes needed, not one:
+            #
+            # 1. $|=1 (autoflush) handles the OUTPUT side -- without it,
+            #    even a perl that has processed a line won't push it to
+            #    disk promptly.
+            # 2. sysread() in an explicit loop, not -pe's implicit
+            #    while(<>){...}, handles the INPUT side -- -pe reads one
+            #    "line" (up to $/, "\n" by default) before there's anything
+            #    to flush at all. Modern TUIs (Claude Code's included)
+            #    redraw mostly via \r + cursor-positioning escapes, not
+            #    literal "\n". Confirmed live: a transcript sat frozen at
+            #    exactly the byte offset of the launch command's own
+            #    trailing newline for an agent's entire multi-minute run,
+            #    while tmux capture-pane on the same live session showed
+            #    extensive fresh output the whole time -- $|=1 alone (a
+            #    prior fix) never got the chance to flush anything because
+            #    perl was still blocked waiting for a "\n" that wasn't
+            #    coming. sysread(STDIN, $buf, 65536) returns as soon as
+            #    ANY data is available on the pipe (a true short read),
+            #    exactly like tmux's own pipe-pane delivery, so each
+            #    sysread pairs with an immediate print+flush of whatever
+            #    arrived. A multi-byte escape sequence split across two
+            #    reads won't be matched by either substitution pass and
+            #    survives unstripped in the transcript -- a rare cosmetic
+            #    imperfection, not a functional blocker, unlike minutes of
+            #    frozen scrollback.
+            _pty_filter = (
+                r"$|=1; while (sysread(STDIN, my $buf, 65536)) { "
+                r"$buf =~ s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL
+                r"$buf =~ s/\x1b\][^\x1b]*\x1b\\//g; "  # OSC with ST (single backslash)
+                r"$buf =~ s/\x1b\[[?]?[0-9;]*[^0-9;m]//g; "  # All CSI/DEC except m (color)
+                r"$buf =~ s/\x1b[()][A-Za-z0-9]//g; "  # Charset selection
+                r"$buf =~ s/\x1b[^\x1b\x5b\x5d]//g; "  # Any other bare ESC sequences
+                r"print $buf; }"
             )
-            # Perl fully block-buffers STDOUT whenever it isn't a TTY --
-            # true here since it's redirected to transcript_path via `>>` --
-            # so without BEGIN{$|=1} (autoflush) every byte pipe-pane feeds
-            # perl sits in an internal buffer and only actually reaches disk
-            # in unpredictable chunks, flushing fully only when the buffer
-            # fills or perl exits (i.e. when the tmux session is killed at
-            # agent termination). Observed live: a live agent's transcript
-            # file sat at 0 bytes on disk while the agent was actively
-            # producing output the whole time, then jumped to its full size
-            # the instant it terminated -- making all the scrollback the
-            # user had just watched scroll by unreadable (nothing to scroll
-            # back to) until the agent finished.
-            pipe_cmd = f"perl -pe {shlex.quote(_ansi_strip)} >> {shlex.quote(str(transcript_path))}"
+            pipe_cmd = f"perl -e {shlex.quote(_pty_filter)} >> {shlex.quote(str(transcript_path))}"
             session.attached_window.attached_pane.cmd("pipe-pane", "-o", pipe_cmd)
         except Exception as e:
             logger.warning(f"Failed to enable pipe-pane transcript logging: {e}")
@@ -1136,7 +1181,7 @@ class AgentManager:
 
             # Architecture context for architect-as-adversarial-reviewer (§10.1.1).
             # When the architect is re-invoked for phase 4, it needs access to the
-            # architecture.md and requirements_analysis.md from previous phases.
+            # architecture.md and requirements.md from previous phases.
             # These are in the shared worktree's docs/ directory.
             if workflow_id:
                 session2 = self.db_manager.get_session()
@@ -1151,10 +1196,10 @@ class AgentManager:
                                     context["architecture.md"] = arch_path.read_text()
                                 except Exception:
                                     pass
-                            req_path = worktree_docs / "requirements_analysis.md"
+                            req_path = worktree_docs / "requirements.md"
                             if req_path.exists():
                                 try:
-                                    context["requirements_analysis.md"] = (
+                                    context["requirements.md"] = (
                                         req_path.read_text()
                                     )
                                 except Exception:
@@ -1322,11 +1367,16 @@ class AgentManager:
             try:
                 output = "\n".join(pane.cmd("capture-pane", "-p", "-S", "-50").stdout)
                 output_lower = output.lower()
-                # Only match the exact Claude session-limit message — generic
-                # fragments like "session limit" or "rate limit" false-positive
-                # on the prompt text itself (which discusses limits).
+                # Match Claude session/rate/limit messages — weekly and monthly
+                # spend limits are distinct from "session limit" and must be
+                # caught here too, otherwise the agent starts "successfully"
+                # and the monitor has to catch it on a later cycle (if it even
+                # runs before the agent is terminated another way). Anchored to
+                # confirmed exact phrases to avoid false-positive on prompt text.
                 for indicator in (
                     "you've hit your session limit",
+                    "you've hit your weekly limit",
+                    "you've hit your monthly limit",
                     "too many requests, please slow down",
                 ):
                     if indicator in output_lower:
@@ -1436,7 +1486,24 @@ class AgentManager:
                         f"{wip['commit_sha'][:8]} ({wip['files_changed']} file(s))"
                     )
             except Exception as e:
-                logger.debug(f"[TERMINATE] WIP commit skipped for {agent_id[:8]}: {e}")
+                # commit_changes -> _agent_repo requires an AgentBranch DB
+                # record keyed by agent_id -- only ever created for the
+                # legacy isolated-per-agent-worktree path (validators,
+                # diagnostic agents). Every normal phase agent in a feature
+                # pipeline runs against the SHARED feature worktree instead
+                # (create_agent_for_task's shared_worktree branch), so this
+                # raises for the common case, and previously the WIP-commit
+                # promise silently no-op'd here with nothing but a DEBUG
+                # log. That mattered once delete_feature/remove_project_design/
+                # rerun_design started force-removing worktrees right after
+                # terminating their agents -- uncommitted work was gone with
+                # no recovery. Fall back to committing directly in the
+                # worktree the agent's own current task says it was using.
+                logger.debug(
+                    f"[TERMINATE] WIP commit via agent-branch path skipped for "
+                    f"{agent_id[:8]}: {e} -- trying shared-worktree fallback"
+                )
+                self._commit_wip_in_shared_worktree(agent_id, agent.current_task_id)
 
             # Capture pane PIDs and final output BEFORE killing the tmux session
             pane_pids = []
@@ -1518,15 +1585,7 @@ class AgentManager:
                                                 get_cli_agent,
                                             )
 
-                                            try:
-                                                _cli = get_cli_agent(agent.cli_type)
-                                                clean_scrollback = (
-                                                    _cli.strip_tui_chrome(
-                                                        full_scrollback
-                                                    )
-                                                )
-                                            except Exception:
-                                                clean_scrollback = full_scrollback
+                                            clean_scrollback = full_scrollback
                                             log_file.write_text(clean_scrollback)
                                             logger.info(
                                                 f"[TMUX-LOG] Final capture for "
@@ -1540,6 +1599,21 @@ class AgentManager:
                                 break
                 except Exception as e:
                     logger.debug(f"Could not capture output before terminate: {e}")
+
+            # Final unconditional flush of the stability-tracked "clean"
+            # transcript (see _flush_stable_transcript) -- must happen
+            # before the session is killed below, since capture-pane can
+            # no longer see anything once it's gone.
+            if agent.tmux_session_name:
+                try:
+                    transcript_dir = self._resolve_tmux_transcript_dir(agent)
+                    if transcript_dir:
+                        self._flush_stable_transcript(
+                            agent.tmux_session_name,
+                            transcript_dir / f"{agent.tmux_session_name}.clean.log",
+                        )
+                except Exception as e:
+                    logger.debug(f"[STABLE-TRANSCRIPT] Final flush failed: {e}")
 
             # Kill tmux session using subprocess (more reliable than libtmux)
             if agent.tmux_session_name:
@@ -1590,10 +1664,49 @@ class AgentManager:
                     except Exception:
                         pass
 
+            # Collect cost data before clearing agent references.
+            # Once current_task_id and assigned_agent_id are cleared,
+            # collect_task_cost can no longer discover the agent/session.
+            if agent.current_task_id:
+                try:
+                    from src.services.cost_collection_service import collect_task_cost
+                    collect_task_cost(agent.current_task_id)
+                except Exception as e:
+                    logger.debug(f"[COST-COLLECT] Failed on terminate for agent {agent_id[:8]}: {e}")
+
             # Update agent status
             agent.status = "terminated"
             agent.current_task_id = None  # Clear stale reference
             agent.terminated_at = datetime.utcnow()
+
+            # Safety net: release any task still pointing at this
+            # now-terminated agent. Every well-behaved caller already
+            # resets its own task's status/assigned_agent_id before
+            # calling terminate_agent (e.g. the session-limit and
+            # connection-error fallback paths in monitor.py) -- by the
+            # time we get here, assigned_agent_id no longer points at
+            # this agent, so this is a no-op for them. It only fires for
+            # a caller that forgot, closing the gap at the shared
+            # primitive instead of requiring every one of terminate_agent's
+            # ~15 call sites to remember it. Observed live: a task sat
+            # "in_progress" pointing at an already-terminated agent
+            # indefinitely -- current_task_id was correctly cleared on the
+            # agent side (satisfying that half of the termination
+            # invariant) but nothing ever reset the task, so no dispatch
+            # path ever picked it up again.
+            stray_tasks = (
+                session.query(Task)
+                .filter_by(assigned_agent_id=agent_id)
+                .filter(Task.status.in_(["assigned", "in_progress", "pending"]))
+                .all()
+            )
+            for stray in stray_tasks:
+                logger.warning(
+                    f"[TERMINATE] Task {stray.id[:8]} still pointed at "
+                    f"terminated agent {agent_id[:8]} -- resetting to pending"
+                )
+                stray.status = "pending"
+                stray.assigned_agent_id = None
 
             # Log termination with captured output
             log_entry = AgentLog(
@@ -1615,6 +1728,53 @@ class AgentManager:
             session.rollback()
         finally:
             session.close()
+
+    def _commit_wip_in_shared_worktree(self, agent_id: str, task_id: Optional[str]) -> None:
+        """WIP-preservation fallback for agents on a shared feature worktree
+        -- see the comment at its call site in terminate_agent for why
+        commit_changes/_agent_repo can't reach these. Resolves the worktree
+        via the agent's current task's workflow (the same working_directory
+        every phase agent on that workflow shares) and commits directly,
+        bypassing the AgentBranch/agent_worktrees machinery entirely. Best-
+        effort: logs and returns on any failure rather than blocking
+        termination on it.
+        """
+        if not task_id:
+            return
+        try:
+            from src.core.database import Workflow
+
+            session = self.db_manager.get_session()
+            try:
+                task = session.query(Task).filter_by(id=task_id).first()
+                working_directory = None
+                if task and task.workflow_id:
+                    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+                    if wf:
+                        working_directory = wf.working_directory
+            finally:
+                session.close()
+
+            if not working_directory or not Path(working_directory).exists():
+                return
+
+            import git as _git
+
+            repo = _git.Repo(working_directory)
+            repo.git.add("-A")
+            if not repo.is_dirty() and not repo.untracked_files:
+                return
+            repo.git.commit(
+                "-m", f"[Agent {agent_id}] [WIP] Auto-saved on terminate", "--no-verify"
+            )
+            logger.info(
+                f"[TERMINATE] Saved WIP for shared-worktree agent {agent_id[:8]} "
+                f"in {working_directory}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[TERMINATE] Shared-worktree WIP commit also failed for {agent_id[:8]}: {e}"
+            )
 
     async def restart_agent(self, agent_id: str, reason: str = ""):
         """Restart a stuck agent.
@@ -1664,6 +1824,19 @@ class AgentManager:
 
             # Kill existing tmux session
             if agent.tmux_session_name:
+                # Final flush of the stability-tracked "clean" transcript
+                # before the session (and its scrollback) disappears --
+                # see _flush_stable_transcript.
+                try:
+                    transcript_dir = self._resolve_tmux_transcript_dir(agent)
+                    if transcript_dir:
+                        self._flush_stable_transcript(
+                            agent.tmux_session_name,
+                            transcript_dir / f"{agent.tmux_session_name}.clean.log",
+                        )
+                except Exception as e:
+                    logger.debug(f"[STABLE-TRANSCRIPT] Final flush before restart failed: {e}")
+
                 try:
                     if self.tmux_server.has_session(agent.tmux_session_name):
                         # Find session by iteration (avoid deprecated get_by_id)
@@ -1712,6 +1885,10 @@ class AgentManager:
                 env_vars["HEPHAESTUS_WORKFLOW_ID"] = task.workflow_id
             if task.phase_id:
                 env_vars["HEPHAESTUS_PHASE_ID"] = task.phase_id
+            import os
+
+            _api_port = os.environ.get("HEPHAESTUS_PORT") or str(getattr(self.config, "mcp_port", 8300))
+            env_vars["HEPHAESTUS_API_URL"] = f"http://localhost:{_api_port}"
 
             # Create new tmux session with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)
@@ -1734,11 +1911,8 @@ class AgentManager:
             cli_agent = get_cli_agent(agent.cli_type)
             if restart_wd:
                 cli_agent.prepare_working_directory(restart_wd)
-            tmux_session = self._create_tmux_session(
-                new_session_name, working_directory=restart_wd, env_vars=env_vars
-            )
 
-            # Resolve phase_name + per-phase thinking budget for the relaunch
+            # Resolve phase_name for the relaunch (needed for output dir and prompt)
             restart_phase_name = None
             restart_thinking_level = None
             if task.phase_id:
@@ -1750,23 +1924,30 @@ class AgentManager:
                         restart_phase = (
                             restart_session.query(Phase)
                             .filter_by(
-                                order=int(task.phase_id), workflow_id=task.workflow_id
+                                order=int(task.phase_id),
+                                workflow_id=task.workflow_id,
                             )
                             .first()
                         )
                     else:
-                        restart_phase = (
-                            restart_session.query(Phase)
-                            .filter_by(id=task.phase_id)
-                            .first()
-                        )
+                        restart_phase = restart_session.query(Phase).filter_by(id=task.phase_id).first()
                     if restart_phase:
                         restart_phase_name = restart_phase.name
-                        restart_thinking_level = (
-                            restart_phase.thinking_level
-                        )  # preserve budget across restart
+                except Exception:
+                    pass
                 finally:
                     restart_session.close()
+
+            # Create phase-specific output directory in .hephaestus/ so agents
+            # don't have to create it themselves
+            if task.phase_id and restart_wd:
+                from pathlib import Path as _Path
+                phase_output_dir = _Path(restart_wd) / ".hephaestus" / (restart_phase_name or task.phase_id)
+                phase_output_dir.mkdir(parents=True, exist_ok=True)
+
+            tmux_session = self._create_tmux_session(
+                new_session_name, working_directory=restart_wd, env_vars=env_vars
+            )
 
             # Prepend restart context to system prompt so pi sees it immediately
             restart_system_prompt = (
@@ -1834,19 +2015,27 @@ class AgentManager:
                 phase_id=task.phase_id,
                 thinking_level=restart_thinking_level,
                 session_id=session_id,
+                working_directory=restart_wd,
             )
 
             pane = tmux_session.attached_window.attached_pane
 
-            # If using GLM, export env vars in the shell first
+            # Export env vars in the shell first — these are required for
+            # MCP tool authentication (HEPHAESTUS_AGENT_ID etc.) and GLM.
             if env_vars:
                 logger.info(
-                    f"Exporting GLM environment variables in shell for restarted agent {agent_id}"
+                    f"Exporting {len(env_vars)} environment variables for restarted agent {agent_id}: "
+                    f"{', '.join(env_vars.keys())}"
                 )
+                # Set via tmux set-environment so vars persist across shell
+                # restarts and are inherited by all child processes.
+                for key, value in env_vars.items():
+                    tmux_session.set_environment(key, value)
+                # Also export in the current shell for immediate availability
                 for key, value in env_vars.items():
                     pane.send_keys(f'export {key}="{value}"', enter=True)
-                # Brief pause to ensure exports complete
-                await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.1)
+                await asyncio.sleep(1.0)
 
             # Launch the CLI (pi/claude/etc.) in the fresh session
             pane.send_keys(launch_command, enter=True)
@@ -1871,6 +2060,7 @@ class AgentManager:
             agent.status = "working"
             agent.health_check_failures = 0
             agent.last_activity = datetime.utcnow()
+            agent.launched_at = datetime.utcnow()
 
             # Log restart
             log_entry = AgentLog(
@@ -2000,58 +2190,54 @@ class AgentManager:
                     return "\n".join(log_lines)
                 return "Agent terminated - no output was captured"
 
-            # For live agents, do a one-time load from transcript log for full
-            # history, then use tmux capture-pane for clean live updates.
             if not agent.tmux_session_name:
                 logger.warning(f"Agent {agent_id} has no tmux session name")
                 return ""
 
-            # Always read from transcript log (has ANSI colors from pipe-pane).
-            # capture-pane returns plain text (tmux renders to text), so we
-            # prefer the transcript which preserves the original ANSI codes.
-            transcript_output = self._read_transcript_log(agent, lines)
-            if transcript_output:
-                return transcript_output
+            # Prefer the stability-tracked "clean" transcript: it's built
+            # from tmux's own capture-pane (cursor positioning, overwrites,
+            # and line wrapping already correctly resolved), polled and
+            # appended to right here, rather than the raw pipe-pane byte
+            # stream (_read_transcript_log below) -- see
+            # _poll_stable_transcript for why raw bytes can't be turned
+            # into correct text by regex stripping alone.
+            transcript_dir = self._resolve_tmux_transcript_dir(agent)
+            if transcript_dir:
+                clean_path = transcript_dir / f"{agent.tmux_session_name}.clean.log"
+                self._poll_stable_transcript(agent.tmux_session_name, clean_path)
+                if clean_path.exists() and clean_path.stat().st_size > 0:
+                    with open(clean_path, "r", errors="replace") as f:
+                        clean_lines = f.read().splitlines()
+                    if lines > 0:
+                        clean_lines = clean_lines[-lines:]
+                    return "\n".join(clean_lines)
 
-            # Fallback: capture-pane if transcript is unavailable
+            # Fall back to an unprocessed capture-pane snapshot if the clean
+            # transcript couldn't produce anything yet (e.g. the whole
+            # session is still within the first couple of confirmation
+            # polls, or it's mid-stream on a long response that hasn't
+            # settled anywhere yet). This is tmux's own correctly-emulated
+            # rendering -- just not yet "confirmed stable" enough to
+            # persist -- so it's still a faithful snapshot, unlike the raw
+            # pipe-pane transcript below. Observed live: a long streaming
+            # response with nothing committed to clean.log yet fell
+            # through to the raw transcript, which re-shows every
+            # intermediate \r-redrawn state as its own line -- the exact
+            # duplication problem the clean transcript exists to avoid.
+            current_lines = self._capture_pane_lines(agent.tmux_session_name)
+            if current_lines is not None:
+                if lines > 0:
+                    current_lines = current_lines[-lines:]
+                return "\n".join(current_lines)
+
+            # Last resort: the raw pipe-pane transcript (has ANSI colors),
+            # only reached if even a live capture-pane snapshot failed
+            # (e.g. the tmux session itself is gone).
             logger.debug(
-                f"Attempting to access tmux session: {agent.tmux_session_name}"
+                f"capture-pane unavailable for {agent.tmux_session_name}, "
+                "falling back to raw transcript"
             )
-
-            # Use has_session instead of deprecated find_where
-            has_session = self.tmux_server.has_session(agent.tmux_session_name)
-            logger.debug(f"has_session({agent.tmux_session_name}) = {has_session}")
-            if not has_session:
-                logger.warning(f"Tmux session {agent.tmux_session_name} not found")
-                return ""
-
-            logger.debug(f"Finding session by iteration: {agent.tmux_session_name}")
-            tmux_session = None
-            for tmux_sess in self.tmux_server.sessions:
-                if tmux_sess.name == agent.tmux_session_name:
-                    tmux_session = tmux_sess
-                    break
-
-            logger.debug(f"Session iteration result: {tmux_session}")
-            if not tmux_session:
-                logger.warning(f"Could not get tmux session {agent.tmux_session_name}")
-                return ""
-
-            logger.debug(f"Successfully got tmux session: {tmux_session}")
-            pane = tmux_session.attached_window.attached_pane
-            # Capture ALL available scrollback — no fixed line limit.
-            # The history-limit is set to 1000 on session creation (pipe-pane
-            # saves the full transcript to a file independently).
-            output = pane.cmd("capture-pane", "-p", "-S", "-").stdout
-            text = "\n".join(output) if output else ""
-
-            from src.interfaces.cli_interface import get_cli_agent
-
-            try:
-                text = get_cli_agent(agent.cli_type).strip_tui_chrome(text)
-            except Exception:
-                pass
-            return text
+            return self._read_transcript_log(agent, lines)
 
         except Exception as e:
             logger.error(f"Failed to get agent output for {agent_id}: {e}")
@@ -2059,98 +2245,77 @@ class AgentManager:
         finally:
             session.close()
 
-    def get_agent_raw_pane(self, agent_id: str, lines: int = 50) -> str:
-        """Capture the agent's CURRENT tmux pane content directly, with none
-        of get_agent_output's chrome-stripping applied.
 
-        get_agent_output always strips TUI chrome (status bars, spinners,
-        the "MCP: N/M servers" line) before returning -- both via
-        _read_transcript_log's mcp_status_re filter and via
-        strip_tui_chrome on its own capture-pane fallback. That's correct
-        for callers that want clean, human/LLM-readable output (Guardian's
-        trajectory analysis, the frontend), but it means there is no way to
-        observe the MCP connection status line through that method at all.
-        This method exists for callers that specifically need current
-        chrome, not history -- a plain, unfiltered capture-pane snapshot.
+    def _resolve_tmux_transcript_dir(self, agent) -> Optional[Path]:
+        """Find the .hephaestus/tmux/ directory this agent's transcript
+        files (raw pipe-pane .transcript.log, and the stability-tracked
+        .clean.log) live in. Shared by _read_transcript_log and
+        _poll_stable_transcript so both agree on the same directory.
         """
+        working_dir = None
+        project_base = None
+        from src.core.database import Task
+
         session = self.db_manager.get_session()
         try:
-            agent = session.query(Agent).filter_by(id=agent_id).first()
-            if not agent or not agent.tmux_session_name:
-                return ""
-            if not self.tmux_server.has_session(agent.tmux_session_name):
-                return ""
-            tmux_session = next(
-                (
-                    s
-                    for s in self.tmux_server.sessions
-                    if s.name == agent.tmux_session_name
-                ),
-                None,
-            )
-            if not tmux_session:
-                return ""
-            pane = tmux_session.attached_window.attached_pane
-            output = pane.cmd("capture-pane", "-p", "-S", f"-{lines}").stdout
-            return "\n".join(output) if output else ""
-        except Exception as e:
-            logger.warning(f"Failed to get raw pane for {agent_id}: {e}")
-            return ""
+            # Try current task first, then most recent task
+            task = None
+            if agent.current_task_id:
+                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+            if not task:
+                task = session.query(Task).filter_by(assigned_agent_id=agent.id).order_by(Task.created_at.desc()).first()
+            if task and task.workflow:
+                if task.workflow.working_directory:
+                    working_dir = task.workflow.working_directory
+                # Get project base_dir from workflow's design
+                if task.workflow.project_id:
+                    from src.core.database import AutopilotProject
+                    proj = session.query(AutopilotProject).get(task.workflow.project_id)
+                    if proj:
+                        project_base = proj.base_dir
         finally:
             session.close()
 
+        if working_dir:
+            return Path(working_dir) / CONTEXT_DIR_NAME / "tmux"
+
+        # Search in common locations using the session name. Existence of
+        # the raw transcript.log (always created unconditionally at
+        # session creation) marks the right directory even before a
+        # .clean.log has ever been written there.
+        search_bases = []
+        if project_base:
+            search_bases.append(Path(project_base))
+        search_bases.append(Path.home() / ".hephaestus")
+
+        for base in search_bases:
+            candidate_dir = base / CONTEXT_DIR_NAME / "tmux"
+            if (candidate_dir / f"{agent.tmux_session_name}.transcript.log").exists():
+                return candidate_dir
+            # Also check one level into .worktrees (worktree-local .hephaestus)
+            if base.name == ".hephaestus":
+                continue  # skip worktree scan for .hephaestus itself
+            for wt_dir in base.glob(".worktrees/*"):
+                candidate_dir = wt_dir / CONTEXT_DIR_NAME / "tmux"
+                if (candidate_dir / f"{agent.tmux_session_name}.transcript.log").exists():
+                    return candidate_dir
+
+        return None
+
     def _read_transcript_log(self, agent, lines: int) -> str:
         """Read output from the pipe-pane transcript log file.
-        
+
         Returns the last `lines` lines from the transcript, or empty string
         if no transcript is available.
         """
         import re
         try:
-            # Get the working directory from the agent's task workflow
-            working_dir = None
-            project_base = None
-            from src.core.database import Task
-            session = self.db_manager.get_session()
-            try:
-                # Try current task first, then most recent task
-                task = None
-                if agent.current_task_id:
-                    task = session.query(Task).filter_by(id=agent.current_task_id).first()
-                if not task:
-                    task = session.query(Task).filter_by(assigned_agent_id=agent.id).order_by(Task.created_at.desc()).first()
-                if task and task.workflow:
-                    if task.workflow.working_directory:
-                        working_dir = task.workflow.working_directory
-                    # Get project base_dir from workflow's design
-                    if task.workflow.project_id:
-                        from src.core.database import AutopilotProject
-                        proj = session.query(AutopilotProject).get(task.workflow.project_id)
-                        if proj:
-                            project_base = proj.base_dir
-            finally:
-                session.close()
-
-            if not working_dir:
-                # Search in common locations using the session name
-                import glob
-                search_paths = []
-                if project_base:
-                    search_paths.append(project_base)
-                search_paths.append(str(Path.home()))
-
-                transcript_path = None
-                for base in search_paths:
-                    pattern = f"{base}/**/{CONTEXT_DIR_NAME}/tmux/{agent.tmux_session_name}.transcript.log"
-                    matches = glob.glob(pattern, recursive=True)
-                    if matches:
-                        transcript_path = Path(max(matches, key=lambda p: Path(p).stat().st_mtime))
-                        break
-
-                if not transcript_path:
-                    return ""
-            else:
-                transcript_path = Path(working_dir) / CONTEXT_DIR_NAME / "tmux" / f"{agent.tmux_session_name}.transcript.log"
+            transcript_dir = self._resolve_tmux_transcript_dir(agent)
+            if not transcript_dir:
+                return ""
+            transcript_path = transcript_dir / f"{agent.tmux_session_name}.transcript.log"
+            if not transcript_path.exists():
+                return ""
 
             file_stat = transcript_path.stat()
             if file_stat.st_size == 0:
@@ -2210,20 +2375,6 @@ class AgentManager:
                     line = line.rsplit("\r", 1)[-1]
                 collapsed.append(line.rstrip())
             text = "\n".join(collapsed)
-
-            # Filter TUI chrome (status bars, spinners, elapsed timers, etc.)
-            spinner_re = re.compile(r'^\s*(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$')
-            thinking_re = re.compile(r'^\s*Thinking\.{0,3}\s*$')
-            tui_chrome_re = re.compile(r'^\s*\.\.\. (?:\(\d+ (?:more|earlier) lines|\d+ lines omitted)')
-            status_bar_re = re.compile(r'^\s*↑\d+.*↓\d+.*R\d+.*CH\d+.*\$\d+')
-            mcp_status_re = re.compile(r'^\s*MCP:\s*\d+/\d+\s*servers')
-            prompt_only_re = re.compile(r'^\s*\$\s*$|^\s*%\s*$|^\s*:\s*$')
-            elapsed_re = re.compile(r'^\s*(?:Elapsed|Took) \d+\.\d+s\s*$')
-            # Filter shell prompt lines (~/path (branch))
-            shell_prompt_re = re.compile(r'^~/\S+ \([^)]+\)\s*$')
-            # Filter empty command lines ($ ...)
-            empty_cmd_re = re.compile(r'^\s*\$ \.\.\.\s*$')
-            dots_only_re = re.compile(r'^\.{1,20}\s*$')
             # Horizontal separator lines pi draws between message blocks
             # (each char individually SGR-wrapped). Same pattern as the
             # frontend's RealTimeAgentOutput filter. Filtering these is
@@ -2277,28 +2428,10 @@ class AgentManager:
                 clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', stripped)
                 clean = re.sub(r'\x1b\][^\x07]*\x07', '', clean).strip()
                 clean = orphan_ansi_re.sub('', clean).strip()
-                if (
-                    spinner_re.match(clean)
-                    or thinking_re.match(clean)
-                    or tui_chrome_re.match(clean)
-                    or status_bar_re.match(clean)
-                    or mcp_status_re.match(clean)
-                    or prompt_only_re.match(clean)
-                    or elapsed_re.match(clean)
-                    or shell_prompt_re.match(clean)
-                    or empty_cmd_re.match(clean)
-                    or dots_only_re.match(clean)
-                ):
-                    kind = 'chrome'
+                if not clean:
+                    kind = 'blank'
                 elif separator_re.match(clean):
                     kind = 'sep'
-                elif not clean:
-                    # Blank padding rows and lines that are only ANSI codes
-                    # (the latter render as literal garbage in non-ANSI
-                    # views). Raw stream blanks are NOT kept as spacing:
-                    # pi's redraw pads every content line with one, so
-                    # preserving them doubles the output.
-                    kind = 'blank'
                 else:
                     kind = 'content'
                 classified.append((kind, line, clean))
@@ -2454,6 +2587,208 @@ class AgentManager:
         except Exception as e:
             logger.debug(f"Could not read transcript log: {e}")
             return ""
+
+    def _find_tmux_session(self, session_name: str):
+        """Look up a live libtmux.Session by name, or None."""
+        if not self.tmux_server.has_session(session_name):
+            return None
+        for tmux_sess in self.tmux_server.sessions:
+            if tmux_sess.name == session_name:
+                return tmux_sess
+        return None
+
+    def _capture_pane_lines(self, session_name: str) -> Optional[List[str]]:
+        """capture-pane the full available scrollback (bounded by the
+        session's own history-limit, 1000) as a list of lines. Unlike raw
+        pipe-pane bytes, this is tmux's OWN terminal emulation output --
+        cursor positioning, overwrites, and line wrapping are already
+        correctly resolved into flat text. Returns None if the session is
+        gone."""
+        tmux_session = self._find_tmux_session(session_name)
+        if not tmux_session:
+            return None
+        try:
+            pane = tmux_session.attached_window.attached_pane
+            output = pane.cmd("capture-pane", "-p", "-S", "-").stdout
+            return list(output) if output else []
+        except Exception as e:
+            logger.debug(f"[STABLE-TRANSCRIPT] capture-pane failed for {session_name}: {e}")
+            return None
+
+    @staticmethod
+    def _append_lines(path: Path, new_lines: List[str]) -> None:
+        if not new_lines:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a") as f:
+                f.write("\n".join(new_lines) + "\n")
+        except Exception as e:
+            logger.warning(f"[STABLE-TRANSCRIPT] Failed to append to {path}: {e}")
+
+    #: Number of consecutive polls a line must be unchanged at the same
+    #: position before it's committed. 2 (the original value) caught a
+    #: real race: pi's TUI briefly reserves blank placeholder lines for a
+    #: command's output before streaming the real content in, and if that
+    #: blank state happened to persist across exactly 2 polls (~1-2s of
+    #: bad timing -- not rare over a multi-hour session), the blank got
+    #: permanently committed and the real content that filled in a moment
+    #: later was silently skipped forever, since committed positions are
+    #: append-only and never revisited. Observed live: "All checks
+    #: passed!" / "EXIT: 0" from a ruff run replaced by two blank lines in
+    #: the clean transcript, confirmed present in the raw capture-pane
+    #: output the whole time. Requiring one more confirmation makes
+    #: catching that exact timing three times in a row far less likely,
+    #: at the cost of one extra poll (~1s) of latency before new content
+    #: appears.
+    _STABILITY_CONFIRMATIONS = 3
+
+    def _poll_stable_transcript(self, session_name: str, clean_path: Path) -> None:
+        """Append whatever's newly stable since the last poll to
+        clean_path, using tmux's own capture-pane instead of raw pty
+        bytes. "Stable" = identical content at the same position across
+        _STABILITY_CONFIRMATIONS consecutive polls of this method -- a
+        line still being actively redrawn (a spinner with a live
+        elapsed-time counter, a long response streaming in) simply never
+        stabilizes until the underlying operation finishes, so it's
+        correctly withheld rather than shown as corrupted partial-
+        overwrite text.
+
+        Why not just re-strip raw pipe-pane bytes harder: cursor-
+        positioning escapes (jump back, overwrite part of a line) can't
+        be turned into correct text by stripping the escape code alone --
+        that only removes the INSTRUCTION, not its effect. Reconstructing
+        the effect requires an actual terminal emulator (2D character
+        grid + cursor state), which is exactly what tmux's own
+        capture-pane already does for us; we just have to poll it instead
+        of re-deriving it from bytes ourselves.
+
+        capture-pane -S - returns the FULL currently-remembered history
+        (bounded by the session's history-limit, 1000) every call, always
+        from the same starting point -- so comparing this poll's lines to
+        earlier polls' lines position-for-position is valid without a
+        scrolling-alignment problem, as long as total output hasn't
+        exceeded history-limit between polls (an interactive agent
+        session polled every few seconds never gets close).
+        """
+        current_lines = self._capture_pane_lines(session_name)
+        if current_lines is None:
+            return
+
+        if not hasattr(self, "_pane_stability_cache"):
+            self._pane_stability_cache: Dict[str, Dict[str, Any]] = {}
+        state = self._pane_stability_cache.get(session_name)
+
+        if state is None:
+            # First poll -- no comparison basis yet. Hold back the last
+            # couple lines (likely still active); everything above that
+            # is a reasonable bootstrap, confirmed against future polls
+            # from here on same as any other line.
+            committed = max(0, len(current_lines) - 2)
+            self._append_lines(clean_path, current_lines[:committed])
+            self._pane_stability_cache[session_name] = {
+                "history": [current_lines],
+                "committed": committed,
+            }
+            return
+
+        history = state["history"]
+        committed = state["committed"]
+        last_lines = history[-1]
+
+        if last_lines and current_lines[:1] != last_lines[:1]:
+            # Discontinuity: the capture window's start point shifted --
+            # the common cause is the pane's total scrollback exceeding
+            # tmux's history-limit (1000 lines) partway through a
+            # long-running session, scrolling some already-committed lines
+            # off the top rather than replacing the window wholesale.
+            # Blindly appending the full current_lines here (as an earlier
+            # version did) re-writes everything already committed in prior
+            # polls, duplicating large stretches of transcript every time
+            # a long session crosses this boundary. Anchor on the last
+            # line we know we already committed and resume from just past
+            # it instead -- only fall back to a full reset if that anchor
+            # has scrolled out of the window entirely (more than
+            # history-limit lines of new output in one poll interval,
+            # which a full reset-and-dump is the correct, if rare,
+            # response to).
+            anchor = last_lines[committed - 1] if committed > 0 else None
+            resume_at = None
+            if anchor is not None:
+                for i in range(len(current_lines) - 1, -1, -1):
+                    if current_lines[i] == anchor:
+                        resume_at = i + 1
+                        break
+
+            if resume_at is not None:
+                logger.info(
+                    f"[STABLE-TRANSCRIPT] Capture window scrolled for "
+                    f"{session_name} -- re-anchored, no content re-appended"
+                )
+                self._pane_stability_cache[session_name] = {
+                    "history": [current_lines],
+                    "committed": resume_at,
+                }
+                return
+
+            logger.warning(
+                f"[STABLE-TRANSCRIPT] Capture window discontinuity for "
+                f"{session_name} -- anchor not found, resetting stability tracking"
+            )
+            self._append_lines(clean_path, current_lines)
+            self._pane_stability_cache[session_name] = {
+                "history": [current_lines],
+                "committed": len(current_lines),
+            }
+            return
+
+        # Require agreement across the last _STABILITY_CONFIRMATIONS polls
+        # (this one plus recent history), not just the immediately
+        # preceding one -- see _STABILITY_CONFIRMATIONS' docstring.
+        recent = history[-(self._STABILITY_CONFIRMATIONS - 1):] + [current_lines]
+        stable_upto = committed
+        if len(recent) >= self._STABILITY_CONFIRMATIONS:
+            for i in range(committed, len(current_lines)):
+                if any(i >= len(poll) or poll[i] != current_lines[i] for poll in recent):
+                    break
+                stable_upto += 1
+
+        if stable_upto > committed:
+            self._append_lines(clean_path, current_lines[committed:stable_upto])
+            committed = stable_upto
+
+        history = (history + [current_lines])[-(self._STABILITY_CONFIRMATIONS - 1):]
+        self._pane_stability_cache[session_name] = {
+            "history": history,
+            "committed": committed,
+        }
+
+    def _flush_stable_transcript(self, session_name: str, clean_path: Path) -> None:
+        """Final, unconditional flush -- call right before killing a
+        session on the normal terminate_agent path. Nothing will change
+        after this point, so commit everything still pending regardless
+        of the usual multi-poll confirmation.
+
+        Note: unlike the raw pipe-pane .transcript.log (which keeps
+        capturing in real time independent of how the session dies, per
+        _create_tmux_session's own comment), this clean transcript only
+        updates when polled -- an abrupt kill (orphan reaper, auto-
+        restart) that doesn't go through terminate_agent can lose the
+        last few seconds this file never saw. That's an acceptable gap
+        specifically for THIS supplementary, easier-to-read file, since
+        the raw .transcript.log remains the unconditional forensics
+        record for those paths.
+        """
+        state = getattr(self, "_pane_stability_cache", {}).pop(session_name, None)
+        current_lines = self._capture_pane_lines(session_name)
+        if current_lines is not None:
+            committed = state["committed"] if state else 0
+            self._append_lines(clean_path, current_lines[committed:])
+        elif state:
+            # Session already gone -- flush whatever was cached, even
+            # though never independently confirmed stable. Strictly
+            # better than losing it.
+            self._append_lines(clean_path, state["history"][-1][state["committed"]:])
 
     def _get_orchestrator_output(self, agent, lines: int) -> str:
         """Return the orchestrator's run log as human-readable text."""

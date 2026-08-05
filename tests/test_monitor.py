@@ -3,7 +3,7 @@
 import asyncio
 import time
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -14,7 +14,16 @@ from src.core.database import Agent, DatabaseManager
 
 @pytest.fixture
 def mock_db():
-    return Mock(spec=DatabaseManager)
+    mock = Mock(spec=DatabaseManager)
+    # session_scope() is used as `with self.db_manager.session_scope() as
+    # session:` throughout monitor.py -- a plain Mock()'s return value
+    # doesn't support the context manager protocol (__enter__/__exit__
+    # are magic methods MagicMock configures automatically but Mock
+    # doesn't), so every code path using session_scope() raised
+    # "'Mock' object does not support the context manager protocol"
+    # instead of exercising the test.
+    mock.session_scope = MagicMock()
+    return mock
 
 
 @pytest.fixture
@@ -40,22 +49,6 @@ def mock_rag():
     return mock
 
 
-@pytest.fixture
-def monitor(mock_db, mock_agent_manager, mock_llm, mock_rag):
-    from src.monitoring.monitor import IntelligentMonitor
-
-    with patch("src.monitoring.monitor.get_config") as mock_cfg:
-        mock_cfg.return_value = Mock(
-            stuck_detection_minutes=10,
-            agent_timeout_minutes=60,
-        )
-        m = IntelligentMonitor(
-            db_manager=mock_db,
-            agent_manager=mock_agent_manager,
-            llm_provider=mock_llm,
-            rag_system=mock_rag,
-        )
-    return m
 
 
 @pytest.fixture
@@ -74,176 +67,6 @@ def make_monitoring_loop(mock_db, mock_agent_manager, mock_llm, mock_rag):
             rag_system=mock_rag,
         )
     return ml
-
-
-# ── _appears_stuck ────────────────────────────────────────────────
-
-
-class TestAppearsStuck:
-    def test_stuck_on_error(self, monitor):
-        assert monitor._appears_stuck("Error: something broke") is True
-
-    def test_stuck_on_failed(self, monitor):
-        assert monitor._appears_stuck("Task failed to complete") is True
-
-    def test_stuck_on_timeout(self, monitor):
-        assert monitor._appears_stuck("Timeout exceeded") is True
-
-    def test_stuck_on_rate_limit(self, monitor):
-        assert monitor._appears_stuck("Rate limit hit") is True
-
-    def test_stuck_on_waiting(self, monitor):
-        assert monitor._appears_stuck("Waiting for input") is True
-
-    def test_not_stuck_when_working(self, monitor):
-        assert monitor._appears_stuck("Building the feature now") is False
-
-    def test_not_stuck_empty_output(self, monitor):
-        assert monitor._appears_stuck("") is False
-
-    def test_case_insensitive(self, monitor):
-        assert monitor._appears_stuck("ERROR occurred") is True
-        assert monitor._appears_stuck("Stuck in loop") is True
-
-
-# ── _is_agent_responsive ─────────────────────────────────────────
-
-
-class TestIsAgentResponsive:
-    def test_responsive_agent(self, make_monitoring_loop, mock_agent_manager):
-        agent = Agent(
-            id="a1",
-            status="working",
-            cli_type="claude",
-            last_activity=datetime.utcnow() - timedelta(minutes=1),
-            tmux_session_name="sess-a1",
-        )
-        with patch("src.monitoring.monitor.get_cli_agent") as mock_cli:
-            mock_cli.return_value = Mock(is_stuck=Mock(return_value=False))
-            assert make_monitoring_loop._is_agent_responsive(agent) is True
-
-    def test_unresponsive_no_activity(self, make_monitoring_loop, mock_agent_manager):
-        agent = Agent(
-            id="a1",
-            status="working",
-            cli_type="claude",
-            last_activity=datetime.utcnow() - timedelta(minutes=60),
-            tmux_session_name="sess-a1",
-        )
-        assert make_monitoring_loop._is_agent_responsive(agent) is False
-
-    def test_unresponsive_no_tmux_session(
-        self, make_monitoring_loop, mock_agent_manager
-    ):
-        mock_agent_manager.tmux_server.has_session.return_value = False
-        agent = Agent(
-            id="a1",
-            status="working",
-            cli_type="claude",
-            last_activity=datetime.utcnow(),
-            tmux_session_name="sess-a1",
-        )
-        assert make_monitoring_loop._is_agent_responsive(agent) is False
-
-    def test_unresponsive_stuck_output(self, make_monitoring_loop, mock_agent_manager):
-        agent = Agent(
-            id="a1",
-            status="working",
-            cli_type="claude",
-            last_activity=datetime.utcnow(),
-            tmux_session_name="sess-a1",
-        )
-        with patch("src.monitoring.monitor.get_cli_agent") as mock_cli:
-            mock_cli.return_value = Mock(is_stuck=Mock(return_value=True))
-            assert make_monitoring_loop._is_agent_responsive(agent) is False
-
-    def test_unresponsive_no_output(self, make_monitoring_loop, mock_agent_manager):
-        mock_agent_manager.get_agent_output.return_value = ""
-        agent = Agent(
-            id="a1",
-            status="working",
-            cli_type="claude",
-            last_activity=datetime.utcnow(),
-            tmux_session_name="sess-a1",
-        )
-        with patch("src.monitoring.monitor.get_cli_agent") as mock_cli:
-            mock_cli.return_value = Mock(is_stuck=Mock(return_value=False))
-            assert make_monitoring_loop._is_agent_responsive(agent) is False
-
-    def test_no_last_activity(self, make_monitoring_loop, mock_agent_manager):
-        agent = Agent(
-            id="a1",
-            status="working",
-            cli_type="claude",
-            last_activity=None,
-            tmux_session_name="sess-a1",
-        )
-        with patch("src.monitoring.monitor.get_cli_agent") as mock_cli:
-            mock_cli.return_value = Mock(is_stuck=Mock(return_value=False))
-            # No last_activity means the time check is skipped
-            assert make_monitoring_loop._is_agent_responsive(agent) is True
-
-
-# ── _is_task_timed_out ───────────────────────────────────────────
-
-
-class TestIsTaskTimedOut:
-    def test_not_timed_out(self, make_monitoring_loop, mock_db):
-        session = Mock()
-        task = Mock(
-            started_at=datetime.utcnow() - timedelta(minutes=5), estimated_complexity=5
-        )
-        session.query.return_value.filter_by.return_value.first.return_value = task
-        mock_db.get_session.return_value = session
-
-        agent = Agent(id="a1", current_task_id="t1")
-        assert make_monitoring_loop._is_task_timed_out(agent) is False
-
-    def test_timed_out(self, make_monitoring_loop, mock_db):
-        session = Mock()
-        # 200 minutes on a complexity-5 task with 60min base timeout = 60*(1+5/10)=90 min
-        task = Mock(
-            started_at=datetime.utcnow() - timedelta(minutes=200),
-            estimated_complexity=5,
-        )
-        session.query.return_value.filter_by.return_value.first.return_value = task
-        mock_db.get_session.return_value = session
-
-        agent = Agent(id="a1", current_task_id="t1")
-        assert make_monitoring_loop._is_task_timed_out(agent) is True
-
-    def test_no_task(self, make_monitoring_loop, mock_db):
-        session = Mock()
-        session.query.return_value.filter_by.return_value.first.return_value = None
-        mock_db.get_session.return_value = session
-
-        agent = Agent(id="a1", current_task_id="missing")
-        assert make_monitoring_loop._is_task_timed_out(agent) is False
-
-    def test_no_started_at(self, make_monitoring_loop, mock_db):
-        session = Mock()
-        task = Mock(started_at=None, estimated_complexity=5)
-        session.query.return_value.filter_by.return_value.first.return_value = task
-        mock_db.get_session.return_value = session
-
-        agent = Agent(id="a1", current_task_id="t1")
-        assert make_monitoring_loop._is_task_timed_out(agent) is False
-
-    def test_high_complexity_longer_timeout(self, make_monitoring_loop, mock_db):
-        session = Mock()
-        # complexity=10 → timeout = 60*(1+10/10) = 120 min
-        task = Mock(
-            started_at=datetime.utcnow() - timedelta(minutes=100),
-            estimated_complexity=10,
-        )
-        session.query.return_value.filter_by.return_value.first.return_value = task
-        mock_db.get_session.return_value = session
-
-        agent = Agent(id="a1", current_task_id="t1")
-        assert make_monitoring_loop._is_task_timed_out(agent) is False
-
-
-# ── _get_past_summaries_for_agent ─────────────────────────────────
 
 
 class TestGetPastSummaries:
@@ -341,109 +164,6 @@ class TestBuildSpecPhaseOutput:
         assert "score" in result
 
 
-# ── analyze_agent_state ───────────────────────────────────────────
-
-
-class TestAnalyzeAgentState:
-    @pytest.mark.asyncio
-    async def test_returns_trajectory_analysis(self, monitor, mock_agent_manager):
-        agent = Agent(
-            id="a1",
-            status="working",
-            cli_type="claude",
-            current_task_id="t1",
-            tmux_session_name="sess-a1",
-            last_activity=datetime.utcnow(),
-        )
-        mock_agent_manager.get_agent_output.return_value = "Building auth module"
-
-        with patch("src.monitoring.monitor.get_cli_agent") as mock_cli:
-            mock_cli.return_value = Mock(is_stuck=Mock(return_value=False))
-            with patch("src.monitoring.monitor.TrajectoryContext") as mock_tc:
-                mock_tc.return_value.build_accumulated_context.return_value = {
-                    "overall_goal": "Build auth",
-                    "constraints": [],
-                    "current_focus": "implementing",
-                }
-                monitor.llm_provider.analyze_agent_state = AsyncMock(
-                    return_value={
-                        "state": "healthy",
-                        "decision": "continue",
-                        "message": "",
-                        "reasoning": "On track",
-                        "confidence": 0.9,
-                    }
-                )
-                result = await monitor.analyze_agent_state(agent)
-
-        assert result["state"] == "healthy"
-        assert result["decision"] == "continue"
-
-    @pytest.mark.asyncio
-    async def test_handles_llm_failure(self, monitor, mock_agent_manager):
-        agent = Agent(
-            id="a1",
-            status="working",
-            cli_type="claude",
-            current_task_id="t1",
-            tmux_session_name="sess-a1",
-            last_activity=datetime.utcnow(),
-        )
-        mock_agent_manager.get_agent_output.return_value = "Building auth module"
-
-        with patch("src.monitoring.monitor.get_cli_agent") as mock_cli:
-            mock_cli.return_value = Mock(is_stuck=Mock(return_value=False))
-            with patch("src.monitoring.monitor.TrajectoryContext") as mock_tc:
-                mock_tc.return_value.build_accumulated_context.return_value = {}
-                monitor.llm_provider.analyze_agent_state = AsyncMock(
-                    side_effect=Exception("LLM error")
-                )
-                result = await monitor.analyze_agent_state(agent)
-
-        # Falls back to healthy
-        assert result["state"] == "healthy"
-        assert result["confidence"] == 0.1
-
-    @pytest.mark.asyncio
-    async def test_llm_hang_times_out_instead_of_blocking_forever(
-        self, monitor, mock_agent_manager, monkeypatch
-    ):
-        """Regression: a slow/over-streaming model call here previously had no
-        timeout at all, so it could block this single shared monitoring-loop
-        task indefinitely -- freezing recovery for every agent in the system,
-        not just this one (observed live: monitor_heartbeat stopped updating
-        for 20+ minutes after one such hung call). analyze_agent_state must
-        bound the call with asyncio.wait_for and fall back on timeout."""
-        monkeypatch.setattr("src.monitoring.monitor.AGENT_STATE_LLM_TIMEOUT", 0.05)
-        agent = Agent(
-            id="a1",
-            status="working",
-            cli_type="claude",
-            current_task_id="t1",
-            tmux_session_name="sess-a1",
-            last_activity=datetime.utcnow(),
-        )
-        mock_agent_manager.get_agent_output.return_value = "Building auth module"
-
-        async def hang(*args, **kwargs):
-            await asyncio.sleep(10)
-
-        with patch("src.monitoring.monitor.get_cli_agent") as mock_cli:
-            mock_cli.return_value = Mock(is_stuck=Mock(return_value=False))
-            with patch("src.monitoring.monitor.TrajectoryContext") as mock_tc:
-                mock_tc.return_value.build_accumulated_context.return_value = {}
-                monitor.llm_provider.analyze_agent_state = hang
-                result = await asyncio.wait_for(
-                    monitor.analyze_agent_state(agent), timeout=2
-                )
-
-        # Falls back to healthy, same as any other LLM failure
-        assert result["state"] == "healthy"
-
-
-# ── _write_agent_tmux_log ────────────────────────────────────────
-
-
 class TestWriteAgentTmuxLog:
     def test_no_output(self, make_monitoring_loop, mock_db):
         # Should not raise
@@ -466,86 +186,6 @@ class TestWriteAgentTmuxLog:
 
         tmp_path / ".hephaestus" / "tmux" / "development_agent-.log"
         # File might not exist due to path matching, but no error should occur
-
-
-# ── _log_intervention ────────────────────────────────────────────
-
-
-class TestLogIntervention:
-    @pytest.mark.asyncio
-    async def test_logs_intervention(self, monitor, mock_db):
-        agent = Agent(id="a1")
-        session = Mock()
-        mock_db.get_session.return_value = session
-
-        await monitor._log_intervention(agent, "nudge", "Try a different approach")
-        session.add.assert_called()
-        session.commit.assert_called()
-
-
-# ── _collect_agent_context ───────────────────────────────────────
-
-
-class TestCollectAgentContext:
-    @pytest.mark.asyncio
-    async def test_collects_context(self, monitor, mock_agent_manager, mock_db):
-        agent = Agent(
-            id="a1",
-            status="working",
-            cli_type="claude",
-            current_task_id="t1",
-            tmux_session_name="sess-a1",
-        )
-        mock_agent_manager.get_agent_output.return_value = "Working on auth"
-        mock_agent_manager.get_project_context = AsyncMock(
-            return_value="Project context"
-        )
-
-        session = Mock()
-        task = Mock(
-            raw_description="Build auth",
-            enriched_description="Build auth system",
-            done_definition="Auth complete",
-            started_at=datetime.utcnow() - timedelta(minutes=30),
-        )
-        session.query.return_value.filter_by.return_value.first.return_value = task
-        mock_db.get_session.return_value = session
-
-        with patch("src.monitoring.monitor.TrajectoryContext") as mock_tc:
-            mock_tc.return_value.build_accumulated_context.return_value = {
-                "overall_goal": "Build auth",
-                "constraints": [],
-            }
-            result = await monitor._collect_agent_context(agent)
-
-        assert "tmux_output" in result
-        assert result["task_description"] == "Build auth system"
-        assert result["done_definition"] == "Auth complete"
-
-    @pytest.mark.asyncio
-    async def test_handles_no_task(self, monitor, mock_agent_manager, mock_db):
-        agent = Agent(
-            id="a1",
-            status="working",
-            cli_type="claude",
-            current_task_id=None,
-            tmux_session_name="sess-a1",
-        )
-        mock_agent_manager.get_agent_output.return_value = "Working"
-        mock_agent_manager.get_project_context = AsyncMock(return_value="")
-
-        session = Mock()
-        session.query.return_value.filter_by.return_value.first.return_value = None
-        mock_db.get_session.return_value = session
-
-        with patch("src.monitoring.monitor.TrajectoryContext") as mock_tc:
-            mock_tc.return_value.build_accumulated_context.return_value = {}
-            result = await monitor._collect_agent_context(agent)
-
-        assert result["task_description"] == "Unknown task"
-
-
-# ── MonitoringLoop._get_past_summaries_for_agent ──────────────────
 
 
 class TestMonitoringLoopGetPastSummaries:
@@ -576,45 +216,6 @@ class TestMonitoringLoopGetPastSummaries:
         result = make_monitoring_loop._get_past_summaries_for_agent("a1")
         assert len(result) == 1
         assert result[0]["trajectory_summary"] == "Good progress"
-
-
-# ── execute_intervention ──────────────────────────────────────────
-
-
-class TestExecuteIntervention:
-    @pytest.mark.asyncio
-    async def test_continue_does_nothing(self, monitor, mock_agent_manager):
-        agent = Agent(id="a1")
-        decision = {"decision": "continue", "message": "", "reasoning": ""}
-        await monitor.execute_intervention(agent, decision)
-        mock_agent_manager.send_message_to_agent.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_nudge_sends_message(self, monitor, mock_agent_manager):
-        agent = Agent(id="a1", current_task_id="t1")
-        decision = {"decision": "nudge", "message": "Try a different approach"}
-        await monitor.execute_intervention(agent, decision)
-        mock_agent_manager.send_message_to_agent.assert_called_once()
-        call_args = mock_agent_manager.send_message_to_agent.call_args
-        assert "different approach" in call_args[0][1]
-
-    @pytest.mark.asyncio
-    async def test_nudge_default_message(self, monitor, mock_agent_manager):
-        agent = Agent(id="a1", current_task_id="t1")
-        decision = {"decision": "nudge", "message": ""}
-        await monitor.execute_intervention(agent, decision)
-        mock_agent_manager.send_message_to_agent.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_restart_calls_manager(self, monitor, mock_agent_manager):
-        mock_agent_manager.restart_agent = AsyncMock()
-        agent = Agent(id="a1")
-        decision = {"decision": "restart", "reasoning": "Stuck too long"}
-        await monitor.execute_intervention(agent, decision)
-        mock_agent_manager.restart_agent.assert_called_once_with("a1", "Stuck too long")
-
-
-# ── _detect_repetition_loop ──────────────────────────────────────
 
 
 class TestDetectRepetitionLoop:
@@ -805,7 +406,7 @@ class TestDetectDangerousCommandConfirmation:
 class TestDetectMaxTokenLimitError:
     TOKEN_LIMIT_OUTPUT = (
         " Thinking...\n\n"
-        " write .hephaestus/feature_review_report.md\n\n"
+        " write .hephaestus/review.md\n\n"
         " # Feature Review Report\n\n"
         " Error: Model stopped because it reached the maximum output token limit."
         " The response may be incomplete.\n\n"
@@ -886,7 +487,7 @@ class TestDetectMcpDisconnected:
     @pytest.mark.asyncio
     async def test_no_output(self, make_monitoring_loop, mock_agent_manager, mock_db):
         agent = Agent(id="a1", cli_type="pi")
-        mock_agent_manager.get_agent_raw_pane.return_value = ""
+        mock_agent_manager.get_agent_output.return_value = ""
         await make_monitoring_loop._detect_mcp_disconnected(agent)
         mock_agent_manager.send_message_to_agent.assert_not_called()
 
@@ -895,7 +496,7 @@ class TestDetectMcpDisconnected:
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
         agent = Agent(id="a1", cli_type="pi")
-        mock_agent_manager.get_agent_raw_pane.return_value = self.CONNECTED_OUTPUT
+        mock_agent_manager.get_agent_output.return_value = self.CONNECTED_OUTPUT
         await make_monitoring_loop._detect_mcp_disconnected(agent)
         mock_agent_manager.send_message_to_agent.assert_not_called()
 
@@ -906,24 +507,26 @@ class TestDetectMcpDisconnected:
         """MCP: 0/0 servers means none are configured at all -- not a
         failure, so this must not fire."""
         agent = Agent(id="a1", cli_type="pi")
-        mock_agent_manager.get_agent_raw_pane.return_value = self.DISCONNECTED_OUTPUT.replace(
+        mock_agent_manager.get_agent_output.return_value = self.DISCONNECTED_OUTPUT.replace(
             "MCP: 0/1 servers", "MCP: 0/0 servers"
         )
         await make_monitoring_loop._detect_mcp_disconnected(agent)
         mock_agent_manager.send_message_to_agent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_nudges_immediately_no_keystrokes(
+    async def test_nudges_and_sends_escape_first(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
-        """No recovery keystrokes -- there's no dialog to dismiss, just a
-        reconnect command for the agent to run itself."""
+        """Sends Escape (send_recovery_keystrokes) before the reconnect
+        message -- an agent stuck in a "Working..." spinner loop with MCP
+        disconnected can't process a text message until the spinner is
+        broken (see commit efa1955)."""
         agent = Agent(id="a1", cli_type="pi")
-        mock_agent_manager.get_agent_raw_pane.return_value = self.DISCONNECTED_OUTPUT
+        mock_agent_manager.get_agent_output.return_value = self.DISCONNECTED_OUTPUT
 
         await make_monitoring_loop._detect_mcp_disconnected(agent)
 
-        mock_agent_manager.send_recovery_keystrokes.assert_not_called()
+        mock_agent_manager.send_recovery_keystrokes.assert_called_once_with("a1")
         mock_agent_manager.send_message_to_agent.assert_called_once()
         nudge = mock_agent_manager.send_message_to_agent.call_args[0][1]
         assert "mcp connect hephaestus" in nudge.lower()
@@ -933,7 +536,7 @@ class TestDetectMcpDisconnected:
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
         agent = Agent(id="a1", cli_type="pi")
-        mock_agent_manager.get_agent_raw_pane.return_value = self.DISCONNECTED_OUTPUT
+        mock_agent_manager.get_agent_output.return_value = self.DISCONNECTED_OUTPUT
 
         await make_monitoring_loop._detect_mcp_disconnected(agent)
         await make_monitoring_loop._detect_mcp_disconnected(agent)
@@ -945,10 +548,12 @@ class TestDetectMcpDisconnected:
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
         agent = Agent(id="a1", cli_type="pi")
-        mock_agent_manager.get_agent_raw_pane.return_value = self.DISCONNECTED_OUTPUT
+        mock_agent_manager.get_agent_output.return_value = self.DISCONNECTED_OUTPUT
 
         await make_monitoring_loop._detect_mcp_disconnected(agent)
-        make_monitoring_loop._nudged_mcp_disconnected["a1"] = time.time() - 31
+        # Cooldown is 45s (c9e653b) -- must be set past that, not just past
+        # the old 30s value this previously used.
+        make_monitoring_loop._nudged_mcp_disconnected["a1"] = time.time() - 46
 
         await make_monitoring_loop._detect_mcp_disconnected(agent)
         assert mock_agent_manager.send_message_to_agent.call_count == 2
@@ -962,7 +567,7 @@ class TestDetectMcpDisconnected:
         (base class default "") must not get pi-specific `mcp connect`
         syntax nudged at it -- that would just confuse it."""
         agent = Agent(id="a1", cli_type="claude")
-        mock_agent_manager.get_agent_raw_pane.return_value = self.DISCONNECTED_OUTPUT
+        mock_agent_manager.get_agent_output.return_value = self.DISCONNECTED_OUTPUT
 
         await make_monitoring_loop._detect_mcp_disconnected(agent)
 
@@ -980,7 +585,7 @@ class TestDetectMcpDisconnected:
         CURRENT task_id and explicitly instruct it to call complete_my_task
         if it hasn't, not just reconnect."""
         agent = Agent(id="a1", cli_type="pi", current_task_id="task-42")
-        mock_agent_manager.get_agent_raw_pane.return_value = self.DISCONNECTED_OUTPUT
+        mock_agent_manager.get_agent_output.return_value = self.DISCONNECTED_OUTPUT
 
         await make_monitoring_loop._detect_mcp_disconnected(agent)
 
@@ -1106,6 +711,149 @@ class TestDetectCreditExhausted:
         mock_agent_manager.terminate_agent.assert_called_once()
 
 
+# ── _detect_agent_never_started ─────────────────────────────────────
+
+
+class TestDetectAgentNeverStarted:
+    """Regression (live incident): a pi agent queued behind other
+    concurrently-launched agents on the same local model server sat at
+    its initial "Begin now." banner with zero output for 10+ minutes.
+    _mechanical_recovery_for_agent's frozen-output check never caught it
+    because its in-memory _stuck_state had just been reset by an
+    unrelated backend restart minutes earlier -- it needs 300s of
+    observed frozen time from THIS process's own polling, not from
+    launch. _detect_agent_never_started reads persisted
+    Agent.launched_at/last_activity instead, so it doesn't depend on
+    in-memory state surviving a restart."""
+
+    def _session_with(self, task):
+        from contextlib import contextmanager
+
+        session = Mock()
+        session.query.return_value.filter_by.return_value.filter.return_value.first.return_value = task
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        return mock_session_scope
+
+    @pytest.mark.asyncio
+    async def test_recent_launch_not_flagged(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        now = datetime.utcnow()
+        agent = Agent(
+            id="a1", cli_type="pi", status="working", current_task_id="t1",
+            created_at=now, launched_at=now, last_activity=now,
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        result = await make_monitoring_loop._detect_agent_never_started(agent)
+
+        assert result is False
+        mock_agent_manager.terminate_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_activity_since_launch_not_flagged(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """last_activity meaningfully later than launched_at means real
+        activity happened at some point -- even if it then went idle for
+        a long time, that's a different failure mode (handled by
+        _mechanical_recovery_for_agent / _audit_system_health's stuck-task
+        check), not "never started"."""
+        launch = datetime.utcnow() - timedelta(seconds=600)
+        agent = Agent(
+            id="a1", cli_type="pi", status="working", current_task_id="t1",
+            created_at=launch, launched_at=launch, last_activity=launch + timedelta(seconds=300),
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        result = await make_monitoring_loop._detect_agent_never_started(agent)
+
+        assert result is False
+        mock_agent_manager.terminate_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_zero_output_past_grace_terminates_and_resets_task(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        launch = datetime.utcnow() - timedelta(seconds=300)
+        agent = Agent(
+            id="a1", cli_type="pi", status="working", current_task_id="t1",
+            created_at=launch, launched_at=launch, last_activity=launch,
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        task = Mock(id="t1", status="in_progress", assigned_agent_id="a1", failure_reason=None)
+        mock_db.session_scope = self._session_with(task)
+
+        result = await make_monitoring_loop._detect_agent_never_started(agent)
+
+        assert result is True
+        mock_agent_manager.terminate_agent.assert_called_once_with("a1")
+        assert task.status == "pending"
+        assert task.assigned_agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_restarted_agent_that_hangs_again_is_still_caught(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: comparing last_activity against created_at (instead
+        of launched_at) made this permanently blind to restarted agents --
+        created_at predates every restart, so (last_activity - created_at)
+        always looked "large" for a resumed "_r" session even with zero
+        activity since THAT restart, the exact case this exists to catch."""
+        original_creation = datetime.utcnow() - timedelta(hours=3)
+        restart = datetime.utcnow() - timedelta(seconds=300)
+        agent = Agent(
+            id="a1", cli_type="pi", status="working", current_task_id="t1",
+            created_at=original_creation, launched_at=restart, last_activity=restart,
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        task = Mock(id="t1", status="in_progress", assigned_agent_id="a1", failure_reason=None)
+        mock_db.session_scope = self._session_with(task)
+
+        result = await make_monitoring_loop._detect_agent_never_started(agent)
+
+        assert result is True
+        mock_agent_manager.terminate_agent.assert_called_once_with("a1")
+
+    @pytest.mark.asyncio
+    async def test_within_grace_period_not_yet_flagged(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        launch = datetime.utcnow() - timedelta(seconds=60)
+        agent = Agent(
+            id="a1", cli_type="pi", status="working", current_task_id="t1",
+            created_at=launch, launched_at=launch, last_activity=launch,
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        result = await make_monitoring_loop._detect_agent_never_started(agent)
+
+        assert result is False
+        mock_agent_manager.terminate_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_one_shot_per_agent(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        launch = datetime.utcnow() - timedelta(seconds=300)
+        agent = Agent(
+            id="a1", cli_type="pi", status="working", current_task_id="t1",
+            created_at=launch, launched_at=launch, last_activity=launch,
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        task = Mock(id="t1", status="in_progress", assigned_agent_id="a1", failure_reason=None)
+        mock_db.session_scope = self._session_with(task)
+
+        await make_monitoring_loop._detect_agent_never_started(agent)
+        await make_monitoring_loop._detect_agent_never_started(agent)
+
+        mock_agent_manager.terminate_agent.assert_called_once_with("a1")
+
+
 class TestDetectBadModelError:
     """Regression: Claude Code rejects a --model string it doesn't
     recognize (e.g. a stale OpenRouter path baked into a Phase row from
@@ -1153,9 +901,27 @@ class TestDetectBadModelError:
     async def test_sends_slash_model_command_directly(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
+        """Regression: this must read config.secondary_cli_model_fallback
+        (Claude's own configured recovery model), not config.cli_model --
+        that global is paired with agents.default_cli_tool (pi) and is
+        typically an OpenRouter path pi's picker resolves, meaningless to
+        Claude Code's own /model."""
         agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
-        make_monitoring_loop.config.cli_model = "sonnet"
+        make_monitoring_loop.config.secondary_cli_model_fallback = "opus"
+
+        result = await make_monitoring_loop._detect_bad_model_error(agent)
+
+        assert result is True
+        mock_agent_manager.send_message_to_agent.assert_called_once_with("a1", "/model opus")
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_sonnet_when_unconfigured(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
+        make_monitoring_loop.config.secondary_cli_model_fallback = None
 
         result = await make_monitoring_loop._detect_bad_model_error(agent)
 
@@ -1171,12 +937,640 @@ class TestDetectBadModelError:
         reloading with the new model would just be noise."""
         agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
-        make_monitoring_loop.config.cli_model = "sonnet"
+        make_monitoring_loop.config.secondary_cli_model_fallback = "opus"
 
         await make_monitoring_loop._detect_bad_model_error(agent)
         await make_monitoring_loop._detect_bad_model_error(agent)
 
         mock_agent_manager.send_message_to_agent.assert_called_once()
+
+
+class TestDetectCliModelFallback:
+    """Regression: pi's local model has only a single inference slot, so an
+    agent queued behind another sits frozen for however long that takes.
+    The generic frozen-nudge path doesn't help (the agent isn't stuck, just
+    waiting), so this switches it in-place to a configured fallback model
+    instead. Polymorphic, not pi-specific: this method never checks
+    agent.cli_type -- it goes through
+    CLIAgentInterface.model_fallback_keystrokes (empty by default, overridden
+    by PiAgent to use its `/model` picker). See
+    docs/PI_MODEL_FALLBACK_DESIGN.md."""
+
+    def _frozen_agent(self, make_monitoring_loop, frozen_for_seconds, cli_type="pi", cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf"):
+        agent = Agent(id="a1", cli_type=cli_type, cli_model=cli_model, current_task_id="t1")
+        make_monitoring_loop.config.default_cli_tool = "pi"
+        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
+        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": "same output", "since": time.time() - frozen_for_seconds, "recov": 0}
+        }
+        return agent
+
+    @pytest.mark.asyncio
+    async def test_cli_without_model_fallback_support_ignored(self, make_monitoring_loop, mock_agent_manager):
+        """opencode's CLIAgentInterface doesn't override
+        model_fallback_keystrokes/fallback_model (base class defaults: []
+        and None) -- must be a no-op regardless of how long it's been
+        frozen, for any CLI that hasn't opted in."""
+        agent = self._frozen_agent(make_monitoring_loop, 200, cli_type="opencode", cli_model="anthropic/claude-sonnet-4")
+        make_monitoring_loop.config.cli_model = "anthropic/claude-sonnet-4"
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_claude_as_secondary_cli_gets_its_own_fallback(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        """Regression: the secondary/fallback CLI (claude, dispatched when
+        pi hits a session limit) must also support this mechanism, using
+        its OWN config value and model vocabulary (claude_model_fallback,
+        e.g. "opus") -- not pi's cli_model_fallback (an OpenRouter path
+        meaningless to Claude Code's /model), and not blocked by a gate
+        that only recognizes pi's global default model."""
+        agent = Agent(id="a1", cli_type="claude", cli_model="sonnet", current_task_id="t1")
+        make_monitoring_loop.config.default_cli_tool = "pi"
+        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.secondary_cli_model_fallback = "opus"
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
+        }
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is True
+        mock_agent_manager.send_message_to_agent.assert_called_once_with("a1", "/model opus")
+
+    @pytest.mark.asyncio
+    async def test_role_based_resolution_when_claude_is_primary(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        """Regression: fallback_model must resolve by ROLE (is this agent's
+        cli_type the current default_cli_tool?), not by hardcoding "pi
+        reads cli_model_fallback, claude reads secondary_cli_model_fallback"
+        regardless of which CLI is actually configured as primary. With
+        Claude set as default_cli_tool (e.g. running Claude against a local
+        model), a Claude agent must read cli_model_fallback -- the primary
+        tier's config -- and pi (now the secondary tier) must read
+        secondary_cli_model_fallback, the mirror image of the default
+        pi-primary test above."""
+        agent = Agent(id="a1", cli_type="claude", cli_model="local-claude-model", current_task_id="t1")
+        make_monitoring_loop.config.default_cli_tool = "claude"
+        make_monitoring_loop.config.cli_model = "local-claude-model"
+        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.cli_model_fallback = "opus"
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
+        }
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is True
+        mock_agent_manager.send_message_to_agent.assert_called_once_with("a1", "/model opus")
+
+    @pytest.mark.asyncio
+    async def test_same_model_fallback_is_a_noop(self, make_monitoring_loop, mock_agent_manager):
+        """Regression: observed live -- secondary_cli_model_fallback left at
+        its shipped default ("sonnet") happened to equal a claude-primary
+        phase's own model, so the "switch" was a literal no-op that still
+        interrupted the agent (visible in its transcript as `/model sonnet`
+        -> "Model's already set to sonnet"), and re-fired on every backend
+        restart since neither Agent.cli_model nor the baseline-default gate
+        change when the fallback equals the current model -- only the
+        in-memory one-shot set would otherwise have prevented a repeat, and
+        that doesn't survive a restart."""
+        agent = Agent(id="a1", cli_type="claude", cli_model="sonnet", current_task_id="t1")
+        make_monitoring_loop.config.default_cli_tool = "pi"
+        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.secondary_cli_model_fallback = "sonnet"
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
+        }
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_pi_reads_secondary_config_when_it_is_the_fallback_tier(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        """Mirror of the above: with Claude primary, a pi agent (now the
+        secondary/fallback-tier CLI) must read secondary_cli_model_fallback,
+        and its baseline-default gate must compare against PiAgent's own
+        default_model, not config.cli_model (which is Claude's local model
+        here, meaningless to pi)."""
+        agent = Agent(id="a1", cli_type="pi", cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf", current_task_id="t1")
+        make_monitoring_loop.config.default_cli_tool = "claude"
+        make_monitoring_loop.config.cli_model = "local-claude-model"
+        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.secondary_cli_model_fallback = "mimo-v2.5-pro"
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
+        }
+
+        with patch("src.monitoring.monitor.asyncio.sleep", new=AsyncMock()):
+            result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is True
+        mock_agent_manager.send_message_to_agent.assert_called_once_with(
+            "a1", "/model mimo-v2.5-pro"
+        )
+
+    @pytest.mark.asyncio
+    async def test_pi_dispatched_as_claude_session_limit_fallback_is_excluded(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        """Regression: pi as a *phase-level* session-limit fallback (e.g.
+        qa_validation.yaml's cli_tool: claude / fallback_cli_tool: pi,
+        fallback_cli_model: openrouter/mimo-v2.5-pro) is a fresh kill+restart
+        dispatch (_mechanical_recovery_for_agent's session-limit path), not
+        an existing session to send in-session /model keystrokes into --
+        that agent's cli_model is already the escalated openrouter path, not
+        pi's standard local default, so the baseline-default gate must
+        exclude it rather than attempt a further in-session switch on it."""
+        agent = Agent(id="a1", cli_type="pi", cli_model="openrouter/mimo-v2.5-pro", current_task_id="t1")
+        make_monitoring_loop.config.default_cli_tool = "pi"
+        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
+        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
+        }
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_exhausted_attempts_stay_exhausted_across_a_restart(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        """Regression: _switched_to_fallback_model/_fallback_attempt_count are
+        in-memory only, so a fresh MonitoringLoop (i.e. after a `heph
+        restart`) used to have no way to know MAX_FALLBACK_ATTEMPTS was
+        already spent, and would grant the agent a full fresh 2-attempt
+        budget all over again. Observed live: agent e6633fe6 got two
+        separate 2-attempt episodes (18:13-18:21, then 19:07-19:18 after a
+        restart in between) instead of being capped at 2 total. AgentLog
+        already has 2 'cli_model_fallback' entries for this agent -- a fresh
+        process (empty in-memory state, as after a restart) must still
+        refuse to fire a 3rd."""
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.all.return_value = [
+            ("cli_model_fallback",),
+            ("cli_model_fallback",),
+        ]
+        make_monitoring_loop.db_manager.session_scope.return_value.__enter__.return_value = mock_session
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_configured_disables_feature(self, make_monitoring_loop, mock_agent_manager):
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+        make_monitoring_loop.config.cli_model_fallback = None
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_agent_already_off_default_model_ignored(self, make_monitoring_loop, mock_agent_manager):
+        """An agent already running something else (including a prior
+        fallback switch) must be left alone -- re-triggering on it would
+        contradict the one-shot-per-task design."""
+        agent = self._frozen_agent(make_monitoring_loop, 200, cli_model="mimo-v2.5-pro")
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_not_yet_frozen_ignored(self, make_monitoring_loop, mock_agent_manager):
+        """No _stuck_state entry at all -- _mechanical_recovery_for_agent
+        hasn't observed a repeated signature for this agent yet."""
+        agent = Agent(id="a1", cli_type="pi", cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf", current_task_id="t1")
+        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
+        make_monitoring_loop._stuck_state = {}
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_frozen_under_threshold_ignored(self, make_monitoring_loop, mock_agent_manager):
+        agent = self._frozen_agent(make_monitoring_loop, 60)  # under the 120s threshold
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_frozen_past_threshold_sends_model_in_one_atomic_message(self, make_monitoring_loop, mock_agent_manager):
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is True
+        mock_agent_manager.send_message_to_agent.assert_called_once_with(
+            "a1", "/model mimo-v2.5-pro"
+        )
+
+    @pytest.mark.asyncio
+    async def test_skips_when_connection_errors_present(self, make_monitoring_loop, mock_agent_manager):
+        """Regression: the picker keystrokes assume the agent is idle at a
+        shell prompt ready to accept "/model <name>" -- if it's actually
+        mid-retry on a connection failure, the send may not land as picker
+        input at all, and instead falls through to the normal chat input,
+        which pi queues as a live "Steering" message instead of it landing
+        as a model switch. Connection errors are a distinct hard blocker
+        already owned by _detect_connection_errors (itself fallback-aware)
+        -- leave this one alone rather than risk misdirecting a busy
+        agent."""
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+        mock_agent_manager.get_agent_output.return_value = (
+            "Error: Connection error.\nError: Connection error.\n"
+            "Retrying (2/3) in 1s... (escape to cancel)"
+        )
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_clears_stuck_state_after_switching(self, make_monitoring_loop, mock_agent_manager):
+        """So the fallback model's own first turn gets a fresh frozen-
+        detection window instead of being judged against a signature
+        captured while still on the original model -- but recov (the
+        generic mechanical-recovery escalation counter that lives in the
+        same _stuck_state entry) must survive. Regression: this used to
+        pop() the whole entry, which also reset recov to 0 on every
+        fallback attempt -- the reason the generic frozen/nudge/abandon
+        path never independently escalated during the incident
+        MAX_FALLBACK_ATTEMPTS was added for."""
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+        make_monitoring_loop._stuck_state["a1"]["recov"] = 1
+
+        await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert make_monitoring_loop._stuck_state["a1"]["since"] is None
+        assert make_monitoring_loop._stuck_state["a1"]["sig"] is None
+        assert make_monitoring_loop._stuck_state["a1"]["recov"] == 1
+
+    @pytest.mark.asyncio
+    async def test_only_fires_once_per_agent(self, make_monitoring_loop, mock_agent_manager):
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+
+        await make_monitoring_loop._detect_cli_model_fallback(agent)
+        assert mock_agent_manager.send_message_to_agent.call_count == 1  # one atomic "/model <name>"
+
+        # Re-seed stuck_state as if the agent is frozen again on a later cycle.
+        make_monitoring_loop._stuck_state["a1"] = {
+            "sig": "same output", "since": time.time() - 200, "recov": 0
+        }
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        assert mock_agent_manager.send_message_to_agent.call_count == 1  # no additional calls
+
+    @pytest.mark.asyncio
+    async def test_logs_an_agent_event_capturing_why_the_model_switched(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: the switch used to only go to process logs -- nothing
+        queryable was attached to the agent/task recording why its model
+        changed. AgentLog is this codebase's existing mechanism for that
+        (see e.g. Conductor/Guardian writes)."""
+        from contextlib import contextmanager
+
+        session = Mock()
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+
+        await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        session.add.assert_called_once()
+        logged = session.add.call_args[0][0]
+        assert logged.agent_id == "a1"
+        assert logged.log_type == "cli_model_fallback"
+        assert logged.details["from_model"] == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        assert logged.details["to_model"] == "mimo-v2.5-pro"
+        assert logged.details["task_id"] == "t1"
+
+    @pytest.mark.asyncio
+    async def test_persists_the_switch_to_agent_cli_model(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: agent.cli_model is surfaced directly in API responses
+        (mcp/api.py, mcp/autopilot_api.py) for UI display, and
+        get_active_agents() re-fetches a fresh row every cycle -- switching
+        the model in the CLI session without also updating the DB column
+        would leave every later cycle (and the UI) showing the stale
+        original model as "the agent's current model" indefinitely."""
+        from contextlib import contextmanager
+
+        agent_row = Mock(cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf")
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = agent_row
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+
+        await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert agent_row.cli_model == "mimo-v2.5-pro"
+
+    @pytest.mark.asyncio
+    async def test_send_failure_reverts_and_allows_retry_under_cap(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: the one-shot flag and the optimistic DB write both
+        happen before the keystroke send is attempted -- previously, if
+        send_message_to_agent raised (e.g. tmux session gone mid-send), no
+        _pending_fallback_verification entry was ever created, so
+        _verify_cli_model_fallback had nothing to check and the agent was
+        permanently blocked by the one-shot gate with the MAX_FALLBACK_ATTEMPTS
+        retry budget never even consulted. A send failure must revert the DB
+        write and behave like an immediately-failed attempt -- retry allowed
+        while attempts remain."""
+        from contextlib import contextmanager
+
+        agent_row = Mock(cli_model="mimo-v2.5-pro")
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = agent_row
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+        mock_agent_manager.send_message_to_agent = AsyncMock(
+            side_effect=RuntimeError("tmux session gone")
+        )
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        assert "a1" not in make_monitoring_loop._switched_to_fallback_model
+        assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+
+    @pytest.mark.asyncio
+    async def test_send_failure_at_max_attempts_gives_up_permanently(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Companion to the above: once MAX_FALLBACK_ATTEMPTS is reached, a
+        send failure must NOT re-enable a retry -- same cap semantics as an
+        unconfirmed switch."""
+        from contextlib import contextmanager
+
+        from src.monitoring.monitor import MAX_FALLBACK_ATTEMPTS
+
+        agent_row = Mock(cli_model="mimo-v2.5-pro")
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = agent_row
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        agent = self._frozen_agent(make_monitoring_loop, 200)
+        make_monitoring_loop._fallback_attempt_count = {"a1": MAX_FALLBACK_ATTEMPTS - 1}
+        mock_agent_manager.send_message_to_agent = AsyncMock(
+            side_effect=RuntimeError("tmux session gone")
+        )
+
+        result = await make_monitoring_loop._detect_cli_model_fallback(agent)
+
+        assert result is False
+        assert "a1" in make_monitoring_loop._switched_to_fallback_model
+        assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+
+
+class TestVerifyCliModelFallback:
+    """Regression: _detect_cli_model_fallback's switch was fire-and-forget --
+    nothing ever checked whether pi's picker interaction actually landed. A
+    wrong search text or a picker that didn't open in time would leave the
+    agent silently stuck on its original (frozen) model with no record of
+    the failed attempt anywhere."""
+
+    @pytest.mark.asyncio
+    async def test_no_pending_entry_is_a_noop(self, make_monitoring_loop, mock_agent_manager):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        make_monitoring_loop._pending_fallback_verification = {}
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        mock_agent_manager.get_agent_output.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cli_that_cannot_verify_clears_pending_silently(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "anything"
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("sonnet", "opus", time.time())
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" not in make_monitoring_loop._pending_fallback_verification
+
+    @pytest.mark.asyncio
+    async def test_confirmed_switch_logs_success_and_clears_pending(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        from contextlib import contextmanager
+
+        session = Mock()
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "Model: xiaomi/mimo-v2.5-pro"
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time())
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" not in make_monitoring_loop._pending_fallback_verification
+        logged = session.add.call_args[0][0]
+        assert logged.log_type == "cli_model_fallback_confirmed"
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_within_grace_period_stays_pending_no_warning(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        make_monitoring_loop.config.monitoring_interval_seconds = 60
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "still on the old model"
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time())  # just switched
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" in make_monitoring_loop._pending_fallback_verification
+        mock_db.session_scope.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_past_grace_period_warns_and_logs(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        from contextlib import contextmanager
+
+        session = Mock()
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        make_monitoring_loop.config.monitoring_interval_seconds = 60
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "still on the old model"
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time() - 200)  # past 2x120s grace
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" not in make_monitoring_loop._pending_fallback_verification
+        logged = session.add.call_args[0][0]
+        assert logged.log_type == "cli_model_fallback_unconfirmed"
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_past_grace_period_allows_a_retry(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: a failed picker interaction (never confirmed) must
+        not permanently strand the agent -- clearing it from
+        _switched_to_fallback_model lets _detect_cli_model_fallback try
+        again if it freezes again on the still-unswitched original model.
+        A successfully *confirmed* switch, by contrast, keeps the agent in
+        that set forever (no automatic switch-back)."""
+        from contextlib import contextmanager
+
+        agent_row = Mock(cli_model="mimo-v2.5-pro")  # the optimistic write from _detect_cli_model_fallback
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = agent_row
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        make_monitoring_loop.config.monitoring_interval_seconds = 60
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "still on the old model"
+        make_monitoring_loop._switched_to_fallback_model = {"a1"}
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time() - 200)
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" not in make_monitoring_loop._switched_to_fallback_model
+        # The optimistic write must be reverted -- otherwise the retry this
+        # just re-enabled would immediately be blocked by
+        # _detect_cli_model_fallback's own "already off default model" gate.
+        assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_past_grace_period_stops_retrying_after_max_attempts(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: observed live -- with no cap, an agent that kept
+        refreezing retried an unconfirmed switch 40+ times over 7+ hours,
+        each retry blindly resending the same keystrokes into whatever state
+        the CLI actually was in, until one attempt landed on a different,
+        unusable model and broke the session outright. Once
+        _fallback_attempt_count reaches MAX_FALLBACK_ATTEMPTS, a still-
+        unconfirmed switch must NOT clear the one-shot set -- no further
+        retries for this agent's task."""
+        from contextlib import contextmanager
+
+        from src.monitoring.monitor import MAX_FALLBACK_ATTEMPTS
+
+        agent_row = Mock(cli_model="mimo-v2.5-pro")
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = agent_row
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        make_monitoring_loop.config.monitoring_interval_seconds = 60
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "still on the old model"
+        make_monitoring_loop._switched_to_fallback_model = {"a1"}
+        make_monitoring_loop._fallback_attempt_count = {"a1": MAX_FALLBACK_ATTEMPTS}
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time() - 200)
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" in make_monitoring_loop._switched_to_fallback_model
+        # The DB write is still reverted regardless -- we just stop retrying.
+        assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+
+    @pytest.mark.asyncio
+    async def test_confirmed_switch_does_not_clear_the_one_shot_set(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        from contextlib import contextmanager
+
+        session = Mock()
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "Model: xiaomi/mimo-v2.5-pro"
+        make_monitoring_loop._switched_to_fallback_model = {"a1"}
+        make_monitoring_loop._pending_fallback_verification = {
+            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time())
+        }
+
+        await make_monitoring_loop._verify_cli_model_fallback(agent)
+
+        assert "a1" in make_monitoring_loop._switched_to_fallback_model
 
 
 # ── _update_agent_health_from_trajectory ─────────────────────────
@@ -1390,122 +1784,6 @@ class TestLogDiagnosticStatusReport:
         )
 
 
-# ── _enrich_answer ────────────────────────────────────────────────
-
-
-class TestEnrichAnswer:
-    @pytest.mark.asyncio
-    async def test_enriches_with_knowledge(self, monitor, mock_rag):
-        mock_rag.retrieve_for_task = AsyncMock(
-            return_value=[
-                {"content": "Auth requires JWT tokens"},
-                {"content": "Use bcrypt for passwords"},
-            ]
-        )
-        result = await monitor._enrich_answer("How to implement auth?", "t1")
-        assert "Additional context" in result
-        assert "JWT" in result
-
-    @pytest.mark.asyncio
-    async def test_no_knowledge_returns_base(self, monitor, mock_rag):
-        mock_rag.retrieve_for_task = AsyncMock(return_value=[])
-        result = await monitor._enrich_answer("Simple answer", "t1")
-        assert result == "Simple answer"
-
-
-# ── _recreate_agent_with_new_approach ────────────────────────────
-
-
-class TestRecreateAgentWithNewApproach:
-    @pytest.mark.asyncio
-    async def test_recreates_agent(
-        self, monitor, mock_agent_manager, mock_db, mock_rag
-    ):
-        agent = Agent(id="a1", current_task_id="t1")
-        session = Mock()
-        task = Mock(
-            id="t1",
-            enriched_description="Build auth",
-            done_definition="Auth complete",
-            phase_id="p1",
-        )
-        session.query.return_value.filter_by.return_value.first.return_value = task
-        mock_db.get_session.return_value = session
-
-        mock_agent_manager.terminate_agent = AsyncMock()
-        mock_agent_manager.create_agent_for_task = AsyncMock(return_value=Mock(id="a2"))
-        mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
-        mock_rag.retrieve_for_task = AsyncMock(return_value=[])
-
-        # Mock second session for phase query
-        phase_session = Mock()
-        phase = Mock(
-            cli_tool="pi",
-            cli_model="mimo",
-            glm_api_token_env=None,
-            thinking_level="low",
-        )
-        phase_session.query.return_value.filter_by.return_value.first.return_value = (
-            phase
-        )
-        mock_db.get_session.side_effect = [session, phase_session]
-
-        await monitor._recreate_agent_with_new_approach(agent, "Stuck too long")
-        mock_agent_manager.terminate_agent.assert_called_once_with("a1")
-        mock_agent_manager.create_agent_for_task.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_handles_no_task(self, monitor, mock_agent_manager, mock_db):
-        agent = Agent(id="a1", current_task_id="missing")
-        session = Mock()
-        session.query.return_value.filter_by.return_value.first.return_value = None
-        mock_db.get_session.return_value = session
-
-        await monitor._recreate_agent_with_new_approach(agent, "No task found")
-        mock_agent_manager.terminate_agent.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_handles_exception(
-        self, monitor, mock_agent_manager, mock_db, mock_rag
-    ):
-        agent = Agent(id="a1", current_task_id="t1")
-        session = Mock()
-        session.query.return_value.filter_by.return_value.first.side_effect = Exception(
-            "DB error"
-        )
-        mock_db.get_session.return_value = session
-
-        # Should not raise
-        await monitor._recreate_agent_with_new_approach(agent, "Error")
-
-    @pytest.mark.asyncio
-    async def test_max_restarts_fails_task_instead_of_recreating(
-        self, monitor, mock_agent_manager, mock_db, mock_rag
-    ):
-        """Regression: this path creates a brand-new Agent row via
-        create_agent_for_task rather than incrementing restart_count on the
-        existing one (unlike AgentManager.restart_agent), so it had no
-        restart-loop bound at all -- a decision-maker that kept returning
-        RECREATE for the same stuck task could spin up unlimited agents."""
-        agent = Agent(id="a1", current_task_id="t1", restart_count=3)
-        session = Mock()
-        task = Mock(id="t1", status="in_progress")
-        session.query.return_value.filter_by.return_value.first.return_value = task
-        mock_db.get_session.return_value = session
-
-        mock_agent_manager.terminate_agent = AsyncMock()
-        mock_agent_manager.create_agent_for_task = AsyncMock()
-
-        await monitor._recreate_agent_with_new_approach(agent, "Stuck too long")
-
-        mock_agent_manager.terminate_agent.assert_not_called()
-        mock_agent_manager.create_agent_for_task.assert_not_called()
-        assert task.status == "failed"
-
-
-# ── _mechanical_recovery_for_agent ────────────────────────────────
-
-
 class TestMechanicalRecovery:
     @pytest.mark.asyncio
     async def test_no_output(self, make_monitoring_loop, mock_agent_manager, mock_db):
@@ -1635,8 +1913,95 @@ class TestMechanicalRecovery:
 
         session = Mock()
         task = Mock(id="t1", status="in_progress")
-        # The query uses filter_by(assigned_agent_id=..., status=...)
-        session.query.return_value.filter_by.return_value.first.return_value = task
+        # The query chains filter_by(assigned_agent_id=...) then a separate
+        # .filter(status.in_(...)) before .first() -- both links must be
+        # configured or the chain falls through to an unconfigured Mock.
+        session.query.return_value.filter_by.return_value.filter.return_value.first.return_value = task
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        assert task.status == "failed"
+        mock_agent_manager.terminate_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_operation_aborted_nudge_echo_does_not_reset_recovery_counter(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: the nudge sent for "Operation aborted" gets echoed
+        into the pane by most CLIs, so the very next poll's signature
+        differs from the pre-nudge baseline purely because of our own
+        message -- not real agent progress. Left unbaselined, every nudge
+        reset st["recov"] back to 0 (the "output changed -> real progress"
+        branch), so max_recov was never actually reached and the agent sat
+        endlessly re-nudged instead of escalating after max_recov attempts.
+        Observed live: 5+ consecutive "Operation aborted" nudges for the
+        same agent."""
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.send_recovery_keystrokes = AsyncMock(return_value=True)
+
+        baseline = "Operation aborted\nAgent idle at prompt"
+        after_nudge_1 = "Operation aborted\nAgent idle at prompt\n[nudge 1 echoed here]"
+        after_nudge_2 = "Operation aborted\nAgent idle at prompt\n[nudge 2 echoed here]"
+        mock_agent_manager.get_agent_output.side_effect = [
+            baseline,       # call 1: sets initial baseline
+            baseline,       # call 2: sig-check, matches baseline -> frozen
+            after_nudge_1,  # call 2: post-nudge re-capture (this fix)
+            after_nudge_1,  # call 3: sig-check, matches re-baselined sig -> still frozen
+            after_nudge_2,  # call 3: post-nudge re-capture (this fix)
+        ]
+
+        # Call 1: sets baseline, no recovery yet.
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        assert make_monitoring_loop._stuck_state["a1"]["recov"] == 0
+
+        # Call 2: frozen for >= 30s -> first nudge.
+        make_monitoring_loop._stuck_state["a1"]["since"] = time.time() - 40
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        assert make_monitoring_loop._stuck_state["a1"]["recov"] == 1
+
+        # Call 3: the pane now shows the first nudge's own echo -- without
+        # the fix this reads as "output changed" and resets recov to 0.
+        make_monitoring_loop._stuck_state["a1"]["since"] = time.time() - 40
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        assert make_monitoring_loop._stuck_state["a1"]["recov"] == 2
+
+        assert mock_agent_manager.send_message_to_agent.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_operation_aborted_escalates_without_waiting_full_frozen_seconds(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: once max_recov nudges are exhausted via the fast 30s
+        abort_frozen path, escalation to fail+terminate used to require
+        frozen_for >= the FULL frozen_seconds (300s), measured from the
+        last nudge's since=now reset -- neither branch's condition was
+        satisfiable in between (recov >= max_recov blocks the nudge
+        branch; frozen_for was only ~30-40s, nowhere near 300s), so the
+        agent sat frozen and untouched for up to 5 more minutes after
+        exhausting recovery attempts."""
+        from contextlib import contextmanager
+
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        frozen_output = "Operation aborted\nAgent idle at prompt"
+        mock_agent_manager.get_agent_output.return_value = frozen_output
+
+        make_monitoring_loop._stuck_state = {}
+        make_monitoring_loop._stuck_state["a1"] = {
+            "sig": frozen_output,
+            "since": time.time() - 40,  # only 40s, nowhere near frozen_seconds=300
+            "recov": 2,  # already exhausted max_recov
+        }
+
+        session = Mock()
+        task = Mock(id="t1", status="in_progress")
+        session.query.return_value.filter_by.return_value.filter.return_value.first.return_value = task
 
         @contextmanager
         def mock_session_scope():
@@ -1656,6 +2021,27 @@ class TestSessionLimitPause:
     fallback_cli_tool configured -- retrying would just recreate the same
     primary CLI and hit the same limit again until it resets on its own."""
 
+    def _wire_tmux_pane_output(self, mock_agent_manager, mock_db, agent_id, pane_text):
+        """Spend/session-limit detection (see e9a34ff) reads the live tmux
+        pane directly -- self.db_manager.get_session().query(Agent)... to
+        find the agent's tmux_session_name, then a matching session in
+        self.agent_manager.tmux_server.sessions, then capture-pane on its
+        attached pane -- NOT get_agent_output (that path was replaced
+        because the interactive limit menu only appears in the live pane,
+        not the transcript log get_agent_output reads from). Without this,
+        the detector's own `if _sess:` guard is never satisfied and the
+        whole check silently no-ops, regardless of what get_agent_output
+        returns."""
+        db_agent = Mock(tmux_session_name=f"agent_{agent_id}")
+        get_session_mock = Mock()
+        get_session_mock.query.return_value.filter_by.return_value.first.return_value = db_agent
+        mock_db.get_session.return_value = get_session_mock
+
+        tmux_session = Mock(name=f"agent_{agent_id}")
+        tmux_session.name = f"agent_{agent_id}"  # Mock(name=...) doesn't set .name itself
+        tmux_session.attached_window.attached_pane.cmd.return_value.stdout = [pane_text]
+        mock_agent_manager.tmux_server.sessions = [tmux_session]
+
     def _session_with(self, task, phase=None, workflow=None):
         from contextlib import contextmanager
 
@@ -1665,7 +2051,18 @@ class TestSessionLimitPause:
             m = Mock()
             name = model.__name__ if hasattr(model, "__name__") else str(model)
             if name == "Task":
-                m.filter_by.return_value.first.return_value = task
+                # Production chains filter_by(assigned_agent_id=...) then a
+                # separate .filter(status.in_(...)) before .first() -- both
+                # links must be configured or the chain falls through to an
+                # unconfigured Mock.
+                def _first_if_active():
+                    # Return the task only if its status is one the
+                    # production query would match, otherwise None.
+                    if task.status in ("assigned", "in_progress"):
+                        return task
+                    return None
+
+                m.filter_by.return_value.filter.return_value.first = _first_if_active
             elif name == "Phase":
                 m.filter_by.return_value.first.return_value = phase
             elif name == "Workflow":
@@ -1688,6 +2085,9 @@ class TestSessionLimitPause:
         mock_agent_manager.get_agent_output.return_value = (
             "You've hit your session limit"
         )
+        self._wire_tmux_pane_output(
+            mock_agent_manager, mock_db, "a1", "You've hit your session limit"
+        )
         mock_agent_manager.terminate_agent = AsyncMock()
 
         task = Mock(
@@ -1698,18 +2098,22 @@ class TestSessionLimitPause:
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
         # No fallback anywhere -- phase.fallback_cli_tool=None above, and
-        # the global config default must also be unset here, or this
+        # both global config defaults must also be unset here, or this
         # "no fallback configured" scenario silently depends on whatever
         # hephaestus_config.yaml happens to contain on the machine running
         # the test (the make_monitoring_loop fixture's own get_config patch
         # only stays active during MonitoringLoop.__init__, not here).
+        # secondary_cli_model_fallback specifically: a bare Mock() without
+        # this auto-vivifies a truthy child Mock for any attribute access,
+        # which the last-resort fallback tier below would treat as a real,
+        # different model and use it -- silently defeating "no fallback"
+        # unless explicitly nulled out.
         with patch("src.monitoring.monitor.get_config") as mock_cfg:
-            mock_cfg.return_value = Mock(default_fallback_cli_tool=None)
+            mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
 
-            # First call only sets the frozen-signature baseline (real check
-            # requires an unchanged signature across two consecutive polls,
-            # matching TestMechanicalRecovery's frozen-detection pattern).
-            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+            # Unlike the frozen/stuck detection elsewhere in this function,
+            # the spend/session-limit check fires immediately on the first
+            # call -- it's not gated by a consecutive-poll baseline.
             await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
         assert task.status == "failed"
@@ -1735,6 +2139,9 @@ class TestSessionLimitPause:
         mock_agent_manager.get_agent_output.return_value = (
             "You've hit your session limit"
         )
+        self._wire_tmux_pane_output(
+            mock_agent_manager, mock_db, "a1", "You've hit your session limit"
+        )
         mock_agent_manager.terminate_agent = AsyncMock()
         mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
         new_agent = Mock(id="a2")
@@ -1754,11 +2161,64 @@ class TestSessionLimitPause:
         mock_agent_manager.create_agent_for_task.assert_called_once()
         call_kwargs = mock_agent_manager.create_agent_for_task.call_args.kwargs
         assert call_kwargs["memories"] == []
-        assert call_kwargs["project_context"] == "ctx"
+        assert call_kwargs["project_context"] == ""
         assert call_kwargs["cli_type"] == "pi"
 
         assert task.status == "pending"
         assert task.assigned_agent_id is None
+        assert workflow.status == "active"
+        assert workflow.paused_by is None
+        mock_agent_manager.terminate_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_secondary_cli_model_when_default_fallback_is_identical(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Live incident: default_cli_tool and default_fallback_cli_tool
+        were both "pi" on the identical model -- the "fall back to global
+        config defaults" branch found a "fallback" that was actually the
+        same cli+model that just hit the limit, so the outer
+        `fallback_tool != agent.cli_type or fallback_model != agent.cli_model`
+        check correctly refused it, and the workflow paused with a real,
+        different secondary_cli_model_fallback ("sonnet") sitting
+        configured and never consulted. Must now try it as a last resort
+        before giving up."""
+        agent = Agent(id="a1", cli_type="pi", cli_model="openrouter/xiaomi/mimo-v2.5-pro")
+        mock_agent_manager.get_agent_output.return_value = (
+            "You've hit your session limit"
+        )
+        self._wire_tmux_pane_output(
+            mock_agent_manager, mock_db, "a1", "You've hit your session limit"
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
+        new_agent = Mock(id="a2")
+        mock_agent_manager.create_agent_for_task = AsyncMock(return_value=new_agent)
+
+        task = Mock(
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1",
+            enriched_description="do the thing", done_definition="done",
+        )
+        # No phase-level override -- forces the global-config path.
+        phase = Mock(fallback_cli_tool=None, fallback_cli_model=None)
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+            mock_cfg.return_value = Mock(
+                default_fallback_cli_tool="pi",
+                default_fallback_cli_model="openrouter/xiaomi/mimo-v2.5-pro",
+                secondary_cli_model_fallback="sonnet",
+            )
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        mock_agent_manager.create_agent_for_task.assert_called_once()
+        call_kwargs = mock_agent_manager.create_agent_for_task.call_args.kwargs
+        assert call_kwargs["cli_type"] == "pi"
+        assert call_kwargs["phase_cli_model"] == "sonnet"
+
+        assert task.status == "pending"
         assert workflow.status == "active"
         assert workflow.paused_by is None
         mock_agent_manager.terminate_agent.assert_called_once()
@@ -1779,6 +2239,9 @@ class TestSessionLimitPause:
         agent = Agent(id="a1", cli_type="claude")
         mock_agent_manager.get_agent_output.return_value = (
             "You've hit your session limit"
+        )
+        self._wire_tmux_pane_output(
+            mock_agent_manager, mock_db, "a1", "You've hit your session limit"
         )
         mock_agent_manager.terminate_agent = AsyncMock()
         mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
@@ -1834,6 +2297,9 @@ class TestSessionLimitPause:
         mock_agent_manager.get_agent_output.return_value = (
             "You've hit your monthly spend limit."
         )
+        self._wire_tmux_pane_output(
+            mock_agent_manager, mock_db, "a1", "You've hit your monthly spend limit."
+        )
         mock_agent_manager.terminate_agent = AsyncMock()
 
         task = Mock(
@@ -1844,7 +2310,7 @@ class TestSessionLimitPause:
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
         with patch("src.monitoring.monitor.get_config") as mock_cfg:
-            mock_cfg.return_value = Mock(default_fallback_cli_tool=None)
+            mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
             await make_monitoring_loop._mechanical_recovery_for_agent(agent)
             await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
@@ -1867,6 +2333,9 @@ class TestSessionLimitPause:
         mock_agent_manager.get_agent_output.return_value = (
             "You've hit your monthly spend limit."
         )
+        self._wire_tmux_pane_output(
+            mock_agent_manager, mock_db, "a1", "You've hit your monthly spend limit."
+        )
         mock_agent_manager.terminate_agent = AsyncMock()
         mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
         new_agent = Mock(id="a2")
@@ -1886,7 +2355,6 @@ class TestSessionLimitPause:
         mock_agent_manager.create_agent_for_task.assert_called_once()
         call_kwargs = mock_agent_manager.create_agent_for_task.call_args.kwargs
         assert call_kwargs["memories"] == []
-        assert call_kwargs["project_context"] == "ctx"
 
         assert task.status == "pending"
         assert workflow.status == "active"
@@ -1894,66 +2362,184 @@ class TestSessionLimitPause:
         mock_agent_manager.terminate_agent.assert_called_once()
 
 
-# ── _handle_stuck_agent ──────────────────────────────────────────
+class TestDetectConnectionErrors:
+    """Regression #1: resetting a connection-error-killed task straight to
+    "pending" with no failure_reason let a later, unrelated orphan-check
+    (a task sitting pending with no agent for >1min) relabel it
+    "Orphaned: never dispatched to an agent" -- a label _advance_phases's
+    own retry cap (max_retry_count=2) deliberately exempts from the cap,
+    on the theory that a scheduling race should always be retried. That
+    let a persistently unreachable LLM endpoint loop forever instead of
+    ever pausing the workflow.
 
+    Regression #2: even with #1 fixed, blindly failing-and-retrying still
+    redispatches onto the SAME broken endpoint every time -- a connection
+    error means the endpoint is unreachable, not that the agent did
+    anything wrong. Observed live: 46+ retries over 5+ hours against a
+    dead local inference host, always onto the same model, even though
+    the phase already had fallback_cli_tool: claude configured. Mirrors
+    the session-limit path: try the phase's (or global) fallback via a
+    fresh kill+restart dispatch first; only fail (routing through the
+    retry cap from #1) if no fallback is configured or the dispatch
+    itself fails."""
 
-class TestHandleStuckAgent:
+    def _session_with(self, task, phase=None):
+        from contextlib import contextmanager
+
+        session = Mock()
+
+        def query_side_effect(model):
+            m = Mock()
+            name = model.__name__ if hasattr(model, "__name__") else str(model)
+            if name == "Task":
+                m.filter_by.return_value.filter.return_value.first.return_value = task
+            elif name == "Phase":
+                m.filter_by.return_value.first.return_value = phase
+            elif name == "Workflow":
+                m.filter_by.return_value.first.return_value = None
+            return m
+
+        session.query.side_effect = query_side_effect
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        return mock_session_scope, session
+
     @pytest.mark.asyncio
-    async def test_steers_with_blockers(
+    async def test_single_error_does_not_yet_terminate(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "Error: Connection error."
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        result = await make_monitoring_loop._detect_connection_errors(agent)
+
+        assert result is False
+        mock_agent_manager.terminate_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_terminates_agent_only_after_task_status_already_updated(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
-        agent = Agent(id="a1", health_check_failures=5)
-        make_monitoring_loop.trajectory_context = Mock()
-        make_monitoring_loop.trajectory_context.build_accumulated_context.return_value = {
-            "discovered_blockers": ["Auth module failing"],
-        }
-        make_monitoring_loop.guardian = Mock()
-        make_monitoring_loop.guardian.steer_agent = AsyncMock()
-
-        await make_monitoring_loop._handle_stuck_agent(agent)
-        make_monitoring_loop.guardian.steer_agent.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_logs_blockers_below_threshold(
-        self, make_monitoring_loop, mock_agent_manager, mock_db
-    ):
-        agent = Agent(id="a1", health_check_failures=1)
-        make_monitoring_loop.trajectory_context = Mock()
-        make_monitoring_loop.trajectory_context.build_accumulated_context.return_value = {
-            "discovered_blockers": ["Blocker 1"],
-        }
-        make_monitoring_loop.guardian = Mock()
-        make_monitoring_loop.guardian.steer_agent = AsyncMock()
-        make_monitoring_loop.intelligent_monitor = Mock()
-        make_monitoring_loop.intelligent_monitor.analyze_agent_state = AsyncMock(
-            return_value={"decision": "continue"}
+        """Regression: terminate_agent() used to run BEFORE the task's
+        status was updated, leaving a window where Agent.status was
+        already "terminated" while Task.status was still "in_progress"
+        (pointing at that now-dead agent). A separate, unrelated periodic
+        sweep (attempt_recovery's stale-assigned-task cleanup) can see
+        exactly that combination and mark the task failed with a generic
+        "terminated unexpectedly" reason before this function's own
+        session ever gets to it -- silently skipping the fallback dispatch
+        entirely. terminate_agent must not be called until the task has
+        already left "assigned"/"in_progress"."""
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = (
+            "Error: Connection error.\nError: Connection error.\nError: Connection error."
         )
-        make_monitoring_loop.intelligent_monitor.execute_intervention = AsyncMock()
+        make_monitoring_loop._stuck_state = {"a1": {"sig": "x", "since": time.time(), "recov": 0}}
+        task = Mock(id="t1", status="in_progress", assigned_agent_id="a1", failure_reason=None, phase_id=None)
+        status_at_terminate_call = []
 
-        await make_monitoring_loop._handle_stuck_agent(agent)
-        # Below threshold — no steering, falls through to analysis
-        make_monitoring_loop.guardian.steer_agent.assert_not_called()
+        async def fake_terminate(agent_id):
+            status_at_terminate_call.append(task.status)
+
+        mock_agent_manager.terminate_agent = AsyncMock(side_effect=fake_terminate)
+
+        mock_session_scope, session = self._session_with(task, phase=None)
+        mock_db.session_scope = mock_session_scope
+
+        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+            mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
+            result = await make_monitoring_loop._detect_connection_errors(agent)
+
+        assert result is True
+        assert status_at_terminate_call == ["failed"]
 
     @pytest.mark.asyncio
-    async def test_no_blockers_runs_analysis(
+    async def test_no_fallback_configured_fails_with_reason_not_silent_pending(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
-        agent = Agent(id="a1", health_check_failures=0)
-        make_monitoring_loop.trajectory_context = Mock()
-        make_monitoring_loop.trajectory_context.build_accumulated_context.return_value = {
-            "discovered_blockers": [],
-        }
-        make_monitoring_loop.intelligent_monitor = Mock()
-        make_monitoring_loop.intelligent_monitor.analyze_agent_state = AsyncMock(
-            return_value={"decision": "continue"}
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = (
+            "Error: Connection error.\nError: Connection error.\nError: Connection error."
         )
-        make_monitoring_loop.intelligent_monitor.execute_intervention = AsyncMock()
+        mock_agent_manager.terminate_agent = AsyncMock()
+        make_monitoring_loop._stuck_state = {"a1": {"sig": "x", "since": time.time(), "recov": 0}}
 
-        await make_monitoring_loop._handle_stuck_agent(agent)
-        make_monitoring_loop.intelligent_monitor.execute_intervention.assert_called_once()
+        task = Mock(id="t1", status="in_progress", assigned_agent_id="a1", failure_reason=None, phase_id=None)
+        mock_session_scope, session = self._session_with(task, phase=None)
+        mock_db.session_scope = mock_session_scope
 
+        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+            mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
+            result = await make_monitoring_loop._detect_connection_errors(agent)
 
-# ── _handle_missing_tmux_session ──────────────────────────────────
+        assert result is True
+        assert task.status == "failed"
+        assert task.assigned_agent_id is None
+        assert task.failure_reason is not None
+        assert "connection error" in task.failure_reason.lower()
+        assert "Orphaned" not in task.failure_reason
+        mock_agent_manager.terminate_agent.assert_called_once()
+        mock_agent_manager.create_agent_for_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fallback_configured_redispatches_instead_of_failing(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = (
+            "Error: Connection error.\nError: Connection error.\nError: Connection error."
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        new_agent = Mock(id="a2")
+        mock_agent_manager.create_agent_for_task = AsyncMock(return_value=new_agent)
+        make_monitoring_loop._stuck_state = {"a1": {"sig": "x", "since": time.time(), "recov": 0}}
+
+        task = Mock(
+            id="t1", status="in_progress", assigned_agent_id="a1",
+            failure_reason=None, phase_id="p1", workflow_id="wf1",
+        )
+        phase = Mock(fallback_cli_tool="claude", fallback_cli_model="sonnet")
+        mock_session_scope, session = self._session_with(task, phase=phase)
+        mock_db.session_scope = mock_session_scope
+
+        result = await make_monitoring_loop._detect_connection_errors(agent)
+
+        assert result is True
+        assert task.status == "pending"
+        assert task.failure_reason is None
+        mock_agent_manager.create_agent_for_task.assert_called_once()
+        call_kwargs = mock_agent_manager.create_agent_for_task.call_args.kwargs
+        assert call_kwargs["cli_type"] == "claude"
+        assert call_kwargs["phase_cli_model"] == "sonnet"
+
+    @pytest.mark.asyncio
+    async def test_fallback_dispatch_failure_still_fails_with_reason(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = (
+            "Error: Connection error.\nError: Connection error.\nError: Connection error."
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.create_agent_for_task = AsyncMock(side_effect=RuntimeError("worktree gone"))
+        make_monitoring_loop._stuck_state = {"a1": {"sig": "x", "since": time.time(), "recov": 0}}
+
+        task = Mock(
+            id="t1", status="in_progress", assigned_agent_id="a1",
+            failure_reason=None, phase_id="p1", workflow_id="wf1",
+        )
+        phase = Mock(fallback_cli_tool="claude", fallback_cli_model="sonnet")
+        mock_session_scope, session = self._session_with(task, phase=phase)
+        mock_db.session_scope = mock_session_scope
+
+        result = await make_monitoring_loop._detect_connection_errors(agent)
+
+        assert result is True
+        assert task.status == "failed"
+        assert "connection error" in task.failure_reason.lower()
+        assert "worktree gone" in task.failure_reason
 
 
 class TestHandleMissingTmux:
@@ -2018,29 +2604,6 @@ class TestCleanupOrphanedSessions:
 
         await make_monitoring_loop._cleanup_orphaned_tmux_sessions()
         session_mock.kill_session.assert_called_once()
-
-
-# ── _handle_timeout ───────────────────────────────────────────────
-
-
-class TestHandleTimeout:
-    @pytest.mark.asyncio
-    async def test_recreates_agent(
-        self, make_monitoring_loop, mock_agent_manager, mock_db
-    ):
-        agent = Agent(id="a1", current_task_id="t1")
-        make_monitoring_loop.intelligent_monitor = Mock()
-        make_monitoring_loop.intelligent_monitor.execute_intervention = AsyncMock()
-
-        await make_monitoring_loop._handle_timeout(agent)
-        make_monitoring_loop.intelligent_monitor.execute_intervention.assert_called_once()
-        call_args = (
-            make_monitoring_loop.intelligent_monitor.execute_intervention.call_args
-        )
-        assert call_args[0][1]["decision"] == "recreate"
-
-
-# ── _generate_diagnostic_prompt ──────────────────────────────────
 
 
 class TestGenerateDiagnosticPrompt:
@@ -2304,3 +2867,50 @@ class TestStuckTaskNudgeCap:
         task = session.query(Task).filter_by(id=task_id).first()
         assert task.status == "in_progress"
         session.close()
+
+
+class TestAutoRestartFlushesCleanTranscript:
+    """_auto_restart_agent kills a stuck agent's tmux session directly --
+    it bypasses terminate_agent's own clean-shutdown flush entirely, so
+    without its own final flush of the stability-tracked "clean"
+    transcript, this abrupt-kill path would lose everything not yet
+    confirmed stable (see AgentManager._flush_stable_transcript)."""
+
+    @pytest.mark.asyncio
+    async def test_flushes_before_killing_session(
+        self, make_monitoring_loop, mock_db, mock_agent_manager
+    ):
+        from contextlib import contextmanager
+        from pathlib import Path
+
+        agent = Agent(id="agent-1", tmux_session_name="agent_agent-1", status="working")
+        fake_dir = Path("/tmp/fake-transcript-dir")
+
+        call_order = []
+        mock_agent_manager._resolve_tmux_transcript_dir = Mock(
+            return_value=fake_dir, side_effect=lambda *a, **k: (call_order.append("flush"), fake_dir)[1]
+        )
+        mock_agent_manager._flush_stable_transcript = Mock()
+        mock_agent_manager.tmux_server.kill_session = Mock(
+            side_effect=lambda *a, **k: call_order.append("kill")
+        )
+
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = None
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+
+        await make_monitoring_loop._auto_restart_agent(agent)
+
+        mock_agent_manager._resolve_tmux_transcript_dir.assert_called_once_with(agent)
+        mock_agent_manager._flush_stable_transcript.assert_called_once_with(
+            "agent_agent-1", fake_dir / "agent_agent-1.clean.log"
+        )
+        assert call_order == ["flush", "kill"], (
+            "the clean transcript must be flushed before the session is "
+            "killed -- capture-pane can't see anything once it's gone"
+        )

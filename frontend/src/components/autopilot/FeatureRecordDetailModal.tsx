@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, FileText, Copy, Clock, CheckCircle2, XCircle, Loader2, Layers } from 'lucide-react';
+import { X, FileText, Copy, Clock, CheckCircle2, XCircle, Loader2, Layers, Trash2 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { MarkdownRenderer } from '@/utils/markdown';
 import { apiService } from '@/services/api';
 import { FeatureStatusBadge } from './DesignQueuePanel';
@@ -48,9 +49,33 @@ const FeatureRecordDetailModal: React.FC<FeatureRecordDetailModalProps> = ({ fea
     enabled: isRealFeature && !!selectedDoc,
   });
 
+  // `feature` is a point-in-time snapshot passed in by the parent (not
+  // itself live/refetched) -- track a local copy so a task deleted here
+  // disappears immediately instead of waiting for the modal to be
+  // reopened against fresh data.
+  const [tasks, setTasks] = useState<any[]>(feature?.tasks || []);
+  useEffect(() => {
+    setTasks(feature?.tasks || []);
+  }, [feature]);
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+
+  const handleDeleteTask = async (task: any) => {
+    if (!confirm(`Permanently delete this task${task.phase_name ? ` (${task.phase_name})` : ''}?`)) {
+      return;
+    }
+    setDeletingTaskId(task.id);
+    try {
+      await apiService.deleteTask(task.id);
+      setTasks((prev) => prev.filter((t) => t.id !== task.id));
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Failed to delete task');
+    } finally {
+      setDeletingTaskId(null);
+    }
+  };
+
   if (!feature) return null;
 
-  const tasks = feature.tasks || [];
   const doneCount = tasks.filter((t: any) => t.status === 'done').length;
 
   return (
@@ -188,6 +213,18 @@ const FeatureRecordDetailModal: React.FC<FeatureRecordDetailModalProps> = ({ fea
                           >
                             <span className="text-gray-600 truncate flex-1">{t.description || t.id}</span>
                             <span className="text-gray-400 ml-2 flex-shrink-0">{t.status}</span>
+                            <button
+                              onClick={() => handleDeleteTask(t)}
+                              disabled={deletingTaskId === t.id}
+                              className="ml-2 p-1 rounded text-gray-300 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-30"
+                              title="Delete task"
+                            >
+                              {deletingTaskId === t.id ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-3 h-3" />
+                              )}
+                            </button>
                           </div>
                         ))}
                       </div>

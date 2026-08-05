@@ -31,9 +31,13 @@ from src.cli.commands.start import (
     _start_monitor,
 )
 from src.cli.utils import save_pid
+from src.core.constants import HEPHAESTUS_LOGS_DIR
 from src.core.logging_config import configure_logging
 
-configure_logging()
+# Logs to watchdog.log directly via a daily-rotating handler -- start.py no
+# longer redirects this process's stdout to that same path (rotation has
+# to happen from inside the writing process).
+configure_logging(log_file=str(Path(HEPHAESTUS_LOGS_DIR) / "watchdog.log"))
 logger = logging.getLogger(__name__)
 
 

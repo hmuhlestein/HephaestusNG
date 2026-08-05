@@ -14,6 +14,33 @@ import pytest
 
 from src.agents.manager import AgentManager
 from src.core.database import Task, Workflow
+from src.phases.models import PhaseContext
+from src.sdk.models import Phase as SdkPhase
+
+
+class _FakePhaseManagerWithContext:
+    """Minimal phase manager stub returning a real PhaseContext for any
+    phase_id -- enough to exercise format_initial_message's phase-context
+    section without the full PhaseManager/DB machinery."""
+
+    def get_phase_context(self, phase_id):
+        sdk_phase = SdkPhase(
+            id=1,
+            name="Test Phase",
+            description="Do the thing",
+            done_definitions=["done"],
+            working_directory=".",
+        )
+        return PhaseContext(
+            phase_id=phase_id,
+            workflow_id="wf-1",
+            phase=sdk_phase,
+            all_phases=[sdk_phase],
+            current_status="in_progress",
+        )
+
+    def phase_role_previously_completed(self, phase_id, role):
+        return False
 
 
 class MockTask:
@@ -422,6 +449,12 @@ class TestWorkflowContextFormats:
         agent_id = str(uuid.uuid4())
         phase_id = str(uuid.uuid4())
 
+        # The word "Phase" only appears via the phase-context section,
+        # which requires a real phase_manager (a bare phase_id on the task
+        # alone isn't enough -- see AgentPromptBuilder.format_initial_message,
+        # which logs a warning and renders no phase context at all when
+        # phase_manager is None, same as this fixture's default).
+        agent_manager.phase_manager = _FakePhaseManagerWithContext()
         task = MockTask(workflow_id=workflow_id, phase_id=phase_id)
 
         message = agent_manager._format_initial_message(

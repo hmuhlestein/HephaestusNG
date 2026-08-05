@@ -42,15 +42,12 @@ class Config:
         server = config.get("server", {})
         self.mcp_host = server.get("host", "0.0.0.0")
         self.mcp_port = server.get("port", 8300)
+        self.frontend_port = server.get("frontend_port", 5300)
         self.enable_cors = server.get("enable_cors", True)
 
         # Paths settings
         paths = config.get("paths", {})
         self.database_path = Path(paths.get("database", "./hephaestus.db"))
-        self.phases_folder = paths.get("phases_folder", "./sample-phases")
-        self.branch_base_path = Path(
-            paths.get("worktree_base", "/tmp/hephaestus_worktrees")
-        )
         # Worktree isolation base. None => WorktreeManager computes <repo>/.worktrees
         # (in-repo, git-excluded). Set an explicit path only to override.
         _wt_base = paths.get("worktree_base_path")
@@ -92,6 +89,29 @@ class Config:
         # primary. None means no global fallback, matching prior behavior.
         self.default_fallback_cli_tool = agents.get("default_fallback_cli_tool")
         self.default_fallback_cli_model = agents.get("default_fallback_cli_model")
+        # In-session model fallback for an agent frozen too long (see
+        # docs/PI_MODEL_FALLBACK_DESIGN.md) -- distinct from
+        # default_fallback_cli_tool/_model above, which tears down and
+        # relaunches under a different CLI entirely. Only takes effect for
+        # a CLI whose CLIAgentInterface subclass overrides
+        # model_fallback_keystrokes (today, pi and claude). Each CLI reads
+        # its own config value (CLIAgentInterface.fallback_model) rather
+        # than sharing one -- pi's is an OpenRouter path its picker
+        # resolves, claude's is one of Claude Code's own model aliases, and
+        # neither vocabulary means anything to the other CLI. None/unset
+        # disables the feature for that CLI.
+        self.cli_model_fallback_wait_seconds = agents.get("cli_model_fallback_wait_seconds", 120)
+        self.cli_model_fallback = agents.get("cli_model_fallback")
+        self.secondary_cli_model_fallback = agents.get("secondary_cli_model_fallback")
+        # Per-(cli_tool, cli_model) concurrency cap, keyed by "cli_tool/cli_model"
+        # (e.g. a local model with a single inference slot:
+        # {"pi/Qwen3.6-27B-UD-Q4_K_XL.gguf": 1}). Distinct from
+        # max_concurrent_agents (mcp section) below, which caps total agents
+        # regardless of which CLI/model they're on -- this stops the queue
+        # from dispatching a second agent onto a combo that can only
+        # actually serve one request at a time, which just leaves the
+        # second agent frozen waiting its turn instead of doing anything.
+        self.cli_model_concurrency_limits = agents.get("cli_model_concurrency_limits", {}) or {}
         # Per-turn reasoning budget for pi agents (off|minimal|low|medium|high|xhigh).
         # Bounds rumination; per-phase `thinking_level` overrides this.
         self.cli_thinking_level = agents.get("cli_thinking_level", "medium")
@@ -122,6 +142,9 @@ class Config:
             "guardian_min_agent_age_seconds", 60
         )
         self.max_ignored_steering = monitoring.get("max_ignored_steering", 3)
+        self.stuck_detection_minutes = monitoring.get("stuck_detection_minutes", 30)
+        self.guardian_nudge_delay_minutes = monitoring.get("guardian_nudge_delay_minutes", 15)
+        self.max_stuck_nudges = monitoring.get("max_stuck_nudges", 5)
 
         # MCP settings
         mcp = config.get("mcp", {})
@@ -148,7 +171,6 @@ class Config:
         self.tmux_output_lines = (
             200  # Used by Guardian/monitoring for performance (UI uses 2000)
         )
-        self.stuck_detection_minutes = 5
         self.agent_timeout_minutes = 30
         self.max_context_memories = 20
         self.similarity_threshold = 0.7
@@ -283,8 +305,6 @@ class Config:
             self.glm_api_token_env = os.getenv("GLM_API_TOKEN_ENV")
 
         # Worktree settings
-        if os.getenv("BRANCH_BASE_PATH"):
-            self.branch_base_path = Path(os.getenv("BRANCH_BASE_PATH"))
         if os.getenv("MAIN_REPO_PATH"):
             self.main_repo_path = Path(os.getenv("MAIN_REPO_PATH"))
         if os.getenv("GIT_BASE_BRANCH"):
@@ -368,10 +388,6 @@ class Config:
         if os.getenv("LOG_LEVEL"):
             self.log_level = os.getenv("LOG_LEVEL")
 
-        # Phases folder from environment
-        if os.getenv("HEPHAESTUS_PHASES_FOLDER"):
-            self.phases_folder = os.getenv("HEPHAESTUS_PHASES_FOLDER")
-
         # Task deduplication settings from environment
         if os.getenv("TASK_DEDUP_ENABLED"):
             self.task_dedup_enabled = os.getenv("TASK_DEDUP_ENABLED").lower() == "true"
@@ -448,9 +464,6 @@ class Config:
         if self.mcp_port:
             env["MCP_PORT"] = str(self.mcp_port)
 
-        # Worktree settings
-        if self.branch_base_path:
-            env["BRANCH_BASE_PATH"] = str(self.branch_base_path)
         if hasattr(self, "working_directory") and self.working_directory:
             env["WORKING_DIRECTORY"] = str(self.working_directory)
 

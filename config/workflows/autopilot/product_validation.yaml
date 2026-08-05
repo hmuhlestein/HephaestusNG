@@ -4,6 +4,10 @@ name: product_validation
 # score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
 spec_gate: true
 thinking_level: medium
+cli_tool: claude
+cli_model: sonnet
+fallback_cli_tool: pi
+fallback_cli_model: openrouter/mimo-v2.5-pro
 description: |
   Validate that the implementation meets the original design intent.
 
@@ -13,12 +17,12 @@ description: |
   and produces a validation report for human review.
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
-  - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write ONE file, product_validation.md, to ./docs/product_validation/ — a
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
+  - Write ONE file, validation.md, to ./.hephaestus/product_validation/ — a
     YAML frontmatter block (structured verdict + unmet_requirements, the
     gate input) followed by the full narrative report, in a single file.
-  - Use exactly that subdirectory name (./docs/product_validation/) — the
+  - Use exactly that subdirectory name (./.hephaestus/product_validation/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
 done_definitions:
@@ -27,13 +31,14 @@ done_definitions:
   - "Non-functional requirements checked (performance, security)"
   - "Integration with existing system validated"
   - "User experience flows verified"
+  - "Feature exposure verified - API endpoints registered, UI components rendered, routes connected"
   - "Edge cases from design doc confirmed handled"
-  - "product_validation.md created with a YAML frontmatter block (structured verdict + unmet_requirements, gate input) followed by the validation report"
+  - "validation.md created with a YAML frontmatter block (structured verdict + unmet_requirements, gate input) followed by the validation report"
   - "Validation report includes recommendations for human reviewer"
   - "Memory saved with validation outcome"
   - "Task marked as done"
 outputs:
-  - "product_validation.md"
+  - "validation.md"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
   Technical terms exact. No pleasantries (sure/certainly/happy to). 
@@ -54,15 +59,15 @@ additional_notes: |
   
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
-  - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
-  - ALL docs/reports go in "Docs Path:" (product_validation.md, etc.).
-  - Code goes in "Project Path:" (src/, tests/, etc.).
+  - Do NOT use absolute paths outside your working directory.
+  - ALL docs/reports go in "Artifacts Path" (validation.md, etc.).
+  - Code goes in "Project Path" (src/, tests/, etc.).
   - Your task description contains the exact paths — copy them exactly.
   
   Read the original design document again from ./.hephaestus/design.md.
-  This is your SOURCE OF TRUTH — not requirements_analysis.md, not architecture.md.
+  This is your SOURCE OF TRUTH — not requirements.md, not architecture.md.
   Those documents are derived artifacts and may have expanded beyond the design scope.
 
   SCOPE CHECK (do this immediately after reading the design doc):
@@ -74,24 +79,41 @@ additional_notes: |
 
   Also read:
   - AGENTS.md - Repository guidelines, coding conventions, project structure
-  - requirements_analysis.md (what was extracted — compare against design for scope drift)
+  - requirements.md (what was extracted — contains REQ-XX requirement IDs)
   - architecture.md (how it was designed — compare against design for scope drift)
-  - doc_review_report.md (documentation quality review)
-  - qa_report.md (what was tested)
-  
+  - docs.md (documentation quality review)
+  - qa.md (what was tested)
+
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: VERIFY FUNCTIONAL REQUIREMENTS
+  STEP 2: VERIFY FUNCTIONAL REQUIREMENTS (REQ-XX TRACKING)
   ═══════════════════════════════════════════════════════════════════════
-  
+
+  **REQUIREMENT TRACKING (MANDATORY):**
+  requirements.md contains REQ-XX numbered requirements. For EACH REQ-XX:
+
+  1. Find the corresponding code implementation
+  2. Verify it does what the design doc specifies
+  3. Check acceptance criteria are met
+  4. Check if the Success Criteria checkbox `[x] REQ-XX` is checked (set by development)
+  5. Create a compliance matrix in your report:
+
+  | REQ ID | Requirement | Status | Evidence | Files |
+  |--------|-------------|--------|----------|-------|
+  | REQ-01 | [description] | ✅ MET / ❌ UNMET | [How verified] | [files] |
+  | REQ-02 | [description] | ✅ MET / ❌ UNMET | [How verified] | [files] |
+
+  6. If any REQ-XX is UNMET, include it in the unmet_requirements
+     list in the YAML frontmatter of your report.
+
   For EACH functional requirement from the design document:
-  
+
   1. Find the corresponding code implementation
   2. Verify it does what the design doc specifies
   3. Check acceptance criteria are met
   4. Note any gaps or deviations
-  
+
   Create a compliance matrix:
-  
+
   | Design Requirement | Implementation | Status | Evidence |
   |--------------------|----------------|--------|----------|
   | [From design doc]  | [File/function] | PASS/FAIL | [How verified] |
@@ -102,7 +124,7 @@ additional_notes: |
   
   Check performance, security, and scalability claims:
   - Are performance targets met? (check benchmarks if available)
-  - Are security measures in place? (check security_report.md)
+  - Are security measures in place? (check security.md)
   - Does it scale as designed?
   
   ═══════════════════════════════════════════════════════════════════════
@@ -125,10 +147,60 @@ additional_notes: |
   - Is the workflow intuitive?
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6: CREATE VALIDATION REPORT
+  STEP 6: VERIFY FEATURE IS FULLY EXPOSED AND ACCESSIBLE (MANDATORY)
+  ═══════════════════════════════════════════════════════════════════════
+
+  ⚠️  THIS STEP CATCHES FEATURES THAT "WORK" BUT AREN'T ACCESSIBLE. ⚠️
+
+  Many features are implemented correctly but fail because they're not
+  properly exposed to users. You MUST verify ALL of the following:
+
+  **API/Endpoint Exposure:**
+  - If the feature adds API endpoints, verify they are registered in the router
+  - Check that route handlers are imported and included in the app
+  - Verify the endpoint path matches what the frontend/client expects
+  - Test that the endpoint actually responds (curl if possible)
+
+  **Frontend/UI Exposure:**
+  - If the feature adds UI elements, verify they are imported and rendered
+  - Check that new components are actually used (not just created)
+  - Verify navigation/routing connects to the new UI
+  - Check that the feature appears in menus, sidebars, or navigation
+  - Verify buttons/links actually trigger the feature
+
+  **Configuration Exposure:**
+  - If the feature adds config options, verify they're read from config
+  - Check that config defaults are sensible
+  - Verify the config is documented or visible in settings UI
+
+  **CLI/Command Exposure:**
+  - If the feature adds CLI commands, verify they're registered
+  - Check that the command appears in --help output
+  - Verify the command actually executes
+
+  **Database/Model Exposure:**
+  - If the feature adds DB tables/columns, verify migrations exist
+  - Check that the ORM models are imported and used
+  - Verify API endpoints read/write to the new tables
+
+  **Common Failure Patterns to Check:**
+  - Component created but never imported/rendered anywhere
+  - API endpoint defined but not added to router
+  - Config option defined but never read
+  - Database model created but never queried
+  - Feature works in isolation but not connected to the system
+  - Feature accessible only via direct URL, not via navigation
+  - Data computed but never included in API response (e.g. cost calculated but not in result dict)
+  - Return statement before data enrichment code runs
+  - Frontend component exists but parent never passes required props
+
+  If ANY of these checks fail, mark as UNMET and include in report.
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 7: CREATE VALIDATION REPORT
   ═══════════════════════════════════════════════════════════════════════
   
-  Write product_validation.md:
+  Write validation.md:
   
   # Product Validation Report
   
@@ -174,21 +246,21 @@ additional_notes: |
   [NEEDS_WORK: [specific issues that need addressing]]
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6.5: PREPEND STRUCTURED VALIDATION RESULT (REQUIRED — drives the pipeline gate)
+  STEP 8: WRITE validation.md WITH FRONTMATTER (REQUIRED — drives the pipeline gate)
   ═══════════════════════════════════════════════════════════════════════
 
-  product_validation.md is ONE file: a YAML frontmatter block (machine-
+  ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
+
+  validation.md is ONE file: a YAML frontmatter block (machine-
   readable, scored to decide whether to ship, return to development, or
   return to architecture) followed immediately by the full narrative
   report from the steps above.
 
-  Prepend this frontmatter block to the very top of ./docs/product_validation/product_validation.md,
-  with EXACTLY this schema (type first, then a closing `---`, then the
-  narrative report immediately after):
+  Write the ENTIRE file at once with frontmatter at the top:
 
   ```
   ---
-  type: product_validation_result
+  type: product_validation
   verdict: PASS
   unmet_requirements: []
   agent_score: 0.0
@@ -222,7 +294,7 @@ additional_notes: |
     unmet requirements).
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 7: SAVE TO MEMORY
+  STEP 9: SAVE TO MEMORY
   ═══════════════════════════════════════════════════════════════════════
   
   Save validation outcome to memory:
@@ -262,7 +334,7 @@ additional_notes: |
   
   After writing all your output files, call:
   
-  hephaestus_complete_my_task({
+  complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was accomplished>",
     "key_learnings": ["<key findings or decisions>"]

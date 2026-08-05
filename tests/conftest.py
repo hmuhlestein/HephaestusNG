@@ -83,7 +83,6 @@ def mock_heph_config():
     config.mcp_host = "127.0.0.1"
     config.mcp_port = 8300
     config.enable_cors = True
-    config.branch_base_path = Path("/tmp/hephaestus_worktrees")
     config.worktree_base_path = None
     config.project_root = Path("/tmp/test-project")
     config.main_repo_path = Path("/tmp/test-project")
@@ -95,7 +94,6 @@ def mock_heph_config():
     config.llm_model = "openai/gpt-4o"
     config.task_similarity_threshold = 0.7
     config.task_related_threshold = 0.4
-    config.phases_folder = "./sample-phases"
     return config
 
 
