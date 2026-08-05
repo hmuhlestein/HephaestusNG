@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent / "src"))
 
 from src.agents.manager import AgentManager
+from src.core.constants import HEPHAESTUS_LOGS_DIR
 from src.core.database import DatabaseManager
 from src.core.logging_config import configure_logging
 from src.core.simple_config import get_config
@@ -29,12 +30,12 @@ from src.memory.rag import RAGSystem
 from src.monitoring.monitor import MonitoringLoop
 from src.phases import PhaseManager
 
-# Configure logging using shared helper (L-2 fix)
-# Only log to stdout — the process is launched with stdout
-# redirected to ~/.hephaestus/logs/monitor.log (see src/cli/commands/start.py),
-# so a second FileHandler here would just duplicate every line into a stray
-# ./logs/monitor.log under the repo (and monitor.stdout.log historically).
-configure_logging()
+# Configure logging using shared helper (L-2 fix). Logs to monitor.log
+# directly via a daily-rotating handler -- start.py no longer redirects
+# this process's stdout to that same path (rotation has to happen from
+# inside the writing process; a second FileHandler here would also just
+# duplicate every line into a stray ./logs/monitor.log under the repo).
+configure_logging(log_file=str(Path(HEPHAESTUS_LOGS_DIR) / "monitor.log"))
 
 logger = logging.getLogger(__name__)
 

@@ -604,13 +604,52 @@ class TestPickNextDesignResume:
 
         assert result is None
 
-    def test_pending_design_still_wins_over_active(self, db_env, tmp_path):
-        """A genuinely new pending design must still be picked before
-        resuming an in-flight one -- resume is only a fallback."""
+    def test_active_design_with_incomplete_feature_wins_over_pending(
+        self, db_env, tmp_path
+    ):
+        """An in-flight design with unfinished feature work must be
+        resumed before a brand new pending design is started. Regression
+        (live incident): the "pending" query ran unconditionally before
+        this resume check, so a low-priority pending design always won --
+        starting a whole new design's Phase 0 while an active design sat
+        with unblocked, ready-to-run features it never got a turn to
+        finish (e.g. a feature's only blocking dependency completing
+        moments after the design queue had already moved past it)."""
         from src.core.database import AutopilotDesign
 
         self._seed_project_and_design(
             db_env, tmp_path, "active", ["active"]
+        )
+        (tmp_path / ".hephaestus" / "designs" / "design2.md").write_text("# Design 2")
+        with db_env.session_scope() as session:
+            session.add(
+                AutopilotDesign(
+                    id="des-2",
+                    project_id="proj-1",
+                    filename="design2.md",
+                    name="Design 2",
+                    ordinal=2,
+                    size_bytes=1,
+                    extension=".md",
+                    status="pending",
+                )
+            )
+
+        result = pick_next_design(tmp_path, set(), MockLogger())
+
+        assert result is not None
+        assert result.db_id == "des-1"
+
+    def test_pending_design_picked_when_no_active_design_has_incomplete_work(
+        self, db_env, tmp_path
+    ):
+        """Once the active design has nothing left to resume (all features
+        terminal), the next pending design should still be picked -- the
+        reordered priority must not starve the pending queue entirely."""
+        from src.core.database import AutopilotDesign
+
+        self._seed_project_and_design(
+            db_env, tmp_path, "active", ["completed", "skipped"]
         )
         (tmp_path / ".hephaestus" / "designs" / "design2.md").write_text("# Design 2")
         with db_env.session_scope() as session:

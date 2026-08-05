@@ -9,7 +9,7 @@ interface BudgetStatusCardProps {
 }
 
 const BudgetStatusCard: React.FC<BudgetStatusCardProps> = ({
-  projectId,
+  projectId: _projectId,
   costTotalUsd = 0,
   costLimitUsd = null,
   onConfigureBudget,

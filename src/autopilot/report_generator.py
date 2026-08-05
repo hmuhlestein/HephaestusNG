@@ -141,7 +141,7 @@ def generate_feature_report(docs_path: str, metrics: dict = None) -> str:
         <div class="section">
             <h2>📝 Forensics Note</h2>
             <div class="forensics-note">
-                <p>🔍 <strong>Pipeline Self-Improvement:</strong> The forensics phase analyzed this pipeline run and identified opportunities for prompt refinement and methodology improvements. See <code>forensics_report.md</code> for detailed findings.</p>
+                <p>🔍 <strong>Pipeline Self-Improvement:</strong> The forensics phase analyzed this pipeline run and identified opportunities for prompt refinement and methodology improvements. See <code>forensics.md</code> for detailed findings.</p>
             </div>
         </div>
 

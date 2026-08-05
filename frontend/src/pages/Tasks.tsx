@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FileText, User, Bot, Clock, ChevronRight, Copy, Link2, Search } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { apiService } from '@/services/api';
 import { Task } from '@/types';
 import StatusBadge from '@/components/StatusBadge';
@@ -164,15 +165,17 @@ const TaskRow: React.FC<{
 };
 
 const Tasks: React.FC = () => {
+  const [searchParams] = useSearchParams();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [filters, setFilters] = useState<TaskFilters>({
-    searchText: '',
+    searchText: searchParams.get('search') || '',
     status: 'all',
-    phase: 'all',
+    phase: searchParams.get('phase') || 'all',
     priority: 'all',
     assignment: 'all',
     dateRange: 'all',
   });
+  const workflowFilter = searchParams.get('workflow') || '';
   const [newTaskIds, setNewTaskIds] = useState<Set<string>>(new Set());
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const { subscribe } = useWebSocket();
@@ -263,6 +266,11 @@ const Tasks: React.FC = () => {
         if (filters.phase !== 'no-phase' && task.phase_name !== filters.phase) {
           return false;
         }
+      }
+
+      // Workflow filter (from URL param)
+      if (workflowFilter && task.workflow_id !== workflowFilter) {
+        return false;
       }
 
       // Priority filter

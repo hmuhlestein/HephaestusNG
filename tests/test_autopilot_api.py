@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -370,6 +370,68 @@ class TestQueueRerun:
         assert resp.status_code == 409, resp.text
         assert "proj-a" in resp.text
 
+    def test_rerun_cleans_up_old_worktree_before_returning(
+        self, project_client, monkeypatch, tmp_path
+    ):
+        """Regression: rerun deleted a design's Workflow rows (a "clean
+        slate") but never removed the worktree directory on disk.
+        _create_integration_worktree's per-design path is deterministic and
+        unchanged by rerun, and only creates fresh `if not wt_path.exists()`
+        -- so the next run silently reused the OLD worktree's stale commits
+        instead of actually starting over. This must synchronously clean up
+        the worktree as part of rerun, not rely on the best-effort
+        background branch sweep (Step 3), which races the orchestrator's
+        own worktree creation for the freshly-reset design."""
+        client, dirs = project_client
+        project_dir = dirs["project_dir"]
+        design_file = dirs["design_dir"] / "01-auth.md"
+
+        worktree = project_dir / ".worktrees" / "wt_feature-auth"
+        worktree.mkdir(parents=True)
+        (worktree / ".git").mkdir()
+
+        from src.core.database import Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-rerun-1", name="autopilot", phases_folder_path="/tmp",
+                    status="failed", definition_id="autopilot",
+                    working_directory=str(worktree),
+                    launch_params={
+                        "design_document": str(design_file),
+                        "project_path": str(project_dir),
+                    },
+                )
+            )
+
+        fake_service = Mock()
+        fake_service.running = False
+        fake_service.start = AsyncMock(return_value={"started": True})
+        fake_service.stop = AsyncMock(return_value={"stopped": True})
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-fixed"
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._get_or_create_project_id",
+            lambda project_path: "proj-fixed",
+        )
+
+        with patch("src.autopilot.orchestrator._cleanup_worktree") as mock_cleanup:
+            resp = client.post(
+                "/api/autopilot/queue/rerun",
+                json={"filename": "01-auth.md", "project_path": str(project_dir)},
+            )
+
+        assert resp.status_code == 200, resp.text
+        mock_cleanup.assert_called_once()
+        call_args = mock_cleanup.call_args[0]
+        assert call_args[0] == worktree
+        assert str(call_args[2]) == str(project_dir)
+
 
 # ── Caching ──────────────────────────────────────────────────────
 
@@ -555,7 +617,7 @@ class TestFeatures:
                 }
             )
         )
-        (docs / "qa_report.md").write_text("# QA Report\nSome content here")
+        (docs / "qa.md").write_text("# QA Report\nSome content here")
 
         resp = client.get("/api/autopilot/features/20260101-120000_detail_test")
         assert resp.status_code == 200
@@ -1561,6 +1623,46 @@ class TestProjectDesigns:
             )
             assert remaining == []
 
+    def test_remove_design_with_cost_history_does_not_500(self, project_client):
+        """Regression: CostEntry.task_id/workflow_id are enforced foreign
+        keys (PRAGMA foreign_keys=ON) that this cleanup never deleted --
+        removing a design whose workflow/tasks had ever recorded real LLM
+        cost (the common case, not the exception, now that cost tracking
+        exists) raised an unhandled IntegrityError instead of succeeding."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, CostEntry, Task, Workflow, get_db
+
+        with get_db() as db:
+            design = db.query(AutopilotDesign).filter_by(project_id=pid, filename="01-auth.md").first()
+            db.add(
+                Workflow(
+                    id="wf-cost-1", name="autopilot", phases_folder_path="/tmp",
+                    status="failed", definition_id="autopilot", design_id=design.id,
+                )
+            )
+            db.add(
+                Task(
+                    id="task-cost-1", workflow_id="wf-cost-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="failed",
+                )
+            )
+            db.add(
+                CostEntry(
+                    id="cost-1", task_id="task-cost-1", workflow_id="wf-cost-1",
+                    source="pi", cost_usd=0.05,
+                )
+            )
+            db.commit()
+
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/01-auth.md")
+        assert resp.status_code == 200, resp.text
+
+        with get_db() as db:
+            assert db.query(Workflow).filter_by(id="wf-cost-1").first() is None
+            assert db.query(CostEntry).filter_by(id="cost-1").first() is None
+
     def test_design_status_surfaces_failure_reason(self, project_client):
         """Regression: AutopilotDesign had no column to store *why* a design
         failed -- orchestrator.py's run_phase0 always passed error=... to
@@ -1655,6 +1757,75 @@ class TestProjectDesigns:
         body = resp.json()
         assert body["features"][0]["cost_total_usd"] == 1.5
         assert body["cost_total_usd"] == 1.5
+
+    def test_design_status_ignores_stale_active_workflow_whose_feature_is_done(
+        self, project_client
+    ):
+        """Regression, observed live on BACKEND_DESIGN.md: matching_workflows
+        is deliberately broad (LIKE-matched on the bare design filename), so
+        it also catches every OTHER feature's workflow that happened to
+        originate from the same design document -- a design gets re-run
+        once per decomposed feature, and each feature's own workflow
+        references the same design_document path in its launch_params. One
+        such sibling workflow (Credit Management System) had its Feature
+        row correctly flip to "completed" but its own Workflow.status was
+        never cleaned up from "active" -- the endpoint's "any workflow
+        active wins" rule then made the WHOLE design look permanently
+        "Active" in the UI, forever, even after every feature (including
+        this design's actual current one) had genuinely finished."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, Feature, Workflow, get_db
+
+        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        (design_dir / "stale-design.md").write_text("# Design")
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-test-stale",
+                    project_id=pid,
+                    filename="stale-design.md",
+                    name="Stale Design",
+                    ordinal=14,
+                    size_bytes=10,
+                    extension=".md",
+                    status="active",
+                )
+            )
+            db.add(
+                Workflow(
+                    id="wf-stale-active",
+                    name="autopilot",
+                    definition_id="autopilot",
+                    phases_folder_path="/tmp",
+                    status="active",  # stale -- never cleaned up
+                    launch_params={
+                        "design_document": str(design_dir / "stale-design.md"),
+                        "project_path": str(dirs["project_dir"]),
+                    },
+                )
+            )
+
+        with get_db() as db:
+            db.add(
+                Feature(
+                    id="feat-stale-1",
+                    design_id="des-test-stale",
+                    feature_key="credit-system",
+                    name="Credit Management System",
+                    scope="s",
+                    status="completed",
+                    workflow_id="wf-stale-active",
+                )
+            )
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/stale-design.md/status")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] != "active"
 
     def test_design_status_surfaces_budget_pause_reason(self, project_client):
         """A budget-triggered pause must be distinguishable from a plain
@@ -1888,3 +2059,374 @@ class TestProjectPathTraversal:
 
         resp = client.delete(f"/api/autopilot/projects/{pid}/designs/../../etc/passwd")
         assert resp.status_code in (400, 404)
+
+
+class TestCleanupBranchesProjectScoping:
+    """POST /cleanup-branches used to construct WorktreeManager with no
+    .reload(), so it silently operated on whatever project happened to be
+    config.main_repo_path's current global default -- wrong project as
+    soon as more than one exists. Live impact: a real cleanup run swept
+    zero of ~25 stale worktrees sitting in a different project's repo,
+    with no error surfaced anywhere."""
+
+    def test_explicit_project_path_is_used(self, project_client, monkeypatch):
+        client, dirs = project_client
+        target = str(dirs["project_dir"])
+
+        with patch("src.core.worktree_manager.WorktreeManager") as MockWtMgr:
+            mock_instance = MockWtMgr.return_value
+            mock_instance.cleanup_all_stale_branches.return_value = {
+                "cleaned": 0,
+                "merged": 0,
+                "failed": 0,
+                "worktrees_cleaned": 0,
+                "branches": [],
+            }
+            resp = client.post(
+                "/api/autopilot/cleanup-branches",
+                params={"project_path": target},
+            )
+
+        assert resp.status_code == 200
+        mock_instance.reload.assert_called_once_with(target)
+
+    def test_falls_back_to_active_project_when_omitted(self, project_client):
+        client, dirs = project_client
+        target = str(dirs["project_dir"])
+
+        from src.core.database import AutopilotProject, get_db
+
+        with get_db() as db:
+            proj = AutopilotProject(
+                id="proj-active-1", name="Active", base_dir=target, is_active=True
+            )
+            db.add(proj)
+
+        with patch("src.core.worktree_manager.WorktreeManager") as MockWtMgr:
+            mock_instance = MockWtMgr.return_value
+            mock_instance.cleanup_all_stale_branches.return_value = {
+                "cleaned": 0,
+                "merged": 0,
+                "failed": 0,
+                "worktrees_cleaned": 0,
+                "branches": [],
+            }
+            resp = client.post("/api/autopilot/cleanup-branches")
+
+        assert resp.status_code == 200
+        mock_instance.reload.assert_called_once_with(target)
+
+    def test_no_project_path_and_no_active_project_is_rejected(self, project_client):
+        client, dirs = project_client
+
+        resp = client.post("/api/autopilot/cleanup-branches")
+
+        assert resp.status_code == 400
+
+
+class TestCostEntryAgentBinding:
+    """ticket-5a75167a: POST /cost-entries authenticated a caller's identity
+    but never bound it to the entry being written -- a caller authenticated
+    as one real agent could supply a *different* agent_id in the body and
+    post a cost entry impersonating another agent's task. System/SDK
+    identities have no single agent to bind to (they post cost entries on
+    behalf of whichever agent/task they're servicing), so only a real
+    per-agent UUID caller is bound to its own authenticated identity."""
+
+    def _mock_cost_stack(self, monkeypatch):
+        from contextlib import contextmanager
+        from unittest.mock import MagicMock
+
+        import src.core.cost_derivation as cost_derivation_mod
+        import src.core.database as database_mod
+
+        recorded = {}
+
+        def fake_record_cost(**kwargs):
+            recorded.update(kwargs)
+            entry = MagicMock()
+            entry.id = "entry-1"
+            entry.cost_usd = kwargs["cost_usd"]
+            return entry
+
+        monkeypatch.setattr(cost_derivation_mod, "record_cost", fake_record_cost)
+
+        @contextmanager
+        def fake_get_db():
+            yield MagicMock()
+
+        monkeypatch.setattr(database_mod, "get_db", fake_get_db)
+        return recorded
+
+    def test_real_agent_cannot_claim_a_different_agent_id(self, client, monkeypatch):
+        import src.mcp.autopilot_api as api_mod
+
+        monkeypatch.setattr(
+            api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
+        )
+        self._mock_cost_stack(monkeypatch)
+
+        resp = client.post(
+            "/api/autopilot/cost-entries",
+            json={
+                "task_id": "someone-elses-task",
+                "agent_id": "someone-elses-agent",
+                "source": "pi",
+                "cost_usd": 0.01,
+            },
+            headers={"X-Agent-ID": "11111111-1111-1111-1111-111111111111"},
+        )
+        assert resp.status_code == 403
+
+    def test_real_agent_id_matching_header_is_allowed(self, client, monkeypatch):
+        import src.mcp.autopilot_api as api_mod
+
+        monkeypatch.setattr(
+            api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
+        )
+        recorded = self._mock_cost_stack(monkeypatch)
+
+        own_id = "11111111-1111-1111-1111-111111111111"
+        resp = client.post(
+            "/api/autopilot/cost-entries",
+            json={
+                "task_id": "my-task",
+                "agent_id": own_id,
+                "source": "pi",
+                "cost_usd": 0.01,
+            },
+            headers={"X-Agent-ID": own_id},
+        )
+        assert resp.status_code == 200
+        assert recorded["agent_id"] == own_id
+
+    def test_system_identity_may_post_on_behalf_of_any_agent(self, client, monkeypatch):
+        import src.mcp.autopilot_api as api_mod
+
+        monkeypatch.setattr(
+            api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
+        )
+        recorded = self._mock_cost_stack(monkeypatch)
+
+        resp = client.post(
+            "/api/autopilot/cost-entries",
+            json={
+                "task_id": "some-task",
+                "agent_id": "some-other-real-agent",
+                "source": "pi",
+                "cost_usd": 0.01,
+            },
+            headers={"X-Agent-ID": "orchestrator"},
+        )
+        assert resp.status_code == 200
+        assert recorded["agent_id"] == "some-other-real-agent"
+
+
+class TestDeleteFeature:
+    """DELETE /features/{feature_id}: an old/stuck feature (dead-end
+    workflow, no path back to "done") had no way to actually disappear
+    from the queue -- pause/stop/resume/rerun all assume the work is still
+    salvageable. This removes the feature, its workflow, its tasks, and
+    dependent records outright."""
+
+    def test_deletes_feature_with_no_workflow(self, project_client):
+        client, dirs = project_client
+        from src.core.database import Feature, get_db
+
+        with get_db() as db:
+            db.add(
+                Feature(
+                    id="feat-1", design_id="does-not-matter", feature_key="x",
+                    name="X", scope="s", status="pending",
+                )
+            )
+
+        resp = client.delete("/api/autopilot/features/feat-1")
+        assert resp.status_code == 200
+        assert resp.json() == {"success": True, "feature_id": "feat-1"}
+
+        with get_db() as db:
+            assert db.query(Feature).filter_by(id="feat-1").first() is None
+
+    def test_deletes_feature_workflow_and_tasks(self, project_client):
+        client, dirs = project_client
+        from src.core.database import Feature, Task, Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-del-1", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                )
+            )
+            db.add(
+                Feature(
+                    id="feat-2", design_id="does-not-matter", feature_key="y",
+                    name="Y", scope="s", status="active", workflow_id="wf-del-1",
+                )
+            )
+            db.add(
+                Task(
+                    id="task-del-1", workflow_id="wf-del-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="pending",
+                )
+            )
+
+        resp = client.delete("/api/autopilot/features/feat-2")
+        assert resp.status_code == 200
+
+        with get_db() as db:
+            assert db.query(Feature).filter_by(id="feat-2").first() is None
+            assert db.query(Workflow).filter_by(id="wf-del-1").first() is None
+            assert db.query(Task).filter_by(id="task-del-1").first() is None
+
+    def test_deletes_feature_with_cost_history(self, project_client):
+        """CostEntry.task_id/workflow_id are also enforced FKs -- a feature
+        that ever recorded real LLM cost (the common case, not the
+        exception, now that cost tracking exists) would otherwise fail to
+        delete with an IntegrityError."""
+        client, dirs = project_client
+        from src.core.database import CostEntry, Feature, Task, Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-del-cost", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                )
+            )
+            db.add(
+                Feature(
+                    id="feat-cost", design_id="does-not-matter", feature_key="c",
+                    name="C", scope="s", status="active", workflow_id="wf-del-cost",
+                )
+            )
+            db.add(
+                Task(
+                    id="task-del-cost", workflow_id="wf-del-cost", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="done",
+                )
+            )
+            db.add(
+                CostEntry(
+                    id="cost-del-1", task_id="task-del-cost", workflow_id="wf-del-cost",
+                    source="pi", cost_usd=0.05,
+                )
+            )
+
+        resp = client.delete("/api/autopilot/features/feat-cost")
+        assert resp.status_code == 200, resp.text
+
+        with get_db() as db:
+            assert db.query(Feature).filter_by(id="feat-cost").first() is None
+            assert db.query(CostEntry).filter_by(id="cost-del-1").first() is None
+
+    def test_terminates_assigned_agent_before_deleting(self, project_client, monkeypatch):
+        client, dirs = project_client
+        from src.core.database import Agent, Feature, Task, Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-del-2", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                )
+            )
+            db.add(
+                Feature(
+                    id="feat-3", design_id="does-not-matter", feature_key="z",
+                    name="Z", scope="s", status="active", workflow_id="wf-del-2",
+                )
+            )
+            db.add(
+                Agent(id="agent-del-1", system_prompt="p", status="working", cli_type="claude")
+            )
+            db.add(
+                Task(
+                    id="task-del-2", workflow_id="wf-del-2", phase_id="phase-1",
+                    raw_description="r", done_definition="d",
+                    status="in_progress", assigned_agent_id="agent-del-1",
+                )
+            )
+
+        mock_state = Mock()
+        mock_state.agent_manager.terminate_agent = AsyncMock()
+        monkeypatch.setattr(
+            "src.core.app_context.get_app_state", lambda: mock_state
+        )
+
+        resp = client.delete("/api/autopilot/features/feat-3")
+        assert resp.status_code == 200
+        mock_state.agent_manager.terminate_agent.assert_awaited_once_with("agent-del-1")
+
+        with get_db() as db:
+            assert db.query(Feature).filter_by(id="feat-3").first() is None
+
+    def test_missing_feature_returns_404(self, project_client):
+        client, dirs = project_client
+        resp = client.delete("/api/autopilot/features/does-not-exist")
+        assert resp.status_code == 404
+
+
+# ── stop_pipeline ─────────────────────────────────────────────────
+
+
+@pytest.fixture
+def stop_pipeline_client(tmp_path, monkeypatch):
+    """Real DB with one is_active AutopilotProject, wired to a fake
+    AutopilotService so stop_pipeline never needs a real running pipeline."""
+    db_path = str(tmp_path / "test.db")
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", db_path)
+
+    from src.core.database import AutopilotProject, DatabaseManager
+
+    db_manager = DatabaseManager(db_path)
+    db_manager.create_tables()
+
+    with db_manager.session_scope() as session:
+        session.add(
+            AutopilotProject(id="proj-stop", name="proj-stop", base_dir=str(tmp_path), is_active=True)
+        )
+
+    fake_service = Mock()
+    fake_service.stop = AsyncMock(return_value={"stopped": True})
+    monkeypatch.setattr(
+        "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+    )
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.mcp.autopilot_api import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    import src.mcp.autopilot_api as api_mod
+
+    api_mod._cache.clear()
+    yield client
+    api_mod._cache.clear()
+
+
+class TestStopPipelineDeactivatesProject:
+    """Regression: stop_pipeline's is_active-clearing step referenced
+    AutopilotProject without importing it in this function's scope --
+    a bare NameError on every call, caught and swallowed by the broad
+    except Exception below it. Since get_db()'s context manager rolls
+    back on any exception raised inside the `with` block, this didn't
+    just skip clearing is_active -- it rolled back pause_project_workflows'
+    changes too, silently, on every single stop_pipeline call."""
+
+    def test_deactivates_the_stopped_project(self, stop_pipeline_client):
+        from src.core.database import AutopilotProject, get_db
+
+        resp = stop_pipeline_client.post(
+            "/api/autopilot/stop", params={"project_id": "proj-stop"}
+        )
+        assert resp.status_code == 200, resp.text
+
+        with get_db() as db:
+            proj = db.query(AutopilotProject).filter_by(id="proj-stop").first()
+            assert proj.is_active is False

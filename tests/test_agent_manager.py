@@ -161,13 +161,18 @@ class TestCreateAgentForTask:
     ):
         """Regression: perl fully block-buffers its STDOUT whenever it isn't
         a TTY (true here -- pipe-pane redirects it to transcript_path via
-        `>>`), so without BEGIN{$|=1} every byte pipe-pane feeds perl sat in
-        an internal buffer and only reached disk in unpredictable chunks,
-        flushing fully only when the buffer filled or perl exited (i.e. when
-        the tmux session was killed at agent termination). Observed live: a
-        live agent's transcript file sat at 0 bytes while the agent was
-        actively producing output the whole time, making all the scrollback
-        the user had just watched scroll by unreadable until it finished."""
+        `>>`), so without $|=1 every byte pipe-pane feeds perl sat in an
+        internal buffer and only reached disk in unpredictable chunks.
+        $|=1 alone still wasn't enough: a plain `perl -pe '...'` also has
+        to finish reading one INPUT "line" (up to "\\n") before there's
+        anything to flush, and modern TUIs (Claude Code's included) redraw
+        mostly via \\r + cursor-positioning escapes, not literal "\\n" --
+        confirmed live, a transcript sat frozen at the byte offset of the
+        launch command's own trailing newline for an agent's entire
+        multi-minute run while tmux capture-pane on the same live session
+        showed extensive fresh output the whole time. sysread() in an
+        explicit loop (not -pe's implicit while(<>)) fixes the input side
+        too: it returns as soon as ANY data is available on the pipe."""
         mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-agent",
@@ -208,7 +213,8 @@ class TestCreateAgentForTask:
         assert len(pipe_pane_calls) == 1
         pipe_cmd = pipe_pane_calls[0].args[-1]
         assert "perl" in pipe_cmd
-        assert "BEGIN{$|=1}" in pipe_cmd
+        assert "$|=1" in pipe_cmd
+        assert "sysread" in pipe_cmd
 
     @pytest.mark.asyncio
     async def test_session_id_uses_feature_model_launch_params(
@@ -434,6 +440,50 @@ class TestCreateAgentForTask:
 
         _, call_kwargs = mock_cli.get_launch_command.call_args
         assert call_kwargs["model"] == "sonnet"
+
+    @pytest.mark.asyncio
+    async def test_passes_working_directory_to_launch_command(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Regression: get_launch_command needs the agent's actual worktree
+        path to check whether a reused session_id already has a stored
+        Claude Code session there (see ClaudeCodeAgent._claude_session_exists)
+        -- without it, every session-reuse launch always tries --session-id
+        first and eats a guaranteed "already in use" error before falling
+        back to --resume."""
+        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-agent",
+                "branch_name": "agent-test-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-claude"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+            mock_cli = MagicMock()
+            mock_cli.get_launch_command.return_value = ["claude", "--model", "sonnet"]
+            mock_cli.default_model = "sonnet"
+            mock_get_cli.return_value = mock_cli
+
+            await mock_agent_manager.create_agent_for_task(
+                task=sample_task,
+                enriched_data={"description": "Implement feature X"},
+                memories=[],
+                project_context="Test project context",
+                working_directory="/tmp/test-project",
+            )
+
+        _, call_kwargs = mock_cli.get_launch_command.call_args
+        assert call_kwargs["working_directory"] == "/tmp/test-project-agent"
 
 
 class TestCreateAgentForTaskMissingSharedWorktree:
@@ -1044,6 +1094,144 @@ class TestTerminateAgent:
 
         # Verify tmux session was killed
         mock_agent_manager.tmux_server.has_session.return_value = False
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_shared_worktree_commit_when_no_agent_branch_record(
+        self, mock_agent_manager, db_manager, tmp_path
+    ):
+        """Regression: commit_changes -> _agent_repo requires an AgentBranch
+        DB record keyed by agent_id, which only ever exists for the legacy
+        isolated-per-agent-worktree path. Every normal phase agent runs
+        against a SHARED feature worktree instead (no AgentBranch record),
+        so terminate_agent's "preserve uncommitted work" promise silently
+        no-op'd for the common case -- the ValueError was caught and only
+        logged at DEBUG. That mattered once delete_feature/
+        remove_project_design/rerun_design started force-removing worktrees
+        right after terminating their agents: uncommitted work was gone
+        with no recovery. terminate_agent must fall back to committing
+        directly in the worktree the agent's own current task was using.
+        """
+        from git import Repo
+
+        repo_dir = tmp_path / "shared-worktree"
+        repo_dir.mkdir()
+        repo = Repo.init(repo_dir)
+        (repo_dir / "README.md").write_text("# init\n")
+        repo.index.add(["README.md"])
+        repo.index.commit("Initial commit")
+
+        # Uncommitted WIP the agent supposedly left behind.
+        (repo_dir / "wip.py").write_text("# work in progress\n")
+        assert repo.is_dirty(untracked_files=True)
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-shared-1", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                    working_directory=str(repo_dir),
+                )
+            )
+            session.add(
+                Task(
+                    id="task-shared-1", workflow_id="wf-shared-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="in_progress",
+                )
+            )
+            session.add(
+                Agent(
+                    id="agent-shared-1", system_prompt="Test", status="working",
+                    cli_type="claude", current_task_id="task-shared-1",
+                )
+            )
+
+        await mock_agent_manager.terminate_agent("agent-shared-1")
+
+        assert not repo.is_dirty(untracked_files=True), (
+            "uncommitted work in the shared worktree must be committed, "
+            "not silently left for a later force-remove to destroy"
+        )
+        assert "wip.py" in repo.head.commit.stats.files
+
+    @pytest.mark.asyncio
+    async def test_releases_stray_task_still_pointing_at_terminated_agent(
+        self, mock_agent_manager, db_manager
+    ):
+        """Regression: terminate_agent only ever updated the Agent row
+        (status/current_task_id/terminated_at) -- every caller was
+        independently responsible for resetting its OWN task's status/
+        assigned_agent_id, and a caller that forgot left the task
+        permanently stranded: "in_progress"/"assigned" tasks are never
+        picked up by any dispatch path, only "pending" ones are. Observed
+        live: a task sat "in_progress" pointing at an already-terminated
+        agent indefinitely -- current_task_id was correctly cleared on
+        the agent side (satisfying that half of the termination
+        invariant) but nothing ever reset the task."""
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-stray-1", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                    working_directory="/tmp/nonexistent-stray-worktree",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-stray-1", workflow_id="wf-stray-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d",
+                    status="in_progress", assigned_agent_id="agent-stray-1",
+                )
+            )
+            session.add(
+                Agent(
+                    id="agent-stray-1", system_prompt="Test", status="working",
+                    cli_type="claude", current_task_id="task-stray-1",
+                )
+            )
+
+        await mock_agent_manager.terminate_agent("agent-stray-1")
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-stray-1").first()
+            assert task.status == "pending"
+            assert task.assigned_agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_does_not_touch_a_task_the_caller_already_released(
+        self, mock_agent_manager, db_manager
+    ):
+        """A task whose caller already reset assigned_agent_id/status
+        before calling terminate_agent (the correct, well-behaved
+        pattern -- see monitor.py's session-limit and connection-error
+        fallback paths) must be left alone by the safety net."""
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-stray-2", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
+                    working_directory="/tmp/nonexistent-stray-worktree-2",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-stray-2", workflow_id="wf-stray-2", phase_id="phase-1",
+                    raw_description="r", done_definition="d",
+                    status="pending", assigned_agent_id=None,
+                )
+            )
+            session.add(
+                Agent(
+                    id="agent-stray-2", system_prompt="Test", status="working",
+                    cli_type="claude", current_task_id=None,
+                )
+            )
+
+        await mock_agent_manager.terminate_agent("agent-stray-2")
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-stray-2").first()
+            assert task.status == "pending"
+            assert task.assigned_agent_id is None
 
 
 if __name__ == "__main__":

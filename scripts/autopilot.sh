@@ -116,9 +116,16 @@ start_qdrant() {
 }
 
 start_backend() {
-    if lsof -ti :8300 >/dev/null 2>&1; then
-        warn "Port 8300 in use - killing existing process"
-        lsof -ti :8300 | xargs kill -9 2>/dev/null
+    local port=${BACKEND_PORT:-8300}
+    local pids
+    # Filter by comm name to avoid killing VS Code Remote SSH's node proxy
+    pids=$(lsof -ti :$port -sTCP:LISTEN 2>/dev/null | while read pid; do
+        comm=$(ps -o comm= -p $pid 2>/dev/null)
+        case "$comm" in python*|uvicorn*) echo $pid;; esac
+    done)
+    if [ -n "$pids" ]; then
+        warn "Port $port in use - killing existing python processes"
+        echo "$pids" | xargs kill -9 2>/dev/null
         sleep 1
     fi
 
@@ -177,7 +184,7 @@ start_monitor() {
 
 stop_services() {
     log "Stopping services..."
-    lsof -ti :8300 | xargs kill -9 2>/dev/null && ok "Backend stopped" || warn "No backend to stop"
+    lsof -ti :8300 -sTCP:LISTEN | xargs kill -9 2>/dev/null && ok "Backend stopped" || warn "No backend to stop"
     pkill -f "npm run dev" 2>/dev/null && ok "Frontend stopped" || warn "No frontend to stop"
     pkill -f "run_monitor.py" 2>/dev/null && ok "Monitor stopped" || warn "No monitor to stop"
     pkill -f "orchestrator.py" 2>/dev/null && ok "Orchestrator stopped" || warn "No orchestrator to stop"
@@ -203,7 +210,7 @@ show_status() {
         err "Backend:     not running"
     fi
 
-    if curl -s http://localhost:5173 >/dev/null 2>&1 || curl -s http://localhost:3000 >/dev/null 2>&1; then
+    if curl -s http://localhost:5300 >/dev/null 2>&1 || curl -s http://localhost:3000 >/dev/null 2>&1; then
         ok "Frontend:    running"
     else
         warn "Frontend:    not running"

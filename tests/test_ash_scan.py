@@ -100,7 +100,7 @@ class TestAshScanWiredIntoPhaseTaskCreation:
                 name="security_review",
                 order=8,
                 description="Security review",
-                done_definitions=["security_report.md created"],
+                done_definitions=["security.md created"],
             )
         )
         session.add(

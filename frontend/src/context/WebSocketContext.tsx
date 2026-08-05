@@ -66,7 +66,8 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     const connectWebSocket = () => {
       if (!isActive) return null;
 
-      const websocket = new WebSocket('ws://localhost:8300/ws');
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const websocket = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
       wsRef.current = websocket;
 
       websocket.onopen = () => {

@@ -296,7 +296,6 @@ Edit the paths in `hephaestus_config.yaml`:
 # Paths Configuration
 paths:
   database: "./hephaestus.db"
-  worktree_base: "/tmp/hephaestus_worktrees"
   project_root: "/Users/yourname/my_project"  # Change this to your project path
 
 # Git Configuration

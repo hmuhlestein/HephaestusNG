@@ -17,6 +17,7 @@ from src.cli.utils import (
     save_pid,
 )
 from src.core.constants import HEPHAESTUS_LOGS_DIR
+from src.core.simple_config import get_config as _get_config
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
 logger = logging.getLogger(__name__)
@@ -109,7 +110,7 @@ class ProcessWatchdog:
                 logger.debug(f"Could not kill duplicate process {pid}: {e}")
 
     def check_duplicate_port_listeners(self, port: int) -> None:
-        """Kill any extra process bound to `port` beyond the tracked backend.
+        """Kill any extra python process bound to `port` beyond the tracked backend.
 
         A second backend process racing the tracked one creates two
         independent AutopilotService singletons against the same DB -- one
@@ -125,26 +126,14 @@ class ProcessWatchdog:
         does, by looking at what's actually bound to the port instead of
         trusting any single PID-tracking mechanism.
 
-        Must filter to LISTEN sockets only (-sTCP:LISTEN) -- plain
-        `lsof -ti :port` matches ANY socket referencing that port,
-        including outbound CLIENT connections from other processes making
-        API calls to the backend (curl, the frontend's Vite proxy, the
-        monitor's own health polling, etc). Without the filter, every
-        short-lived client process making a request at the moment this
-        check ran got misidentified as a rogue duplicate SERVER and killed
-        -- observed live: a fresh, unrelated PID "duplicate" appearing and
-        getting killed every single watchdog cycle, indefinitely, long
-        after the actual backend-duplication bug (assume_backend_running)
-        was already fixed.
+        Uses get_port_listeners to filter both by LISTEN socket state AND
+        process command name. VS Code Remote SSH also creates a LISTEN
+        socket on the same port (with `node` as the command) -- killing
+        that nukes the user's entire remote session.
         """
+        from src.cli.utils.ports import get_port_listeners
         try:
-            result = subprocess.run(
-                ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
+            pids = get_port_listeners(port, {"python", "uvicorn"})
         except Exception as e:
             logger.debug(f"Duplicate-backend port check failed: {e}")
             return
@@ -341,6 +330,7 @@ def run(args):
         else:
             results["backend"] = "started but not healthy"
             print(" timeout")
+            _print_backend_error()
 
     # Monitor
     if not args.backend_only and not args.no_monitor:
@@ -438,7 +428,6 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
 
     log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_dir / "backend.log", "a")
 
     try:
         proc = subprocess.Popen(
@@ -446,7 +435,15 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
             cwd=str(HEPHAESTUS_DIR),
             env=env,
             stdin=subprocess.DEVNULL,
-            stdout=log_file,
+            # run_server.py owns backend.log directly via a daily-rotating
+            # handler (src/core/logging_config.py) -- a raw stdout redirect
+            # here could never rotate (that has to happen from inside the
+            # writing process), which is exactly how backend.log reached
+            # 253MB unattended. Only output from before configure_logging()
+            # runs (a handful of import lines) is invisible now; everything
+            # after, including uncaught exceptions, still reaches
+            # backend.log via logging_config's sys.excepthook.
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
             start_new_session=True,  # detach into own session — survives launcher/shell exit
         )
@@ -479,14 +476,19 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
 def _start_monitor(python: str) -> bool:
     log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_dir / "monitor.log", "a")
     try:
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
         proc = subprocess.Popen(
             [python, str(HEPHAESTUS_DIR / "run_monitor.py")],
             cwd=str(HEPHAESTUS_DIR),
             stdin=subprocess.DEVNULL,
-            stdout=log_file,
+            # run_monitor.py owns monitor.log directly via a daily-rotating
+            # handler (src/core/logging_config.py) -- see _start_backend's
+            # identical comment for why the raw redirect was removed.
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
+            env=env,
             start_new_session=True,  # detach into own session — survives launcher/shell exit (else reaped by SIGKILL)
         )
         # Same reasoning as _start_backend above: give run_monitor.py's own
@@ -520,14 +522,16 @@ def _start_watchdog(port: int, args) -> bool:
 
     log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_dir / "watchdog.log", "a")
 
     try:
         proc = subprocess.Popen(
             cmd,
             cwd=str(HEPHAESTUS_DIR),
             stdin=subprocess.DEVNULL,
-            stdout=log_file,
+            # run_watchdog.py owns watchdog.log directly via a daily-rotating
+            # handler (src/core/logging_config.py) -- see _start_backend's
+            # identical comment for why the raw redirect was removed.
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
             start_new_session=True,  # detach into own session — survives launcher/shell exit
         )
@@ -539,50 +543,36 @@ def _start_watchdog(port: int, args) -> bool:
 
 
 def _kill_port(port: int) -> None:
-    """Kill whatever is listening on the given port.
+    """Kill node/npm processes LISTENing on the given port.
 
-    Filters to LISTEN sockets only (-sTCP:LISTEN) -- a plain
-    `lsof -ti :port` also matches outbound client connections to that port
-    (e.g. an in-flight request to the backend), which don't block a fresh
-    bind and have no business being killed here.
+    Filters by command name to avoid killing VS Code Remote SSH
+    port-forwarding proxies (also `node`, also LISTEN).
     """
-    import signal
-
-    try:
-        result = subprocess.run(
-            ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.stdout.strip():
-            for pid_str in result.stdout.strip().split("\n"):
-                try:
-                    pid = int(pid_str)
-                    os.kill(pid, signal.SIGKILL)
-                except (ValueError, OSError):
-                    pass
-            time.sleep(1)  # Wait for port to free
-    except Exception:
-        pass
+    from src.cli.utils.ports import kill_port_listeners
+    kill_port_listeners(port, {"node", "npm"})
 
 
 def _start_frontend() -> bool:
     frontend_dir = HEPHAESTUS_DIR / "frontend"
     if not (frontend_dir / "package.json").exists():
         return False
-    # Ensure port 5173 is free
-    _kill_port(5173)
+    config = _get_config()
+    frontend_port = config.frontend_port
+    _kill_port(frontend_port)
     log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = open(log_dir / "frontend.log", "a")
     try:
+        env = os.environ.copy()
+        env["FRONTEND_PORT"] = str(frontend_port)
+        env["BACKEND_PORT"] = str(config.mcp_port)
         proc = subprocess.Popen(
             ["npm", "run", "dev"],
             cwd=str(frontend_dir),
             stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
+            env=env,
             start_new_session=True,  # detach into own session — survives launcher/shell exit
         )
         save_pid("frontend", proc.pid)
@@ -610,6 +600,35 @@ def _print_results(results, port):
             icon = "FAIL"
         print(f"  {service:12s} {icon:4s} {status}")
     print()
-    print("  Frontend:  http://localhost:5173")
+    config = _get_config()
+    print(f"  Frontend:  http://localhost:{config.frontend_port}")
     print(f"  Backend:   http://127.0.0.1:{port}")
     print(f"  Health:    http://127.0.0.1:{port}/health")
+
+
+def _print_backend_error() -> None:
+    """Tail the backend log and print the likely cause of a startup failure."""
+    log_path = Path(HEPHAESTUS_LOGS_DIR) / "backend.log"
+    if not log_path.exists():
+        print()
+        print(f"  Check the backend log for details:")
+        print(f"    {log_path}")
+        return
+    try:
+        lines = log_path.read_text().splitlines()
+    except OSError:
+        return
+    tail = lines[-50:]
+    error_keys = ("ERROR", "Error", "Traceback", "Exception", "NoSuchPath",
+                  "FATAL", "fatal", "Set paths", "heph project")
+    error_lines = [ln for ln in tail if any(k in ln for k in error_keys)]
+    if error_lines:
+        print()
+        print("  Error details:")
+        for ln in error_lines[-10:]:
+            print(f"    {ln}")
+        print(f"  Full log: {log_path}")
+    else:
+        print()
+        print(f"  Check the backend log for details:")
+        print(f"    {log_path}")

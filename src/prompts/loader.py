@@ -181,6 +181,16 @@ def get_validator_prompt(validator_type: str = "validator") -> str:
     return get_prompt(key)
 
 
+def get_monitor_nudge(key: str, **variables: str) -> str:
+    """Get a monitor nudge/steering message with variables interpolated.
+
+    Args:
+        key: Sub-key under monitor_nudges (e.g. "operation_aborted")
+        variables: Values for the message's {placeholder} variables
+    """
+    return get_prompt(f"monitor_nudges.{key}", variables)
+
+
 def reload_prompts():
     """Force reload prompts from YAML (for testing or hot-reload)."""
     global _prompts_cache

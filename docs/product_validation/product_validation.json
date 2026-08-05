@@ -1,16 +1,6 @@
 {
   "verdict": "PASS",
-  "blocker_count": 0,
-  "requirements_met": 4,
-  "requirements_total": 4,
   "unmet_requirements": [],
-  "test_results": {
-    "passed": 27,
-    "failed": 0,
-    "total": 27,
-    "pass_rate": 100.0
-  },
-  "regressions_found": false,
-  "prior_run_verdict": null,
-  "prior_run_blocker_count": null
+  "agent_score": 0.97,
+  "summary": "OpenCode cost collector implementation matches design intent post-gate-resolution: all 5 FRs verified against code, 83/83 feature-scoped tests pass, prior adversarial_review BLOCKER (naive-datetime timezone bug) confirmed fixed, diff confined to a single file with no scope creep."
 }

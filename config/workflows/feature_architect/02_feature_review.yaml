@@ -4,6 +4,8 @@ name: feature_review
 # score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
 spec_gate: true
 thinking_level: high
+cli_tool: claude
+cli_model: sonnet
 description: |
   Adversarially review the Feature Architect's decomposition against the original
   design document. You are a fresh reviewer, not the architect who wrote the
@@ -21,10 +23,10 @@ done_definitions:
   - "depends_on graph checked for cycles and unnecessary coupling"
   - "All BLOCKER and FIX findings documented with the exact design section and recommended fix"
   - "DEFER issues documented"
-  - "feature_review_report.md created with a YAML frontmatter block (blocker_count/fix_count/defer_count, gate input) followed by the BLOCKER/FIX/DEFER findings"
+  - "review.md created with a YAML frontmatter block (blocker_count/fix_count/defer_count, gate input) followed by the BLOCKER/FIX/DEFER findings"
   - "Task marked as done"
 outputs:
-  - "feature_review_report.md"
+  - "review.md"
 next_steps:
   - "On any BLOCKER or FIX finding, the engine sends this report back to the Feature Architect for re-decomposition"
   - "On pass, per-feature pipelines are launched from features.json as-is"
@@ -101,7 +103,7 @@ additional_notes: |
   STEP 4: WRITE THE REPORT
   ═══════════════════════════════════════════════════════════════════════
 
-  Write feature_review_report.md to ./.hephaestus/ (the same directory
+  Write review.md to ./.hephaestus/ (the same directory
   everything you read in Step 1 already lives in — design.md, features.json,
   scope.md) — NOT ./docs/. This report is internal orchestration input for
   the Feature Architect's next attempt, not a project deliverable, so it
@@ -144,11 +146,11 @@ additional_notes: |
   [What the decomposition got right]
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: PREPEND STRUCTURED RESULT TO feature_review_report.md (NOT OPTIONAL)
+  STEP 5: PREPEND STRUCTURED RESULT TO review.md (NOT OPTIONAL)
   ═══════════════════════════════════════════════════════════════════════
 
-  feature_review_report.md is ONE file: a YAML frontmatter block followed
-  by the full report above, written to ./.hephaestus/feature_review_report.md
+  review.md is ONE file: a YAML frontmatter block followed
+  by the full report above, written to ./.hephaestus/review.md
   — NOT ./docs/, same reason as Step 4. The frontmatter is what drives the
   pipeline: if ANY BLOCKER or FIX is found, the pipeline sends the FULL
   report straight back to the Feature Architect as its next task — without
@@ -209,7 +211,7 @@ additional_notes: |
 
   After writing all your output files, call:
 
-  hephaestus_complete_my_task({
+  complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was reviewed and found>",
     "key_learnings": ["<key findings or decisions>"]

@@ -413,9 +413,19 @@ def _get_or_create_project_id(project_path: str) -> str:
         # user-paused workflows would also skip them here, leaving a
         # workflow permanently stuck even after the user explicitly hits
         # play again.
-        resumed = db.query(Workflow).filter(Workflow.project_id == proj.id, Workflow.paused_by == "user").update({Workflow.status: "active", Workflow.paused_by: None})
-        if resumed:
-            logger.info(f"Resumed {resumed} user-paused workflow(s) for '{proj.name}'")
+        #
+        # Gated on proj.is_active actually being True (either already was,
+        # or was just set above): background_phase_advancement_sweep
+        # (server.py) scopes its work to is_active projects only. Flipping
+        # a workflow back to "active" while is_active stayed False (cap
+        # reached above) would leave it permanently invisible to that
+        # sweep -- it looks like it's running but nothing ever advances
+        # it. Leave it paused instead; the next successful activation
+        # (this function running again with room under the cap) resumes it.
+        if proj.is_active:
+            resumed = db.query(Workflow).filter(Workflow.project_id == proj.id, Workflow.paused_by == "user").update({Workflow.status: "active", Workflow.paused_by: None})
+            if resumed:
+                logger.info(f"Resumed {resumed} user-paused workflow(s) for '{proj.name}'")
 
         db.commit()
         return proj.id
@@ -779,6 +789,8 @@ def pause_workflow_direct(workflow_id: str) -> bool:
             wf = session.query(Workflow).filter_by(id=workflow_id).first()
             if wf:
                 wf.status = "paused"
+                wf.paused_by = "user"
+                wf.paused_at = datetime.utcnow()
                 return True
         return False
     except Exception as e:
@@ -908,6 +920,8 @@ def create_agent_for_task_direct(
     phase_id: Optional[str] = None,
     agent_type: str = "phase",
     enriched_data_override: Optional[dict] = None,
+    phase_cli_tool_override: Optional[str] = None,
+    phase_cli_model_override: Optional[str] = None,
 ) -> Optional[dict]:
     """Create an agent for a pending task directly in-process (H-2 fix).
 
@@ -951,16 +965,76 @@ def create_agent_for_task_direct(
                 if getattr(task, "completion_criteria", None):
                     enriched_data["completion_criteria"] = task.completion_criteria
 
-            agent = asyncio.run(
-                server_state.agent_manager.create_agent_for_task(
-                    task=task,
-                    enriched_data=enriched_data,
-                    memories=[],
-                    project_context="",
-                    agent_type=agent_type,
-                    use_existing_worktree=True,
+            # Per-cli/model concurrency gate (e.g. a local model's single
+            # inference slot) -- this is the orchestrator's OWN direct
+            # dispatch path for phase transitions, entirely bypassing
+            # QueueService.get_next_queued_task's equivalent check, even
+            # though this is the path that actually creates most phase
+            # tasks (scope_review, development, etc.) in a live run.
+            # resolve_cli_model_dispatch atomically reserves whichever
+            # combo it picks -- the caller-supplied phase_cli_tool_override
+            # (e.g. session-limit escalation) always wins and skips this
+            # gate entirely, since it's a bug for this gate's own decision
+            # to overwrite one the caller already made (see the regression
+            # test test_caller_supplied_override_is_respected_not_discarded
+            # for the incident this guards against).
+            _reservation = None
+            phase_glm_token_env = None
+            phase_thinking_level = None
+            qs = getattr(server_state, "queue_service", None)
+            if qs and qs.cli_model_concurrency_limits and not phase_cli_tool_override:
+                cli_override, model_override, _reservation, saturated = qs.resolve_cli_model_dispatch(
+                    session, task
                 )
-            )
+                if saturated:
+                    # No usable fallback -- dispatch on the primary anyway
+                    # rather than block this phase transition entirely
+                    # (this function has no "queue and retry later" path
+                    # the way process_queue does).
+                    logger.warning(
+                        f"[create_agent_for_task_direct] Task {task_id[:8]}'s combo is at its "
+                        "concurrency limit with no usable fallback -- dispatching anyway"
+                    )
+                elif cli_override:
+                    phase_cli_tool_override = cli_override
+                    phase_cli_model_override = model_override
+                    # Passing phase_cli_tool/_model explicitly below
+                    # short-circuits create_agent_for_task's own
+                    # auto-fetch-from-Phase-row block (it only fires when
+                    # all four phase_* args are None) -- fetch
+                    # glm_token_env/thinking_level here too so overriding
+                    # the CLI/model doesn't also silently drop this
+                    # phase's other config for this one dispatch.
+                    if task.phase_id:
+                        _phase_row = session.query(Phase).filter_by(id=task.phase_id).first()
+                        if _phase_row:
+                            phase_glm_token_env = _phase_row.glm_api_token_env
+                            phase_thinking_level = _phase_row.thinking_level
+                    logger.info(
+                        f"[create_agent_for_task_direct] Task {task_id[:8]}'s primary combo at its "
+                        f"concurrency limit -- dispatching on fallback model {model_override} instead"
+                    )
+
+            # _reservation (if any) must be released once this dispatch
+            # attempt finishes, success or not.
+            try:
+                agent = asyncio.run(
+                    server_state.agent_manager.create_agent_for_task(
+                        task=task,
+                        enriched_data=enriched_data,
+                        memories=[],
+                        project_context="",
+                        agent_type=agent_type,
+                        use_existing_worktree=True,
+                        phase_cli_tool=phase_cli_tool_override,
+                        phase_cli_model=phase_cli_model_override,
+                        phase_glm_token_env=phase_glm_token_env,
+                        phase_thinking_level=phase_thinking_level,
+                    )
+                )
+            finally:
+                if _reservation and qs:
+                    qs.release_cli_model_slot(*_reservation)
             # create_agent_for_task mutates task.assigned_agent_id/status on
             # THIS object, but commits its own separate session (which owns
             # the new Agent row) -- not this one. Without committing here
@@ -975,7 +1049,15 @@ def create_agent_for_task_direct(
         finally:
             session.close()
     except Exception as e:
-        logger.debug(f"[create_agent_for_task_direct] Failed: {e}")
+        # Was logger.debug -- invisible at this app's default log level, so
+        # every dispatch failure here (self-heal task creation, negotiation
+        # retries, arbitration) was completely silent apart from whatever
+        # generic message the caller derived from a bare None return (e.g.
+        # _trigger_arbitration's "Failed to dispatch arbitration agent",
+        # with no indication of why). Elevated so the actual exception is
+        # visible without needing to reproduce it manually outside the
+        # running process.
+        logger.warning(f"[create_agent_for_task_direct] Failed: {e}")
         return None
 
 
@@ -1209,6 +1291,20 @@ def _workflow_appears_abandoned(workflow_id: str) -> bool:
         for status in non_terminal_statuses:
             if get_tasks(status=status, workflow_id=workflow_id):
                 return False
+        # If all tasks are done AND all phases are completed, the workflow is completed, not abandoned
+        all_tasks = get_tasks(workflow_id=workflow_id)
+        if all_tasks and all(t.get("status") == "done" for t in all_tasks):
+            # Also check that all phases are completed
+            from src.core.database import PhaseExecution, Phase
+            with get_db() as db:
+                incomplete_phases = db.query(PhaseExecution).join(
+                    Phase, PhaseExecution.phase_id == Phase.id
+                ).filter(
+                    Phase.workflow_id == workflow_id,
+                    PhaseExecution.status != "completed"
+                ).count()
+                if incomplete_phases == 0:
+                    return False
         return True
     except Exception:
         # Can't verify either signal -- treat as NOT abandoned (don't risk
@@ -1442,7 +1538,14 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
         # issues, not agent failures -- they should retry indefinitely.
         retry_count = task.get("retry_count", 0)
         is_orphan = "Orphaned" in (task.get("failure_reason") or "")
-        if retry_count >= 2 and not is_orphan:
+        # Read max_task_retries from workflow config, default to 5
+        try:
+            from src.autopilot.spec import load_workflow_definition
+            wf_def = load_workflow_definition(workflow_id)
+            max_retry = wf_def.get("orchestrator", {}).get("max_task_retries", 5)
+        except Exception:
+            max_retry = 5
+        if retry_count >= max_retry and not is_orphan:
             logger.info(
                 f"  Task {task_id[:8]} failed {retry_count} times - skipping retry"
             )
@@ -1997,6 +2100,42 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
     return designs
 
 
+def _has_resumable_active_design(project_id: Optional[str]) -> bool:
+    """True if this project has an ACTIVE design with incomplete (not
+    completed/skipped) features already on file.
+
+    Used by run_continuous_pipeline's "workflow still active" gate to decide
+    whether an unrelated design's still-running workflow should actually
+    block picking up new work. It should only block a FRESH design's Phase 0
+    -- run_single_workflow's default pause_existing=True terminates every
+    other active workflow's agents project-wide (see its docstring), which
+    is destructive if another design's agents are still genuinely working.
+    Resuming an already-active design never reaches that path: run_phase0
+    skips straight past Phase 0 when Feature rows already exist (Tier 1,
+    see its docstring), and the feature dispatch that follows always passes
+    pause_existing=False. So a design in this state is always safe to
+    resume regardless of what else is active in the project.
+    """
+    try:
+        from src.core.database import AutopilotDesign, Feature, get_db
+
+        if not project_id:
+            return False
+        with get_db() as db:
+            active_designs = db.query(AutopilotDesign).filter_by(project_id=project_id, status="active").all()
+            for candidate in active_designs:
+                incomplete = (
+                    db.query(Feature)
+                    .filter(Feature.design_id == candidate.id, Feature.status.notin_(["completed", "skipped"]))
+                    .count()
+                )
+                if incomplete > 0:
+                    return True
+            return False
+    except Exception:
+        return False
+
+
 def pick_next_design(
     queue_dir: Path,
     processed_hashes: Set[str],
@@ -2053,18 +2192,32 @@ def pick_next_design(
                 f"pick_next_design: searching project '{project.name}' ({project.id[:8]})"
             )
 
-            # Get next pending design ordered by ordinal
-            design = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).first()
+            # Resume support: prioritize a design that already finished
+            # Phase 0 (status moved to "active") but still has incomplete
+            # features over starting a brand new "pending" design. A design
+            # in this state was checked FIRST here, before finishing this
+            # loop looked at "pending" designs at all -- but the "pending"
+            # query below always ran unconditionally FIRST, so any pending
+            # design (however low-priority) always won, silently starting
+            # a whole new design's Phase 0 while an active design sat with
+            # unblocked, ready-to-run features it would never be given a
+            # turn to finish. Observed live: a feature whose only blocking
+            # dependency had just completed stayed unstarted indefinitely
+            # because a second, unrelated design was next in queue-order.
+            #
+            # Snapshot the pending list BEFORE the active-design loop below
+            # runs -- that loop can itself reset a design back to "pending"
+            # (candidate.status = "pending", to retry after a failed
+            # workflow), and a design reset like that must wait for a
+            # FRESH pick_next_design call to be eligible, not be picked
+            # right back up by the pending-fallback query at the bottom of
+            # this same call as if it had been queued all along.
+            pending_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
 
-            if design:
-                logger.info(f"pick_next_design: found pending design '{design.name}' ({design.id[:8]})")
-
-            if design is None:
-                # Resume support: a design that already finished Phase 0
-                # (status moved to "active") but was stopped mid-feature-
-                # pipeline is invisible to the "pending" query above.
-                active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
-                logger.info(f"pick_next_design: no pending designs, found {len(active_designs)} active design(s)")
+            design = None
+            active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
+            if active_designs:
+                logger.info(f"pick_next_design: found {len(active_designs)} active design(s), checking for incomplete work before considering pending designs")
                 for candidate in active_designs:
                     incomplete = (
                         db.query(Feature)
@@ -2165,7 +2318,16 @@ def pick_next_design(
                         db.commit()
                         logger.info(f"Design {candidate.name} has all features completed/skipped — marking done")
 
-                if design is None:
+            if design is None:
+                # No active design has resumable work -- safe to start the
+                # next design that was already pending before this call
+                # (the snapshot taken above, not a fresh query -- see its
+                # comment for why a design the loop above just reset to
+                # "pending" must not be picked up here).
+                design = pending_designs[0] if pending_designs else None
+                if design:
+                    logger.info(f"pick_next_design: found pending design '{design.name}' ({design.id[:8]})")
+                else:
                     logger.info("pick_next_design: no designs to process")
 
             if design:
@@ -2521,6 +2683,287 @@ def _cleanup_worktree(
         logger.warning(f"Failed to cleanup worktree: {e}")
 
 
+def sweep_completed_workflow_worktrees(logger: OrchestratorLogger) -> int:
+    """Remove worktrees left behind by workflows that reached 'completed'
+    status but never got their normal _cleanup_worktree() call to run --
+    e.g. the backend restarted between run_single_workflow returning
+    "completed" in _run_one_feature and that same call stack reaching its
+    _cleanup_worktree() a few lines later. Nothing else ever revisits a
+    workflow once it's "completed", so a worktree orphaned this way sits
+    forever until something (previously: only a manual /cleanup-branches
+    call, or a rerun of that exact design) happens to sweep it.
+
+    Deliberately narrower than WorktreeManager.cleanup_all_stale_branches():
+    only touches a worktree whose OWN workflow record unambiguously says
+    "done", one at a time via the same removal _cleanup_worktree already
+    uses for the normal completion path -- not a heuristic dirty/branch
+    sweep that can pull old, unrelated branches back into main (observed
+    live: doing that once already reintroduced files under .hephaestus/,
+    which must stay git-excluded, into main's history).
+
+    Returns the number of worktrees removed.
+    """
+    from src.core.database import Agent, Task
+    from src.core.database import DatabaseManager as DbManager
+    from src.core.database import Workflow
+    from src.core.simple_config import get_config
+
+    cfg = get_config()
+    db = DbManager(str(cfg.database_path))
+    removed = 0
+    try:
+        with db.session_scope() as session:
+            targets = [
+                (wf.id, wf.working_directory, wf.launch_params)
+                for wf in session.query(Workflow).filter(
+                    Workflow.status == "completed",
+                    Workflow.working_directory.isnot(None),
+                )
+                if wf.working_directory and ".worktrees/" in wf.working_directory
+            ]
+
+            # A workflow can reach "completed" while a straggler task from a
+            # goto-triggered re-run of an earlier phase is still being worked
+            # by a live agent in this same worktree (observed live: a
+            # security_review task re-fired via goto stayed "in_progress"
+            # with its agent still "working" while the workflow completed
+            # through a different path). Force-removing the worktree out
+            # from under that agent destroys its in-progress work and
+            # leaves it permanently stuck with a deleted cwd -- skip those
+            # and let a later sweep pass (once the straggler finishes) pick
+            # them up instead.
+            if targets:
+                live_workflow_ids = {
+                    wf_id
+                    for (wf_id,) in session.query(Task.workflow_id)
+                    .join(Agent, Agent.current_task_id == Task.id)
+                    .filter(
+                        Task.workflow_id.in_([t[0] for t in targets]),
+                        Task.status == "in_progress",
+                        Agent.status != "terminated",
+                    )
+                    .all()
+                }
+                for wf_id, _, _ in targets:
+                    if wf_id in live_workflow_ids:
+                        logger.warning(
+                            f"[SWEEP] Skipping worktree removal for completed "
+                            f"workflow {wf_id[:8]} -- a live agent is still "
+                            "working an in-progress task under it"
+                        )
+                targets = [t for t in targets if t[0] not in live_workflow_ids]
+
+        for wf_id, working_directory, launch_params in targets:
+            worktree = Path(working_directory)
+            if not (worktree / ".git").exists():
+                continue  # already gone -- nothing to remove
+
+            lp = launch_params if isinstance(launch_params, dict) else {}
+            project_path_str = lp.get("project_path")
+            if not project_path_str:
+                logger.warning(
+                    f"[SWEEP] Workflow {wf_id[:8]} has an orphaned worktree "
+                    f"{worktree} but no launch_params.project_path to scope "
+                    "cleanup to -- skipping rather than guessing"
+                )
+                continue
+
+            try:
+                branch = _git.Repo(worktree).active_branch.name
+            except Exception:
+                branch = ""
+
+            logger.info(
+                f"[SWEEP] Cleaning up orphaned worktree for completed "
+                f"workflow {wf_id[:8]}: {worktree}"
+            )
+            _cleanup_worktree(worktree, branch, Path(project_path_str), logger)
+            removed += 1
+    except Exception as e:
+        logger.warning(f"[SWEEP] Failed to sweep completed-workflow worktrees: {e}")
+    finally:
+        session = getattr(db, "_session", None) or getattr(db, "session", None)
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+    return removed
+
+
+def heal_orphaned_agent_branches(logger: OrchestratorLogger) -> int:
+    """Detect and heal agent-branch worktrees left behind by a stranded
+    agent: real, committed work that never got merged because the task
+    that owned it ended up "failed" instead of "done" -- e.g. its worktree
+    was force-removed out from under it by a race in
+    sweep_completed_workflow_worktrees (see that function's live-agent
+    guard, added after this exact incident: a goto-triggered straggler
+    task's worktree got deleted while its agent was still working, the
+    agent's own uncommitted fixes had already landed in commits on its
+    branch, and nothing ever merged that branch since the task it belonged
+    to was never going to report "done" again).
+
+    A branch matching the configured agent branch_prefix, with no live
+    `git worktree` checkout, is unambiguously orphaned -- a live agent can
+    only write to its branch through an active worktree checkout, so "no
+    worktree has this branch checked out" already proves no agent is still
+    using it, with no need to cross-reference Task/Agent DB state (which,
+    for this per-agent-worktree path, doesn't reliably map branch name back
+    to a specific task anyway -- a retried task can inherit an older
+    agent's branch/worktree wholesale).
+
+    Healing is deliberately conservative: only a clean fast-forward of the
+    CURRENT base branch tip is merged. If nothing has base_branch checked
+    out anywhere, that's a compare-and-swap `update-ref` (no working tree
+    to desync). If base_branch IS checked out somewhere -- typically the
+    project's own primary checkout -- a bare ref move would desync that
+    checkout's index/working tree from its new HEAD (confirmed live: `git
+    status` then shows every changed file as locally modified), so this
+    does a real `git merge --ff-only` there instead, and only when that
+    checkout is clean. Anything that isn't a clean fast-forward (base
+    branch moved on since the orphaned branch diverged) is left alone and
+    logged with "FAILED" so it surfaces via tech_debt_requirements.yaml's
+    existing `grep -r "EXHAUSTED|STUCK|FAILED" ~/.hephaestus/logs/` step
+    for manual review -- resolving real conflicts unattended is a materially
+    different risk than fast-forwarding a branch nothing else was touching.
+
+    Returns the number of branches auto-merged.
+    """
+    from src.core.database import AutopilotProject
+    from src.core.database import DatabaseManager as DbManager
+    from src.core.simple_config import get_config
+
+    cfg = get_config()
+    db = DbManager(str(cfg.database_path))
+    healed = 0
+    try:
+        with db.session_scope() as session:
+            project_dirs = {
+                proj.base_dir
+                for proj in session.query(AutopilotProject).all()
+                if proj.base_dir and Path(proj.base_dir).is_dir()
+            }
+
+        for project_dir in project_dirs:
+            try:
+                healed += _heal_orphaned_branches_for_project(Path(project_dir), cfg, logger)
+            except Exception as e:
+                logger.warning(f"[BRANCH-HEAL] Failed to scan {project_dir}: {e}")
+    except Exception as e:
+        logger.warning(f"[BRANCH-HEAL] Failed to enumerate projects: {e}")
+    return healed
+
+
+def _heal_orphaned_branches_for_project(project_dir: Path, cfg, logger: OrchestratorLogger) -> int:
+    try:
+        repo = _git.Repo(project_dir)
+    except Exception:
+        return 0
+
+    base_branch = cfg.base_branch
+    prefix = cfg.branch_prefix
+    if base_branch not in repo.heads:
+        return 0
+    base_sha = repo.heads[base_branch].commit.hexsha
+
+    # Map branch name -> worktree path for every branch currently checked
+    # out anywhere (this always includes the project's own primary
+    # checkout, listed by git as an ordinary worktree entry). Branches
+    # still checked out are in active use -- never touch those as heal
+    # candidates. base_branch itself being checked out somewhere (the
+    # common case: a project's primary checkout normally sits on main)
+    # instead changes HOW it gets healed, below.
+    try:
+        porcelain = repo.git.worktree("list", "--porcelain")
+    except Exception:
+        porcelain = ""
+    checked_out_branches: dict = {}
+    current_path = None
+    for line in porcelain.splitlines():
+        if line.startswith("worktree "):
+            current_path = line[len("worktree "):]
+        elif line.startswith("branch ") and current_path:
+            branch_name = line.split(" ", 1)[1].removeprefix("refs/heads/")
+            checked_out_branches[branch_name] = current_path
+
+    healed = 0
+    for head in repo.heads:
+        name = head.name
+        if not name.startswith(prefix) or name == base_branch or name in checked_out_branches:
+            continue
+
+        try:
+            ahead = repo.git.rev_list(f"{base_branch}..{name}", "--count").strip()
+        except Exception:
+            continue
+        if ahead == "0":
+            continue  # already fully merged, or never advanced past base
+
+        try:
+            repo.git.merge_base("--is-ancestor", base_branch, name)
+            is_ff = True
+        except _git.GitCommandError:
+            is_ff = False
+
+        branch_sha = head.commit.hexsha
+        if not is_ff:
+            logger.warning(
+                f"[BRANCH-HEAL] FAILED to auto-heal orphaned branch {name} in "
+                f"{project_dir} -- {ahead} commit(s) not on {base_branch}, but not "
+                f"a clean fast-forward (base branch has diverged since). Needs "
+                f"manual review: git diff {base_branch}...{name}"
+            )
+            continue
+
+        base_worktree_path = checked_out_branches.get(base_branch)
+        if base_worktree_path:
+            # base_branch is actively checked out somewhere (typically the
+            # project's own primary checkout) -- a bare `update-ref` would
+            # move that checkout's HEAD commit forward without touching its
+            # index/working tree, leaving `git status` showing every
+            # changed file as locally modified (reverted to the pre-merge
+            # content) until someone notices and resets. Confirmed by
+            # direct reproduction. Do a real merge in that checkout
+            # instead, so the ref and the working tree move together, and
+            # only when it's clean -- a dirty checkout is left alone rather
+            # than risking an unattended merge on top of someone's
+            # in-progress edits.
+            try:
+                base_repo = _git.Repo(base_worktree_path)
+                if base_repo.is_dirty(untracked_files=False):
+                    logger.warning(
+                        f"[BRANCH-HEAL] FAILED to heal {name} in {project_dir} -- "
+                        f"{base_branch} is checked out at {base_worktree_path} with "
+                        "uncommitted changes; skipping rather than risking an "
+                        "unattended merge there. Needs manual review."
+                    )
+                    continue
+                base_repo.git.merge(name, "--ff-only")
+                logger.info(
+                    f"[BRANCH-HEAL] Fast-forwarded {base_branch} to {branch_sha[:8]} "
+                    f"({ahead} commit(s) from orphaned branch {name}, project {project_dir})"
+                )
+                healed += 1
+            except Exception as e:
+                logger.warning(f"[BRANCH-HEAL] FAILED to heal {name} in {project_dir}: {e}")
+        else:
+            try:
+                # Nobody has base_branch checked out anywhere, so no
+                # working tree can be desynced -- a bare compare-and-swap
+                # ref update is safe (and only advances if base_branch is
+                # still exactly base_sha, so this can't clobber a commit
+                # that landed on it between the read above and this write).
+                repo.git.update_ref(f"refs/heads/{base_branch}", branch_sha, base_sha)
+                logger.info(
+                    f"[BRANCH-HEAL] Fast-forwarded {base_branch} to {branch_sha[:8]} "
+                    f"({ahead} commit(s) from orphaned branch {name}, project {project_dir})"
+                )
+                healed += 1
+            except Exception as e:
+                logger.warning(f"[BRANCH-HEAL] FAILED to heal {name} in {project_dir}: {e}")
+    return healed
+
+
 def _create_designs_folder(
     project_path: Path,
     design_entry: DesignEntry,
@@ -2688,6 +3131,29 @@ def _sync_stale_feature_statuses(logger: OrchestratorLogger) -> int:
     from src.core.database import Feature, Workflow, get_db
 
     repaired = 0
+
+    # Re-link any feature whose workflow link was never written (see
+    # _relink_features_to_workflows). That function normally runs as a side
+    # effect of _run_one_feature/run_single_design re-walking the design --
+    # but a design whose pipeline has already fully finished has nothing
+    # left to trigger a re-walk, so a feature whose workflow completed
+    # without the link ever being written stays workflow_id=None forever.
+    # The stale-status join below can't see it either (it requires a
+    # linked Workflow row), so without this pass the feature is invisible
+    # to every self-heal path and its status sticks indefinitely. Observed
+    # live: a feature's workflow reached "completed" but Feature.workflow_id
+    # was never set, leaving Feature.status stuck "active" across restarts.
+    with get_db() as db:
+        orphaned_design_ids = {
+            design_id
+            for (design_id,) in db.query(Feature.design_id)
+            .filter(Feature.workflow_id.is_(None))
+            .distinct()
+            .all()
+        }
+    for design_id in orphaned_design_ids:
+        _relink_features_to_workflows(design_id, logger)
+
     with get_db() as db:
         # Feature has a linked workflow that completed. Deliberately NOT
         # also inferring completion for workflow_id-less features from
@@ -2723,6 +3189,143 @@ def _sync_stale_feature_statuses(logger: OrchestratorLogger) -> int:
         if repaired:
             db.commit()
     return repaired
+
+
+def _sync_stale_design_statuses(logger: OrchestratorLogger) -> int:
+    """Self-heal: flip AutopilotDesign.status to "completed" for any
+    "active" design whose every Feature has reached completed/skipped.
+
+    Mirrors pick_next_design's own "all features done -> mark completed"
+    decision (this file, ~line 2316) -- but that check only ever runs as a
+    side effect of the orchestrator picking its NEXT design to work on. A
+    design whose last feature finishes without anything else in the
+    pipeline ever needing to pick a new design again (the common case once
+    every feature has already been queued) has its AutopilotDesign.status
+    stuck "active" indefinitely, with nothing left to ever call
+    pick_next_design for it again. Observed live: a design's UI showed
+    every one of its features as done while the design itself still
+    showed "active".
+
+    Deliberately narrower than pick_next_design's full branch: only the
+    unambiguous "nothing left to do" case is handled here (and note
+    "nothing left to do" already implies no feature is stuck "failed"
+    either, since "failed" is neither "completed" nor "skipped" and would
+    itself count as incomplete). pick_next_design's failed-workflow
+    retry/give-up branches have real side effects (retry-count bookkeeping
+    tied to picking the next design) that belong to that call path, not an
+    unrelated background sweep.
+
+    Runs from the same generic, restart-safe background sweep as
+    _sync_stale_feature_statuses.
+
+    Returns the number of designs repaired.
+    """
+    from src.core.database import AutopilotDesign, Feature, get_db
+
+    repaired = 0
+    with get_db() as db:
+        active_designs = db.query(AutopilotDesign).filter_by(status="active").all()
+        for design in active_designs:
+            total = db.query(Feature).filter(Feature.design_id == design.id).count()
+            if total == 0:
+                continue  # not decomposed into features yet -- nothing to sync
+            incomplete = (
+                db.query(Feature)
+                .filter(
+                    Feature.design_id == design.id,
+                    Feature.status.notin_(["completed", "skipped"]),
+                )
+                .count()
+            )
+            if incomplete > 0:
+                continue
+            logger.info(f"[DESIGN-SYNC] Design {design.id[:8]} ({design.name}) has all {total} feature(s) completed/skipped but status was 'active' -- syncing to completed")
+            design.status = "completed"
+            repaired += 1
+        if repaired:
+            db.commit()
+    return repaired
+
+
+def _resync_pipeline_registry(logger: OrchestratorLogger, loop: "asyncio.AbstractEventLoop") -> int:
+    """Self-heal for a project whose persisted "was running" marker
+    (AutopilotService.enumerate_persisted_states) says its pipeline should
+    be running, but AutopilotServiceRegistry has no live entry for it --
+    the one-shot startup resume (_resume_interrupted_workflows) either
+    never ran for it or failed silently. See
+    docs/SAFE_RESTART_DESIGN.md §3.5.
+
+    Runs from the same generic, restart-safe background sweep as
+    _sync_stale_feature_statuses -- catches whatever the startup resume
+    missed, on an ongoing basis instead of only once at boot. Observed
+    live: several backend restarts in quick succession left a project's
+    pipeline dead (no crash, no error -- it just never got another turn to
+    pick up new work) while its own "is this project running" status
+    still read healthy, derived from an unrelated still-active workflow
+    rather than the pipeline loop itself.
+
+    AutopilotService.start() is async and spawns its own long-lived
+    background task (self._task) that must stay tied to the server's
+    persistent event loop, not a throwaway one -- asyncio.run(...) (this
+    module's usual sync-to-async bridge, see create_agent_for_task_direct)
+    would create and then immediately close a temporary loop, silently
+    orphaning that task the moment start() itself returns. Scheduling onto
+    the real loop via run_coroutine_threadsafe avoids that.
+    """
+    from src.autopilot.service import AutopilotService, get_registry
+
+    try:
+        persisted = AutopilotService.enumerate_persisted_states()
+    except Exception as e:
+        logger.warning(f"[PIPELINE-RESYNC] Could not enumerate persisted state: {e}")
+        return 0
+
+    registry = get_registry()
+    resumed = 0
+    for project_id, state in persisted:
+        project_path = state.get("project_path")
+        if not project_path:
+            continue
+
+        existing = registry.get(project_id)
+        if existing and existing.running:
+            continue  # already tracked and alive -- nothing to do
+
+        if _should_stop(project_id):
+            # A pause_for_restart() (or an explicit stop()) is already
+            # in-flight for this project -- its registry entry can look
+            # exactly like "should restart" here (running momentarily
+            # False, persisted marker deliberately left intact) while it's
+            # still mid-drain. Restarting it now would race the graceful
+            # pause itself. Let the NEXT sweep tick re-check once that
+            # settles, rather than force a restart mid-shutdown.
+            logger.debug(
+                f"[PIPELINE-RESYNC] Project {project_id[:8]}: stop already "
+                "in flight, skipping this tick"
+            )
+            continue
+
+        logger.warning(
+            f"[PIPELINE-RESYNC] Project {project_id[:8]}: persisted state "
+            "says running but no live pipeline found -- restarting"
+        )
+        try:
+            service = registry.get_or_create(project_id)
+            future = asyncio.run_coroutine_threadsafe(
+                service.start(
+                    project_path=project_path,
+                    design_queue=state.get("design_queue", ""),
+                    max_iterations=state.get("max_iterations", 10),
+                ),
+                loop,
+            )
+            future.result(timeout=30.0)
+            resumed += 1
+        except Exception as e:
+            logger.warning(
+                f"[PIPELINE-RESYNC] Failed to restart project {project_id[:8]}: {e}"
+            )
+    return resumed
 
 
 def _recover_abandoned_workflows_missing_worktree(logger: OrchestratorLogger) -> int:
@@ -2966,21 +3569,57 @@ def _retry_exhausted_paused_workflows(logger: OrchestratorLogger) -> int:
     cutoff = datetime.utcnow() - timedelta(seconds=_get_paused_workflow_retry_cooldown_seconds())
     recovered = 0
     with get_db() as db:
+        # Also pick up system-exhausted workflows that may have been manually
+        # fixed or had their blocker resolved (e.g. a phase that was stuck now
+        # has tasks done)
         candidates = (
             db.query(Workflow)
             .filter(
                 Workflow.status == "paused",
-                Workflow.paused_by == "system",
+                Workflow.paused_by.in_(["system", "system-exhausted"]),
                 or_(Workflow.paused_at.is_(None), Workflow.paused_at < cutoff),
             )
             .all()
         )
         for wf in candidates:
-            if wf.paused_retry_count >= max_cycles:
+            if wf.paused_by == "system" and wf.paused_retry_count >= max_cycles:
                 logger.warning(f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} exhausted {max_cycles} auto-retry cycles -- giving up permanently, needs a manual resume")
                 wf.paused_by = "system-exhausted"
                 wf.status_reason = f"{wf.status_reason or ''} (auto-retry gave up after {max_cycles} attempts -- manual resume required)"
                 recovered += 1  # counts as "handled", not "retried"
+                continue
+
+            # For system-exhausted workflows, only retry if there are actually
+            # failed or pending tasks in in_progress phases (conditions may have changed)
+            if wf.paused_by == "system-exhausted":
+                in_progress_phase_ids = {
+                    pid for (pid,) in db.query(PhaseExecution.phase_id).join(Phase, PhaseExecution.phase_id == Phase.id).filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress").all()
+                }
+                # Check for failed OR pending tasks (pending with no agent = stuck)
+                stuck_tasks = db.query(Task).filter(
+                    Task.workflow_id == wf.id,
+                    Task.phase_id.in_(in_progress_phase_ids),
+                    Task.status.in_(["failed", "pending"]),
+                ).all() if in_progress_phase_ids else []
+                # Filter pending tasks to only those with no assigned agent (truly stuck)
+                stuck_tasks = [t for t in stuck_tasks if t.status == "failed" or (t.status == "pending" and not t.assigned_agent_id)]
+                if not stuck_tasks:
+                    continue  # No stuck tasks to retry, leave as system-exhausted
+                # Has stuck tasks — reset and retry
+                for task in stuck_tasks:
+                    task.retry_count = 0
+                    if task.status == "pending":
+                        task.failure_reason = None
+                wf.status = "active"
+                wf.paused_by = None
+                wf.status_reason = None
+                wf.paused_at = None
+                wf.paused_retry_count = 0
+                logger.warning(
+                    f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} was system-exhausted but has "
+                    f"{len(stuck_tasks)} stuck task(s) in in_progress phase -- retrying"
+                )
+                recovered += 1
                 continue
 
             # Scoped to the CURRENTLY in_progress phase only -- see the
@@ -3156,14 +3795,16 @@ def _relink_features_to_workflows(design_id: str, logger: OrchestratorLogger) ->
 
 
 def _clean_stale_assigned_tasks(workflow_id: str, logger: OrchestratorLogger) -> None:
-    """Clean tasks that are 'assigned' or 'in_progress' to terminated agents.
+    """Clean tasks that are 'assigned' or 'in_progress' to terminated agents,
+    and pending/assigned tasks that belong to already-completed workflows.
 
     Called periodically from the polling loop to prevent tasks from hanging
     forever when agents crash or are killed.
     """
-    from src.core.database import Agent, Task, get_db
+    from src.core.database import Agent, Task, Workflow, get_db
 
     with get_db() as db:
+        # 1. Tasks assigned to terminated agents
         stale_tasks = (
             db.query(Task)
             .filter(
@@ -3186,6 +3827,25 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: OrchestratorLogger) ->
                 # retry below loses exactly the feedback it needs to fix.
                 if not task.failure_reason:
                     task.failure_reason = f"Agent {task.assigned_agent_id[:8]} terminated unexpectedly"
+                db.commit()
+
+        # 2. Pending/assigned tasks in already-completed workflows
+        workflow = db.query(Workflow).filter_by(id=workflow_id).first()
+        if workflow and workflow.status == "completed":
+            orphaned = (
+                db.query(Task)
+                .filter(
+                    Task.workflow_id == workflow_id,
+                    Task.status.in_(["pending", "assigned"]),
+                )
+                .all()
+            )
+            for task in orphaned:
+                logger.info(f"[ORPHAN-TASK] Task {task.id[:8]} ({task.phase_id}) in completed workflow — marking failed")
+                task.status = "failed"
+                task.failure_reason = "Orphaned: workflow already completed"
+                task.assigned_agent_id = None
+            if orphaned:
                 db.commit()
 
 
@@ -3425,18 +4085,18 @@ SWEEP_ENABLED = False
 _SWEEP_REPORT_NAMES = {
     "review_findings.md",
     "review_report.md",
-    "security_report.md",
+    "security.md",
     "test_failures.md",
-    "doc_review_report.md",
+    "docs.md",
     "adversarial_review.md",
-    "adversarial_review_report.md",
-    "forensics_report.md",
+    "adversarial.md",
+    "forensics.md",
     "architecture.md",
     "run_health.json",
     "pipeline_metrics.json",
-    "qa_report.md",
-    "product_validation.md",
-    "scope_review_result.md",
+    "qa.md",
+    "validation.md",
+    "scope.md",
     "arbitration_result.json",
 }
 _STRAY_DIRS: set = set()  # no directories swept until re-validated
@@ -3448,7 +4108,7 @@ def _sweep_stray_files(
     docs_dir: Path,
     logger: OrchestratorLogger,
 ) -> None:
-    """Move known ephemeral report files from project root into feature docs.
+    """Move known ephemeral report files from project root into feature .hephaestus/.
 
     Only files whose lowercased name appears in _SWEEP_REPORT_NAMES are
     eligible — source files, design docs, scripts, and anything else in
@@ -3459,15 +4119,15 @@ def _sweep_stray_files(
 
     docs_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── known report files written to ./docs/ by agents ────────────
-    proj_docs = project_path / _REPORT_SUBDIR
-    if proj_docs.is_dir() and proj_docs.resolve() != docs_dir.resolve():
-        for f in proj_docs.iterdir():
+    # ── known report files written to ./.hephaestus/ by agents ────────
+    proj_hephaestus = project_path / _REPORT_SUBDIR
+    if proj_hephaestus.is_dir() and proj_hephaestus.resolve() != docs_dir.resolve():
+        for f in proj_hephaestus.iterdir():
             if f.is_file() and f.name.lower() in _SWEEP_REPORT_NAMES:
                 dest = docs_dir / f.name
                 if not dest.exists():
                     shutil.copy2(str(f), str(dest))
-                    logger.info(f"Copied report: docs/{f.name} -> features/.../docs/")
+                    logger.info(f"Copied report: .hephaestus/{f.name} -> features/.../docs/")
 
     # ── known report files accidentally written to project root ─────
     for f in project_path.iterdir():
@@ -3492,37 +4152,40 @@ def _sweep_stray_files(
             logger.info(f"Moved feature file: {f.name} -> features/.../docs/")
 
 
-_REPORT_SUBDIR = "docs"
+_REPORT_SUBDIR = ".hephaestus"
 
 
 def _report_path(project_path: Path, filename: str) -> Path:
     """Locate a report an agent wrote.
 
-    Under worktree isolation agents write reports to ./docs/ (relative to their
-    worktree), which merges to <project>/docs/. Prefer that location; fall back
-    to the project root. Does NOT iterate worktrees (too slow for per-turn calls).
+    Under worktree isolation agents write reports to ./.hephaestus/ (relative
+    to their worktree), which is git-excluded. Fall back to the project root.
+    Does NOT iterate worktrees (too slow for per-turn calls).
     """
-    in_docs = project_path / _REPORT_SUBDIR / filename
-    if in_docs.exists():
-        return in_docs
+    in_hephaestus = project_path / _REPORT_SUBDIR / filename
+    if in_hephaestus.exists():
+        return in_hephaestus
     return project_path / filename
 
 
 def collect_report_summaries(project_path: Path) -> Dict[str, str]:
     summaries = {}
     report_files = {
-        "requirements": "requirements_analysis.md",
+        "requirements": "requirements.md",
         "architecture": "architecture.md",
         "review": "review_report.md",
-        "doc_review": "doc_review_report.md",
-        "security": "security_report.md",
-        "qa": "qa_report.md",
-        "product_validation": "product_validation.md",
-        "forensics": "forensics_report.md",
+        "doc_review": "docs.md",
+        "security": "security.md",
+        "qa": "qa.md",
+        "product_validation": "validation.md",
+        "forensics": "forensics.md",
     }
 
     for key, filename in report_files.items():
-        filepath = project_path / filename
+        # First check .hephaestus/ (where agents write), then project root
+        filepath = project_path / ".hephaestus" / filename
+        if not filepath.exists():
+            filepath = project_path / filename
         if filepath.exists():
             try:
                 content = filepath.read_text()
@@ -3627,7 +4290,7 @@ def generate_product_validation_report(
     and the engine's evaluation points. This function is a fallback that reads
     existing reports for display/summary purposes only.
     """
-    validation_path = _report_path(project_path, "product_validation.md")
+    validation_path = _report_path(project_path, "validation.md")
 
     if validation_path.exists():
         from src.autopilot.okf_markdown import read_okf
@@ -3637,7 +4300,7 @@ def generate_product_validation_report(
             frontmatter, _ = parsed
             verdict = str(frontmatter.get("verdict", "")).upper()
             meets_spec = verdict == "PASS" and qa_passed
-            logger.info(f"Using structured product_validation.md frontmatter: verdict={verdict}")
+            logger.info(f"Using structured validation.md frontmatter: verdict={verdict}")
             return meets_spec, validation_path.read_text()
 
         # Fallback: no parseable frontmatter -- fall back to a raw text scan
@@ -3695,7 +4358,28 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
         with get_db() as db:
             # Get workflow
             wf = db.query(Workflow).filter_by(id=workflow_id).first()
-            if not wf or wf.status not in ("active", "paused"):
+            if not wf:
+                return False
+
+            # Mark pending/in_progress tasks as failed when workflow is failed
+            if wf.status == "failed":
+                orphaned_tasks = (
+                    db.query(Task)
+                    .filter(
+                        Task.workflow_id == workflow_id,
+                        Task.status.in_(["pending", "in_progress", "assigned"]),
+                    )
+                    .all()
+                )
+                for t in orphaned_tasks:
+                    logger.warning(f"[PHASE-ADVANCE] Task {t.id[:8]} is {t.status} but workflow is failed — marking failed")
+                    t.status = "failed"
+                    t.failure_reason = f"Workflow failed: {wf.status_reason or 'unknown reason'}"
+                if orphaned_tasks:
+                    db.commit()
+                return False
+
+            if wf.status not in ("active", "paused"):
                 return False
 
             # Auto-resume paused workflow if it has a done task in the stalled phase
@@ -3711,6 +4395,27 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
             # Same reasoning: a phase stuck "pending" despite a done task
             # is invisible to every dispatch case below otherwise.
             _release_pending_phases_with_done_tasks(db, workflow_id, logger)
+
+            # Self-heal: tasks that are "done" but have a failure_reason
+            # indicate gate validation failed after the task completed.
+            # Reset these to "failed" so they can be properly retried
+            # with correct gate evaluation.
+            inconsistent_tasks = (
+                db.query(Task)
+                .filter(
+                    Task.workflow_id == workflow_id,
+                    Task.status == "done",
+                    Task.failure_reason.isnot(None),
+                    Task.failure_reason != "",
+                )
+                .all()
+            )
+            for t in inconsistent_tasks:
+                logger.warning(f"[PHASE-ADVANCE] Task {t.id[:8]} is 'done' but has failure_reason — resetting to 'failed' for proper gate evaluation")
+                t.status = "failed"
+                t.completed_at = None
+            if inconsistent_tasks:
+                db.commit()
 
             # Get all phases and their statuses
             phase_statuses = _get_phase_statuses(db, workflow_id)
@@ -4270,6 +4975,57 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
         if orphaned_pending:
             db.commit()
 
+        # Also check for pending tasks with terminated agents (regardless of age)
+        terminated_pending = (
+            db.query(Task)
+            .filter(
+                Task.phase_id == phase.id,
+                Task.status == "pending",
+                Task.assigned_agent_id.isnot(None),
+                ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+                *cycle_filter,
+            )
+            .all()
+        )
+        terminated_tasks = []
+        for t in terminated_pending:
+            agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
+            if agent and agent.status == "terminated":
+                terminated_tasks.append(t)
+        for t in terminated_tasks:
+            logger.warning(f"[PHASE-ADVANCE] {phase.name} has pending task {t.id[:8]} with terminated agent -- marking failed")
+            t.status = "failed"
+            t.failure_reason = "Agent terminated"
+            t.assigned_agent_id = None
+        if terminated_tasks:
+            db.commit()
+
+        # Mark pending tasks with retry_count past cap as failed
+        # These are stuck in pending state but have been retried too many times
+        try:
+            from src.autopilot.spec import load_workflow_definition
+            _wf_def = load_workflow_definition(phase.workflow_id)
+            _max_retry = _wf_def.get("orchestrator", {}).get("max_task_retries", 5)
+        except Exception:
+            _max_retry = 5
+        stale_retry_tasks = (
+            db.query(Task)
+            .filter(
+                Task.phase_id == phase.id,
+                Task.status == "pending",
+                Task.retry_count >= _max_retry,
+                ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+                *cycle_filter,
+            )
+            .all()
+        )
+        for t in stale_retry_tasks:
+            logger.warning(f"[PHASE-ADVANCE] {phase.name} has pending task {t.id[:8]} with retry_count={t.retry_count} (>= {_max_retry}) -- marking failed")
+            t.status = "failed"
+            t.failure_reason = t.failure_reason or "Exceeded retry cap"
+        if stale_retry_tasks:
+            db.commit()
+
         incomplete = (
             db.query(Task)
             .filter(
@@ -4337,6 +5093,111 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             if result is not None:
                 return result
             continue  # No completed tasks yet
+
+        # Before marking phase as complete, check if there are failed tasks
+        # that should be retried. A phase with done tasks AND failed tasks
+        # is NOT complete — the failed tasks need retry first.
+        failed_count = (
+            db.query(Task)
+            .filter(
+                Task.phase_id == phase.id,
+                Task.status == "failed",
+                ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+                *cycle_filter,
+            )
+            .count()
+        )
+        if failed_count > 0:
+            # Has failed tasks — try to retry them before marking complete
+            if not _claim_phase_task_creation(db, phase.id):
+                continue
+            try:
+                # _maybe_retry_failed_tasks only retries when ALL tasks are failed.
+                # When we have done + failed, we need to retry the failed ones directly.
+                failed_tasks = (
+                    db.query(Task)
+                    .filter(
+                        Task.phase_id == phase.id,
+                        Task.status == "failed",
+                        ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+                        *cycle_filter,
+                    )
+                    .all()
+                )
+                # Filter to retryable tasks (orphaned, session limits, and stuck tasks are always retryable)
+                # Read max_task_retries from workflow config, default to 5
+                try:
+                    from src.autopilot.spec import load_workflow_definition
+                    wf_def = load_workflow_definition(phase.workflow_id)
+                    max_retry_count = wf_def.get("orchestrator", {}).get("max_task_retries", 5)
+                except Exception:
+                    max_retry_count = 5
+                _limit_failure = lambda r: "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
+                _stuck_failure = lambda r: "task stuck" in (r or "").lower()
+                retryable_tasks = [
+                    t for t in failed_tasks
+                    if (t.retry_count or 0) < max_retry_count
+                    or "Orphaned" in (t.failure_reason or "")
+                    or _limit_failure(t.failure_reason)
+                    or _stuck_failure(t.failure_reason)
+                ]
+                if retryable_tasks:
+                    logger.info(f"[PHASE-ADVANCE] {phase.name} has {done_count} done but {len(retryable_tasks)} failed tasks to retry")
+                    for task in retryable_tasks:
+                        if task.failure_reason:
+                            # Use raw_description as base to avoid accumulating retry messages
+                            base = task.raw_description or ""
+                            task.enriched_description = f"{base}\n\n--- RETRY: your previous attempt failed ---\n{task.failure_reason}"
+                        task.status = "pending"
+                        task.failure_reason = None
+                        task.retry_count = (task.retry_count or 0) + 1
+                    db.commit()
+                    # Dispatch agents for the retried tasks
+                    for task in retryable_tasks:
+                        try:
+                            agent_data = create_agent_for_task_direct(
+                                task.id, phase.workflow_id, phase.id
+                            )
+                            if agent_data:
+                                task.assigned_agent_id = agent_data.get("agent_id")
+                                task.status = "in_progress"
+                                task.started_at = datetime.utcnow()
+                        except Exception as e:
+                            logger.error(f"[PHASE-ADVANCE] Failed to dispatch retry agent for task {task.id[:8]}: {e}")
+                    db.commit()
+                    return True
+                else:
+                    # All failed tasks past retry cap. Bug: this used to
+                    # only set execution.status = "failed" and fall
+                    # straight through into the "phase complete, fire
+                    # transition" section below -- _fire_phase_transition
+                    # calls PhaseManager.mark_phase_complete, which
+                    # evaluates the engine decision from the failed task's
+                    # own stale action/completion data (e.g. "continue",
+                    # written by the agent's own self-report before the
+                    # output validator rejected it), NOT from
+                    # execution.status. Observed live: architectural_review
+                    # exhausted its retry cap on a real frontmatter-schema
+                    # defect and the pipeline advanced straight to
+                    # qa_validation as if the review had passed. Mirror
+                    # _trigger_arbitration's own exhausted-retry-budget
+                    # handling (wf.status = "failed" + status_reason, then
+                    # stop) instead of silently continuing.
+                    logger.warning(f"[PHASE-ADVANCE] {phase.name} has {failed_count} failed tasks all past retry cap — marking phase and workflow as failed")
+                    if execution:
+                        execution.status = "failed"
+                        execution.completed_at = datetime.utcnow()
+                    wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                    if wf and wf.status != "failed":
+                        wf.status = "failed"
+                        wf.status_reason = (
+                            f"{phase.name}: {failed_count} task(s) exhausted the retry cap "
+                            "without producing a valid output"
+                        )
+                    db.commit()
+                    continue
+            finally:
+                _release_phase_task_creation_claim(db, phase.id)
 
         # Phase is complete — fire transition. mark_phase_complete's engine
         # evaluation can take minutes (an LLM call in phase_manager.py), and
@@ -4423,27 +5284,54 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
         # re-dispatched every single poll cycle forever, burning a cycle
         # every few seconds indefinitely and starving every other
         # workflow's turn in the same poll loop. Observed live.
-        max_retry_count = 2
+        # Read max_task_retries from workflow config, default to 5
+        try:
+            from src.autopilot.spec import load_workflow_definition
+            wf_def = load_workflow_definition(phase.workflow_id)
+            max_retry_count = wf_def.get("orchestrator", {}).get("max_task_retries", 5)
+        except Exception:
+            max_retry_count = 5
         failed_tasks = (
             db.query(Task)
             .filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter)
             .all()
         )
-        # Orphaned tasks (never dispatched) are scheduling issues, not agent
-        # failures -- they should always be retryable.
+        # Orphaned tasks (never dispatched), session/spend limit failures,
+        # and stuck-task failures are not agent faults -- they should always
+        # be retryable. Session limit failures will use the fallback model on retry.
+        _limit_failure = lambda r: "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
+        _stuck_failure = lambda r: "task stuck" in (r or "").lower()
         retryable_tasks = [
             t for t in failed_tasks
             if (t.retry_count or 0) < max_retry_count
             or "Orphaned" in (t.failure_reason or "")
+            or _limit_failure(t.failure_reason)
+            or _stuck_failure(t.failure_reason)
         ]
         if not retryable_tasks:
             reasons = sorted({t.failure_reason for t in failed_tasks if t.failure_reason})
             reason_text = "; ".join(reasons) if reasons else "no reason recorded"
             logger.warning(
                 f"[PHASE-ADVANCE] Phase {phase.name} has {len(failed_tasks)} failed "
-                f"task(s), all past the retry cap ({max_retry_count}) -- pausing "
-                f"the workflow instead of retrying forever: {reason_text}"
+                f"task(s), all past the retry cap ({max_retry_count})"
             )
+            # Check if there are still pending tasks in other phases —
+            # don't pause the workflow if there's still work to do.
+            other_pending = (
+                db.query(Task)
+                .filter(
+                    Task.workflow_id == phase.workflow_id,
+                    Task.phase_id != phase.id,
+                    Task.status == "pending",
+                )
+                .count()
+            )
+            if other_pending > 0:
+                logger.info(
+                    f"[PHASE-ADVANCE] {phase.name} exhausted retries but {other_pending} "
+                    f"pending tasks remain in other phases — not pausing workflow"
+                )
+                return None
             workflow = db.query(Workflow).filter_by(id=phase.workflow_id).first()
             if workflow and workflow.status != "paused":
                 workflow.status = "paused"
@@ -4465,7 +5353,8 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
         reset_task_ids = []
         for task in retryable_tasks:
             if task.failure_reason:
-                base = task.enriched_description or task.raw_description or ""
+                # Use raw_description as base to avoid accumulating retry messages
+                base = task.raw_description or ""
                 task.enriched_description = f"{base}\n\n--- RETRY: your previous attempt failed with this specific error, fix it rather than repeating the same mistake ---\n{task.failure_reason}"
             task.status = "pending"
             task.failure_reason = None
@@ -4508,12 +5397,40 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
         # only thing that ever ran for it. Dispatch a fresh agent directly,
         # mirroring _create_phase_task's own create-then-update pattern.
         for task_id in reset_task_ids:
-            agent_data = create_agent_for_task_direct(task_id, phase.workflow_id, phase.id)
+            # Check if this task failed due to session/CLI limit -- if so,
+            # resolve the fallback CLI/model for the retry so we don't
+            # just hit the same limit again.
+            session_limit_override_cli = None
+            session_limit_override_model = None
+            with get_db() as check_db:
+                check_task = check_db.query(Task).filter_by(id=task_id).first()
+                if check_task and ("session limit" in (check_task.failure_reason or "").lower() or "spend limit" in (check_task.failure_reason or "").lower()):
+                    if phase.id:
+                        _phase = check_db.query(Phase).filter_by(id=phase.id).first()
+                        if _phase:
+                            session_limit_override_cli = getattr(_phase, 'fallback_cli_tool', None)
+                            session_limit_override_model = getattr(_phase, 'fallback_cli_model', None)
+                    if not session_limit_override_cli:
+                        cfg = get_config()
+                        if cfg.default_fallback_cli_tool:
+                            session_limit_override_cli = cfg.default_fallback_cli_tool
+                            session_limit_override_model = cfg.default_fallback_cli_model
+                    if session_limit_override_cli:
+                        logger.info(
+                            f"[PHASE-ADVANCE] Task {task_id[:8]} failed due to session limit -- "
+                            f"retrying with fallback {session_limit_override_cli}/{session_limit_override_model or 'default'}"
+                        )
+
+            agent_data = create_agent_for_task_direct(
+                task_id, phase.workflow_id, phase.id,
+                phase_cli_tool_override=session_limit_override_cli,
+                phase_cli_model_override=session_limit_override_model,
+            )
             with get_db() as retry_db:
                 retry_task = retry_db.query(Task).filter_by(id=task_id).first()
                 if not retry_task:
                     continue
-                if not agent_data:
+                if not agent_data or not isinstance(agent_data, dict) or "agent_id" not in agent_data:
                     # Back to "failed" (not left "pending") so the next poll's
                     # _maybe_retry_failed_tasks (which only triggers on
                     # status="failed") gets another chance at this -- leaving
@@ -4615,7 +5532,7 @@ def _fire_phase_transition(workflow_id: str, phase_id: str, phase_name: str, log
             # phase's corrective task should see THAT, not a reason that
             # contradicts the real work already done (observed live: a
             # developer task was told "WHY YOU'RE HERE: no
-            # adversarial_review_report.md found" while the adversarial
+            # adversarial.md found" while the adversarial
             # review that sent it there had, per its own completion_notes,
             # found and reported 3 concrete BLOCKERs -- the agent had to
             # rediscover them itself instead of being told directly).
@@ -4713,8 +5630,8 @@ change case): {phase_list_text}
 
 WHAT TO DO:
 1. Read whatever evidence is relevant -- the latest gate output file(s) in
-   ./docs/ (e.g. qa_report.md, adversarial_review_report.md,
-   security_report.md -- whichever exist for this workflow; each starts
+   ./.hephaestus/ (e.g. qa.md, adversarial.md,
+   security.md -- whichever exist for this workflow; each starts
    with a YAML frontmatter block giving its structured verdict/counts,
    followed by the full narrative report), and the phase's own recent
    deliverables, to understand exactly what's blocking progress.
@@ -4821,6 +5738,29 @@ def _trigger_arbitration(
 
     task_id = str(uuid.uuid4())
     with get_db() as db:
+        # Ensure created_by_agent_id's FK is satisfied -- Task.created_by_
+        # agent_id is a real ForeignKey("agents.id"), and ARBITRATION_CREATED_BY
+        # ("arbitration") was never a real Agent row, only a sentinel string.
+        # With FK enforcement on, every single insert below raised
+        # sqlite3.IntegrityError, silently caught by _fire_phase_transition's
+        # catch-all and re-logged as "[PHASE-ADVANCE] Transition error" --
+        # the arbitration Task never persisted, so arbitration could never
+        # actually happen; the phase just kept re-evaluating to "arbitrate"
+        # every sweep tick forever. Mirrors the same get-or-create server.py's
+        # create_task endpoint already does for its own created_by_agent_id.
+        # Observed live: 1180+ failed attempts over ~30 hours on one
+        # workflow, total_gotos climbing the whole time, zero arbitration
+        # tasks ever created.
+        if not db.query(Agent).filter_by(id=ARBITRATION_CREATED_BY).first():
+            db.add(
+                Agent(
+                    id=ARBITRATION_CREATED_BY,
+                    system_prompt="auto-created for arbitration task attribution",
+                    status="idle",
+                    cli_type="system",
+                )
+            )
+            db.flush()
         task = Task(
             id=task_id,
             raw_description=f"Arbitrate stuck phase: {phase_name}",
@@ -4840,7 +5780,24 @@ def _trigger_arbitration(
         task_id,
         workflow_id,
         phase_id,
-        agent_type="arbitration",
+        # Not "arbitration" -- Agent.agent_type has a CHECK constraint
+        # ('phase', 'validator', 'result_validator', 'monitor',
+        # 'diagnostic', 'orchestrator') that "arbitration" was never a
+        # member of, so every dispatch here unconditionally raised
+        # sqlite3.IntegrityError, silently caught by create_agent_for_task_
+        # direct's own except-and-return-None and logged only at DEBUG
+        # (invisible at the default log level) -- every arbitration attempt
+        # hit the "if not agent_data" branch below and failed the workflow,
+        # even after Task creation itself was fixed to no longer FK-fail.
+        # "diagnostic" is a safe substitute, not a hack: prompt_builder.py's
+        # format_initial_message already treats "diagnostic" and
+        # "arbitration" identically (both use the verbatim validation_prompt
+        # path), so this changes zero prompt-building behavior while
+        # actually satisfying the constraint. created_by_agent_id
+        # (ARBITRATION_CREATED_BY) on the Task, not Agent.agent_type, is
+        # what identifies/counts arbitration tasks elsewhere (the
+        # max_arbitrations_per_phase cap above) -- unaffected by this.
+        agent_type="diagnostic",
         enriched_data_override={"validation_prompt": prompt},
     )
     if not agent_data:
@@ -5216,7 +6173,7 @@ def _cap_out_review_phase(
         )
         return None
 
-    docs_dir = Path(workflow.working_directory) / "docs" / phase.name
+    docs_dir = Path(workflow.working_directory) / ".hephaestus" / phase.name
     docs_dir.mkdir(parents=True, exist_ok=True)
 
     history = get_review_findings_history(workflow_id, phase.name)
@@ -5290,6 +6247,15 @@ def _create_phase_task(
                         # PhaseManager itself and advances to the next phase —
                         # the same completion path a real agent would trigger
                         # via update_task_status, just fired synthetically.
+                        return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
+
+            # deploy phase: skip entirely if DEPLOY.md doesn't exist
+            if phase_name == "deploy":
+                wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                if wf and wf.working_directory:
+                    deploy_md = Path(wf.working_directory) / "DEPLOY.md"
+                    if not deploy_md.exists():
+                        logger.info(f"[PHASE-TASK] deploy skipped — DEPLOY.md not found in {wf.working_directory}")
                         return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
 
             # Check if phase already has an active task
@@ -6629,7 +7595,7 @@ def run_phase0(
         # goto ever fired, so the report text never got embedded in a
         # corrective task's description either) leaves no audit trail at
         # all of what the reviewer actually checked and confirmed was fine.
-        review_src = features_json_path.parent / "feature_review_report.md"
+        review_src = features_json_path.parent / "review.md"
         if review_src.exists():
             shutil.copy2(review_src, designs_folder / review_src.name)
 
@@ -6682,6 +7648,113 @@ def run_phase0(
         _cleanup_worktree(worktree, branch, project_path, logger)
 
 
+# ── Review mode helpers ───────────────────────────────────────────────────────
+
+
+def _should_pause_for_review(project_id: str) -> bool:
+    """Return True if this project has review_mode enabled."""
+    try:
+        from src.core.database import AutopilotProject, get_db
+        with get_db() as db:
+            proj = db.query(AutopilotProject).get(project_id)
+            return bool(proj and getattr(proj, "review_mode", False))
+    except Exception:
+        return False
+
+
+def _pause_feature_for_review(feature_id: str, logger: "OrchestratorLogger") -> None:
+    """Pause a feature's workflow with paused_by='review'.
+
+    The self-heal sweep skips any workflow with paused_by set, so this
+    prevents auto-resume without touching any other code paths.
+    """
+    try:
+        from src.core.database import Feature, Workflow, get_db
+        with get_db() as db:
+            feat = db.query(Feature).filter_by(id=feature_id).first()
+            if feat and feat.workflow_id:
+                # Don't pause for review if feature was already approved
+                if feat.review_status == "approved":
+                    logger.debug(f"[REVIEW] Feature {feature_id} already approved — skipping review pause")
+                    return
+                wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
+                if wf and wf.paused_by != "review" and wf.status not in ("failed", "completed"):
+                    wf.status = "paused"
+                    wf.paused_by = "review"
+                    feat.status = "paused"
+                    db.commit()
+                    logger.info(f"[REVIEW] Feature {feature_id} paused for review")
+    except Exception as e:
+        logger.error(f"[REVIEW] Failed to pause feature {feature_id} for review: {e}")
+
+
+def _wait_for_review_clearance(
+    feature_id: str,
+    logger: "OrchestratorLogger",
+    project_id: Optional[str] = None,
+    poll_interval: int = 30,
+) -> None:
+    """Block until the feature's review pause is cleared (paused_by != 'review').
+
+    Polls the DB every poll_interval seconds. Returns when:
+    - the user approves or requests changes (paused_by cleared), OR
+    - the pipeline stop signal fires (_should_stop returns True).
+    Waits indefinitely otherwise — Review Mode requires explicit human action.
+    """
+    logger.info(f"[REVIEW] Waiting for human review of feature {feature_id}")
+    while True:
+        if project_id and _should_stop(project_id):
+            logger.info(f"[REVIEW] Stop signal — exiting review wait for {feature_id}")
+            return
+        try:
+            from src.core.database import Feature, Workflow, get_db
+            with get_db() as db:
+                feat = db.query(Feature).filter_by(id=feature_id).first()
+                if not feat or not feat.workflow_id:
+                    logger.info(f"[REVIEW] Feature {feature_id} no longer exists — exiting review wait")
+                    return
+                wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
+                if not wf or wf.paused_by != "review":
+                    logger.info(f"[REVIEW] Review cleared for feature {feature_id}")
+                    return
+        except Exception as e:
+            logger.error(f"[REVIEW] Error checking review status: {e}")
+        time.sleep(poll_interval)
+
+
+def _wait_for_pending_reviews(
+    project_id: str,
+    logger: "OrchestratorLogger",
+    poll_interval: int = 30,
+) -> None:
+    """Block until all features pending review are approved.
+
+    Called before starting new features to ensure review mode gates
+    the entire pipeline, not just individual features.
+    """
+    from src.core.database import Feature, Workflow, get_db
+
+    while True:
+        try:
+            with get_db() as db:
+                pending_reviews = (
+                    db.query(Feature)
+                    .join(Workflow, Feature.workflow_id == Workflow.id)
+                    .filter(
+                        Workflow.project_id == project_id,
+                        Workflow.paused_by == "review",
+                        Workflow.status == "paused",
+                    )
+                    .count()
+                )
+                if pending_reviews == 0:
+                    return
+                logger.info(f"[REVIEW] Waiting for {pending_reviews} feature(s) pending review before starting new features")
+        except Exception as e:
+            logger.error(f"[REVIEW] Error checking pending reviews: {e}")
+        time.sleep(poll_interval)
+
+
 def _run_one_feature(
     sdk,
     design_entry: DesignEntry,
@@ -6714,6 +7787,22 @@ def _run_one_feature(
     feature_name = feature.get("name", feature_key)
 
     logger.info(f"Starting feature pipeline: {feature_name} ({feature_key})")
+
+    # Check if all dependencies are completed before starting
+    depends_on = feature.get("depends_on", [])
+    if depends_on:
+        with get_db() as db:
+            for dep_key in depends_on:
+                dep_feature = db.query(Feature).filter_by(
+                    design_id=design_entry.db_id,
+                    feature_key=dep_key,
+                ).first()
+                if not dep_feature:
+                    logger.warning(f"[DEPENDENCY] Feature {feature_key} depends on {dep_key} which doesn't exist — skipping")
+                    return "skipped"
+                if dep_feature.status not in ("completed", "active"):
+                    logger.warning(f"[DEPENDENCY] Feature {feature_key} depends on {dep_key} which is {dep_feature.status} — skipping")
+                    return "skipped"
 
     # Set structured log context for this feature's lifetime
     from src.core.log_context import set_log_context
@@ -6896,6 +7985,10 @@ def _run_one_feature(
         if wf_status == "completed":
             # Check if product validation passed
             # For now, mark as completed if workflow completed
+            # Review mode: pause for human approval BEFORE marking completed
+            if project_id and feature_id and _should_pause_for_review(project_id):
+                _pause_feature_for_review(feature_id, logger)
+                _wait_for_review_clearance(feature_id, logger, project_id=project_id)
             final_status = "completed"
         elif wf_status == "paused":
             # Not a failure -- run_single_workflow returns "paused" for a
@@ -6920,14 +8013,27 @@ def _run_one_feature(
         # Update feature status
         _update_feature_status(feature_id, design_entry.db_id, final_status, logger=logger)
 
-        # Sweep artifacts to permanent record
-        docs_dir = worktree / "docs"
+        # Sweep artifacts to permanent record. Phase reports now live under
+        # .hephaestus/ (git-excluded) -- some flat at the top level
+        # (requirements.md, architecture.md), some one level down
+        # in a phase subdirectory (qa_validation/qa.md,
+        # adversarial_review/adversarial.md, etc., per each
+        # gated phase's CRITICAL PATH RULE) -- so this must recurse, not
+        # just iterate the top level like the old flat docs/ layout needed.
+        # Excludes tmux/ (transcript logs), features/ (Phase 0 internal
+        # state), and scratch/ (agent scratch space) -- none of those are
+        # phase-report artifacts.
+        docs_dir = worktree / ".hephaestus"
+        _sweep_excluded_dirs = {"tmux", "features", "scratch"}
         if docs_dir.exists():
-            for f in docs_dir.iterdir():
-                if f.is_file():
-                    dest = feature_record_path / f.name
-                    if not dest.exists():
-                        shutil.copy2(f, dest)
+            for f in docs_dir.rglob("*"):
+                if not f.is_file():
+                    continue
+                if f.relative_to(docs_dir).parts[0] in _sweep_excluded_dirs:
+                    continue
+                dest = feature_record_path / f.name
+                if not dest.exists():
+                    shutil.copy2(f, dest)
 
         if wf_status == "completed":
             # Only clean up the worktree once the feature's pipeline has
@@ -6941,6 +8047,15 @@ def _run_one_feature(
             # graceful backend restart mid-pipeline returns "interrupted"
             # here, then destroyed the very worktree resume needed).
             _cleanup_worktree(worktree, branch, project_path, logger)
+
+        # Review mode: if the project has review_mode enabled, pause here and
+        # wait for explicit human approval before returning to the caller.
+        # Only pause for review if the feature completed successfully.
+        # _wait_for_review_clearance polls every 30 s and respects the
+        # pipeline's stop_event so Stop/restart work cleanly.
+        if project_id and feature_id and final_status == "completed" and _should_pause_for_review(project_id):
+            _pause_feature_for_review(feature_id, logger)
+            _wait_for_review_clearance(feature_id, logger, project_id=project_id)
 
         return final_status
 
@@ -6993,6 +8108,23 @@ def run_feature_pipelines(
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    # Statuses _run_one_feature/run_single_workflow can return that do NOT
+    # mean the feature actually reached a resolved state -- "interrupted"
+    # (an explicit stop/quit/KeyboardInterrupt) and "timeout" (this poll
+    # loop's own wall-clock budget expired, reset fresh on every resume --
+    # see run_single_workflow's start_time) both mean "we stopped watching,"
+    # not "this feature is done." Unlike "failed"/"skipped"/"hard_error"
+    # (genuine, if bad, resolutions -- see the comment below on why those
+    # don't block dependents), advancing to a later dependency layer after
+    # one of these is exactly how a still-in-progress dependency's
+    # dependents can start early: observed live, a feature whose dependency
+    # was still genuinely running (its own workflow status was "active", it
+    # simply hadn't finished within this walk's 2-hour polling window) had
+    # its dependent feature dispatched immediately after the dependency's
+    # run_single_workflow call returned "timeout".
+    NON_TERMINAL_STATUSES = {"interrupted", "timeout"}
+    halted_early = False
+
     for group in execution_groups:
         # Every feature in the group is attempted -- a failed dependency no
         # longer auto-skips its dependents. Skipping was a one-shot,
@@ -7007,6 +8139,10 @@ def run_feature_pipelines(
 
         if not features_to_run:
             continue
+
+        # Review mode: wait for any pending reviews before starting new features
+        if project_id and _should_pause_for_review(project_id):
+            _wait_for_pending_reviews(project_id, logger)
 
         # Run features in this group
         if len(features_to_run) == 1:
@@ -7025,6 +8161,8 @@ def run_feature_pipelines(
                 project_id,
             )
             feature_results[feature_key] = status
+            if status in NON_TERMINAL_STATUSES:
+                halted_early = True
         else:
             # Multiple parallel features - use ThreadPoolExecutor
             logger.info(f"Running {len(features_to_run)} features in parallel")
@@ -7052,9 +8190,27 @@ def run_feature_pipelines(
                     try:
                         status = future.result()
                         feature_results[feature_key] = status
+                        if status in NON_TERMINAL_STATUSES:
+                            halted_early = True
                     except Exception as e:
                         logger.error(f"Feature {feature_key} failed: {e}")
                         feature_results[feature_key] = "failed"
+
+        # Stop before starting the next dependency layer -- a non-terminal
+        # result means at least one feature in this layer may still be
+        # genuinely in progress (or a stop was explicitly requested), so its
+        # dependents in later layers must not be dispatched yet. The next
+        # walk of this same design (background_phase_advancement_sweep's
+        # resume, or the continuous pipeline's own re-pick) will re-resolve
+        # execution_groups fresh and correctly re-encounter this layer
+        # before ever reaching the ones after it.
+        if halted_early:
+            logger.info(
+                "Halting feature pipeline walk early: a feature in this "
+                "layer did not reach a resolved status (interrupted/timeout) "
+                "-- not dispatching later dependency layers this walk."
+            )
+            break
 
     # Log summary
     logger.info("Feature pipeline results:")
@@ -7247,8 +8403,8 @@ def _archive_and_cleanup(
 ) -> None:
     """Copy phase artifacts to the permanent designs folder, then remove the worktree.
 
-    Copies docs/*.md, *.json, *.html from the shared worktree into
-    designs_folder/docs/ so artifacts survive worktree removal.
+    Copies .hephaestus/*.md, *.json, *.html from the shared worktree into
+    designs_folder/.hephaestus/ so artifacts survive worktree removal.
     Then removes the linked worktree via `git worktree remove`.
     """
     import shutil
@@ -7263,16 +8419,26 @@ def _archive_and_cleanup(
     worktree = project_path
     repo_root = worktree.parent.parent  # .worktrees/ -> project root
 
-    # Copy docs
-    worktree_docs = worktree / "docs"
-    dest_docs = designs_folder / "docs"
+    # Copy docs. Recurse, not iterate the top level -- some phase reports
+    # sit flat at .hephaestus/<file> (requirements.md,
+    # architecture.md), others one level down in a phase subdirectory
+    # (qa_validation/qa.md, per each gated phase's CRITICAL PATH
+    # RULE). Excludes tmux/ (transcript logs), features/ (Phase 0 internal
+    # state), and scratch/ (agent scratch space) -- not phase-report
+    # artifacts.
+    worktree_docs = worktree / ".hephaestus"
+    dest_docs = designs_folder / ".hephaestus"
+    _archive_excluded_dirs = {"tmux", "features", "scratch"}
     if worktree_docs.exists():
         dest_docs.mkdir(parents=True, exist_ok=True)
-        for f in worktree_docs.iterdir():
-            if f.is_file():
-                dest = dest_docs / f.name
-                if not dest.exists():
-                    shutil.copy2(f, dest)
+        for f in worktree_docs.rglob("*"):
+            if not f.is_file():
+                continue
+            if f.relative_to(worktree_docs).parts[0] in _archive_excluded_dirs:
+                continue
+            dest = dest_docs / f.name
+            if not dest.exists():
+                shutil.copy2(f, dest)
         logger.info(f"Artifacts archived to {dest_docs}")
 
     # Remove the linked worktree
@@ -7372,6 +8538,23 @@ def _should_stop(project_id: Optional[str]) -> bool:
         except Exception:
             pass
     return False
+
+
+def _interruptible_sleep(seconds: int, project_id: Optional[str]) -> None:
+    """Sleep up to `seconds`, but return early if _should_stop(project_id)
+    flips during it. A plain time.sleep(seconds) here means a stop request
+    (including AutopilotService.pause_for_restart(), see
+    docs/SAFE_RESTART_DESIGN.md §3.3) is invisible to the loop for however
+    long the sleep already had left -- up to DESIGN_QUEUE_SCAN_INTERVAL
+    (60s) at the two call sites that use this. Checking every second
+    instead makes that latency ~1s regardless of where in the sleep the
+    stop request lands.
+    """
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if _should_stop(project_id):
+            return
+        time.sleep(max(0, min(1, deadline - time.time())))
 
 
 def _register_orchestrator_agent(log_dir: Path, cli_tool: str, logger: OrchestratorLogger) -> Optional[str]:
@@ -7650,7 +8833,7 @@ def run_continuous_pipeline(args) -> None:
                 try:
                     active_workflows = get_active_workflows(str(project_path), project_id=current_project_id)
                     still_blocking = _escalate_stale_active_workflows(active_workflows, active_workflow_abandoned_streak, logger)
-                    if still_blocking:
+                    if still_blocking and not _has_resumable_active_design(current_project_id):
                         wf_ids = [i[:8] for i in still_blocking]
                         logger.info(f"Workflow still active ({', '.join(wf_ids)}) - waiting before picking next design")
                         state.queue_status = {
@@ -7662,9 +8845,34 @@ def run_continuous_pipeline(args) -> None:
                         persistent_state.save(state, processed_hashes)
                         time.sleep(POLL_INTERVAL)
                         continue
+                    elif still_blocking:
+                        wf_ids = [i[:8] for i in still_blocking]
+                        logger.info(
+                            f"Workflow(s) still active ({', '.join(wf_ids)}) but another design has "
+                            "resumable ready features -- proceeding to pick_next_design instead of waiting"
+                        )
 
-                    # Also check previous workflow is fully complete (all phases done, branches merged)
-                    if state.current_workflow_id:
+                    # Also check previous workflow is fully complete (all phases done, branches merged).
+                    # Same reasoning as the still_blocking bypass above: skip this
+                    # entirely when another design already has resumable ready work
+                    # -- state.current_workflow_id tracks whichever design THIS
+                    # loop's own run_single_design call was last responsible for,
+                    # which is a different thing from "is the project's queue
+                    # allowed to make progress." Without this, a design left
+                    # tracked here from before a restart (still legitimately
+                    # in-progress, driven by its own agents independent of this
+                    # loop) blocks pick_next_design from ever running again, the
+                    # same way still_blocking did. Any genuine abandonment of
+                    # THIS workflow is already caught by _escalate_stale_active_
+                    # workflows above, which runs over the full project-wide
+                    # active-workflow list regardless of state.current_workflow_id.
+                    resumable_elsewhere = _has_resumable_active_design(current_project_id)
+                    if state.current_workflow_id and resumable_elsewhere:
+                        logger.info(
+                            f"Previous workflow {state.current_workflow_id[:8]} not re-checked this cycle "
+                            "-- another design has resumable ready features"
+                        )
+                    elif state.current_workflow_id:
                         # First check if workflow still exists in DB
                         try:
                             wf_check = get_workflow_status(state.current_workflow_id)
@@ -7785,7 +8993,7 @@ def run_continuous_pipeline(args) -> None:
                             }
                             logger.save_state(state)
                             persistent_state.save(state, processed_hashes)
-                            time.sleep(POLL_INTERVAL)
+                            _interruptible_sleep(POLL_INTERVAL, current_project_id)
                             continue
                         else:
                             logger.info(f"Previous workflow fully complete: {reason}")
@@ -7804,7 +9012,7 @@ def run_continuous_pipeline(args) -> None:
                     logger.save_state(state)
                     _update_orchestrator_status("idle")
                     persistent_state.save(state, processed_hashes)
-                    time.sleep(DESIGN_QUEUE_SCAN_INTERVAL)
+                    _interruptible_sleep(DESIGN_QUEUE_SCAN_INTERVAL, current_project_id)
                     continue
 
                 next_design.status = DesignStatus.IN_PROGRESS

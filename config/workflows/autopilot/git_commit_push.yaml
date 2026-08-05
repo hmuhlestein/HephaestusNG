@@ -12,6 +12,7 @@ description: |
   4. Record commit hash and PR URL
 done_definitions:
   - "Current branch and remote confirmed (or no-remote noted)"
+  - "No open bug tickets blocking the merge"
   - "All eligible changes staged (git add -A or explicit file list)"
   - "Descriptive commit message created (or nothing to commit confirmed)"
   - "Commit created on feature branch (or confirmed already committed)"
@@ -97,42 +98,48 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   STEP 3: PUSH FEATURE BRANCH
   ═══════════════════════════════════════════════════════════════════════
-  
+
+  Before pushing, merge main into the feature branch to catch conflicts early:
+  ```bash
+  REMOTE=$(git remote | head -1)
+  DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/$REMOTE/HEAD 2>/dev/null | sed "s@refs/remotes/$REMOTE/@@" || echo "main")
+  FEATURE_BRANCH=$(git branch --show-current)
+
+  # Fetch latest main
+  git fetch $REMOTE $DEFAULT_BRANCH
+
+  # Merge main into feature branch to resolve conflicts here
+  git merge $REMOTE/$DEFAULT_BRANCH -m "Merge $DEFAULT_BRANCH into $FEATURE_BRANCH to stay current"
+  ```
+
+  If merge conflicts occur:
+  ```bash
+  # Resolve conflicts in each file
+  git status  # see conflicted files
+  # Edit files to resolve conflicts, then:
+  git add -A
+  git commit --no-verify -m "Resolve merge conflicts with $DEFAULT_BRANCH"
+  ```
+
+  Now push:
   ```bash
   git push $REMOTE $FEATURE_BRANCH
   ```
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: CREATE AND MERGE PULL REQUEST
+  STEP 4: MERGE TO MAIN
   ═══════════════════════════════════════════════════════════════════════
-  
-  Preferred: use GitHub CLI.
-  ```bash
-  gh pr create --title "feat: <feature name>" --body "## Summary
-  - Change 1
-  - Change 2
-  
-  ## Test Plan
-  - [ ] All tests pass
-  - [ ] Manual verification completed
-  
-  Autopilot validated: $(date -u +%Y-%m-%d)"
-  
-  gh pr merge --merge --delete-branch
-  ```
-  
-  `--delete-branch` removes only the REMOTE branch after merge.
-  STOP after this command. Do NOT delete the local branch (`git branch -d`).
-  The local branch is checked out by the active worktree and cannot be deleted —
-  attempting to delete it will prompt you to remove the worktree, which you MUST NOT do.
-  
-  If `gh` is unavailable OR there is no remote, do a local merge from the main repo:
+
+  ALWAYS merge locally into main. This is the primary path — do not skip
+  it in favor of a PR-only merge.
+
   ```bash
   # Navigate to the main repo root (not the worktree)
   MAIN_REPO=$(git rev-parse --git-common-dir | sed 's|/\.git.*||')
   cd "$MAIN_REPO"
   git status  # confirm clean main branch
 
+  # Merge feature branch into main
   git merge --no-ff $FEATURE_BRANCH -m "Merge $FEATURE_BRANCH into main
 
   Autopilot validated: $(date -u +%Y-%m-%d)"
@@ -146,9 +153,14 @@ additional_notes: |
   git merge --no-ff $FEATURE_BRANCH -m "Merge $FEATURE_BRANCH into main"
   ```
 
-  If remote exists, push main after merging:
+  Push main after merging:
   ```bash
   git push $REMOTE $DEFAULT_BRANCH  # skip if no remote
+  ```
+
+  Optionally create a PR for visibility (does not replace local merge):
+  ```bash
+  gh pr create --title "feat: <feature name>" --body "..." 2>/dev/null || true
   ```
   
   ═══════════════════════════════════════════════════════════════════════
@@ -168,8 +180,8 @@ additional_notes: |
   
   DO:
   - Stage and commit all un-committed changes
-  - Push the feature branch before creating the PR
-  - Use --no-ff for merge commits to preserve branch history
+  - Push the feature branch before merging
+  - Merge into main locally (gh PR is optional, not a substitute)
   - Use --no-verify for automated pipeline commits
   - Record the commit hash
   
@@ -182,6 +194,27 @@ additional_notes: |
   - Create a new feature branch — you are already on one
   - Commit secrets or API keys
   - Force push without explicit instructions
+  - Attempt to fix bugs or code issues yourself — if there are open bug tickets,
+    mark the task as FAILED with a message indicating bugs need to be fixed first.
+    The orchestrator will route back to development to resolve them.
+
+  ═══════════════════════════════════════════════════════════════════════
+  BUG TICKET HANDLING
+  ═══════════════════════════════════════════════════════════════════════
+
+  Before attempting to merge, check for open bug tickets:
+  ```bash
+  # Check via MCP if available
+  search_tickets(status="open", ticket_type="bug")
+  ```
+
+  If open bug tickets exist:
+  1. Do NOT attempt to fix the bugs yourself
+  2. Do NOT merge code with known bugs
+  3. Mark the task as FAILED with reason: "Open bug tickets must be resolved before merge: <ticket details>"
+  4. The orchestrator will automatically route back to development to fix the bugs
+
+  If no open bug tickets exist, proceed with the merge normally.
   
   ═══════════════════════════════════════════════════════════════════════
   WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
@@ -193,7 +226,7 @@ additional_notes: |
   
   After all git operations complete, call:
   
-  hephaestus_complete_my_task({
+  complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was committed and merged>",
     "key_learnings": ["<commit hash>", "<PR URL if created>"]

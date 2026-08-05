@@ -323,3 +323,72 @@ class TestActiveAgentStatusFilter:
         agent = session.query(Agent).filter_by(id="agent-test-123").first()
         assert agent.status == "terminated"
         session.close()
+
+
+class TestOrphanReapFlushesCleanTranscript:
+    """An orphaned session has no active Agent row by definition, so
+    reaping it bypasses terminate_agent's own clean-shutdown flush of the
+    stability-tracked "clean" transcript entirely. Without its own final
+    flush here, this abrupt-kill path would lose everything not yet
+    confirmed stable (see AgentManager._flush_stable_transcript)."""
+
+    @pytest.fixture
+    def reaper(self):
+        from src.monitoring.orphan_reaper import OrphanSessionReaper
+
+        db_manager = MagicMock()
+        agent_manager = MagicMock()
+        return OrphanSessionReaper(db_manager, agent_manager)
+
+    @pytest.mark.asyncio
+    async def test_flushes_before_killing_orphaned_session(self, reaper):
+        from pathlib import Path
+
+        orphan_session = MagicMock()
+        orphan_session.name = "agent-orphan-999"
+        call_order = []
+        orphan_session.kill_session = MagicMock(
+            side_effect=lambda: call_order.append("kill")
+        )
+        reaper.agent_manager.tmux_server.sessions = [orphan_session]
+        reaper.last_check_time = datetime.now() - timedelta(seconds=200)
+
+        mock_db_session = MagicMock()
+        reaper.db_manager.get_session.return_value = mock_db_session
+
+        agent_query = MagicMock()
+        agent_query.filter.return_value.all.return_value = []
+        last_agent = MagicMock()
+        agent_query.filter_by.return_value.first.return_value = last_agent
+
+        wf_query = MagicMock()
+        wf_query.filter.return_value.all.return_value = []
+
+        def query_side_effect(model):
+            from src.core.database import Agent, Workflow
+            if model == Agent:
+                return agent_query
+            elif model == Workflow:
+                return wf_query
+            return MagicMock()
+
+        mock_db_session.query.side_effect = query_side_effect
+
+        fake_dir = Path("/tmp/fake-transcript-dir")
+        reaper.agent_manager._resolve_tmux_transcript_dir = MagicMock(
+            return_value=fake_dir,
+            side_effect=lambda *a, **k: (call_order.append("flush"), fake_dir)[1],
+        )
+        reaper.agent_manager._flush_stable_transcript = MagicMock()
+
+        await reaper.cleanup_orphaned_tmux_sessions()
+
+        reaper.agent_manager._resolve_tmux_transcript_dir.assert_called_once_with(last_agent)
+        reaper.agent_manager._flush_stable_transcript.assert_called_once_with(
+            "agent-orphan-999", fake_dir / "agent-orphan-999.clean.log"
+        )
+        orphan_session.kill_session.assert_called_once()
+        assert call_order == ["flush", "kill"], (
+            "the clean transcript must be flushed before the session is "
+            "killed -- capture-pane can't see anything once it's gone"
+        )

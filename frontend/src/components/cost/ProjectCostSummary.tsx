@@ -16,7 +16,7 @@ interface ProjectCostSummaryProps {
  * Displays project cost summary with optional budget configuration.
  */
 const ProjectCostSummary: React.FC<ProjectCostSummaryProps> = ({
-  projectId,
+  projectId: _projectId,
   projectName,
   costTotal,
   costLimit,

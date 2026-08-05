@@ -4,6 +4,10 @@ name: qa_validation
 # score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
 spec_gate: true
 thinking_level: medium
+cli_tool: claude
+cli_model: sonnet
+fallback_cli_tool: pi
+fallback_cli_model: openrouter/mimo-v2.5-pro
 description: |
   Run comprehensive QA tests and validate the implementation.
 
@@ -12,13 +16,13 @@ description: |
   QA report with pass/fail status and recommendations.
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
-  - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write ONE file, qa_report.md, to ./docs/qa_validation/ — a YAML
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
+  - Write ONE file, qa.md, to ./.hephaestus/qa_validation/ — a YAML
     frontmatter block (structured pass/fail counts, the gate input) followed
-    by the full narrative report, in a single file. See STEP 10 below for
+    by the full narrative report, in a single file. See STEP 11 below for
     the exact frontmatter schema.
-  - Use exactly that subdirectory name (./docs/qa_validation/) — the
+  - Use exactly that subdirectory name (./.hephaestus/qa_validation/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
 done_definitions:
@@ -33,12 +37,12 @@ done_definitions:
   - "End-to-end validation performed"
   - "Requirements compliance verified"
   - "Security fixes validated"
-  - "qa_report.md created with a YAML frontmatter block (structured pass/fail counts, gate input) followed by the comprehensive narrative report"
+  - "qa.md created with a YAML frontmatter block (structured pass/fail counts, gate input) followed by the comprehensive narrative report"
   - "Memory saved with QA findings"
   - "Iteration recommendation provided (done/needs_work)"
   - "Task marked as done"
 outputs:
-  - "qa_report.md"
+  - "qa.md"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
   Technical terms exact. No pleasantries (sure/certainly/happy to). 
@@ -51,13 +55,13 @@ additional_notes: |
   YOUR MISSION: Run comprehensive tests and validate against requirements
 
   Do NOT edit existing source/production code. If you find bugs in the
-  application, file a ticket (STEP 8) — the developer fixes it, not you.
+  application, file a ticket (STEP 9) — the developer fixes it, not you.
   You MAY write tests: new test files, smoke tests, or validation for
-  uncovered requirements (STEP 4/STEP 5) — that's expected, not an exception
+  uncovered requirements (STEP 5/STEP 6) — that's expected, not an exception
   to the rule above.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 0: CHECK FOR TESTING.md (PRIMARY INSTRUCTIONS)
+  STEP 1: CHECK FOR TESTING.md (PRIMARY INSTRUCTIONS)
   ═══════════════════════════════════════════════════════════════════════
   
   Your task description contains "Project Root (absolute): <path>".
@@ -93,40 +97,47 @@ additional_notes: |
     5. **Check acceptance criteria** — verify every item in TESTING.md's
        "Acceptance Criteria" section. Mark each PASS or FAIL explicitly.
 
-    → Skip to STEP 9 (Create Report) after completing all 5 steps above.
+    → Skip to STEP 10 (Create Report) after completing all 5 steps above.
     → The fallback steps below are ONLY for when TESTING.md does not exist.
   
   If TESTING.md DOES NOT EXIST:
     → Note in your report: "TESTING.md not found - using fallback instructions"
-    → Continue with the fallback steps below (STEP 1 through STEP 8).
+    → Continue with the fallback steps below (STEP 2 through STEP 9).
   
   ═══════════════════════════════════════════════════════════════════════
   FALLBACK STEPS (only if TESTING.md does not exist)
   ═══════════════════════════════════════════════════════════════════════
   
-  STEP 1: READ REQUIREMENTS AND CONTEXT
+  STEP 2: READ REQUIREMENTS AND CONTEXT
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
-  - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
-  - ALL docs/reports go in "Docs Path:" (qa_report.md, etc.).
-  - Code/tests go in "Project Path:" (src/, tests/, etc.).
+  - Do NOT use absolute paths outside your working directory.
+  - ALL docs/reports go in "Artifacts Path" (qa.md, etc.).
+  - Code/tests go in "Project Path" (src/, tests/, etc.).
   - Your task description contains the exact paths — copy them exactly.
   
   Read:
   - Your task description for "Docs Path:" and "Project Path:" locations
   - TESTING.md — How to run the app and tests
-  - requirements_analysis.md (from Docs Path) - What must it do?
+  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth)
+  - requirements.md (from Docs Path) - What must it do? (contains REQ-XX IDs)
   - architecture.md (from Docs Path) - How should it work?
   - review_report.md (from Docs Path) - What issues were found?
-  - doc_review_report.md (from Docs Path) - Were docs updated to match implementation?
-  - security_report.md (from Docs Path) - What security fixes were made?
+  - docs.md (from Docs Path) - Were docs updated to match implementation?
+  - security.md (from Docs Path) - What security fixes were made?
+
+  **REQUIREMENT TRACKING:**
+  requirements.md contains REQ-XX numbered requirements. When writing
+  test cases and the QA report, reference REQ-XX IDs to show which requirements
+  each test validates. Include a "Requirements Coverage" section in your report
+  showing which REQ-XX requirements are covered by passing tests.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: START APPLICATION AND VALIDATE ENVIRONMENT
+  STEP 3: START APPLICATION AND VALIDATE ENVIRONMENT
   ═══════════════════════════════════════════════════════════════════════
   
   Follow TESTING.md instructions EXACTLY to start the application:
@@ -153,14 +164,14 @@ additional_notes: |
   - Any startup issues encountered
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: VERIFY RESOLVED TICKETS FROM PREVIOUS QA RUNS
+  STEP 4: VERIFY RESOLVED TICKETS FROM PREVIOUS QA RUNS
   ═══════════════════════════════════════════════════════════════════════
 
   Before running new tests, check if there are resolved bug tickets from
   previous QA/security_review runs that need verification:
 
   1. Search for all tickets for this workflow:
-     hephaestus_search_tickets(workflow_id="<your workflow id>", ticket_type="bug")
+     search_tickets(workflow_id="<your workflow id>", ticket_type="bug")
 
   2. For each ticket that is resolved or in "validated"/"shipped" status:
      - Read the ticket's description and reproduction steps
@@ -169,12 +180,12 @@ additional_notes: |
        b. Check the related code changes
        c. Run any tests related to the ticket's area
      - If the fix works — move ticket to "shipped":
-       hephaestus_update_ticket_status(
+       heph_update_ticket_status(
          ticket_id="<ticket id>",
          new_status="shipped",
        )
      - If the fix does NOT work (issue still present) — reopen to "in-progress":
-       hephaestus_update_ticket_status(
+       heph_update_ticket_status(
          ticket_id="<ticket id>",
          new_status="in-progress",
        )
@@ -187,7 +198,7 @@ additional_notes: |
   truly addressed.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: DISCOVER AND RUN TESTS
+  STEP 5: DISCOVER AND RUN TESTS
   ═══════════════════════════════════════════════════════════════════════
   
   First, discover where tests actually live:
@@ -219,10 +230,10 @@ additional_notes: |
   
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: REQUIREMENTS COMPLIANCE CHECK
+  STEP 6: REQUIREMENTS COMPLIANCE CHECK
   ═══════════════════════════════════════════════════════════════════════
   
-  For EACH functional requirement from requirements_analysis.md:
+  For EACH functional requirement from requirements.md:
   
   1. Identify which test(s) validate this requirement
   2. If no test exists, write a quick validation
@@ -237,16 +248,16 @@ additional_notes: |
   | FR-3: [desc] | test_fr3.py | FAIL | [error] |
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6: VALIDATE SECURITY FIXES
+  STEP 7: VALIDATE SECURITY FIXES
   ═══════════════════════════════════════════════════════════════════════
   
-  For each critical security fix from security_report.md:
+  For each critical security fix from security.md:
   - Verify the fix is in place
   - Test that the vulnerability is no longer exploitable
   - Ensure the fix doesn't break functionality
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 7: RUN SMOKE TESTS
+  STEP 8: RUN SMOKE TESTS
   ═══════════════════════════════════════════════════════════════════════
   
   Run quick end-to-end validation:
@@ -254,17 +265,26 @@ additional_notes: |
   - Hit key API endpoints
   - Verify responses are correct
   - Check error handling
+
+  **UI/Frontend Smoke Tests (if applicable):**
+  - Navigate to the feature's UI location
+  - Verify the feature is visible and accessible
+  - Click through the primary user flows
+  - Verify data displays correctly
+  - Check that forms/inputs work
+  - Verify error states display properly
+  - Check that the feature integrates with existing UI (navigation, menus)
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 8: CREATE TICKETS FOR ISSUES FOUND
+  STEP 9: CREATE TICKETS FOR ISSUES FOUND
   ═══════════════════════════════════════════════════════════════════════
   
-  For EACH issue found (Critical, Major, Minor), create a ticket using create_ticket.
+  For EACH issue found (Critical, Major, Minor), create a ticket using heph_create_ticket.
   
   TICKET TEMPLATE (copy this for each issue):
   
   ```
-  hephaestus_create_ticket(
+  heph_create_ticket(
     agent_id="<your agent id>",
     workflow_id="<your workflow id>",
     task_id="<your task id>",
@@ -319,10 +339,10 @@ additional_notes: |
   ```
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 9: CREATE QA REPORT
+  STEP 10: CREATE QA REPORT
   ═══════════════════════════════════════════════════════════════════════
   
-  Write qa_report.md with:
+  Write qa.md with:
   
   # QA Report: [Project Name]
   
@@ -393,21 +413,21 @@ additional_notes: |
   2. [Problem 2]
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 10: PREPEND STRUCTURED QA RESULT (REQUIRED — drives the pipeline gate)
+  STEP 11: WRITE qa.md WITH FRONTMATTER (REQUIRED — drives the pipeline gate)
   ═══════════════════════════════════════════════════════════════════════
 
-  qa_report.md is ONE file: a YAML frontmatter block (machine-readable,
+  ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
+
+  qa.md is ONE file: a YAML frontmatter block (machine-readable,
   scored against the project spec to decide whether to continue, return to
   development, or return to architecture) followed immediately by the full
   narrative report from the steps above. Use REAL numbers from your run.
 
-  Prepend this frontmatter block to the very top of ./docs/qa_validation/qa_report.md,
-  with EXACTLY this schema (type first, then a closing `---`, then the
-  narrative report immediately after):
+  Write the ENTIRE file at once with frontmatter at the top:
 
   ```
   ---
-  type: qa_validation_result
+  type: qa_validation
   failed_tests: 0
   failed_test_names: []
   passed_tests: 0
@@ -445,7 +465,7 @@ additional_notes: |
     reason to leave a failing test unreported.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 11: SAVE TO MEMORY
+  STEP 12: SAVE TO MEMORY
   ═══════════════════════════════════════════════════════════════════════
   
   Save QA findings to memory:
@@ -488,7 +508,7 @@ additional_notes: |
   
   After writing all your output files, call:
   
-  hephaestus_complete_my_task({
+  complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was accomplished>",
     "key_learnings": ["<key findings or decisions>"]

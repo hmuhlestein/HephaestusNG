@@ -87,7 +87,7 @@ def load_workflow_from_dir(workflow_dir: Path) -> dict:
     return cfg
 
 
-def build_phase(phase_cfg: dict, default_model: str, default_thinking: str, default_fallback_tool: str = None, default_fallback_model: str = None) -> Phase:
+def build_phase(phase_cfg: dict, default_model: str, default_thinking: str, default_fallback_tool: str = None, default_fallback_model: str = None, default_cli_tool: str = None) -> Phase:
     """Build a Phase (sdk) from a phase config dict.
 
     Args:
@@ -96,6 +96,7 @@ def build_phase(phase_cfg: dict, default_model: str, default_thinking: str, defa
         default_thinking: Default thinking_level string inherited from workflow.yaml.
         default_fallback_tool: Default fallback CLI tool from workflow.yaml.
         default_fallback_model: Default fallback CLI model from workflow.yaml.
+        default_cli_tool: Default primary CLI tool from workflow.yaml.
 
     Returns:
         Phase dataclass instance.
@@ -127,6 +128,8 @@ def build_phase(phase_cfg: dict, default_model: str, default_thinking: str, defa
         next_steps=phase_cfg.get("next_steps", []),
         validation=validation,
         self_review=self_review,
+        cli_tool=phase_cfg.get("cli_tool") or default_cli_tool,
+        glm_api_token_env=phase_cfg.get("glm_api_token_env"),
         fallback_cli_tool=phase_cfg.get("fallback_cli_tool") or default_fallback_tool,
         fallback_cli_model=phase_cfg.get("fallback_cli_model") or default_fallback_model,
     )
@@ -148,6 +151,7 @@ def build_phase_list(cfg: dict) -> list:
             cfg.get("default_thinking_level", "low"),
             cfg.get("fallback_cli_tool"),
             cfg.get("fallback_cli_model"),
+            cfg.get("default_cli_tool"),
         )
         for pc in cfg["phases"]
     }

@@ -53,6 +53,7 @@ from src.mcp.tickets_api import router as tickets_router
 from src.memory.rag import RAGSystem
 from src.memory.store_factory import VectorStoreProtocol, create_vector_store
 from src.phases import PhaseManager
+from src.prompts.loader import get_prompt
 from src.services.embedding_service import EmbeddingService
 from src.services.queue_service import QueueService
 from src.services.result_validator_service import ResultValidatorService
@@ -66,17 +67,7 @@ logger = logging.getLogger(__name__)
 # Concrete and checkable by design, not an open-ended "find your own gaps" —
 # makes a no-op pass (nothing changed, same completion_notes) easy to spot
 # later against the before/after diff.
-SELF_REVIEW_CHECKLIST_PROMPT = """
-Before this is actually done, re-check your own work:
-- Re-read the design/requirements — is every requirement implemented?
-- Edge cases and error handling — anything unhandled?
-- Tests exist for new code, and they pass?
-- Any TODOs, stubs, or dead code left behind?
-
-Fix anything real you find, then call hephaestus_update_task_status
-with status="done" again — record what you changed (if anything) in the
-summary.
-"""
+SELF_REVIEW_CHECKLIST_PROMPT = "\n" + get_prompt("self_review_checklist")
 
 
 def _resolve_worktree_path(session, task) -> Optional[str]:
@@ -132,14 +123,16 @@ if config.enable_cors:
         _cors_origins = [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
     else:
         # Development defaults: localhost only
-        _cors_origins = [
-            "http://localhost:5173",
-            "http://localhost:3000",
-            "http://localhost:8300",
-            "http://127.0.0.1:5173",
-            "http://127.0.0.1:3000",
-            "http://127.0.0.1:8300",
-        ]
+        _config = get_config()
+        _frontend_port = _config.frontend_port
+        _backend_port = _config.mcp_port
+        _cors_origins = [f"http://localhost:{_frontend_port}",
+                         "http://localhost:3000",
+                         f"http://localhost:{_backend_port}",
+                         f"http://127.0.0.1:{_frontend_port}",
+                         "http://127.0.0.1:3000",
+                         f"http://127.0.0.1:{_backend_port}",
+                         ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins,
@@ -359,6 +352,11 @@ class ServerState:
         self.queue_service = QueueService(
             db_manager=self.db_manager,
             max_concurrent_agents=config.max_concurrent_agents,
+            cli_model_concurrency_limits=config.cli_model_concurrency_limits,
+            default_cli_tool=config.default_cli_tool,
+            default_cli_model=config.cli_model,
+            cli_model_fallback=config.cli_model_fallback,
+            secondary_cli_model_fallback=config.secondary_cli_model_fallback,
         )
         logger.info(f"Queue service initialized with max_concurrent_agents={config.max_concurrent_agents}")
 
@@ -573,7 +571,7 @@ async def _resume_interrupted_workflows(
 
     Returns {"resumed": int, "workflows": [ids]}.
     """
-    from src.core.database import Agent, Task, Workflow
+    from src.core.database import Agent, Feature, Task, Workflow
 
     session = server_state.db_manager.get_session()
     result = {"resumed": 0, "workflows": []}
@@ -599,6 +597,10 @@ async def _resume_interrupted_workflows(
                 if wf.status in ("paused", "failed"):
                     wf.status = "active"
                     wf.paused_by = None
+                    # Also update the associated feature status
+                    feature = session.query(Feature).filter_by(workflow_id=wf.id).first()
+                    if feature and feature.status in ("paused", "failed"):
+                        feature.status = "active"
             session.commit()
 
         resumed = 0
@@ -691,6 +693,46 @@ async def _resume_interrupted_workflows(
         return result
     finally:
         session.close()
+
+
+def _build_phase_dict(phase) -> dict:
+    """Serialize a source sdk.models.Phase into the dict form stored in
+    WorkflowDefinition.phases_config, refreshed from YAML at every startup."""
+    phase_dict = {
+        "id": phase.id,
+        "name": phase.name,
+        "description": phase.description,
+        "done_definitions": phase.done_definitions,
+        "working_directory": phase.working_directory,
+    }
+    if phase.additional_notes:
+        phase_dict["additional_notes"] = phase.additional_notes
+    if phase.outputs:
+        phase_dict["outputs"] = phase.outputs
+    if phase.next_steps:
+        phase_dict["next_steps"] = phase.next_steps
+    # NOTE: `phase.validation` is NOT carried through here even
+    # though phase_manager.py reads phase_config.get("validation")
+    # when building Phase DB rows -- a pre-existing gap (not
+    # introduced by self_review below) that's why validation has
+    # never actually fired for any phase despite the plumbing
+    # existing. Not fixed here — out of scope for self_review,
+    # flagging so it isn't mistaken for "already working."
+    if phase.self_review:
+        phase_dict["self_review"] = phase.self_review
+    if phase.cli_tool:
+        phase_dict["cli_tool"] = phase.cli_tool
+    if phase.cli_model:
+        phase_dict["cli_model"] = phase.cli_model
+    if phase.fallback_cli_tool:
+        phase_dict["fallback_cli_tool"] = phase.fallback_cli_tool
+    if phase.fallback_cli_model:
+        phase_dict["fallback_cli_model"] = phase.fallback_cli_model
+    if phase.glm_api_token_env:
+        phase_dict["glm_api_token_env"] = phase.glm_api_token_env
+    if phase.thinking_level:
+        phase_dict["thinking_level"] = phase.thinking_level
+    return phase_dict
 
 
 @app.on_event("startup")
@@ -821,31 +863,7 @@ async def startup_event():
         with server_state.db_manager.get_session() as session:
             for defn in all_definitions:
                 # Build phases_config from source
-                phases_config = []
-                for phase in defn.phases:
-                    phase_dict = {
-                        "id": phase.id,
-                        "name": phase.name,
-                        "description": phase.description,
-                        "done_definitions": phase.done_definitions,
-                        "working_directory": phase.working_directory,
-                    }
-                    if phase.additional_notes:
-                        phase_dict["additional_notes"] = phase.additional_notes
-                    if phase.outputs:
-                        phase_dict["outputs"] = phase.outputs
-                    if phase.next_steps:
-                        phase_dict["next_steps"] = phase.next_steps
-                    # NOTE: `phase.validation` is NOT carried through here even
-                    # though phase_manager.py reads phase_config.get("validation")
-                    # when building Phase DB rows -- a pre-existing gap (not
-                    # introduced by self_review below) that's why validation has
-                    # never actually fired for any phase despite the plumbing
-                    # existing. Not fixed here — out of scope for self_review,
-                    # flagging so it isn't mistaken for "already working."
-                    if phase.self_review:
-                        phase_dict["self_review"] = phase.self_review
-                    phases_config.append(phase_dict)
+                phases_config = [_build_phase_dict(phase) for phase in defn.phases]
 
                 workflow_config = {
                     "has_result": defn.config.has_result,
@@ -984,7 +1002,76 @@ async def startup_event():
     except Exception as e:
         logger.error(f"[RESUME] resume scan failed: {e}")
 
+    # Sweep worktrees for workflows that finished ("completed") but never
+    # got their normal post-completion cleanup call to run -- the same
+    # restart window _resume_interrupted_workflows exists to cover, just
+    # for the opposite case (the workflow finished, not that it was
+    # interrupted mid-flight).
+    try:
+        from src.autopilot.orchestrator import sweep_completed_workflow_worktrees
+
+        swept = sweep_completed_workflow_worktrees(logger)
+        if swept:
+            logger.info(f"[SWEEP] Cleaned up {swept} orphaned completed-workflow worktree(s)")
+    except Exception as e:
+        logger.error(f"[SWEEP] Completed-workflow worktree sweep failed: {e}")
+
     logger.info("Server started successfully")
+
+
+async def _notify_agents_of_restart(project_id: str) -> int:
+    """Best-effort checkpoint nudge to every working phase agent in this
+    project, sent right before pausing its pipeline for a restart -- see
+    docs/SAFE_RESTART_DESIGN.md §3.4.
+
+    Not a guarantee: tmux text injection can't interrupt an agent
+    synchronously blocked on its own LLM call. This only helps an agent
+    that's between turns notice before its session goes quiet, and
+    encourages the save_memory-as-you-go habit the system prompt already
+    asks for.
+    """
+    from src.core.database import Agent, Task, Workflow
+
+    agent_ids: list = []
+    try:
+        with server_state.db_manager.session_scope() as session:
+            wf_ids = [
+                w.id
+                for w in session.query(Workflow).filter_by(project_id=project_id).all()
+            ]
+            if not wf_ids:
+                return 0
+            task_ids = [
+                t.id
+                for t in session.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()
+            ]
+            agent_ids = [
+                a.id
+                for a in session.query(Agent)
+                .filter(Agent.status == "working", Agent.current_task_id.in_(task_ids))
+                .all()
+            ]
+    except Exception as e:
+        logger.warning(
+            f"[SAFE-RESTART] Could not enumerate agents to notify for "
+            f"project {project_id[:8]}: {e}"
+        )
+        return 0
+
+    notified = 0
+    for agent_id in agent_ids:
+        try:
+            await server_state.agent_manager.send_message_to_agent(
+                agent_id,
+                "A backend restart is happening shortly. If you're mid-edit, "
+                "finish this atomic step (don't start a new multi-file change). "
+                "Call hephaestus_save_memory now with anything you don't want "
+                "to lose -- your session will resume automatically afterward.",
+            )
+            notified += 1
+        except Exception as e:
+            logger.debug(f"[SAFE-RESTART] Could not notify agent {agent_id[:8]}: {e}")
+    return notified
 
 
 @app.on_event("shutdown")
@@ -992,9 +1079,61 @@ async def shutdown_event():
     """Cleanup on shutdown."""
     logger.info("Shutting down Hephaestus MCP Server...")
 
-    # Stop background queue processor
-    logger.info("Stopping background queue processor...")
+    # Set this FIRST, before pausing pipelines below -- it's what stops
+    # background_phase_advancement_sweep (server_state.shutdown_event.set()
+    # further down is this same event) from starting a NEW tick, including
+    # its _resync_pipeline_registry self-heal check (SAFE_RESTART_DESIGN.md
+    # §3.5). Without this ordering, that sweep can keep ticking for the
+    # entire pause_for_restart() drain window below (up to 45s) and race
+    # it: a project mid-pause has its persisted "was running" marker still
+    # intact (deliberately, for auto-resume) but its registry entry
+    # momentarily not-running, which is exactly _resync_pipeline_registry's
+    # own trigger condition -- it could try to restart a pipeline that's
+    # still in the middle of winding down. Doesn't fully close the window
+    # (a tick already in flight at this exact instant could still race),
+    # narrowed further by _resync_pipeline_registry checking _should_stop()
+    # itself before restarting anything (orchestrator.py).
     server_state.shutdown_event.set()
+
+    # Pause every running project's autopilot pipeline gracefully, instead
+    # of letting asyncio hard-cancel it when the event loop closes later in
+    # this shutdown -- see docs/SAFE_RESTART_DESIGN.md §3.1/§3.2. Notify
+    # in-flight agents first (best-effort), then pause: an agent mid-step
+    # benefits most from knowing a restart is coming before its session
+    # goes quiet, not after. pause_for_restart() (unlike stop()) keeps the
+    # persisted "was running" marker intact, so _resume_interrupted_workflows
+    # still auto-resumes each project on the next startup.
+    try:
+        from src.autopilot.service import get_registry
+
+        running_services = get_registry().running()
+        if running_services:
+            logger.info(
+                f"[SAFE-RESTART] Pausing {len(running_services)} running "
+                "autopilot pipeline(s) for restart..."
+            )
+            for service in running_services:
+                try:
+                    notified = await _notify_agents_of_restart(service.project_id)
+                    if notified:
+                        logger.info(
+                            f"[SAFE-RESTART] Notified {notified} agent(s) "
+                            f"in project {service.project_id[:8]}"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"[SAFE-RESTART] Failed to notify agents for project "
+                        f"{service.project_id[:8]}: {e}"
+                    )
+            await asyncio.gather(
+                *(service.pause_for_restart() for service in running_services),
+                return_exceptions=True,
+            )
+    except Exception as e:
+        logger.error(f"[SAFE-RESTART] Graceful pipeline pause failed: {e}")
+
+    # Stop background queue processor (shutdown_event already set above)
+    logger.info("Stopping background queue processor...")
     if server_state.background_queue_processor_task:
         try:
             await asyncio.wait_for(server_state.background_queue_processor_task, timeout=5.0)
@@ -1239,11 +1378,30 @@ async def process_queue(project_id: Optional[str] = None):
                 requesting_agent_id="system",
             )
 
-        agent = await AgentDispatchService.dispatch(
-            task=task_for_agent,
-            enriched_data=enriched_data_for_agent,
-            dispatch_context=dispatch_context,
-        )
+        # QueueService.get_next_queued_task set this when the phase's
+        # primary cli/model combo was at its configured concurrency limit
+        # (e.g. a local model's single inference slot) -- dispatch on the
+        # fallback model it picked instead of the phase's own cli_tool/
+        # cli_model. Only overrides those two keys; phase_glm_token_env/
+        # phase_thinking_level stay as resolved from the phase.
+        if hasattr(next_task, "_dispatch_cli_override"):
+            override_cli_tool, override_cli_model = next_task._dispatch_cli_override
+            dispatch_context["phase_cli_tool"] = override_cli_tool
+            dispatch_context["phase_cli_model"] = override_cli_model
+
+        # get_next_queued_task reserved this combo's slot (if a limit is
+        # configured for it) to close the check-then-act race -- must be
+        # released once this dispatch attempt finishes, success or not, or
+        # the reservation permanently steals a slot from this combo.
+        try:
+            agent = await AgentDispatchService.dispatch(
+                task=task_for_agent,
+                enriched_data=enriched_data_for_agent,
+                dispatch_context=dispatch_context,
+            )
+        finally:
+            if hasattr(next_task, "_reserved_cli_model"):
+                server_state.queue_service.release_cli_model_slot(*next_task._reserved_cli_model)
         logger.info(f"Created agent {agent.id} for queued task {next_task.id}")
 
         # Agent is now working — "in_progress" (not "assigned" like the
@@ -1396,7 +1554,7 @@ async def background_phase_advancement_sweep():
     while not server_state.shutdown_event.is_set():
         try:
             await asyncio.wait_for(
-                loop.run_in_executor(None, _run_phase_advancement_sweep_once, sweep_logger),
+                loop.run_in_executor(None, _run_phase_advancement_sweep_once, sweep_logger, loop),
                 timeout=120.0,
             )
         except asyncio.TimeoutError:
@@ -1414,19 +1572,39 @@ async def background_phase_advancement_sweep():
     logger.info("Background phase advancement sweep stopped")
 
 
-def _run_phase_advancement_sweep_once(sweep_logger) -> None:
+# Throttle for the branch-healing scan below -- it shells out to git
+# (worktree list, rev-list, merge-base) across every known project, which
+# is wasteful to repeat on every ~20s sweep tick. Module-level (not a
+# DB-persisted timestamp) is fine: worst case after a restart is one extra
+# scan immediately, not a correctness issue.
+_LAST_BRANCH_HEAL_TIME: Optional[datetime] = None
+_BRANCH_HEAL_INTERVAL_SECONDS = 900  # 15 minutes
+
+
+def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     """Synchronous body of one background_phase_advancement_sweep tick --
     see that function's docstring for why this runs in a thread executor
-    rather than inline on the event loop."""
+    rather than inline on the event loop.
+
+    loop: the server's persistent event loop, passed through from
+    background_phase_advancement_sweep -- needed by
+    _resync_pipeline_registry to schedule AutopilotService.start() back
+    onto it (see that function's docstring for why asyncio.run(...) can't
+    be used here). Optional/defaulted so direct test calls that don't
+    exercise the pipeline-resync path don't need to fake one up.
+    """
     from src.autopilot.orchestrator import (
         _advance_phases,
         _clean_stale_assigned_tasks,
         _maybe_resolve_arbitration,
         _recover_abandoned_workflows_missing_worktree,
         _recover_abandoned_workflows_with_completed_phase,
+        _resync_pipeline_registry,
         _retry_exhausted_paused_workflows,
         _retry_failed_tasks,
+        _sync_stale_design_statuses,
         _sync_stale_feature_statuses,
+        heal_orphaned_agent_branches,
     )
     from src.core.database import Workflow
 
@@ -1436,6 +1614,34 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
         _sync_stale_feature_statuses(sweep_logger)
     except Exception as e:
         logger.error(f"[PHASE-SWEEP] Feature-status sync error: {e}")
+
+    # Design-table-wide, same reasoning as the feature-status sync above --
+    # a design whose last feature just finished has nothing left to ever
+    # call pick_next_design for it again, so its own status sticks "active"
+    # without this.
+    try:
+        _sync_stale_design_statuses(sweep_logger)
+    except Exception as e:
+        logger.error(f"[PHASE-SWEEP] Design-status sync error: {e}")
+
+    if loop is not None:
+        try:
+            _resync_pipeline_registry(sweep_logger, loop)
+        except Exception as e:
+            logger.error(f"[PHASE-SWEEP] Pipeline-registry resync error: {e}")
+
+    # Project-wide, not scoped to any one workflow -- a stranded agent's
+    # orphaned branch outlives the workflow it belonged to (that workflow is
+    # typically already "completed" by the time this matters). Throttled
+    # since it shells out to git per project every time it runs.
+    global _LAST_BRANCH_HEAL_TIME
+    now = datetime.utcnow()
+    if _LAST_BRANCH_HEAL_TIME is None or (now - _LAST_BRANCH_HEAL_TIME).total_seconds() >= _BRANCH_HEAL_INTERVAL_SECONDS:
+        _LAST_BRANCH_HEAL_TIME = now
+        try:
+            heal_orphaned_agent_branches(sweep_logger)
+        except Exception as e:
+            logger.error(f"[PHASE-SWEEP] Branch-healing sweep error: {e}")
 
     # Runs before the active/paused workflow snapshot below, so a workflow
     # this just resumed is included in this same tick's per-workflow loop
@@ -1588,8 +1794,11 @@ async def create_task(
             if has_ticket_tracking and not request.ticket_id:
                 # Check if this is an SDK agent (allowed to create tasks without tickets)
                 is_sdk_agent = agent_id == "main-session-agent" or "sdk" in agent_id.lower() or "main" in agent_id.lower()
+                # Phase agents creating tasks within a workflow are also exempt
+                # (they're part of the pipeline, not external callers)
+                is_phase_agent = request.workflow_id is not None and request.phase_id is not None
 
-                if not is_sdk_agent:
+                if not is_sdk_agent and not is_phase_agent:
                     session.close()
                     raise HTTPException(
                         status_code=400,
@@ -2038,11 +2247,63 @@ async def create_task(
                         phase_id=temp_task.phase_id,
                     )
 
-                    agent = await AgentDispatchService.dispatch(
-                        task=temp_task,
-                        enriched_data=enriched_task,
-                        dispatch_context=dispatch_context,
-                    )
+                    # 6.6 Per-cli/model concurrency gate (e.g. a local
+                    # model's single inference slot) -- this endpoint's own
+                    # capacity check above (6.5) only covers the GLOBAL
+                    # max_concurrent_agents cap, which says nothing about
+                    # whether THIS specific combo has a free slot. Dispatch
+                    # on the fallback model instead if it's saturated; if no
+                    # fallback is usable, queue the task the same way 6.5
+                    # already does for the global cap, rather than dispatch
+                    # into a slot that isn't actually free.
+                    qs = server_state.queue_service
+                    _reservation = None
+                    if qs.cli_model_concurrency_limits:
+                        with qs.db_manager.session_scope() as _qsession:
+                            _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(
+                                _qsession, temp_task
+                            )
+                        if _saturated:
+                            logger.info(
+                                f"Task {task_id}'s combo is already at its concurrency limit with no "
+                                "usable fallback -- queueing instead of dispatching"
+                            )
+                            qs.enqueue_task(task_id)
+                            queue_status = qs.get_queue_status()
+                            from src.core.database import resolve_project_for_workflow
+
+                            bcast_project_id, bcast_project_name = resolve_project_for_workflow(request.workflow_id)
+                            await server_state.broadcast_update(
+                                {
+                                    "type": "task_queued",
+                                    "task_id": task_id,
+                                    "description": enriched_task["enriched_description"][:200],
+                                    "queue_position": queue_status.get("queued_tasks_count", 0),
+                                    "slots_available": queue_status.get("slots_available", 0),
+                                },
+                                project_id=bcast_project_id,
+                                project_name=bcast_project_name,
+                            )
+                            return
+                        if _cli_override:
+                            logger.info(
+                                f"Task {task_id}'s primary combo at its concurrency limit -- "
+                                f"dispatching on fallback model {_model_override} instead"
+                            )
+                            dispatch_context["phase_cli_tool"] = _cli_override
+                            dispatch_context["phase_cli_model"] = _model_override
+
+                    # _reservation (if any) must be released once this
+                    # dispatch attempt finishes, success or not.
+                    try:
+                        agent = await AgentDispatchService.dispatch(
+                            task=temp_task,
+                            enriched_data=enriched_task,
+                            dispatch_context=dispatch_context,
+                        )
+                    finally:
+                        if _reservation:
+                            qs.release_cli_model_slot(*_reservation)
 
                     # Store agent ID immediately (before session issues)
                     agent_id_str = str(agent.id) if agent else None
@@ -2422,8 +2683,9 @@ async def update_task_status(
 
             session.commit()
 
-            # Collect cost data for completed tasks
-            if request.status == "done":
+            # Collect cost data for completed tasks (done or failed --
+            # failed tasks still consumed LLM tokens and should be attributed)
+            if request.status in ("done", "failed"):
                 TaskCompletionService.collect_cost_on_completion(request.task_id)
 
             # Commit in the shared worktree when a task completes successfully,
@@ -2648,12 +2910,47 @@ async def bump_task_priority_endpoint(
             phase_id=task.phase_id,
         )
 
-        # Create agent immediately (bypassing agent limit)
-        agent = await AgentDispatchService.dispatch(
-            task=task,
-            enriched_data={"enriched_description": task.enriched_description},
-            dispatch_context=dispatch_context,
-        )
+        # This endpoint's whole point is "start now, bypassing the global
+        # max_concurrent_agents cap" -- but a per-cli/model concurrency
+        # limit (e.g. a local model's single inference slot) is a different
+        # kind of constraint: forcing a 2nd agent onto it doesn't actually
+        # start it any sooner, it just sits frozen waiting its turn like
+        # any other agent would. Dispatch on the fallback model instead
+        # when saturated; if no fallback is usable, dispatch on the primary
+        # anyway (with a warning) rather than silently queue it -- queueing
+        # would contradict this endpoint's "start immediately" contract.
+        qs = server_state.queue_service
+        _reservation = None
+        if qs.cli_model_concurrency_limits:
+            with qs.db_manager.session_scope() as _qsession:
+                _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(
+                    _qsession, task
+                )
+            if _saturated:
+                logger.warning(
+                    f"Task {task_id}'s combo is at its concurrency limit with no usable "
+                    "fallback -- dispatching anyway (bump-priority bypasses limits)"
+                )
+            elif _cli_override:
+                logger.info(
+                    f"Task {task_id}'s primary combo at its concurrency limit -- "
+                    f"dispatching on fallback model {_model_override} instead"
+                )
+                dispatch_context["phase_cli_tool"] = _cli_override
+                dispatch_context["phase_cli_model"] = _model_override
+
+        # Create agent immediately (bypassing agent limit). _reservation
+        # (if any) must be released once this dispatch attempt finishes,
+        # success or not.
+        try:
+            agent = await AgentDispatchService.dispatch(
+                task=task,
+                enriched_data={"enriched_description": task.enriched_description},
+                dispatch_context=dispatch_context,
+            )
+        finally:
+            if _reservation:
+                qs.release_cli_model_slot(*_reservation)
 
         # Update task status
         AgentDispatchService.mark_assigned(task_id, agent.id, status="assigned")
@@ -2746,6 +3043,98 @@ async def cancel_task_endpoint(task_id: str):
         raise
     except Exception as e:
         logger.error(f"Failed to cancel task: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task_endpoint(task_id: str):
+    """Permanently delete a single task and its dependent records.
+
+    Unlike pause/cancel (which only apply to pending/queued/in-progress
+    tasks and leave the row in place), this removes the task outright in
+    any status -- for the specific case of an old, stuck task (e.g. a
+    stale run's task sitting 'blocked' or 'in_progress' with a long-dead
+    agent) that just clutters the queue view with no path to actually
+    disappear otherwise.
+    """
+    logger.info(f"Delete request for task {task_id}")
+
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.database import (
+        AgentResult,
+        CostEntry,
+        Memory,
+        TaskPromptOverride,
+        Ticket,
+        ValidationReview,
+        resolve_project_for_workflow,
+    )
+
+    try:
+        session = server_state.db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            agent_id = task.assigned_agent_id
+            deleted_workflow_id = task.workflow_id
+        finally:
+            session.close()
+
+        # Terminate the assigned agent first (if any) -- terminate_agent
+        # itself clears Agent.current_task_id, which this task's own FK
+        # deletion below would otherwise violate (foreign_keys=ON).
+        if agent_id:
+            await server_state.agent_manager.terminate_agent(agent_id)
+
+        session = server_state.db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            # Same dependent-record set rerun_design's own task cleanup
+            # deletes for the same reason (FK constraints are enforced).
+            session.query(TaskPromptOverride).filter_by(task_id=task_id).delete(synchronize_session=False)
+            session.query(ValidationReview).filter_by(task_id=task_id).delete(synchronize_session=False)
+            session.query(AgentResult).filter_by(task_id=task_id).delete(synchronize_session=False)
+            session.query(Memory).filter_by(related_task_id=task_id).delete(synchronize_session=False)
+            session.query(Ticket).filter_by(task_id=task_id).delete(synchronize_session=False)
+            # CostEntry.task_id is also an enforced FK -- any task that ever
+            # recorded real LLM cost (increasingly the common case, not the
+            # exception) would otherwise fail to delete with an IntegrityError.
+            session.query(CostEntry).filter_by(task_id=task_id).delete(synchronize_session=False)
+
+            session.delete(task)
+            session.commit()
+        except IntegrityError as e:
+            session.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cannot delete task {task_id}: other records still reference it "
+                    f"(e.g. a subtask or diagnostic run) -- {e}"
+                ),
+            )
+        finally:
+            session.close()
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(deleted_workflow_id)
+        await server_state.broadcast_update(
+            {"type": "task_deleted", "task_id": task_id},
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
+        )
+
+        logger.info(f"Task {task_id} deleted")
+        return {"success": True, "task_id": task_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2957,12 +3346,52 @@ async def restart_task_endpoint(
                 phase_id=task.phase_id,
             )
 
-            # Create agent for the task
-            agent = await AgentDispatchService.dispatch(
-                task=task,
-                enriched_data={"enriched_description": task.enriched_description},
-                dispatch_context=dispatch_context,
-            )
+            # Per-cli/model concurrency gate -- same reasoning as create_task's
+            # 6.6 (this endpoint's own should_queue_task above only covers the
+            # global cap). Fall back to the fallback model if the primary
+            # combo is saturated; queue the task if no fallback is usable.
+            qs = server_state.queue_service
+            _reservation = None
+            if qs.cli_model_concurrency_limits:
+                with qs.db_manager.session_scope() as _qsession:
+                    _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(
+                        _qsession, task
+                    )
+                if _saturated:
+                    logger.info(
+                        f"Task {task_id}'s combo is already at its concurrency limit with no "
+                        "usable fallback -- queueing instead of dispatching"
+                    )
+                    qs.enqueue_task(task_id)
+                    await server_state.broadcast_update(
+                        {"type": "task_restarted", "task_id": task_id, "status": "queued"},
+                        project_id=bcast_project_id,
+                        project_name=bcast_project_name,
+                    )
+                    return {
+                        "success": True,
+                        "message": f"Task {task_id[:8]} restarted and added to queue",
+                        "status": "queued",
+                    }
+                if _cli_override:
+                    logger.info(
+                        f"Task {task_id}'s primary combo at its concurrency limit -- "
+                        f"dispatching on fallback model {_model_override} instead"
+                    )
+                    dispatch_context["phase_cli_tool"] = _cli_override
+                    dispatch_context["phase_cli_model"] = _model_override
+
+            # Create agent for the task. _reservation (if any) must be
+            # released once this dispatch attempt finishes, success or not.
+            try:
+                agent = await AgentDispatchService.dispatch(
+                    task=task,
+                    enriched_data={"enriched_description": task.enriched_description},
+                    dispatch_context=dispatch_context,
+                )
+            finally:
+                if _reservation:
+                    qs.release_cli_model_slot(*_reservation)
 
             # Update task status
             AgentDispatchService.mark_assigned(task_id, agent.id, status="assigned")
@@ -3077,8 +3506,59 @@ async def openid_config():
     }
 
 
-# Store registered clients (in production, use a database)
-registered_clients = {}
+# OAuth authorization codes and client registrations (persisted in-memory with proper validation)
+import hashlib
+import base64
+import threading
+
+_auth_codes: Dict[str, Dict] = {}  # code -> {client_id, redirect_uri, scope, code_challenge, code_challenge_method, expires_at, used}
+registered_clients: Dict[str, Dict] = {}  # client_id -> client details
+_revoked_tokens: set = set()  # Set of hashed revoked tokens
+_auth_lock = threading.Lock()  # Thread-safe lock for auth operations
+
+
+def _validate_redirect_uri(uri: str) -> bool:
+    """Validate redirect URI is safe (HTTPS or localhost)."""
+    from urllib.parse import urlparse
+    parsed = urlparse(uri)
+    # Must be HTTPS (except localhost for development)
+    if parsed.scheme not in ("https",) and parsed.hostname not in ("localhost", "127.0.0.1"):
+        return False
+    # No fragments allowed (OAuth 2.0 security)
+    if parsed.fragment:
+        return False
+    # No wildcards
+    if "*" in uri:
+        return False
+    return True
+
+
+def _generate_code_challenge(code_verifier: str) -> str:
+    """Generate PKCE code challenge from verifier (S256 method)."""
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+# Rate limiting with thread-safe lock
+_rate_limit_lock = threading.Lock()
+_rate_limit_store: Dict[str, List[float]] = defaultdict(list)
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMIT_MAX = 30  # requests per window
+
+
+def _check_rate_limit(key: str, max_requests: int = RATE_LIMIT_MAX) -> bool:
+    """Check if request is within rate limit. Returns True if allowed.
+    
+    Thread-safe implementation using lock to prevent race conditions.
+    """
+    with _rate_limit_lock:
+        now = time.time()
+        # Clean old entries
+        _rate_limit_store[key] = [t for t in _rate_limit_store[key] if now - t < RATE_LIMIT_WINDOW]
+        if len(_rate_limit_store[key]) >= max_requests:
+            return False
+        _rate_limit_store[key].append(now)
+        return True
 
 
 @app.post("/oauth/register")
@@ -3086,20 +3566,42 @@ async def register_client(request: Dict[str, Any]):
     """Dynamic Client Registration endpoint (RFC 7591)."""
     import secrets
 
+    # Rate limit registration to prevent spam/DoS
+    if not _check_rate_limit("oauth_register", max_requests=5):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded for client registration")
+    
+    # Validate redirect URIs
+    redirect_uris = request.get("redirect_uris", ["https://claude.ai/api/mcp/auth_callback"])
+    if not isinstance(redirect_uris, list) or len(redirect_uris) == 0:
+        raise HTTPException(status_code=400, detail="redirect_uris must be a non-empty array")
+    
+    for uri in redirect_uris:
+        if not isinstance(uri, str) or not _validate_redirect_uri(uri):
+            raise HTTPException(status_code=400, detail=f"Invalid redirect_uri: {uri}. Must be HTTPS (or localhost for dev).")
+    
+    # Validate client_name length to prevent abuse
+    client_name = request.get("client_name", "Claude")
+    if not isinstance(client_name, str) or len(client_name) > 255:
+        raise HTTPException(status_code=400, detail="client_name must be a string of 255 characters or less")
+    
     client_id = f"client_{secrets.token_urlsafe(16)}"
     client_secret = secrets.token_urlsafe(32)
 
-    # Store client registration
-    registered_clients[client_id] = {
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "client_name": request.get("client_name", "Claude"),
-        "redirect_uris": request.get("redirect_uris", ["https://claude.ai/api/mcp/auth_callback"]),
-        "grant_types": request.get("grant_types", ["authorization_code"]),
-        "response_types": request.get("response_types", ["code"]),
-        "scope": request.get("scope", "openid profile email"),
-        "token_endpoint_auth_method": request.get("token_endpoint_auth_method", "none"),
-    }
+    # Store client registration with thread safety
+    with _auth_lock:
+        registered_clients[client_id] = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "client_name": client_name,
+            "redirect_uris": redirect_uris,
+            "grant_types": request.get("grant_types", ["authorization_code"]),
+            "response_types": request.get("response_types", ["code"]),
+            "scope": request.get("scope", "openid profile email"),
+            "token_endpoint_auth_method": request.get("token_endpoint_auth_method", "none"),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+
+    logger.info(f"Registered new OAuth client: {client_id}")
 
     # Return client registration response
     return {
@@ -3107,10 +3609,10 @@ async def register_client(request: Dict[str, Any]):
         "client_secret": client_secret,
         "client_id_issued_at": int(datetime.utcnow().timestamp()),
         "client_secret_expires_at": 0,  # Never expires
-        "redirect_uris": registered_clients[client_id]["redirect_uris"],
+        "redirect_uris": redirect_uris,
         "grant_types": registered_clients[client_id]["grant_types"],
         "response_types": registered_clients[client_id]["response_types"],
-        "client_name": registered_clients[client_id]["client_name"],
+        "client_name": client_name,
         "scope": registered_clients[client_id]["scope"],
         "token_endpoint_auth_method": registered_clients[client_id]["token_endpoint_auth_method"],
     }
@@ -3126,25 +3628,57 @@ async def authorize_get(
     code_challenge: Optional[str] = None,
     code_challenge_method: Optional[str] = None,
 ):
-    """Authorization endpoint - auto-approves for local use."""
+    """Authorization endpoint - validates client and stores auth code."""
     import secrets
 
+    # Rate limit authorization requests
+    if not _check_rate_limit("oauth_authorize", max_requests=10):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    
+    # Validate client_id exists
+    with _auth_lock:
+        client = registered_clients.get(client_id)
+    if not client:
+        raise HTTPException(status_code=400, detail="invalid_client: Unknown client_id")
+    
+    # Validate redirect_uri is registered for this client
+    if redirect_uri not in client.get("redirect_uris", []):
+        raise HTTPException(status_code=400, detail="invalid_redirect_uri: URI not registered for this client")
+    
+    # Validate response_type
+    if response_type != "code":
+        raise HTTPException(status_code=400, detail="unsupported_response_type: Only 'code' is supported")
+    
     # Generate authorization code
     auth_code = secrets.token_urlsafe(32)
+    
+    # Store auth code with metadata (single-use, expires in 10 minutes)
+    with _auth_lock:
+        _auth_codes[auth_code] = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
+            "expires_at": time.time() + 600,  # 10 minutes
+            "used": False,
+        }
+    
+    logger.info(f"Authorization code issued for client {client_id}")
 
     # Build redirect URL with code
     redirect_url = f"{redirect_uri}?code={auth_code}"
     if state:
         redirect_url += f"&state={state}"
 
-    # Return HTML that auto-redirects (simulating user approval)
+    # Return HTML that auto-redirects (simulating user approval for local development)
     html_content = f"""
     <html>
     <head>
         <meta http-equiv="refresh" content="0; url={redirect_url}">
     </head>
     <body>
-        <p>Authorizing... Redirecting to Claude...</p>
+        <p>Authorizing... Redirecting to client...</p>
     </body>
     </html>
     """
@@ -3167,33 +3701,145 @@ async def authorize_post(request: Dict[str, Any]):
 
 @app.post("/oauth/token")
 async def token(request: Dict[str, Any] = Body(...)):
-    """Token endpoint - returns access token."""
+    """Token endpoint - validates authorization code and issues tokens."""
     import secrets
 
-    # For simplicity, always return a valid token (no real auth)
-    return {
-        "access_token": f"access_{secrets.token_urlsafe(32)}",
-        "token_type": "Bearer",
-        "expires_in": 3600,
-        "refresh_token": f"refresh_{secrets.token_urlsafe(32)}",
-        "scope": request.get("scope", "openid profile email"),
-    }
+    grant_type = request.get("grant_type")
+    
+    # Rate limit token requests
+    if not _check_rate_limit("oauth_token", max_requests=20):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    
+    if grant_type == "authorization_code":
+        code = request.get("code")
+        client_id = request.get("client_id")
+        redirect_uri = request.get("redirect_uri")
+        code_verifier = request.get("code_verifier")
+        
+        if not code or not client_id:
+            raise HTTPException(status_code=400, detail="code and client_id are required")
+        
+        # Validate client exists
+        with _auth_lock:
+            client = registered_clients.get(client_id)
+        if not client:
+            raise HTTPException(status_code=401, detail="invalid_client")
+        
+        # Validate and consume authorization code (single-use)
+        with _auth_lock:
+            stored_code = _auth_codes.get(code)
+            if not stored_code:
+                raise HTTPException(status_code=400, detail="invalid_grant: Unknown authorization code")
+            
+            if stored_code["used"]:
+                # Code reuse detected - potential attack, invalidate all tokens for this code
+                logger.warning(f"SECURITY: Authorization code reuse detected for client {client_id}")
+                raise HTTPException(status_code=400, detail="invalid_grant: Authorization code already used")
+            
+            if stored_code["expires_at"] < time.time():
+                del _auth_codes[code]
+                raise HTTPException(status_code=400, detail="invalid_grant: Authorization code expired")
+            
+            if stored_code["client_id"] != client_id:
+                raise HTTPException(status_code=400, detail="invalid_grant: Code was not issued to this client")
+            
+            if redirect_uri and stored_code["redirect_uri"] != redirect_uri:
+                raise HTTPException(status_code=400, detail="invalid_grant: redirect_uri mismatch")
+            
+            # PKCE validation
+            if stored_code.get("code_challenge"):
+                if not code_verifier:
+                    raise HTTPException(status_code=400, detail="invalid_grant: code_verifier required")
+                
+                # Verify code_verifier matches stored challenge (S256 method)
+                if stored_code.get("code_challenge_method") == "S256":
+                    expected_challenge = _generate_code_challenge(code_verifier)
+                    if expected_challenge != stored_code["code_challenge"]:
+                        logger.warning(f"SECURITY: PKCE verification failed for client {client_id}")
+                        raise HTTPException(status_code=400, detail="invalid_grant: PKCE verification failed")
+                elif stored_code.get("code_challenge_method") == "plain":
+                    if code_verifier != stored_code["code_challenge"]:
+                        raise HTTPException(status_code=400, detail="invalid_grant: PKCE verification failed")
+            
+            # Mark code as used (single-use enforcement)
+            stored_code["used"] = True
+            # Clean up used code after a short delay
+            code_scope = stored_code["scope"]
+        
+        logger.info(f"Token issued for client {client_id}")
+        
+        # Issue tokens
+        return {
+            "access_token": f"access_{secrets.token_urlsafe(32)}",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": f"refresh_{secrets.token_urlsafe(32)}",
+            "scope": code_scope,
+        }
+    
+    elif grant_type == "refresh_token":
+        refresh_token = request.get("refresh_token")
+        if not refresh_token:
+            raise HTTPException(status_code=400, detail="refresh_token required")
+        
+        # Check if token has been revoked
+        import hashlib
+        token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
+        if token_hash in _revoked_tokens:
+            raise HTTPException(status_code=400, detail="invalid_grant: Token has been revoked")
+        
+        return {
+            "access_token": f"access_{secrets.token_urlsafe(32)}",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": f"refresh_{secrets.token_urlsafe(32)}",
+            "scope": request.get("scope", "openid profile email"),
+        }
+    
+    else:
+        raise HTTPException(status_code=400, detail=f"unsupported_grant_type: {grant_type}")
 
 
 @app.post("/oauth/revoke")
 async def revoke_token(request: Dict[str, Any]):
-    """Token revocation endpoint."""
-    # For local use, just return success
+    """Token revocation endpoint (RFC 7009)."""
+    import hashlib
+    
+    token = request.get("token")
+    if not token:
+        raise HTTPException(status_code=400, detail="token is required")
+    
+    # Store hash of revoked token (don't store raw tokens)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    
+    with _auth_lock:
+        _revoked_tokens.add(token_hash)
+    
+    logger.info(f"Token revoked (hash: {token_hash[:16]}...)")
     return {"revoked": True}
 
 
 @app.get("/userinfo")
-async def userinfo():
-    """Fake userinfo endpoint."""
+async def userinfo(authorization: Optional[str] = Header(None)):
+    """Userinfo endpoint - extracts user info from token."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Bearer token required")
+    
+    token = authorization[7:]  # Remove 'Bearer ' prefix
+    
+    # Check if token has been revoked
+    import hashlib
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    if token_hash in _revoked_tokens:
+        raise HTTPException(status_code=401, detail="Token has been revoked")
+    
+    # For local development, return user info based on token
+    # In production, this would decode the JWT and fetch real user data
     return {
         "sub": "local-user",
         "name": "Local User",
         "preferred_username": "local",
+        "email": "user@localhost",
     }
 
 
@@ -3212,9 +3858,9 @@ async def root():
             "auth": {"type": "none", "required": False},
         },
         "endpoints": [
-            "/create_task",
-            "/update_task_status",
-            "/save_memory",
+            "/hephaestus_create_task",
+            "/hephaestus_update_task_status",
+            "/hephaestus_save_memory",
             "/agent_status",
             "/task_progress",
             "/health",
@@ -3233,7 +3879,7 @@ async def list_tools():
     return {
         "tools": [
             {
-                "name": "create_task",
+                "name": "heph_create_task",
                 "description": "Create a new task for an autonomous agent",
                 "input_schema": {
                     "type": "object",
@@ -3289,7 +3935,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "save_memory",
+                "name": "heph_save_memory",
                 "description": "Save a memory to the knowledge base",
                 "input_schema": {
                     "type": "object",
@@ -3302,7 +3948,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "search_memory",
+                "name": "heph_search_memory",
                 "description": "Search the knowledge base for relevant memories using semantic search",
                 "input_schema": {
                     "type": "object",
@@ -3328,7 +3974,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "get_task_status",
+                "name": "heph_get_task_status",
                 "description": "Get status of tasks, optionally filtered by agent_id or workflow_id",
                 "input_schema": {
                     "type": "object",
@@ -3340,7 +3986,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "update_task_status",
+                "name": "heph_update_task_status",
                 "description": "Update the status of a task (done, failed, etc.)",
                 "input_schema": {
                     "type": "object",
@@ -3378,13 +4024,13 @@ async def list_tools():
                 },
             },
             {
-                "name": "complete_my_task",
+                "name": "heph_complete_my_task",
                 "description": (
                     "Mark YOUR OWN currently-assigned task done or failed -- "
                     "no task_id needed, the server already knows which task "
                     "you're working on. Use this instead of "
-                    "update_task_status for the normal case of finishing "
-                    "your own work; update_task_status still exists for the "
+                    "heph_update_task_status for the normal case of finishing "
+                    "your own work; heph_update_task_status still exists for the "
                     "rare case of updating a task that isn't your current one."
                 ),
                 "input_schema": {
@@ -3423,7 +4069,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "create_ticket",
+                "name": "heph_create_ticket",
                 "description": "Create a new ticket in the Kanban board",
                 "input_schema": {
                     "type": "object",
@@ -3470,7 +4116,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "search_tickets",
+                "name": "heph_search_tickets",
                 "description": "Search for existing tickets by title or tags",
                 "input_schema": {
                     "type": "object",
@@ -3490,7 +4136,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "update_ticket_status",
+                "name": "heph_update_ticket_status",
                 "description": "Update the status of a ticket",
                 "input_schema": {
                     "type": "object",
@@ -3505,7 +4151,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "broadcast_message",
+                "name": "heph_broadcast_message",
                 "description": "Send a message to ALL active agents",
                 "input_schema": {
                     "type": "object",
@@ -3523,7 +4169,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "send_message",
+                "name": "heph_send_message",
                 "description": "Send a direct message to a specific agent",
                 "input_schema": {
                     "type": "object",
@@ -4522,17 +5168,17 @@ async def _tool_complete_my_task(arguments: Dict[str, Any]):
 # _handle_devtools_tool/_DEVTOOLS_TOOLS since they share a different shape:
 # a browser-session precondition and per-tool required-args).
 _MCP_TOOLS: Dict[str, Any] = {
-    "create_task": _tool_create_task,
-    "save_memory": _tool_save_memory,
-    "search_memory": _tool_search_memory,
-    "get_task_status": _tool_get_task_status,
-    "update_task_status": _tool_update_task_status,
-    "complete_my_task": _tool_complete_my_task,
-    "create_ticket": _tool_create_ticket,
-    "search_tickets": _tool_search_tickets,
-    "update_ticket_status": _tool_update_ticket_status,
-    "broadcast_message": _tool_broadcast_message,
-    "send_message": _tool_send_message,
+            "heph_create_task": _tool_create_task,
+    "heph_save_memory": _tool_save_memory,
+    "heph_search_memory": _tool_search_memory,
+    "heph_get_task_status": _tool_get_task_status,
+    "heph_update_task_status": _tool_update_task_status,
+    "heph_complete_my_task": _tool_complete_my_task,
+    "heph_create_ticket": _tool_create_ticket,
+    "heph_search_tickets": _tool_search_tickets,
+    "heph_update_ticket_status": _tool_update_ticket_status,
+    "heph_broadcast_message": _tool_broadcast_message,
+    "heph_send_message": _tool_send_message,
 }
 
 

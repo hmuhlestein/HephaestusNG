@@ -1,9 +1,10 @@
 """Tests for autopilot/orchestrator.py — pure utilities + detection functions."""
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -833,6 +834,89 @@ class TestPickNextDesign:
             assert wf.design_id == "des-real-fail"
 
 
+class TestHasResumableActiveDesign:
+    """Regression: the 'workflow still active' gate in run_continuous_pipeline
+    used to block picking up ANY new work whenever any workflow was active
+    anywhere in the project, even one belonging to a completely unrelated
+    design. A design that's already active with ready, dependency-satisfied
+    features would then sit untouched indefinitely behind an unrelated
+    design's in-progress chain. _has_resumable_active_design lets the gate
+    tell the two cases apart -- resuming an active design is always safe
+    (Tier-1 Phase-0 skip + pause_existing=False), only a brand new design's
+    Phase 0 dispatch is destructive."""
+
+    def test_true_when_active_design_has_incomplete_features(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator import _has_resumable_active_design
+        from src.core.database import AutopilotDesign, Feature
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotDesign(
+                id="des-backend", project_id="proj-1", filename="d.md", name="Backend",
+                status="active",
+            )
+        )
+        session.add(
+            Feature(
+                id="feat-done", design_id="des-backend", feature_key="auth-fraud",
+                name="Auth", scope="s", status="completed",
+            )
+        )
+        session.add(
+            Feature(
+                id="feat-ready", design_id="des-backend", feature_key="credit-system",
+                name="Credit", scope="s", status="pending", depends_on=["auth-fraud"],
+            )
+        )
+        session.commit()
+        session.close()
+
+        assert _has_resumable_active_design("proj-1") is True
+
+    def test_false_when_no_active_design(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator import _has_resumable_active_design
+        from src.core.database import AutopilotDesign
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotDesign(
+                id="des-pending", project_id="proj-1", filename="d.md", name="D",
+                status="pending",
+            )
+        )
+        session.commit()
+        session.close()
+
+        assert _has_resumable_active_design("proj-1") is False
+
+    def test_false_when_active_design_has_no_incomplete_features(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator import _has_resumable_active_design
+        from src.core.database import AutopilotDesign, Feature
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotDesign(
+                id="des-done", project_id="proj-1", filename="d.md", name="D",
+                status="active",
+            )
+        )
+        session.add(
+            Feature(
+                id="feat-a", design_id="des-done", feature_key="a",
+                name="A", scope="s", status="completed",
+            )
+        )
+        session.commit()
+        session.close()
+
+        assert _has_resumable_active_design("proj-1") is False
+
+    def test_false_without_project_id(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator import _has_resumable_active_design
+
+        assert _has_resumable_active_design(None) is False
+
+
 class TestCreateFeatureFolder:
     def test_creates_folder(self, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger, create_feature_folder
@@ -871,7 +955,7 @@ class TestCollectReportSummaries:
         from src.autopilot.orchestrator import collect_report_summaries
 
         # Reports are at project_path level, not in subdirectory
-        (tmp_path / "qa_report.md").write_text("# QA Report\nAll tests passed")
+        (tmp_path / "qa.md").write_text("# QA Report\nAll tests passed")
         (tmp_path / "architecture.md").write_text("# Architecture")
         result = collect_report_summaries(tmp_path)
         assert "qa" in result
@@ -1447,7 +1531,7 @@ class TestRetryFailedTasks:
         from src.autopilot.orchestrator import OrchestratorLogger, _retry_failed_tasks
         from src.core.database import Task
 
-        self._make_workflow_and_failed_task(orch_db_env, retry_count=2)
+        self._make_workflow_and_failed_task(orch_db_env, retry_count=5)
 
         recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
 
@@ -1456,7 +1540,7 @@ class TestRetryFailedTasks:
         with orch_db_env.session_scope() as session:
             task = session.query(Task).filter_by(id="task-1").first()
             assert task.status == "failed"
-            assert task.retry_count == 2
+            assert task.retry_count == 5
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct", return_value=None)
     def test_agent_dispatch_failure_lands_back_on_failed_not_stuck_pending(
@@ -1876,6 +1960,131 @@ class TestCreateAgentForTaskDirectAppStateGuard:
             result = create_agent_for_task_direct("task-1", "wf-1", "phase-1")
 
         assert result is None
+
+
+class TestCreateAgentForTaskDirectCliModelConcurrencyLimit:
+    """Regression: create_agent_for_task_direct is the orchestrator's OWN
+    direct dispatch path for phase transitions -- it's what actually
+    creates most phase tasks (scope_review, development, etc.) in a live
+    run, entirely bypassing QueueService.get_next_queued_task's per-cli/
+    model concurrency check. A local model's single inference slot could
+    still get double-booked through this path even with that check in
+    place on the queue-mediated path."""
+
+    def _seed(self, db, cli_tool="pi", cli_model="qwen-local", saturate=True):
+        from src.core.database import Agent, Phase, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp"))
+            session.add(
+                Phase(
+                    id="phase-1", workflow_id="wf-1", order=1, name="development",
+                    description="d", done_definitions=[], cli_tool=cli_tool, cli_model=cli_model,
+                )
+            )
+            session.add(
+                Task(
+                    id="task-1", raw_description="r", done_definition="d",
+                    status="pending", phase_id="phase-1", workflow_id="wf-1",
+                )
+            )
+            if saturate:
+                session.add(
+                    Agent(id="busy-agent", system_prompt="p", status="working", cli_type=cli_tool, cli_model=cli_model)
+                )
+
+    def _server_state(self, db, **queue_service_kwargs):
+        from src.services.queue_service import QueueService
+
+        server_state = Mock()
+        server_state.db_manager = db
+        server_state.agent_manager.create_agent_for_task = AsyncMock(
+            return_value=Mock(id="new-agent")
+        )
+        server_state.queue_service = QueueService(db, max_concurrent_agents=10, **queue_service_kwargs)
+        return server_state
+
+    def test_dispatches_on_fallback_when_primary_combo_saturated(self, orch_db_env):
+        from src.autopilot.orchestrator import create_agent_for_task_direct
+
+        self._seed(orch_db_env, saturate=True)
+        server_state = self._server_state(
+            orch_db_env,
+            cli_model_concurrency_limits={"pi/qwen-local": 1},
+            default_cli_tool="pi",
+            default_cli_model="qwen-local",
+            cli_model_fallback="mimo-v2.5-pro",
+        )
+
+        with patch("src.core.app_context.get_app_state", return_value=server_state):
+            result = create_agent_for_task_direct("task-1", "wf-1", "phase-1")
+
+        assert result == {"agent_id": "new-agent", "status": "created"}
+        _, kwargs = server_state.agent_manager.create_agent_for_task.call_args
+        assert kwargs["phase_cli_tool"] == "pi"
+        assert kwargs["phase_cli_model"] == "mimo-v2.5-pro"
+
+    def test_dispatches_on_primary_when_combo_has_a_free_slot(self, orch_db_env):
+        from src.autopilot.orchestrator import create_agent_for_task_direct
+
+        self._seed(orch_db_env, saturate=False)
+        server_state = self._server_state(
+            orch_db_env,
+            cli_model_concurrency_limits={"pi/qwen-local": 1},
+            default_cli_tool="pi",
+            default_cli_model="qwen-local",
+            cli_model_fallback="mimo-v2.5-pro",
+        )
+
+        with patch("src.core.app_context.get_app_state", return_value=server_state):
+            create_agent_for_task_direct("task-1", "wf-1", "phase-1")
+
+        _, kwargs = server_state.agent_manager.create_agent_for_task.call_args
+        assert kwargs["phase_cli_tool"] is None
+        assert kwargs["phase_cli_model"] is None
+
+    def test_no_limits_configured_is_a_noop(self, orch_db_env):
+        """No queue_service.cli_model_concurrency_limits configured -- must
+        behave exactly as before, no per-cli/model lookups at all."""
+        from src.autopilot.orchestrator import create_agent_for_task_direct
+
+        self._seed(orch_db_env, saturate=True)
+        server_state = self._server_state(orch_db_env)
+
+        with patch("src.core.app_context.get_app_state", return_value=server_state):
+            create_agent_for_task_direct("task-1", "wf-1", "phase-1")
+
+        _, kwargs = server_state.agent_manager.create_agent_for_task.call_args
+        assert kwargs["phase_cli_tool"] is None
+        assert kwargs["phase_cli_model"] is None
+
+    def test_caller_supplied_override_is_respected_not_discarded(self, orch_db_env):
+        """Regression: create_agent_for_task_direct also accepts
+        phase_cli_tool_override/phase_cli_model_override as explicit
+        parameters (used by the session-limit escalation retry at this
+        function's other call site). This concurrency gate's own working
+        variables used to share those exact names, and unconditionally
+        reset them to None near the top of the function -- silently
+        discarding whatever the caller passed in before the "only run if
+        no override was passed" check ever saw it, breaking session-limit
+        escalation's fallback dispatch outright. A caller-supplied override
+        must win even when the primary combo has a free slot (no
+        concurrency-driven override would fire on its own)."""
+        from src.autopilot.orchestrator import create_agent_for_task_direct
+
+        self._seed(orch_db_env, saturate=False)
+        server_state = self._server_state(orch_db_env)  # no concurrency limits configured
+
+        with patch("src.core.app_context.get_app_state", return_value=server_state):
+            create_agent_for_task_direct(
+                "task-1", "wf-1", "phase-1",
+                phase_cli_tool_override="claude",
+                phase_cli_model_override="sonnet",
+            )
+
+        _, kwargs = server_state.agent_manager.create_agent_for_task.call_args
+        assert kwargs["phase_cli_tool"] == "claude"
+        assert kwargs["phase_cli_model"] == "sonnet"
 
 
 class TestCreateCorrectiveTask:
@@ -2353,13 +2562,13 @@ class TestSweepStrayFiles:
         docs = feature / "docs"
         docs.mkdir()
 
-        stray = feature / "security_report.md"
+        stray = feature / "security.md"
         stray.write_text("# Security Report")
 
         with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
             _sweep_stray_files(tmp_path, feature, docs, logger)
         assert not stray.exists()
-        assert (docs / "security_report.md").exists()
+        assert (docs / "security.md").exists()
 
     def test_moves_stray_dirs(self, tmp_path):
         from unittest.mock import patch
@@ -2373,13 +2582,13 @@ class TestSweepStrayFiles:
         docs.mkdir()
 
         # Create report file directly in project root (not in a subdirectory)
-        stray = tmp_path / "qa_report.md"
+        stray = tmp_path / "qa.md"
         stray.write_text("# QA Report")
 
         with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
             _sweep_stray_files(tmp_path, feature, docs, logger)
         assert not stray.exists()
-        assert (docs / "qa_report.md").exists()
+        assert (docs / "qa.md").exists()
 
     def test_copies_report_docs(self, tmp_path):
         from unittest.mock import patch
@@ -2392,14 +2601,77 @@ class TestSweepStrayFiles:
         docs = feature / "docs"
         docs.mkdir()
 
-        # Create report in project docs/ dir
-        proj_docs = tmp_path / "docs"
+        # Create report in project .hephaestus/ dir (where agents write --
+        # _REPORT_SUBDIR, see 5f26488's docs/ -> .hephaestus/ migration)
+        proj_docs = tmp_path / ".hephaestus"
         proj_docs.mkdir()
-        (proj_docs / "qa_report.md").write_text("# QA Report")
+        (proj_docs / "qa.md").write_text("# QA Report")
 
         with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
             _sweep_stray_files(tmp_path, feature, docs, logger)
-        assert (docs / "qa_report.md").exists()
+        assert (docs / "qa.md").exists()
+
+
+class TestArchiveAndCleanup:
+    """Regression: 5f26488 moved agent artifacts from docs/ to .hephaestus/
+    and updated this function's docstring to say so, but left the actual
+    code reading/writing "docs" -- a docstring/code mismatch, and a real
+    bug: artifacts written to the new .hephaestus/ location were never
+    archived to the permanent designs_folder record at all."""
+
+    def test_archives_flat_and_phase_scoped_reports_from_hephaestus(self, tmp_path):
+        from src.autopilot.orchestrator import DesignEntry, OrchestratorLogger, _archive_and_cleanup
+
+        project_path = tmp_path / "project"
+        (project_path / ".hephaestus" / "qa_validation").mkdir(parents=True)
+        (project_path / ".hephaestus" / "architecture.md").write_text("# Architecture")
+        (project_path / ".hephaestus" / "qa_validation" / "qa.md").write_text("# QA")
+
+        designs_folder = tmp_path / "designs_folder"
+        designs_folder.mkdir()
+
+        design_entry = DesignEntry(
+            path=tmp_path / "design.md", name="d", content_hash="h",
+            project_path=project_path,
+        )
+
+        _archive_and_cleanup(design_entry, designs_folder, OrchestratorLogger(tmp_path / "logs"))
+
+        assert (designs_folder / ".hephaestus" / "architecture.md").exists()
+        assert (designs_folder / ".hephaestus" / "qa.md").exists()
+
+    def test_excludes_tmux_features_and_scratch_directories(self, tmp_path):
+        """tmux/ (transcript logs), features/ (Phase 0 internal state), and
+        scratch/ (agent scratch space) are not phase-report artifacts and
+        must not get swept into the permanent record."""
+        from src.autopilot.orchestrator import DesignEntry, OrchestratorLogger, _archive_and_cleanup
+
+        project_path = tmp_path / "project"
+        hephaestus = project_path / ".hephaestus"
+        (hephaestus / "tmux").mkdir(parents=True)
+        (hephaestus / "tmux" / "agent_x.transcript.log").write_text("log")
+        (hephaestus / "features" / "some-feature").mkdir(parents=True)
+        (hephaestus / "features" / "some-feature" / "scope.md").write_text("scope")
+        (hephaestus / "scratch").mkdir(parents=True)
+        (hephaestus / "scratch" / "notes.md").write_text("notes")
+        (hephaestus / "requirements.md").write_text("# Requirements")
+
+        designs_folder = tmp_path / "designs_folder"
+        designs_folder.mkdir()
+
+        design_entry = DesignEntry(
+            path=tmp_path / "design.md", name="d", content_hash="h",
+            project_path=project_path,
+        )
+
+        _archive_and_cleanup(design_entry, designs_folder, OrchestratorLogger(tmp_path / "logs"))
+
+        dest = designs_folder / ".hephaestus"
+        assert (dest / "requirements.md").exists()
+        assert not (dest / "agent_x.transcript.log").exists()
+        assert not (dest / "scope.md").exists()
+        assert not (dest / "notes.md").exists()
+
 
 class TestCheckApiCredits:
     @patch("src.autopilot.orchestrator.get_tasks")
@@ -2681,17 +2953,20 @@ class TestAttemptRecovery:
         logger = OrchestratorLogger(Path("/tmp/logs"))
         attempt_recovery("wf-1", logger)
         attempt_recovery("wf-1", logger)
+        attempt_recovery("wf-1", logger)
+        attempt_recovery("wf-1", logger)
+        attempt_recovery("wf-1", logger)
         with orch_db_env.session_scope() as session:
             task = session.query(Task).filter_by(id="t1").first()
-            assert task.retry_count == 2
+            assert task.retry_count == 5
 
-        # Third call must skip retrying entirely -- retry_count already at cap
+        # Sixth call must skip retrying entirely -- retry_count already at cap
         calls_before = mock_create_agent.call_count
         attempt_recovery("wf-1", logger)
         assert mock_create_agent.call_count == calls_before
         with orch_db_env.session_scope() as session:
             task = session.query(Task).filter_by(id="t1").first()
-            assert task.retry_count == 2  # unchanged -- never even attempted
+            assert task.retry_count == 5  # unchanged -- never even attempted
 
     @patch("src.autopilot.orchestrator.get_db")
     @patch("src.autopilot.orchestrator.api_post")
@@ -2709,7 +2984,7 @@ class TestAttemptRecovery:
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_tasks.side_effect = [
-            [{"id": "t1", "retry_count": 2, "phase_id": "p1"}],  # already retried 2x
+            [{"id": "t1", "retry_count": 5, "phase_id": "p1"}],  # already retried 5x
         ]
         mock_agents.return_value = []
         success, msg = attempt_recovery("wf-1", logger)
@@ -3433,6 +3708,396 @@ class TestSyncStaleFeatureStatuses:
             assert feat.status == "pending"
             assert feat.workflow_id is None
             assert feat.completed_at is None
+
+    def test_relinks_orphaned_feature_before_syncing_status(self, orch_db_env):
+        """Regression (live incident): a feature whose workflow completed
+        without Feature.workflow_id ever being written stays workflow_id=
+        None forever once its design's pipeline has fully finished --
+        nothing is left to trigger the design re-walk that normally calls
+        _relink_features_to_workflows, and the stale-status join above
+        can't see it either (it requires a linked Workflow row). Must
+        relink from the matching workflow's launch_params first, then sync
+        status in the same tick."""
+        from src.autopilot.orchestrator import _sync_stale_feature_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Workflow(
+                    id="wf-done",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    definition_id="autopilot",
+                    design_id="design-1",
+                    launch_params={"feature_id": "feat-a"},
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1",
+                    design_id="design-1",
+                    feature_key="feat-a",
+                    name="Feature A",
+                    scope="s",
+                    status="active",
+                    workflow_id=None,
+                )
+            )
+
+        repaired = _sync_stale_feature_statuses(MagicMock())
+
+        assert repaired == 1
+        with orch_db_env.session_scope() as session:
+            feat = session.query(Feature).filter_by(id="feature-row-1").first()
+            assert feat.workflow_id == "wf-done"
+            assert feat.status == "completed"
+            assert feat.completed_at is not None
+
+
+class TestSyncStaleDesignStatuses:
+    """_sync_stale_design_statuses: the Design-table-wide self-heal for the
+    same class of bug TestSyncStaleFeatureStatuses covers one level up --
+    pick_next_design's own "all features done -> mark completed" decision
+    only runs as a side effect of picking the NEXT design, so a design
+    whose last feature finishes with nothing else ever needing to pick a
+    new design again stays "active" forever without this."""
+
+    def test_flips_design_to_completed_when_all_features_done(self, orch_db_env):
+        from src.autopilot.orchestrator import _sync_stale_design_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename="d.md", name="D",
+                    status="active",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1", design_id="design-1", feature_key="feat-a",
+                    name="Feature A", scope="s", status="completed",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-2", design_id="design-1", feature_key="feat-b",
+                    name="Feature B", scope="s", status="skipped",
+                )
+            )
+
+        repaired = _sync_stale_design_statuses(MagicMock())
+
+        assert repaired == 1
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "completed"
+
+    def test_leaves_design_alone_when_a_feature_is_still_incomplete(self, orch_db_env):
+        from src.autopilot.orchestrator import _sync_stale_design_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename="d.md", name="D",
+                    status="active",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1", design_id="design-1", feature_key="feat-a",
+                    name="Feature A", scope="s", status="completed",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-2", design_id="design-1", feature_key="feat-b",
+                    name="Feature B", scope="s", status="active",
+                )
+            )
+
+        repaired = _sync_stale_design_statuses(MagicMock())
+
+        assert repaired == 0
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "active"
+
+    def test_leaves_design_alone_when_a_feature_has_failed(self, orch_db_env):
+        """A "failed" feature is neither completed nor skipped -- must not
+        be treated as "done" just because nothing is actively in flight."""
+        from src.autopilot.orchestrator import _sync_stale_design_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename="d.md", name="D",
+                    status="active",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1", design_id="design-1", feature_key="feat-a",
+                    name="Feature A", scope="s", status="completed",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-2", design_id="design-1", feature_key="feat-b",
+                    name="Feature B", scope="s", status="failed",
+                )
+            )
+
+        repaired = _sync_stale_design_statuses(MagicMock())
+
+        assert repaired == 0
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "active"
+
+    def test_leaves_design_without_features_alone(self, orch_db_env):
+        """A design not yet decomposed into features has zero Feature rows
+        -- must not be mistaken for "all done" by an empty-set vacuous
+        truth."""
+        from src.autopilot.orchestrator import _sync_stale_design_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename="d.md", name="D",
+                    status="active",
+                )
+            )
+
+        repaired = _sync_stale_design_statuses(MagicMock())
+
+        assert repaired == 0
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "active"
+
+    def test_leaves_non_active_design_alone(self, orch_db_env):
+        """Only "active" designs are candidates -- a "pending" design that
+        happens to have zero features (not yet decomposed) must not be
+        touched."""
+        from src.autopilot.orchestrator import _sync_stale_design_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(
+                    id="design-1", project_id="proj-1", filename="d.md", name="D",
+                    status="pending",
+                )
+            )
+
+        repaired = _sync_stale_design_statuses(MagicMock())
+
+        assert repaired == 0
+        with orch_db_env.session_scope() as session:
+            design = session.query(AutopilotDesign).filter_by(id="design-1").first()
+            assert design.status == "pending"
+
+
+class TestInterruptibleSleep:
+    """docs/SAFE_RESTART_DESIGN.md §3.3: run_continuous_pipeline's loop used
+    a plain time.sleep(N) at its two longest waits, making a stop request
+    (including AutopilotService.pause_for_restart()) invisible to the loop
+    for up to DESIGN_QUEUE_SCAN_INTERVAL (60s) if it landed mid-sleep."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_stop_events(self):
+        from src.autopilot import orchestrator
+
+        orchestrator._stop_events.clear()
+        yield
+        orchestrator._stop_events.clear()
+
+    def test_returns_promptly_once_should_stop_flips(self):
+        import asyncio
+        import threading
+        import time as time_module
+
+        from src.autopilot import orchestrator
+        from src.autopilot.orchestrator import _interruptible_sleep
+
+        event = asyncio.Event()
+        orchestrator._stop_events["proj-a"] = event
+
+        def _flip_after_delay():
+            time_module.sleep(0.3)
+            event.set()
+
+        threading.Thread(target=_flip_after_delay, daemon=True).start()
+
+        start = time_module.time()
+        _interruptible_sleep(30, "proj-a")
+        elapsed = time_module.time() - start
+
+        assert elapsed < 2  # nowhere near the full 30s requested
+
+    def test_sleeps_the_full_duration_when_never_asked_to_stop(self):
+        import time as time_module
+
+        from src.autopilot.orchestrator import _interruptible_sleep
+
+        start = time_module.time()
+        _interruptible_sleep(1, "proj-never-registered")
+        elapsed = time_module.time() - start
+
+        assert elapsed >= 0.9
+
+
+class TestResyncPipelineRegistry:
+    """docs/SAFE_RESTART_DESIGN.md §3.5: a project whose persisted state
+    says its pipeline should be running, but AutopilotServiceRegistry has
+    no live entry for it, has fallen through the one-shot startup resume
+    -- restart it from the periodic background sweep instead of leaving it
+    silently idle."""
+
+    @pytest.mark.asyncio
+    async def test_restarts_a_project_with_no_live_registry_entry(self):
+        from unittest.mock import AsyncMock
+
+        from src.autopilot.orchestrator import _resync_pipeline_registry
+
+        persisted = [
+            ("proj-a", {"project_path": "/tmp/proj-a", "design_queue": "", "max_iterations": 7}),
+        ]
+        mock_service = Mock()
+        mock_service.start = AsyncMock(return_value={"started": True})
+        mock_registry = Mock()
+        mock_registry.get.return_value = None
+        mock_registry.get_or_create.return_value = mock_service
+
+        with patch(
+            "src.autopilot.service.AutopilotService.enumerate_persisted_states",
+            return_value=persisted,
+        ), patch("src.autopilot.service.get_registry", return_value=mock_registry):
+            loop = asyncio.get_running_loop()
+            resumed = await loop.run_in_executor(
+                None, _resync_pipeline_registry, MagicMock(), loop
+            )
+
+        assert resumed == 1
+        mock_registry.get_or_create.assert_called_once_with("proj-a")
+        mock_service.start.assert_called_once_with(
+            project_path="/tmp/proj-a", design_queue="", max_iterations=7
+        )
+
+    @pytest.mark.asyncio
+    async def test_leaves_an_already_running_project_alone(self):
+        from unittest.mock import AsyncMock
+
+        from src.autopilot.orchestrator import _resync_pipeline_registry
+
+        persisted = [
+            ("proj-a", {"project_path": "/tmp/proj-a"}),
+        ]
+        already_running = Mock()
+        already_running.running = True
+        mock_registry = Mock()
+        mock_registry.get.return_value = already_running
+        mock_registry.get_or_create = Mock(side_effect=AssertionError("must not be called"))
+
+        with patch(
+            "src.autopilot.service.AutopilotService.enumerate_persisted_states",
+            return_value=persisted,
+        ), patch("src.autopilot.service.get_registry", return_value=mock_registry):
+            loop = asyncio.get_running_loop()
+            resumed = await loop.run_in_executor(
+                None, _resync_pipeline_registry, MagicMock(), loop
+            )
+
+        assert resumed == 0
+        mock_registry.get_or_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_restarts_a_project_whose_registry_entry_exists_but_isnt_running(self):
+        """Not just "no entry at all" -- a stale, non-running entry left
+        over from a prior pause must also be restarted."""
+        from unittest.mock import AsyncMock
+
+        from src.autopilot.orchestrator import _resync_pipeline_registry
+
+        persisted = [
+            ("proj-a", {"project_path": "/tmp/proj-a"}),
+        ]
+        stale_entry = Mock()
+        stale_entry.running = False
+        mock_service = Mock()
+        mock_service.start = AsyncMock(return_value={"started": True})
+        mock_registry = Mock()
+        mock_registry.get.return_value = stale_entry
+        mock_registry.get_or_create.return_value = mock_service
+
+        with patch(
+            "src.autopilot.service.AutopilotService.enumerate_persisted_states",
+            return_value=persisted,
+        ), patch("src.autopilot.service.get_registry", return_value=mock_registry):
+            loop = asyncio.get_running_loop()
+            resumed = await loop.run_in_executor(
+                None, _resync_pipeline_registry, MagicMock(), loop
+            )
+
+        assert resumed == 1
+        mock_service.start.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_skips_a_project_with_a_stop_already_in_flight(self):
+        """Regression: a project mid pause_for_restart() (or an explicit
+        stop()) looks identical to "should restart" here -- registry entry
+        momentarily not-running, persisted marker deliberately left intact
+        -- for as long as the pause takes to actually finish (up to 45s).
+        Restarting it from this sweep would race the graceful pause
+        itself. _should_stop(project_id) (the same signal
+        pause_for_restart()/stop() set) must prevent that."""
+        from unittest.mock import AsyncMock
+
+        from src.autopilot import orchestrator
+        from src.autopilot.orchestrator import _resync_pipeline_registry
+
+        orchestrator._stop_events.clear()
+        try:
+            stop_event = asyncio.Event()
+            stop_event.set()
+            orchestrator._stop_events["proj-a"] = stop_event
+
+            persisted = [
+                ("proj-a", {"project_path": "/tmp/proj-a"}),
+            ]
+            stale_entry = Mock()
+            stale_entry.running = False
+            mock_registry = Mock()
+            mock_registry.get.return_value = stale_entry
+            mock_registry.get_or_create = Mock(side_effect=AssertionError("must not be called"))
+
+            with patch(
+                "src.autopilot.service.AutopilotService.enumerate_persisted_states",
+                return_value=persisted,
+            ), patch("src.autopilot.service.get_registry", return_value=mock_registry):
+                loop = asyncio.get_running_loop()
+                resumed = await loop.run_in_executor(
+                    None, _resync_pipeline_registry, MagicMock(), loop
+                )
+
+            assert resumed == 0
+            mock_registry.get_or_create.assert_not_called()
+        finally:
+            orchestrator._stop_events.clear()
 
 
 class TestRecoverAbandonedWorkflowsMissingWorktree:
@@ -4193,9 +4858,17 @@ class TestRetryExhaustedPausedWorkflows:
             task = session.query(Task).filter_by(id="task-stuck").first()
             assert task.retry_count == 2
 
-        # And it stays excluded on a subsequent pass.
+        # On a subsequent pass, system-exhausted workflows with failed tasks
+        # get retried (conditions may have changed since exhausting retries)
         recovered_again = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
-        assert recovered_again == 0
+        assert recovered_again == 1
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-paused").first()
+            assert wf.status == "active"
+            assert wf.paused_by is None
+            # Retry count on task was reset
+            task = session.query(Task).filter_by(id="task-stuck").first()
+            assert task.retry_count == 0
 
     def test_only_resets_failed_tasks_in_in_progress_phase(self, orch_db_env, tmp_path):
         """Same scoping requirement _recover_abandoned_workflows_missing_worktree
@@ -4277,12 +4950,32 @@ class TestWorkflowAppearsAbandoned:
                     id="t1",
                     raw_description="r",
                     done_definition="d",
-                    status="done",
+                    status="failed",
                     workflow_id="wf-1",
                 )
             )
 
         assert _workflow_appears_abandoned("wf-1") is True
+
+    def test_false_when_all_tasks_done(self, orch_db_env):
+        from src.autopilot.orchestrator import _workflow_appears_abandoned
+        from src.core.database import Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+            )
+            session.add(
+                Task(
+                    id="t1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    workflow_id="wf-1",
+                )
+            )
+
+        assert _workflow_appears_abandoned("wf-1") is False
 
     def test_false_with_pending_task(self, orch_db_env):
         from src.autopilot.orchestrator import _workflow_appears_abandoned
@@ -4673,6 +5366,63 @@ class TestGetOrCreateProjectId:
             assert proj_b.is_active is True
             assert proj_c.is_active is False
 
+    def test_does_not_resume_paused_workflows_when_cap_reached(
+        self, orch_db_env, tmp_path, monkeypatch
+    ):
+        """Regression: when the cap blocks reactivation, this function used
+        to still unconditionally flip the project's user-paused workflows
+        back to status="active" -- but background_phase_advancement_sweep
+        (server.py) only ever looks at workflows belonging to is_active
+        projects. A workflow left "active" on a project that failed to
+        reactivate is invisible to that sweep forever: it looks like it's
+        running but nothing ever advances it."""
+        from unittest.mock import MagicMock
+
+        from src.autopilot.orchestrator import _get_or_create_project_id
+        from src.core.database import AutopilotProject, Workflow
+
+        mock_config = MagicMock()
+        mock_config.max_concurrent_projects = 2
+        monkeypatch.setattr(
+            "src.core.simple_config.get_config", lambda: mock_config
+        )
+
+        project_a = tmp_path / "project-a"
+        project_a.mkdir()
+        project_b = tmp_path / "project-b"
+        project_b.mkdir()
+        project_c = tmp_path / "project-c"
+        project_c.mkdir()
+
+        id_a = _get_or_create_project_id(str(project_a))
+        id_b = _get_or_create_project_id(str(project_b))
+
+        # project_c already exists (was active and running before), but is
+        # currently paused and inactive -- simulates a project stopped via
+        # /autopilot/stop, whose slot was then taken by a or b.
+        with orch_db_env.session_scope() as session:
+            proj_c = AutopilotProject(
+                id="proj-c", name="project-c", base_dir=str(project_c.resolve()),
+                is_active=False,
+            )
+            session.add(proj_c)
+            session.add(
+                Workflow(
+                    id="wf-c", project_id="proj-c", definition_id="autopilot",
+                    name="t", phases_folder_path="/tmp",
+                    status="paused", paused_by="user",
+                )
+            )
+
+        _get_or_create_project_id(str(project_c))
+
+        with orch_db_env.session_scope() as session:
+            proj_c = session.query(AutopilotProject).filter_by(id="proj-c").first()
+            wf_c = session.query(Workflow).filter_by(id="wf-c").first()
+            assert proj_c.is_active is False
+            assert wf_c.status == "paused"
+            assert wf_c.paused_by == "user"
+
     def test_concurrent_insert_race_recovers_instead_of_raising(
         self, orch_db_env, tmp_path
     ):
@@ -5045,7 +5795,7 @@ class TestCreatePhaseTaskReviewCap:
             count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
             assert count == 3
 
-        result_md = tmp_path / "docs" / "architectural_review" / "architectural_review_report.md"
+        result_md = tmp_path / ".hephaestus" / "architectural_review" / "review.md"
         assert result_md.exists()
         from src.autopilot.okf_markdown import read_okf
 
@@ -5094,7 +5844,7 @@ class TestCreatePhaseTaskReviewCap:
             count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
             assert count == 4
 
-        notice = tmp_path / "docs" / "security_review" / "security_review_capped_notice.md"
+        notice = tmp_path / ".hephaestus" / "security_review" / "security_review_capped_notice.md"
         assert notice.exists()
         assert "capped after 4 runs" in notice.read_text()
 
@@ -5211,7 +5961,7 @@ class TestCreatePhaseTaskReviewCap:
 
         assert result is True
         mock_fire.assert_called_once()
-        report = tmp_path / "docs" / "adversarial_review" / "adversarial_review_report.md"
+        report = tmp_path / ".hephaestus" / "adversarial_review" / "adversarial.md"
         assert report.exists()
         text = report.read_text()
         assert "capped after 3 runs" in text

@@ -548,7 +548,9 @@ class TestMaybeRetryFailedTasks:
             task = session.query(Task).filter_by(id="task-fail-0").first()
             assert task.status == "in_progress"
             assert task.failure_reason is None
-            assert "Execute phase X: do the thing" in task.enriched_description
+            # Uses raw_description as base (not enriched_description) to avoid
+            # accumulating retry messages from previous attempts
+            assert "Execute phase X" in task.enriched_description
             assert "Missing output artifact: docs/report.md" in task.enriched_description
 
     def test_task_without_failure_reason_gets_plain_reset(self, db_manager, sample_workflow):
@@ -703,7 +705,7 @@ class TestMaybeRetryFailedTasks:
                     done_definition="d",
                     status="failed",
                     failure_reason="Workflow's shared worktree is missing",
-                    retry_count=2,
+                    retry_count=5,
                 )
             )
 
@@ -1262,6 +1264,51 @@ class TestCaseInProgressComplete:
             assert task.status == "in_progress"  # the retry actually ran
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is None  # released, not stranded
+
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    def test_exhausted_retry_cap_fails_the_workflow_instead_of_firing_transition(
+        self, mock_fire, db_manager, sample_workflow
+    ):
+        """Regression, found live: once every failed task in a phase (that
+        also has a done task from an earlier cycle) is past the retry cap,
+        this used to only set execution.status = "failed" and fall
+        straight through into firing a transition anyway --
+        _fire_phase_transition's engine evaluation reads the failed task's
+        own stale action/completion data, not execution.status, so it
+        would advance to the next phase as if the failed one had passed.
+        Observed live: architectural_review exhausted its retry cap on a
+        real frontmatter-schema defect and the pipeline advanced straight
+        to qa_validation as if the review had passed."""
+        from src.autopilot.orchestrator import _case_in_progress_complete, _get_phase_statuses
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-exhausted-1",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="architectural_review's report has the wrong frontmatter type",
+                    retry_count=5,
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        mock_fire.assert_not_called()
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "failed"
+            assert "phase-1" not in wf.status_reason  # uses phase.name, not phase.id
+            assert "requirements" in wf.status_reason  # phase-1's name, from sample_workflow
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "failed"
 
 
 class TestReleaseStaleTaskCreationClaims:
@@ -2440,7 +2487,11 @@ class TestTriggerArbitration:
         assert result is True
         mock_create_agent.assert_called_once()
         _, kwargs = mock_create_agent.call_args
-        assert kwargs["agent_type"] == "arbitration"
+        # Not "arbitration" -- Agent.agent_type's CHECK constraint doesn't
+        # allow it (see test_agent_type_satisfies_the_check_constraint).
+        # "diagnostic" is the deliberate substitute -- prompt_builder.py
+        # treats the two identically for prompt-building purposes.
+        assert kwargs["agent_type"] == "diagnostic"
         assert "validation_prompt" in kwargs["enriched_data_override"]
         assert "requirements" in kwargs["enriched_data_override"]["validation_prompt"]
 
@@ -2462,6 +2513,85 @@ class TestTriggerArbitration:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert "requirements" in wf.status_reason
             assert "exhausted 5 attempts" in wf.status_reason
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_creates_its_own_sentinel_agent_if_missing(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Regression: this file's own _seed_sentinel_agents autouse
+        fixture pre-creates the ARBITRATION_CREATED_BY Agent row for
+        every test in this file specifically because, per its own
+        docstring, "any code path that sets
+        task.created_by_agent_id=ARBITRATION_CREATED_BY FK-fails"
+        without it -- a test-only workaround for a gap that was never
+        actually closed in _trigger_arbitration itself. Production never
+        seeds that row, so every real call hit
+        sqlite3.IntegrityError: FOREIGN KEY constraint failed on the
+        Task insert, silently caught by _fire_phase_transition's
+        catch-all and logged as "[PHASE-ADVANCE] Transition error" --
+        arbitration could never actually happen. Observed live: 1180+
+        failed attempts over ~30 hours on one workflow, zero arbitration
+        tasks ever created. This test undoes the fixture's seeding to
+        reproduce the true production condition."""
+        from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _trigger_arbitration
+
+        with db_manager.session_scope() as session:
+            session.query(Agent).filter_by(id=ARBITRATION_CREATED_BY).delete()
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        result = _trigger_arbitration(
+            "wf-1", "phase-1", "requirements", "exhausted 5 attempts", MagicMock()
+        )
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            assert session.query(Agent).filter_by(id=ARBITRATION_CREATED_BY).first() is not None
+            task = (
+                session.query(Task)
+                .filter_by(created_by_agent_id=ARBITRATION_CREATED_BY)
+                .first()
+            )
+            assert task is not None
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_agent_type_satisfies_the_check_constraint(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Regression: Agent.agent_type has a CHECK constraint ('phase',
+        'validator', 'result_validator', 'monitor', 'diagnostic',
+        'orchestrator') that "arbitration" was never a member of -- every
+        real (non-mocked) call from create_agent_for_task_direct into
+        AgentManager.create_agent_for_task raised sqlite3.IntegrityError:
+        CHECK constraint failed on the Agent insert, caught and logged
+        only at DEBUG (invisible at the default log level) and returned
+        as None, so every arbitration dispatch failed silently --
+        _trigger_arbitration always hit its "if not agent_data" branch
+        and failed the workflow, even after the Task-creation FK bug was
+        separately fixed. This mocks create_agent_for_task_direct like
+        the other tests in this class (a full dispatch is a heavier
+        integration concern), but then actually tries to persist an
+        Agent row with the captured agent_type value against the real
+        schema -- the authoritative check, not a hardcoded copy of the
+        constraint's allowed list that could itself drift out of sync."""
+        from src.core.database import Agent as _Agent
+        from src.autopilot.orchestrator import _trigger_arbitration
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        _trigger_arbitration(
+            "wf-1", "phase-1", "requirements", "exhausted", MagicMock()
+        )
+
+        _, kwargs = mock_create_agent.call_args
+        agent_type = kwargs["agent_type"]
+
+        with db_manager.session_scope() as session:
+            session.add(_Agent(
+                id="agent-type-check-probe",
+                system_prompt="x", status="idle", cli_type="pi",
+                agent_type=agent_type,
+            ))
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     def test_prompt_lists_valid_phase_names(

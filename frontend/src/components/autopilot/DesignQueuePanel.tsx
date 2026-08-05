@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
@@ -21,7 +21,7 @@ import { CSS } from '@dnd-kit/utilities';
 import {
   Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
   CheckCircle2, XCircle, Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, Layers,
-  PauseCircle, Square, RotateCcw, FileBarChart2
+  PauseCircle, Square, RotateCcw, FileBarChart2, Eye
 } from 'lucide-react';
 import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -39,9 +39,10 @@ interface DesignQueuePanelProps {
   onAddDesign: () => void;
   onLoadDesign: () => void;
   currentDesign?: string | null;
+  onReviewFeature?: (featureId: string, feature: any) => void;
 }
 
-const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, onLoadDesign, currentDesign }) => {
+const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, onLoadDesign, currentDesign, onReviewFeature }) => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
@@ -329,13 +330,14 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   onDetail={handleDetail}
                   onTaskClick={setSelectedTaskId}
                   onSelectFeature={setSelectedFeature}
+                  onReviewFeature={onReviewFeature}
                   onAction={(action) => {
                     if (action === 'rerun') {
                       // /autopilot/queue/rerun stops the orchestrator and
                       // terminates every active agent/workflow system-wide,
                       // not just this design's -- confirm before firing since
                       // this icon is one click away, unlike the modal's button.
-                      if (confirm(`Rerun "${item.name}"? This restarts its pipeline from scratch and will also pause every other currently running pipeline.`)) {
+                      if (confirm(`Rerun "${item.name}"? This restarts its pipeline from scratch, deletes its existing worktree (any uncommitted work in it is lost), and will also pause every other currently running pipeline.`)) {
                         rerunDesignMutation.mutate(item.filename);
                       }
                     } else {
@@ -411,7 +413,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
 const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
   pending: { color: 'bg-gray-100 text-gray-600', icon: <Clock className="w-3 h-3" />, label: 'Pending' },
   active: { color: 'bg-blue-100 text-blue-700', icon: <Loader2 className="w-3 h-3 animate-spin" />, label: 'Active' },
-  paused: { color: 'bg-yellow-100 text-yellow-700', icon: <Clock className="w-3 h-3" />, label: 'Paused' },
+  paused: { color: 'bg-yellow-100 text-yellow-700', icon: <Pause className="w-3 h-3" />, label: 'Paused' },
   completed: { color: 'bg-green-100 text-green-700', icon: <CheckCircle2 className="w-3 h-3" />, label: 'Done' },
   failed: { color: 'bg-red-100 text-red-700', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
 };
@@ -458,16 +460,18 @@ interface RowActionIconsProps {
   canStop?: boolean;
   canResume?: boolean;
   canRerun?: boolean;
+  canDelete?: boolean;
   onPause?: () => void;
   onStop?: () => void;
   onResume?: () => void;
   onRerun?: () => void;
-  pending?: { pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean };
+  onDelete?: () => void;
+  pending?: { pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean; delete?: boolean };
   size?: 'sm' | 'md';
 }
 
 const RowActionIcons: React.FC<RowActionIconsProps> = ({
-  canPause, canStop, canResume, canRerun, onPause, onStop, onResume, onRerun, pending = {}, size = 'md',
+  canPause, canStop, canResume, canRerun, canDelete, onPause, onStop, onResume, onRerun, onDelete, pending = {}, size = 'md',
 }) => {
   const iconCls = size === 'sm' ? 'w-3.5 h-3.5' : 'w-4 h-4';
   const btnCls = size === 'sm' ? 'p-1 rounded' : 'p-2 rounded-lg';
@@ -485,6 +489,7 @@ const RowActionIcons: React.FC<RowActionIconsProps> = ({
     { key: 'stop', enabled: canStop, isPending: pending.stop, onClick: onStop, icon: <Square className={iconCls} />, hoverColor: 'hover:bg-red-50 hover:text-red-600', title: 'Stop' },
     { key: 'resume', enabled: canResume, isPending: pending.resume, onClick: onResume, icon: <Play className={iconCls} />, hoverColor: 'hover:bg-green-50 hover:text-green-600', title: 'Resume' },
     { key: 'rerun', enabled: canRerun, isPending: pending.rerun, onClick: onRerun, icon: <RotateCcw className={iconCls} />, hoverColor: 'hover:bg-violet-50 hover:text-violet-600', title: 'Rerun' },
+    { key: 'delete', enabled: canDelete, isPending: pending.delete, onClick: onDelete, icon: <Trash2 className={iconCls} />, hoverColor: 'hover:bg-red-50 hover:text-red-600', title: 'Delete task' },
   ];
 
   return (
@@ -516,6 +521,7 @@ interface SortableDesignItemProps {
   onDetail: (filename: string) => void;
   onTaskClick: (taskId: string) => void;
   onSelectFeature: (feature: any) => void;
+  onReviewFeature?: (featureId: string, feature: any) => void;
   onAction?: (action: 'pause' | 'stop' | 'resume' | 'rerun') => void;
   actionPending?: { pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean };
   status?: string;
@@ -528,7 +534,7 @@ interface SortableDesignItemProps {
   projectId: string | null;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, projectId }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, projectId }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -543,6 +549,19 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
     return false;
   });
   const [features, setFeatures] = useState<any[]>([]);
+
+  // Calculate elapsed time from features' tasks
+  const designElapsedSeconds = features.reduce((acc: number, f: any) => {
+    const tasks = f.tasks || [];
+    return acc + tasks.reduce((taskAcc: number, t: any) => {
+      if (t.created_at) {
+        const start = new Date(t.created_at).getTime();
+        const end = t.completed_at ? new Date(t.completed_at).getTime() : Date.now();
+        return taskAcc + Math.max(0, (end - start) / 1000);
+      }
+      return taskAcc;
+    }, 0);
+  }, 0);
 
   const fetchFeatures = async () => {
     if (!projectId) return;
@@ -673,6 +692,11 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                 <CostDisplay currentCost={costTotal} showProgress={false} className="text-xs" />
               )
             )}
+            {designElapsedSeconds > 0 && (
+              <span className="text-xs text-gray-400">
+                {formatElapsed(designElapsedSeconds)}
+              </span>
+            )}
             {status && status !== 'pending' && (
               <StatusBadge status={status} pausedBy={pausedBy} />
             )}
@@ -726,6 +750,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                       feature={feature}
                       onTaskClick={onTaskClick}
                       onSelectFeature={onSelectFeature}
+                      onReviewFeature={onReviewFeature}
                       projectId={projectId ?? undefined}
                       onFeatureUpdate={() => refetchFeatures()}
                     />
@@ -754,6 +779,7 @@ const FEATURE_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNo
   active: { color: 'bg-blue-100 text-blue-700', icon: <Loader2 className="w-3 h-3 animate-spin" />, label: 'Active' },
   completed: { color: 'bg-green-100 text-green-700', icon: <CheckCircle2 className="w-3 h-3" />, label: 'Done' },
   failed: { color: 'bg-red-100 text-red-700', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
+  paused: { color: 'bg-yellow-100 text-yellow-700', icon: <Pause className="w-3 h-3" />, label: 'Paused' },
   skipped: { color: 'bg-gray-100 text-gray-500', icon: <Clock className="w-3 h-3" />, label: 'Skipped' },
 };
 
@@ -768,13 +794,22 @@ export const FeatureStatusBadge: React.FC<{ status: string }> = ({ status }) => 
   );
 };
 
+const formatElapsed = (seconds: number): string => {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+};
+
 const FeatureRow: React.FC<{
   feature: any;
   onTaskClick: (taskId: string) => void;
   onSelectFeature: (feature: any) => void;
+  onReviewFeature?: (featureId: string, feature: any) => void;
   projectId?: string;
   onFeatureUpdate?: () => void;
-}> = ({ feature, onTaskClick, onSelectFeature, onFeatureUpdate }) => {
+}> = ({ feature, onTaskClick, onSelectFeature, onReviewFeature, onFeatureUpdate }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-features');
@@ -786,10 +821,20 @@ const FeatureRow: React.FC<{
     }
     return false;
   });
-  const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean }>({});
+  const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean; delete?: boolean }>({});
   const tasks = feature.tasks || [];
   const doneCount = tasks.filter((t: any) => t.status === 'done').length;
   const activeCount = tasks.filter((t: any) => ['in_progress', 'assigned'].includes(t.status)).length;
+
+  // Calculate elapsed time from tasks
+  const elapsedSeconds = tasks.reduce((acc: number, t: any) => {
+    if (t.created_at) {
+      const start = new Date(t.created_at).getTime();
+      const end = t.completed_at ? new Date(t.completed_at).getTime() : Date.now();
+      return acc + Math.max(0, (end - start) / 1000);
+    }
+    return acc;
+  }, 0);
 
   // The Feature Architect (Phase 0) and placeholder entries aren't real
   // `Feature` DB rows (see the synthetic ids built in autopilot_api.py), so
@@ -798,8 +843,14 @@ const FeatureRow: React.FC<{
   // entries' own `workflow_id` supports instead.
   const isRealFeature = !feature.id.startsWith('phase0-') && !feature.id.startsWith('placeholder-');
   const hasWorkflow = !!feature.workflow_id;
+  const reviewPending = !!feature.review_pending;
 
-  const runFeatureAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun') => {
+  const runFeatureAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun' | 'delete') => {
+    if (action === 'delete' && !confirm(
+      `Permanently delete "${feature.name}" (${feature.feature_key})? This removes its workflow, all its tasks, and its worktree -- any uncommitted work in it is lost. This cannot be undone.`
+    )) {
+      return;
+    }
     setActionPending((p) => ({ ...p, [action]: true }));
     try {
       if (action === 'pause') {
@@ -814,18 +865,27 @@ const FeatureRow: React.FC<{
         // No true "restart this feature from scratch" endpoint exists yet;
         // recover non-destructively continues from the last committed phase.
         await apiService.recoverWorkflow(feature.workflow_id);
+      } else if (action === 'delete') {
+        await apiService.deleteFeature(feature.id);
       }
       onFeatureUpdate?.();
-    } catch (err) {
+    } catch (err: any) {
       console.error(`Feature ${action} failed:`, err);
+      if (action === 'delete') {
+        toast.error(err?.response?.data?.detail || 'Failed to delete feature');
+      }
     } finally {
       setActionPending((p) => ({ ...p, [action]: false }));
     }
   };
 
   return (
-    <div className="bg-white rounded-lg border border-gray-100 overflow-hidden">
-      <div className="flex items-center gap-3 px-3 py-2">
+    <div className={`rounded-lg border overflow-hidden transition-colors ${
+      reviewPending
+        ? 'bg-amber-50 border-l-4 border-amber-400 border-t-amber-200 border-b-amber-200 border-r-amber-200'
+        : 'bg-white border-gray-100'
+    }`}>
+      <div className={`flex items-center gap-3 px-3 py-2 ${reviewPending ? 'animate-pulse-subtle' : ''}`}>
         <div
           className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer hover:bg-gray-50 transition-colors rounded"
           onClick={() => {
@@ -872,6 +932,11 @@ const FeatureRow: React.FC<{
           <span className="text-xs text-gray-400">
             {doneCount}/{tasks.length} tasks
           </span>
+          {elapsedSeconds > 0 && (
+            <span className="text-xs text-gray-400">
+              {formatElapsed(elapsedSeconds)}
+            </span>
+          )}
           {activeCount > 0 && (
             <span className="text-xs text-blue-500">
               {activeCount} active
@@ -879,16 +944,23 @@ const FeatureRow: React.FC<{
           )}
           <FeatureCostBadge cost={feature.cost_total_usd ?? 0} />
           <FeatureStatusBadge status={feature.status} />
+          {reviewPending && (feature.status === 'completed' || feature.status === 'paused') && (
+            <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-100 text-amber-700 border border-amber-300 animate-pulse">
+              Review
+            </span>
+          )}
           <RowActionIcons
             size="sm"
             canPause={hasWorkflow && feature.status === 'active'}
             canStop={hasWorkflow && (feature.status === 'active' || feature.status === 'paused')}
             canResume={hasWorkflow && (feature.status === 'paused' || feature.status === 'failed')}
             canRerun={hasWorkflow}
+            canDelete={isRealFeature}
             onPause={() => runFeatureAction('pause')}
             onStop={() => runFeatureAction('stop')}
             onResume={() => runFeatureAction('resume')}
             onRerun={() => runFeatureAction('rerun')}
+            onDelete={() => runFeatureAction('delete')}
             pending={actionPending}
           />
           <button
@@ -908,6 +980,16 @@ const FeatureRow: React.FC<{
               title="View feature report"
             >
               <FileBarChart2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {reviewPending && (feature.status === 'completed' || feature.status === 'paused') && onReviewFeature && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onReviewFeature(feature.id, feature); }}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-sm transition-colors"
+              title="Review this feature"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              Review
             </button>
           )}
         </div>
@@ -933,15 +1015,43 @@ const TaskRow: React.FC<{
   onTaskClick: (taskId: string) => void;
   onTaskUpdate?: () => void;
 }> = ({ task, onTaskClick, onTaskUpdate }) => {
-  const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean }>({});
+  const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean; delete?: boolean }>({});
   const [tmuxAgent, setTmuxAgent] = useState<Agent | null>(null);
+
+  const tmuxViewerOpenRef = useRef(false);
 
   const openTmuxView = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!task.agent_id) return;
     const agent = await apiService.getAgent(task.agent_id);
-    if (agent) setTmuxAgent(agent);
+    if (agent) {
+      tmuxViewerOpenRef.current = true;
+      setTmuxAgent(agent);
+    }
   };
+
+  // Keep tmuxAgent's status fresh while the viewer is open -- it's only
+  // fetched once, on open, otherwise. Left stale, RealTimeAgentOutput
+  // keeps showing whatever status the agent had at that moment (e.g. its
+  // "Live" indicator staying on) even after the agent actually finished
+  // or was terminated -- the same bug Agents.tsx fixed for its own
+  // selectedAgent state.
+  useEffect(() => {
+    if (!tmuxAgent) return;
+    const interval = setInterval(async () => {
+      try {
+        const agent = await apiService.getAgent(tmuxAgent.id);
+        // Guard: if the viewer was closed while the fetch was in-flight,
+        // don't reopen it. Without this, a close→fetch→resolve race
+        // sets tmuxAgent back to a value, re-rendering the viewer in a
+        // disconnected state.
+        if (agent && tmuxViewerOpenRef.current) setTmuxAgent(agent);
+      } catch {
+        // Keep showing the last known state on a transient fetch error.
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [tmuxAgent?.id]);
 
   // Once the task is finished, its own outcome is more useful than why it
   // was dispatched -- show completion_notes/failure_reason instead of
@@ -965,7 +1075,12 @@ const TaskRow: React.FC<{
     .replace(/\s*\n+\s*/g, ' ')
     .trim();
 
-  const runTaskAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun') => {
+  const runTaskAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun' | 'delete') => {
+    if (action === 'delete' && !confirm(
+      `Permanently delete this task${task.phase_name ? ` (${task.phase_name})` : ''}? This removes it entirely -- it will not be resumable, and any assigned agent will be stopped.`
+    )) {
+      return;
+    }
     setActionPending((p) => ({ ...p, [action]: true }));
     try {
       if (action === 'pause') {
@@ -979,10 +1094,15 @@ const TaskRow: React.FC<{
         // Same underlying action (reset + spawn a fresh agent) -- Resume
         // applies to a paused ('blocked') task, Rerun to a done/failed one.
         await apiService.restartTask(task.id);
+      } else if (action === 'delete') {
+        await apiService.deleteTask(task.id);
       }
       onTaskUpdate?.();
-    } catch (err) {
+    } catch (err: any) {
       console.error(`Task ${action} failed:`, err);
+      if (action === 'delete') {
+        toast.error(err?.response?.data?.detail || 'Failed to delete task');
+      }
     } finally {
       setActionPending((p) => ({ ...p, [action]: false }));
     }
@@ -1029,6 +1149,21 @@ const TaskRow: React.FC<{
               done
             </span>
           )}
+          {task.created_at && (
+            <span className="text-[10px] text-gray-400">
+              {formatElapsed(
+                Math.floor(
+                  ((task.completed_at ? new Date(task.completed_at).getTime() : Date.now()) -
+                    new Date(task.created_at).getTime()) / 1000
+                )
+              )}
+            </span>
+          )}
+          {task.cost_total_usd > 0 && (
+            <span className="text-[10px] text-gray-400">
+              ${task.cost_total_usd.toFixed(2)}
+            </span>
+          )}
         </div>
         <p
           className="text-xs text-gray-500 truncate leading-relaxed"
@@ -1053,14 +1188,16 @@ const TaskRow: React.FC<{
         canStop={activeStatuses.includes(task.status)}
         canResume={task.status === 'blocked'}
         canRerun={task.status === 'done' || task.status === 'failed'}
+        canDelete
         onPause={() => runTaskAction('pause')}
         onStop={() => runTaskAction('stop')}
         onResume={() => runTaskAction('resume')}
         onRerun={() => runTaskAction('rerun')}
+        onDelete={() => runTaskAction('delete')}
         pending={actionPending}
       />
       {tmuxAgent && (
-        <RealTimeAgentOutput agent={tmuxAgent} onClose={() => setTmuxAgent(null)} fallbackPhaseName={task.phase_name} />
+        <RealTimeAgentOutput agent={tmuxAgent} onClose={() => { tmuxViewerOpenRef.current = false; setTmuxAgent(null); }} fallbackPhaseName={task.phase_name} />
       )}
     </div>
   );

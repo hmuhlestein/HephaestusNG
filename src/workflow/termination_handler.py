@@ -76,8 +76,9 @@ class WorkflowTerminationHandler:
                 f"Performed {len(cleanup_actions)} cleanup actions for workflow {workflow_id}"
             )
 
-            # 4. Mark workflow as completed by result
-            workflow.status = "completed"
+            # 4. Mark workflow as failed (not completed) - this was a termination
+            workflow.status = "failed"
+            workflow.status_reason = workflow.status_reason or "Workflow terminated"
             workflow.completed_by_result = True
             session.commit()
 
@@ -311,11 +312,36 @@ class WorkflowTerminationHandler:
 
             for execution in phase_executions:
                 try:
-                    execution.status = "completed"
+                    # Only mark as completed if the phase actually had work done.
+                    # Phases that were pending or never started should be marked as
+                    # failed/terminated, not completed.
+                    if execution.status == "in_progress":
+                        # Check if there are any done tasks for this phase
+                        done_tasks = session.query(Task).filter(
+                            Task.phase_id == execution.phase_id,
+                            Task.status == "done"
+                        ).count()
+                        # Check if there are still pending/active tasks
+                        pending_tasks = session.query(Task).filter(
+                            Task.phase_id == execution.phase_id,
+                            Task.status.in_(["pending", "assigned", "in_progress"])
+                        ).count()
+                        
+                        if done_tasks > 0 and pending_tasks == 0:
+                            execution.status = "completed"
+                            execution.completion_summary = "Completed due to workflow termination"
+                        elif pending_tasks > 0:
+                            # Keep in_progress so pending tasks can be dispatched
+                            execution.completion_summary = "In-progress at workflow termination (pending tasks remain)"
+                        else:
+                            execution.status = "failed"
+                            execution.completion_summary = "Failed due to workflow termination (no completed work)"
+                    elif execution.status == "pending":
+                        execution.status = "failed"
+                        execution.completion_summary = "Failed due to workflow termination (never started)"
+                    # Already completed executions stay completed
+                    
                     execution.completed_at = datetime.utcnow()
-                    execution.completion_summary = (
-                        "Completed due to workflow termination by validated result"
-                    )
                     cleanup_actions.append(
                         {
                             "action": "complete_phase_execution",

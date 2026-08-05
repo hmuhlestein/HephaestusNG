@@ -1,0 +1,12 @@
+# Review feedback prompt template
+# Used when a development task is created to address human review feedback
+
+review_feedback_prompt: |
+  ## Human Review Feedback
+
+  {feedback}
+
+  Read the feature report for context: .hephaestus/feature_report.html
+
+  Address all feedback items and make the necessary code changes.
+  After making changes, update the feature report with what you changed.

@@ -1,5 +1,4 @@
 import React from 'react';
-import { DollarSign } from 'lucide-react';
 
 interface FeatureCostBadgeProps {
   cost: number;
@@ -25,7 +24,6 @@ const FeatureCostBadge: React.FC<FeatureCostBadgeProps> = ({
     <span
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 ${className}`}
     >
-      <DollarSign className="w-3 h-3" />
       {formatCost(cost)}
     </span>
   );

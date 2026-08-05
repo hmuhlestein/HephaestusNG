@@ -271,7 +271,10 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   // Collapse carriage returns (\r) first, then filter
   const processedOutput = useMemo(() => {
     if (!output) return '';
-    const lines = output.split('\n');
+    // Expand tabs to 4-space stops (tmux uses 8, but 4 is more readable
+    // in a web UI) before any other processing.
+    const expanded = output.replace(/\t/g, '    ');
+    const lines = expanded.split('\n');
     const collapsed: string[] = [];
     for (const line of lines) {
       if (line.includes('\r')) {
@@ -393,7 +396,9 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
             <div className="flex items-center space-x-3">
               <div className="flex items-center space-x-2">
                 <div className={`w-2 h-2 rounded-full ${
-                  isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
+                  currentStatus === 'terminated'
+                    ? 'bg-blue-500'
+                    : isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
                 }`} />
                 <h3 className="text-lg font-semibold text-gray-800 dark:text-white">
                   {agent.current_task?.phase_info?.name || fallbackPhaseName || agent.agent_type || 'Agent'} {agent.id.substring(0, 8)} - Output
@@ -609,7 +614,31 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
 
           {/* Footer with stats */}
           <div className="px-6 py-2 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-xs text-gray-500 dark:text-gray-400 flex justify-between items-center rounded-b-lg">
-            <div className="flex space-x-4">
+            <div className="flex items-center space-x-4">
+              {/* Shows the AGENT is actively working, not just that the
+                  viewer's poll succeeded -- gated on currentStatus (the
+                  component's own 3s-polled status, same source StatusBadge
+                  below uses), not the agent prop directly, which can be
+                  stale if the parent doesn't refresh it (observed live:
+                  StatusBadge correctly showed "Not Running" while a
+                  spinner gated on the stale agent.status prop kept
+                  spinning). Stops once the agent goes idle/stuck/
+                  terminated, even though the viewer keeps polling
+                  successfully (it's just fetching unchanging content at
+                  that point). Tied to isConnected (not a per-request flag)
+                  so it stays steady instead of blipping on/off every ~1s
+                  poll. Fixed-width slot, always rendered, opacity-toggled
+                  so the stats beside it never shift. */}
+              <RefreshCw
+                className={`w-3 h-3 animate-spin shrink-0 ${currentStatus === 'working' && isConnected && !isPaused && !isSelectionPaused ? 'opacity-100' : 'opacity-0'}`}
+                aria-hidden={!(currentStatus === 'working' && isConnected && !isPaused && !isSelectionPaused)}
+                aria-label="Live"
+              />
+              {agent?.cli_type && (
+                <span className="font-mono" title="CLI tool / model running this agent">
+                  {agent.cli_type}{agent.cli_model ? ` / ${agent.cli_model}` : ''}
+                </span>
+              )}
               <span>Lines: {output.split('\n').length}</span>
               <span>Characters: {output.length}</span>
               {searchTerm && (

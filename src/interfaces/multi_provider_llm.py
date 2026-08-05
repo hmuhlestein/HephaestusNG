@@ -52,9 +52,9 @@ class MultiProviderLLM(LLMProviderInterface):
             phase_context=phase_context,
         )
 
-    async def classify_complexity(self, design_text: str) -> str:
+    async def classify_complexity(self, design_text: str, workflow_id: str = None) -> str:
         """Rate a design's implementation complexity: 'low' | 'medium' | 'high'."""
-        return await self.client.classify_complexity(design_text)
+        return await self.client.classify_complexity(design_text, workflow_id=workflow_id)
 
     async def resolve_ticket_clarification(
         self,
@@ -100,28 +100,6 @@ class MultiProviderLLM(LLMProviderInterface):
             Embedding vector
         """
         return await self.client.generate_embedding(text)
-
-    async def analyze_agent_state(
-        self,
-        agent_output: str,
-        task_info: Dict[str, Any],
-        project_context: str,
-    ) -> Dict[str, Any]:
-        """Analyze agent state for monitoring decisions.
-
-        Args:
-            agent_output: Recent output from agent's tmux session
-            task_info: Current task information
-            project_context: Project-wide context
-
-        Returns:
-            Dictionary containing state analysis
-        """
-        return await self.client.analyze_agent_state(
-            agent_output=agent_output,
-            task_info=task_info,
-            project_context=project_context,
-        )
 
     async def generate_agent_prompt(
         self,
@@ -201,31 +179,6 @@ class MultiProviderLLM(LLMProviderInterface):
         """
         return await self.client.analyze_system_coherence(
             guardian_summaries=guardian_summaries, system_goals=system_goals
-        )
-
-    async def review_qa_report(
-        self,
-        qa_report: str,
-        prd_content: str,
-        phase_intent: str,
-        spec: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Review a QA report against PRD and phase intent.
-
-        Args:
-            qa_report: The QA report content
-            prd_content: The PRD content
-            phase_intent: What the phase was supposed to accomplish
-            spec: Acceptance criteria
-
-        Returns:
-            Dictionary with verdict, reasoning, and recommendations
-        """
-        return await self.client.review_qa_report(
-            qa_report=qa_report,
-            prd_content=prd_content,
-            phase_intent=phase_intent,
-            spec=spec,
         )
 
     def get_model_name(self) -> str:

@@ -610,16 +610,18 @@ class PhaseManager:
             session.close()
 
     def phase_role_previously_completed(self, phase_id: str, role: str) -> bool:
-        """Check whether an EARLIER phase in this same workflow shares the
-        given session role and has already completed.
+        """Check whether a genuine prior pi conversation for this role
+        already exists in this workflow -- either an EARLIER-ordered phase
+        sharing the role that has completed, or THIS SAME phase having
+        already run at least once before (a goto or retry sending it back
+        to itself).
 
         Session IDs are deterministic per (project, design, role, model) --
-        see get_session_id in src.autopilot.phases -- so a phase only
-        resumes a genuine prior pi conversation if an earlier-ordered phase
-        mapped to the same role actually ran before it. A role appearing
-        more than once in the pipeline config is not by itself evidence of
-        reuse: the *first* phase to use a shared role has no prior session
-        either.
+        see get_session_id in src.autopilot.phases -- so both cases resume
+        the exact same pi session/conversation with full memory. A role
+        appearing more than once in the pipeline config is not by itself
+        evidence of reuse: the *first* phase to use a shared role has no
+        prior session either.
         """
         from src.autopilot.phases import SESSION_ROLES
 
@@ -642,18 +644,40 @@ class PhaseManager:
                 for p in earlier_phases
                 if SESSION_ROLES.get(p.name, p.name) == role
             ]
-            if not earlier_same_role_ids:
-                return False
-
-            completed = (
-                session.query(PhaseExecution)
-                .filter(
-                    PhaseExecution.phase_id.in_(earlier_same_role_ids),
-                    PhaseExecution.status == "completed",
+            if earlier_same_role_ids:
+                completed = (
+                    session.query(PhaseExecution)
+                    .filter(
+                        PhaseExecution.phase_id.in_(earlier_same_role_ids),
+                        PhaseExecution.status == "completed",
+                    )
+                    .first()
                 )
-                .first()
-            )
-            return completed is not None
+                if completed is not None:
+                    return True
+
+            # A goto/retry back to THIS SAME phase (e.g. adversarial_review
+            # finds issues and sends the pipeline back to development) is
+            # not "an earlier phase" in the Phase.order sense above -- it's
+            # the identical phase_id, re-run. get_session_id keys purely on
+            # (project, design, role, model), so this new task's agent
+            # resumes the exact same conversation as the phase's first
+            # pass regardless. A goto also resets this phase's own
+            # PhaseExecution.status back to "pending" (see
+            # _handle_evaluation_goto), erasing the "completed" evidence a
+            # status check would need -- count prior Task rows for this
+            # phase_id instead, which a goto never resets. The current
+            # task's own row is already committed by the time this runs
+            # (see AgentPromptBuilder.format_initial_message's caller), so
+            # more than one row means a real earlier attempt exists.
+            if SESSION_ROLES.get(phase.name, phase.name) == role:
+                prior_task_count = (
+                    session.query(Task).filter(Task.phase_id == phase_id).count()
+                )
+                if prior_task_count > 1:
+                    return True
+
+            return False
         finally:
             session.close()
 
@@ -718,7 +742,7 @@ class PhaseManager:
         """Start the next phase, or complete the workflow if there isn't one."""
         next_started = self._start_next_phase(session, phase_id)
         if not next_started:
-            self._complete_workflow(session)
+            self._complete_workflow(session, current_phase_id=phase_id)
             return {
                 "action": "continue",
                 "target_phase": None,
@@ -750,7 +774,7 @@ class PhaseManager:
         """
         next_phase = self._start_next_phase(session, phase_id)
         if not next_phase:
-            self._complete_workflow(session)
+            self._complete_workflow(session, current_phase_id=phase_id)
             return {
                 "action": "continue",
                 "target_phase": None,
@@ -857,7 +881,7 @@ class PhaseManager:
         logger.info(f"Skipping past phase {phase.name}: {evaluation.reason}")
         next_phase = self._start_next_phase(session, phase.id)
         if not next_phase:
-            self._complete_workflow(session)
+            self._complete_workflow(session, current_phase_id=phase.id)
             return {
                 "action": "continue",
                 "target_phase": None,
@@ -1413,6 +1437,33 @@ class PhaseManager:
             )
             return None
 
+        # Don't start a new phase if another phase is already in_progress.
+        # This prevents out-of-order execution when a long-running phase
+        # (e.g. scope_review) completes after a later phase (e.g. development)
+        # has already started. Without this check, _start_next_phase would
+        # create a duplicate task for an intermediate phase that either
+        # already completed or should wait for the current phase to finish.
+        # Observed live: scope_review ran for ~20 hours; when it finally
+        # completed, it triggered a new architecture_design task while
+        # development was already in_progress.
+        in_progress_execution = (
+            session.query(PhaseExecution)
+            .join(Phase, PhaseExecution.phase_id == Phase.id)
+            .filter(
+                Phase.workflow_id == current_phase.workflow_id,
+                PhaseExecution.status == "in_progress",
+                Phase.id != current_phase_id,
+            )
+            .first()
+        )
+        if in_progress_execution:
+            other_phase = session.query(Phase).filter_by(id=in_progress_execution.phase_id).first()
+            logger.info(
+                f"[PHASE] _start_next_phase skipped — {other_phase.name if other_phase else 'another phase'} "
+                f"is already in_progress for this workflow"
+            )
+            return None
+
         # Honor an explicit goto/retry target recorded on the task that just
         # completed this phase, instead of unconditionally advancing to the
         # next phase by order. E.g. qa_validation finds a failure and goto's
@@ -1514,10 +1565,45 @@ class PhaseManager:
 
         return None
 
-    def _complete_workflow(self, session) -> None:
-        """Mark the workflow as completed when the last phase finishes."""
+    def _complete_workflow(self, session, current_phase_id: Optional[str] = None) -> None:
+        """Mark the workflow as completed when the last phase finishes.
+
+        current_phase_id: the phase whose completion triggered this call, if
+        known -- used as a safety check. Every caller treats ANY None return
+        from _start_next_phase as "no more phases," but that function also
+        returns None for two other, non-terminal reasons: the workflow isn't
+        active/paused, or another phase is already in_progress (e.g. stale
+        state left over from goto/retry churn). Refuse to complete the
+        workflow if a higher-order Phase genuinely still exists -- that's
+        real, unstarted work, not a finished pipeline. Observed live: a
+        goto-limit-exceeded forced "continue" past product_validation got
+        treated as full workflow completion while doc_review,
+        forensics_analysis, git_commit_push, and deploy were all still
+        "pending" and had never run -- the workflow never actually reached
+        the phase that merges to main.
+        """
         if not self.workflow_id:
             return
+
+        if current_phase_id:
+            current_phase = session.query(Phase).filter_by(id=current_phase_id).first()
+            if current_phase:
+                remaining = (
+                    session.query(Phase)
+                    .filter(
+                        Phase.workflow_id == self.workflow_id,
+                        Phase.order > current_phase.order,
+                    )
+                    .first()
+                )
+                if remaining:
+                    logger.warning(
+                        f"[PHASE] _complete_workflow refused for workflow "
+                        f"{self.workflow_id[:8]} -- phase {remaining.name} "
+                        f"(order {remaining.order}) still remains after "
+                        f"{current_phase.name} (order {current_phase.order})"
+                    )
+                    return
 
         workflow = session.query(Workflow).filter_by(id=self.workflow_id).first()
         if workflow and workflow.status == "active":
@@ -1529,8 +1615,8 @@ class PhaseManager:
     def _populate_feature_folder(self, session, workflow) -> None:
         """Create .hephaestus/features/<dir>/ and copy all run artifacts into it.
 
-        The worktree is intentionally kept after git_commit_push merges so both
-        committed docs/ and git-excluded .hephaestus/tmux/ logs are available here.
+        The worktree is intentionally kept after git_commit_push merges so the
+        agent-written .hephaestus/ reports and tmux/ logs are still available here.
         """
         try:
             import shutil as _shutil
@@ -1588,26 +1674,28 @@ class PhaseManager:
 
             _doc_extensions = {".md", ".json", ".txt", ".log", ".csv", ".html"}
 
-            # 1. Production artifacts from worktree's docs/ (merged to main but
-            #    the worktree copy is canonical and complete here).
-            wt_docs = wt / "docs"
-            if wt_docs.is_dir():
-                for f in wt_docs.rglob("*"):
-                    if (
-                        f.is_file()
-                        and f.suffix in _doc_extensions
-                        and "tmux" not in f.parts
-                    ):
-                        rel = f.relative_to(wt_docs)
-                        dest = docs_dir / rel
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        if not dest.exists():
-                            _shutil.copy2(str(f), str(dest))
+            # 1. Production artifacts from worktree's .hephaestus/ (git-excluded,
+            #    the worktree copy is canonical and complete here). tmux/,
+            #    features/, and scratch/ are internal orchestration state, not
+            #    report content, so they're excluded from the sweep.
+            wt_hephaestus = wt / CONTEXT_DIR_NAME
+            _sweep_excluded_dirs = {"tmux", "features", "scratch"}
+            if wt_hephaestus.is_dir():
+                for f in wt_hephaestus.rglob("*"):
+                    if not (f.is_file() and f.suffix in _doc_extensions):
+                        continue
+                    rel = f.relative_to(wt_hephaestus)
+                    if rel.parts[0] in _sweep_excluded_dirs:
+                        continue
+                    dest = docs_dir / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if not dest.exists():
+                        _shutil.copy2(str(f), str(dest))
 
             # 2. feature_report.html → feature dir root (where UI expects it)
             for candidate in [
                 docs_dir / "feature_report.html",
-                wt_docs / "feature_report.html",
+                wt_hephaestus / "feature_report.html",
             ]:
                 if candidate.is_file():
                     dest = feature_dir / "feature_report.html"

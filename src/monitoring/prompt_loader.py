@@ -6,6 +6,8 @@ from typing import Any, Dict, Optional
 
 import structlog
 
+from src.prompts.loader import get_prompt
+
 logger = structlog.get_logger()
 
 
@@ -91,15 +93,9 @@ class PromptLoader:
 
         # Format last message marker section
         if last_message_marker:
-            marker_section = f"""
-In the previous monitoring cycle, Claude's last message contained: `{last_message_marker}`
-
-**Use this to identify what's NEW** in the current agent output:
-- Everything BEFORE this marker was already analyzed
-- Everything AFTER this marker is new activity
-- Focus your trajectory analysis on the NEW parts
-- Still review full context for accumulated understanding
-"""
+            marker_section = "\n" + get_prompt("guardian_marker_section", {
+                "last_message_marker": last_message_marker,
+            }) + "\n"
         else:
             marker_section = "No marker from previous cycle (this is the first analysis for this agent)"
 
@@ -114,44 +110,19 @@ In the previous monitoring cycle, Claude's last message contained: `{last_messag
                     + "\n\n[... Additional instructions truncated for brevity ...]"
                 )
 
-            phase_section = f"""
-**THIS AGENT IS WORKING IN A PHASED WORKFLOW**
-
-The task belongs to **{phase_info["workflow_context"]["current_position"]}** in the workflow.
-
-### Phase {phase_info["phase_number"]}: {phase_info["phase_name"]}
-
-**Phase Description**:
-{phase_info["phase_description"]}
-
-**Phase Done Definitions** (What this phase must accomplish):
-{chr(10).join(f"- {d}" for d in phase_info.get("done_definitions", []))}
-
-**Phase-Specific Instructions** (Agent MUST follow these):
-{additional_notes}
-
-**Expected Outputs from This Phase**:
-{phase_info.get("outputs") or "See done definitions"}
-
-**What Happens After This Phase**:
-{phase_info.get("next_steps") or "Move to next phase"}
-
-**Workflow Context**:
-- Total Phases: {phase_info["workflow_context"]["total_phases"]}
-- All Phases: {", ".join(phase_info["workflow_context"]["all_phase_names"])}
-- Workflow: {phase_info["workflow_context"]["workflow_name"]}
-
-⚠️ **CRITICAL FOR TRAJECTORY ANALYSIS** ⚠️
-
-You MUST evaluate whether the agent is following the Phase-specific instructions above.
-Common Phase instruction patterns:
-- "Create a Phase X task" → Check if agent created the task
-- "Mark task as done when finished" → Check if agent called update_task_status
-- "Search before creating" → Check if agent searched for duplicates
-- "Include TICKET: ticket-xxx in description" → Verify format
-
-If agent is NOT following phase instructions → needs_steering: true
-"""
+            phase_section = "\n" + get_prompt("guardian_phase_section", {
+                "workflow_position": phase_info["workflow_context"]["current_position"],
+                "phase_number": phase_info["phase_number"],
+                "phase_name": phase_info["phase_name"],
+                "phase_description": phase_info["phase_description"],
+                "done_definitions": chr(10).join(f"- {d}" for d in phase_info.get("done_definitions", [])),
+                "additional_notes": additional_notes,
+                "outputs": phase_info.get("outputs") or "See done definitions",
+                "next_steps": phase_info.get("next_steps") or "Move to next phase",
+                "total_phases": phase_info["workflow_context"]["total_phases"],
+                "all_phase_names": ", ".join(phase_info["workflow_context"]["all_phase_names"]),
+                "workflow_name": phase_info["workflow_context"]["workflow_name"],
+            }) + "\n"
         else:
             phase_section = "No workflow phase information available for this task."
 
@@ -217,14 +188,14 @@ If agent is NOT following phase instructions → needs_steering: true
         if workflows:
             workflows_breakdown = ""
             for wf in workflows:
-                workflows_breakdown += f"""
-### Workflow: {wf.get("workflow_id", "Unknown")}
-**Description**: {wf.get("description", "No description")}
-**Definition**: {wf.get("definition_name", "N/A")}
-**Active Agents**: {", ".join(wf.get("agent_ids", [])) if wf.get("agent_ids") else "None"}
-**Current Phases**: {", ".join(str(p) for p in wf.get("phases", [])) if wf.get("phases") else "N/A"}
-**Task Status**: {wf.get("task_summary", "No tasks")}
-"""
+                workflows_breakdown += "\n" + get_prompt("conductor_workflow_breakdown_entry", {
+                    "workflow_id": wf.get("workflow_id", "Unknown"),
+                    "description": wf.get("description", "No description"),
+                    "definition_name": wf.get("definition_name", "N/A"),
+                    "agent_ids": ", ".join(wf.get("agent_ids", [])) if wf.get("agent_ids") else "None",
+                    "phases": ", ".join(str(p) for p in wf.get("phases", [])) if wf.get("phases") else "N/A",
+                    "task_summary": wf.get("task_summary", "No tasks"),
+                }) + "\n"
         else:
             workflows_breakdown = (
                 "No active workflows or workflow information not available."
@@ -399,13 +370,10 @@ If agent is NOT following phase instructions → needs_steering: true
 
         # Handle previous feedback section
         if previous_feedback and iteration > 1:
-            previous_feedback_section = f"""
-### Previous Validation Feedback (Iteration {iteration - 1}):
-```
-{previous_feedback}
-```
-Please verify that the previous issues have been addressed.
-"""
+            previous_feedback_section = "\n" + get_prompt("task_validation_previous_feedback", {
+                "previous_iteration": iteration - 1,
+                "previous_feedback": previous_feedback,
+            }) + "\n"
         else:
             previous_feedback_section = ""
 

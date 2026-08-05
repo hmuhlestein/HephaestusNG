@@ -7,10 +7,37 @@ the filename, it's a generic MCP server usable by any compatible CLI agent
 -- not exclusive to Claude.
 """
 
+import atexit
+import logging
 import os
+from pathlib import Path
 
 import httpx
 from fastmcp import FastMCP
+
+# This process has no logging of its own -- if it dies (OOM kill, an
+# uncaught exception outside a tool's own try/except, the stdio pipe to
+# the parent CLI breaking), there is currently zero trace of it anywhere.
+# One instance of this process runs per live agent (spawned fresh by the
+# CLI per ~/.config/mcp/mcp.json), so the log file is scoped by PID/agent
+# to avoid concurrent instances interleaving into one file.
+_LOG_DIR = Path(os.path.expanduser("~/.hephaestus/logs/mcp_client"))
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_agent_id_for_log = os.environ.get("HEPHAESTUS_AGENT_ID", "")
+_log_name = f"{_agent_id_for_log[:8]}_{os.getpid()}.log" if _agent_id_for_log else f"pid{os.getpid()}.log"
+logger = logging.getLogger("hephaestus.mcp_client")
+logger.setLevel(logging.INFO)
+_file_handler = logging.FileHandler(_LOG_DIR / _log_name)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logger.addHandler(_file_handler)
+
+logger.info(
+    f"mcp_client.py starting: pid={os.getpid()} "
+    f"agent_id={os.environ.get('HEPHAESTUS_AGENT_ID', '<unset>')} "
+    f"task_id={os.environ.get('HEPHAESTUS_TASK_ID', '<unset>')} "
+    f"workflow_id={os.environ.get('HEPHAESTUS_WORKFLOW_ID', '<unset>')}"
+)
+atexit.register(lambda: logger.info(f"mcp_client.py exiting: pid={os.getpid()}"))
 
 # Initialize MCP client
 mcp = FastMCP("hephaestus-client")
@@ -24,7 +51,7 @@ HEPHAESTUS_URL = os.environ.get("HEPHAESTUS_URL", "http://127.0.0.1:8300")
 DEFAULT_AGENT_ID = "main-session-agent"
 
 
-@mcp.tool()
+@mcp.tool(name="health_check")
 def health_check() -> str:
     """Check if Hephaestus server is running"""
     try:
@@ -39,7 +66,7 @@ def health_check() -> str:
         return f"❌ Cannot connect to Hephaestus server: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="create_task")
 async def create_task(
     description: str,
     done_definition: str,
@@ -135,7 +162,7 @@ Description: {result.get("enriched_description", description)[:100]}..."""
         return f"❌ Error creating task: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="get_tasks")
 async def get_tasks(status: str = "all") -> str:
     """List tasks in Hephaestus.
 
@@ -173,7 +200,7 @@ async def get_tasks(status: str = "all") -> str:
         return f"❌ Error getting tasks: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="save_memory")
 async def save_memory(
     content: str,
     agent_id: str = None,
@@ -228,7 +255,7 @@ async def save_memory(
         return f"❌ Error saving memory: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="search_memory")
 async def search_memory(
     query: str,
     agent_id: str = None,
@@ -279,7 +306,7 @@ async def search_memory(
         return f"❌ Error searching memory: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="update_task_status")
 async def update_task_status(
     task_id: str = None,
     agent_id: str = None,
@@ -343,6 +370,9 @@ async def _post_task_status(
     """Shared HTTP call + response formatting for update_task_status and
     complete_my_task -- the only difference between them is how task_id/
     agent_id get resolved before reaching here."""
+    logger.info(
+        f"_post_task_status CALL task_id={task_id} agent_id={agent_id} status={status}"
+    )
     if status == "done" and not summary.strip():
         return (
             "❌ Failed to complete task: summary is required when status='done' "
@@ -368,6 +398,10 @@ async def _post_task_status(
                 headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
                 timeout=10.0,
             )
+            logger.info(
+                f"_post_task_status RESPONSE task_id={task_id} "
+                f"status_code={response.status_code} body={response.text[:500]}"
+            )
 
             if response.status_code == 200:
                 result = response.json()
@@ -387,10 +421,13 @@ async def _post_task_status(
             else:
                 return f"❌ Failed to update task status: {response.text}"
     except Exception as e:
+        logger.exception(
+            f"_post_task_status EXCEPTION task_id={task_id} agent_id={agent_id} status={status}"
+        )
         return f"❌ Error updating task status: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="complete_my_task")
 async def complete_my_task(
     status: str = None,
     summary: str = "",
@@ -399,22 +436,12 @@ async def complete_my_task(
 ) -> str:
     """Mark YOUR OWN currently-assigned task done or failed.
 
-    No task_id or agent_id needed -- unlike update_task_status, this tool
-    doesn't even accept them as parameters, so there's nothing to mistype
-    or truncate. Both are read directly from this session's own
-    environment (HEPHAESTUS_AGENT_ID / HEPHAESTUS_TASK_ID, set when this
-    agent was created) -- the same values update_task_status falls back to
-    when they're omitted, except here that's the ONLY path, not a fallback
-    a wrong-but-present value can silently bypass.
-
-    Use this for the normal case of finishing your own work.
-    update_task_status still exists for the rare case of updating a task
-    that isn't your current one.
+    IMPORTANT: Do NOT pass agent_id or task_id — this tool doesn't accept them.
+    They are read from environment variables automatically.
 
     Args:
         status: New status (done/failed/in_progress)
-        summary: Summary of what was accomplished. REQUIRED for done status --
-            describe what you actually did, not just that you finished.
+        summary: Summary of what was accomplished. REQUIRED for done status.
         failure_reason: Reason for failure (for failed status)
         key_learnings: List of key learnings from the task
 
@@ -435,7 +462,7 @@ async def complete_my_task(
     return await _post_task_status(task_id, agent_id, status, summary, failure_reason, key_learnings)
 
 
-@mcp.tool()
+@mcp.tool(name="give_validation_review")
 async def give_validation_review(
     task_id: str = None,
     validator_agent_id: str = None,
@@ -498,7 +525,7 @@ Iteration: {result.get("iteration", "N/A")}"""
         return f"❌ Error submitting validation review: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="validate_my_agent_id")
 async def validate_my_agent_id(
     agent_id: str = None, workflow_id: str = None, task_id: str = None
 ) -> str:
@@ -544,7 +571,7 @@ Check your initial prompt for "Your Agent ID:" - it should be a UUID like:
         return f"❌ Error validating agent ID: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="get_agent_status")
 async def get_agent_status() -> str:
     """Get status of all active agents in Hephaestus"""
     try:
@@ -573,7 +600,7 @@ async def get_agent_status() -> str:
         return f"❌ Error getting agent status: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="submit_result")
 async def submit_result(
     markdown_file_path: str,
     agent_id: str = None,
@@ -631,7 +658,7 @@ Message: {result.get("message", "")}"""
         return f"❌ Error submitting result: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="submit_result_validation")
 async def submit_result_validation(
     result_id: str, validation_passed: bool, feedback: str, evidence: list = None
 ) -> str:
@@ -682,7 +709,7 @@ Result ID: {result.get("result_id", "unknown")}"""
         return f"❌ Error submitting result validation: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="get_workflow_results")
 async def get_workflow_results(workflow_id: str = None) -> str:
     """Get all submitted results for a workflow.
 
@@ -726,7 +753,7 @@ async def get_workflow_results(workflow_id: str = None) -> str:
         return f"❌ Error getting workflow results: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="broadcast_message")
 async def broadcast_message(message: str, sender_agent_id: str = None) -> str:
     """Broadcast a message to all active agents in the system.
 
@@ -775,7 +802,7 @@ async def broadcast_message(message: str, sender_agent_id: str = None) -> str:
         return f"❌ Error broadcasting message: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="send_message")
 async def send_message(
     message: str, sender_agent_id: str = None, recipient_agent_id: str = None
 ) -> str:
@@ -836,7 +863,7 @@ async def send_message(
 # ==================== TICKET TRACKING SYSTEM TOOLS ====================
 
 
-@mcp.tool()
+@mcp.tool(name="create_ticket")
 async def create_ticket(
     title: str,
     description: str,
@@ -970,7 +997,7 @@ Message: {result.get("message", "")}{similar_msg}"""
         return error_message
 
 
-@mcp.tool()
+@mcp.tool(name="update_ticket")
 async def update_ticket(
     ticket_id: str, updates: dict, agent_id: str = None, update_comment: str = None
 ) -> str:
@@ -1012,7 +1039,7 @@ Message: {result.get("message", "")}"""
         return f"❌ Error updating ticket: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="update_ticket_status")
 async def change_ticket_status(
     ticket_id: str,
     new_status: str,
@@ -1067,7 +1094,7 @@ To: {result.get("new_status", "unknown")}"""
         return f"❌ Error changing ticket status: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="add_ticket_comment")
 async def add_ticket_comment(
     ticket_id: str,
     comment_text: str,
@@ -1112,7 +1139,7 @@ async def add_ticket_comment(
         return f"❌ Error adding comment: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="search_tickets")
 async def search_tickets(
     query: str,
     agent_id: str = None,
@@ -1198,7 +1225,7 @@ Search time: {result.get("search_time_ms", 0):.0f}ms
         return f"❌ Error searching tickets: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="get_ticket")
 async def get_ticket(ticket_id: str) -> str:
     """Get detailed information about a specific ticket by its exact ID.
 
@@ -1333,7 +1360,7 @@ async def get_ticket(ticket_id: str) -> str:
         return f"❌ Error getting ticket: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="get_tickets")
 async def get_tickets(
     agent_id: str = None,
     workflow_id: str = None,
@@ -1420,7 +1447,7 @@ Has more: {result.get("has_more", False)}
         return f"❌ Error getting tickets: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="link_commit_to_ticket")
 async def link_commit_to_ticket(
     ticket_id: str, commit_sha: str, agent_id: str = None, commit_message: str = None
 ) -> str:
@@ -1459,7 +1486,7 @@ async def link_commit_to_ticket(
         return f"❌ Error linking commit: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="get_commit_diff")
 async def get_commit_diff(commit_sha: str, agent_id: str = None) -> str:
     """Get detailed git diff for a commit (used by Git Diff Window in UI).
 
@@ -1501,7 +1528,7 @@ Files changed: {result.get("files_changed", 0)}
         return f"❌ Error getting commit diff: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="resolve_ticket")
 async def resolve_ticket(
     ticket_id: str, resolution_comment: str, agent_id: str = None, commit_sha: str = None
 ) -> str:
@@ -1548,7 +1575,7 @@ Message: {result.get("message", "")}{unblocked_msg}"""
         return f"❌ Error resolving ticket: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="request_ticket_clarification")
 async def request_ticket_clarification(
     ticket_id: str,
     conflict_description: str,
@@ -1665,7 +1692,7 @@ async def request_ticket_clarification(
 # ==================== WORKFLOW MANAGEMENT TOOLS ====================
 
 
-@mcp.tool()
+@mcp.tool(name="list_workflow_definitions")
 async def list_workflow_definitions() -> str:
     """List all available workflow definitions.
 
@@ -1699,7 +1726,7 @@ async def list_workflow_definitions() -> str:
         return f"Error getting workflow definitions: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="list_workflow_executions")
 async def list_workflow_executions(status: str = "all") -> str:
     """List all workflow executions.
 
@@ -1747,7 +1774,7 @@ async def list_workflow_executions(status: str = "all") -> str:
         return f"Error getting workflow executions: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="start_workflow_execution")
 async def start_workflow_execution(
     definition_id: str, description: str, working_directory: str = None
 ) -> str:
@@ -1804,7 +1831,7 @@ Use this workflow_id in all subsequent create_task and create_ticket calls."""
         return f"Error starting workflow execution: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="get_workflow_execution")
 async def get_workflow_execution(workflow_id: str) -> str:
     """Get details of a specific workflow execution.
 
@@ -1852,7 +1879,7 @@ Stats:
         return f"Error getting workflow execution: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(name="spawn_agent")
 async def spawn_agent(
     agent_name: str,
     task: str,
@@ -2033,4 +2060,12 @@ if __name__ == "__main__":
     print(
         "  - Hybrid search (default) combines semantic understanding + keyword precision"
     )
-    mcp.run()
+    try:
+        mcp.run()
+    except BaseException:
+        # Whatever kills the process (uncaught exception, KeyboardInterrupt,
+        # SystemExit) gets one last record here before it disappears --
+        # without this, a crash here is otherwise silent (see logger setup
+        # above for why that matters).
+        logger.exception("mcp.run() terminated with an exception")
+        raise
