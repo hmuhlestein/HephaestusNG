@@ -16,9 +16,16 @@ instead, silently bypassing that mock.
 """
 
 import logging
+import re
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# A shell dropped into a continuation prompt (unterminated quote/paren/
+# heredoc from a prior Bash tool call) waits here indefinitely. Matches
+# zsh's PS2 variants (dquote>, quote>, cmdsubst>, heredoc>, bquote>) and
+# bash's generic "> ".
+_SHELL_CONTINUATION_RE = re.compile(r"^(dquote|quote|cmdsubst|heredoc|bquote)>\s*$|^>\s*$")
 
 
 class AgentMessenger:
@@ -35,6 +42,30 @@ class AgentMessenger:
     def tmux_server(self):
         """Always read the live tmux_server from agent_manager."""
         return self._agent_manager.tmux_server
+
+    def _pane_is_wedged(self, pane) -> bool:
+        """True if the pane's most recent non-blank line is a shell
+        continuation prompt rather than a normal prompt or the CLI's own
+        interface.
+
+        Happens when an agent's own Bash tool call leaves an unterminated
+        quote/paren/heredoc: the underlying shell blocks waiting for the
+        closing token and never returns control to the CLI. Sending a
+        nudge into that pane with send_keys just types the message as more
+        garbage input into the stuck shell -- it never reaches the agent.
+        Observed live: three stacked Guardian "stuck or looping" nudges,
+        none of which landed, because each one only extended the same
+        dquote> continuation instead of being read by the CLI.
+        """
+        try:
+            lines = pane.cmd("capture-pane", "-p", "-S", "-5").stdout
+        except Exception:
+            return False
+        for line in reversed(lines or []):
+            stripped = line.strip()
+            if stripped:
+                return bool(_SHELL_CONTINUATION_RE.match(stripped))
+        return False
 
     async def send_message_to_agent(self, agent_id: str, message: str) -> None:
         """Send a message to an agent's tmux session.
@@ -83,6 +114,22 @@ class AgentMessenger:
 
             # Send message
             pane = tmux_session.attached_window.attached_pane
+
+            if self._pane_is_wedged(pane):
+                logger.warning(
+                    f"Pane for agent {agent_id} is wedged in a shell continuation "
+                    f"prompt (unterminated quote/paren from a prior command) -- "
+                    f"sending Ctrl-C to break out before delivering the message, "
+                    f"otherwise it would just be typed into the stuck shell as more "
+                    f"garbage input and never reach the agent."
+                )
+                pane.send_keys("C-c", enter=False)
+                await asyncio.sleep(0.5)
+                if self._pane_is_wedged(pane):
+                    logger.warning(
+                        f"Pane for agent {agent_id} still wedged after Ctrl-C -- "
+                        f"sending the message anyway as a best effort."
+                    )
 
             # Escape special shell characters to prevent glob/syntax errors
             # Wrap in quotes to prevent shell interpretation of [, ], etc.
