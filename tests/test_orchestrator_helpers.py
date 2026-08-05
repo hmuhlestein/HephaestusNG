@@ -4927,6 +4927,141 @@ class TestRetryExhaustedPausedWorkflows:
             assert stuck_task.retry_count == 0  # reset
 
 
+class TestAutoResumePausedWorkflow:
+    """_try_auto_resume_paused_workflow's paused_by guard used to be
+    `is not None`, which every real pause site defeats -- every one of
+    them (user, budget, review, system) sets paused_by to something
+    non-None, so the guard made this function's whole body dead code.
+    "system" (set only by _maybe_retry_failed_tasks's exhausted-retry-cap
+    give-up) is a heuristic judgment, not deliberate operator intent, and
+    should be reconsidered once a done task shows the thing it gave up on
+    actually succeeded -- exactly the race a still-in-flight final attempt
+    (its own retry path uncapped at 2) can win moments after the cap-based
+    pause fires. user/budget/review pauses must stay untouched."""
+
+    def _seed(self, db, paused_by, phase_execution_status="in_progress", task_status="done"):
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by=paused_by,
+                    status_reason="security_review: exhausted retries -- some reason",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-1",
+                    workflow_id="wf-1",
+                    name="security_review",
+                    order=7,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-1",
+                    phase_id="phase-1",
+                    workflow_execution_id="wf-1",
+                    status=phase_execution_status,
+                )
+            )
+            session.add(
+                Task(
+                    id="task-1",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status=task_status,
+                )
+            )
+
+    def test_resumes_system_paused_workflow_with_done_task(self, orch_db_env):
+        from src.autopilot.orchestrator import _try_auto_resume_paused_workflow
+        from src.core.database import Workflow
+
+        self._seed(orch_db_env, paused_by="system")
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            _try_auto_resume_paused_workflow(session, "wf-1", wf, MagicMock())
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"
+            assert wf.paused_by is None
+            assert wf.status_reason is None
+
+    def test_leaves_user_paused_workflow_alone_even_with_done_task(self, orch_db_env):
+        from src.autopilot.orchestrator import _try_auto_resume_paused_workflow
+        from src.core.database import Workflow
+
+        self._seed(orch_db_env, paused_by="user")
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            _try_auto_resume_paused_workflow(session, "wf-1", wf, MagicMock())
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "user"
+
+    def test_leaves_budget_paused_workflow_alone(self, orch_db_env):
+        from src.autopilot.orchestrator import _try_auto_resume_paused_workflow
+        from src.core.database import Workflow
+
+        self._seed(orch_db_env, paused_by="budget")
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            _try_auto_resume_paused_workflow(session, "wf-1", wf, MagicMock())
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "budget"
+
+    def test_leaves_system_exhausted_paused_workflow_alone(self, orch_db_env):
+        """"system-exhausted" (the permanent give-up state after max retry
+        cycles) must not be swept up by the "system" special-case -- it's
+        an exact-match check, not a prefix match."""
+        from src.autopilot.orchestrator import _try_auto_resume_paused_workflow
+        from src.core.database import Workflow
+
+        self._seed(orch_db_env, paused_by="system-exhausted")
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            _try_auto_resume_paused_workflow(session, "wf-1", wf, MagicMock())
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "system-exhausted"
+
+    def test_system_paused_without_done_task_stays_paused(self, orch_db_env):
+        from src.autopilot.orchestrator import _try_auto_resume_paused_workflow
+        from src.core.database import Workflow
+
+        self._seed(orch_db_env, paused_by="system", task_status="failed")
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            _try_auto_resume_paused_workflow(session, "wf-1", wf, MagicMock())
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "system"
+
+
 class TestWorkflowAppearsAbandoned:
     """_workflow_appears_abandoned: the signal _escalate_stale_active_
     workflows uses to decide whether a workflow stuck "active" is
