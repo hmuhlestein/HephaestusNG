@@ -31,6 +31,7 @@ from src.core.database import (
     DatabaseManager,
     Phase,
     Task,
+    TaskStatus,
     Workflow,
 )
 from src.core.simple_config import get_config
@@ -2568,6 +2569,30 @@ async def update_task_status(
                     )
                 else:
                     raise HTTPException(status_code=403, detail="Agent not authorized for this task")
+
+        # Idempotency guard: a task already in a terminal state (done/
+        # failed/duplicated) has nothing left to process. Without this, a
+        # redundant completion call -- observed live, caused by the CLI's
+        # own auto-compact replaying the initial task prompt, which reads
+        # to the agent as a fresh request to redo work it already reported
+        # done -- re-runs the ENTIRE pipeline below: record_learnings
+        # (duplicate memory writes each time), self-review, output-artifact
+        # re-verification, and cost re-collection, none of which are
+        # idempotent. Short-circuiting here isn't just an optimization --
+        # it's what actually stops the loop, since each redundant call now
+        # costs nothing instead of a full reprocessing pass that itself
+        # takes long enough to trigger the next auto-compact.
+        if task.status in TaskStatus.TERMINAL:
+            logger.info(
+                f"Task {request.task_id[:8]} is already '{task.status}' -- "
+                f"redundant {request.status} call from agent {agent_id[:8]}, "
+                "returning success without reprocessing"
+            )
+            return UpdateTaskStatusResponse(
+                success=True,
+                message=f"Task already {task.status} — no action needed",
+                termination_scheduled=True,
+            )
 
         if request.status == "done" and not request.summary.strip():
             raise HTTPException(
