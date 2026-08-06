@@ -8,11 +8,12 @@ orphaned-agent scan below it -- so the workflow looked like it "immediately
 paused again" no matter how many times Play was pressed.
 """
 
-from unittest.mock import MagicMock, patch
+import subprocess
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.database import DatabaseManager, Task, Workflow
+from src.core.database import Agent, DatabaseManager, Phase, Task, Workflow
 
 
 @pytest.fixture
@@ -29,6 +30,7 @@ async def _run_resume(test_db, workflow_id=None, project_id=None):
     with patch.object(server_module, "server_state") as mock_state:
         mock_state.db_manager = test_db
         mock_state.agent_manager = MagicMock()
+        mock_state.agent_manager.restart_agent = AsyncMock()
         mock_state.queue_service.should_queue_task.return_value = True
         return await server_module._resume_interrupted_workflows(
             workflow_id=workflow_id, project_id=project_id, reactivate=True
@@ -193,3 +195,121 @@ class TestResumeInterruptedWorkflowsProjectScoping:
         assert task_b.status == "blocked"
         assert wf_b.status == "paused"
         assert result["resumed"] == 1
+
+
+def _make_git_repo_with_worktree(tmp_path, branch_merged: bool):
+    """A base repo (default branch "main") plus a worktree checked out on
+    its own branch with one commit -- mirrors this codebase's shared
+    per-workflow worktree layout (<project>/.worktrees/wt_X on branch
+    agent-X). branch_merged merges that branch into main first, matching a
+    git_commit_push task whose work already landed."""
+    repo = tmp_path / "project"
+    repo.mkdir()
+    run = lambda *args, cwd=repo: subprocess.run(
+        args, cwd=cwd, check=True, capture_output=True, text=True
+    )
+    run("git", "init", "-b", "main")
+    run("git", "config", "user.email", "t@t.com")
+    run("git", "config", "user.name", "t")
+    (repo / "f.txt").write_text("base")
+    run("git", "add", ".")
+    run("git", "commit", "-m", "base")
+
+    wt_path = repo / ".worktrees" / "wt_abc123"
+    wt_path.parent.mkdir()
+    run("git", "worktree", "add", "-b", "agent-abc123", str(wt_path))
+    (wt_path / "g.txt").write_text("feature work")
+    run("git", "add", ".", cwd=wt_path)
+    run("git", "commit", "-m", "feature work", cwd=wt_path)
+
+    if branch_merged:
+        run("git", "merge", "--no-ff", "agent-abc123")
+
+    return wt_path
+
+
+class TestResumeInterruptedWorkflowsGitCommitPushRecovery:
+    """Regression, observed live: an orphaned git_commit_push agent whose
+    completion call was lost to a connection drop (a backend restart
+    landed exactly on top of the agent's final complete_my_task call) got
+    blindly redispatched to redo the whole git sequence from scratch, even
+    though the merge+push had already succeeded (verified after the fact
+    via `git log` -- the branch was already an ancestor of main).
+    _git_commit_push_already_landed checks git state directly so the
+    orphan-resume path can mark the task done instead of wasting a full
+    re-run on an already-completed merge."""
+
+    def _seed(self, test_db, working_directory, phase_name="git_commit_push"):
+        session = test_db.get_session()
+        session.add(
+            Workflow(
+                id="wf-git", name="t", phases_folder_path="/tmp", status="active",
+                definition_id="autopilot", working_directory=str(working_directory),
+            )
+        )
+        session.add(
+            Phase(
+                id="phase-gcp", workflow_id="wf-git", order=12, name=phase_name,
+                description="d", done_definitions=["x"],
+            )
+        )
+        session.add(
+            Agent(
+                id="agent-old", system_prompt="p", status="working", cli_type="claude",
+                agent_type="phase", tmux_session_name="agent_old", current_task_id="task-git",
+            )
+        )
+        session.add(
+            Task(
+                id="task-git", workflow_id="wf-git", phase_id="phase-gcp",
+                raw_description="r", done_definition="d", status="in_progress",
+                assigned_agent_id="agent-old",
+            )
+        )
+        session.commit()
+        session.close()
+
+    @pytest.mark.asyncio
+    async def test_marks_done_instead_of_restarting_when_branch_already_merged(self, test_db, tmp_path):
+        wt_path = _make_git_repo_with_worktree(tmp_path, branch_merged=True)
+        self._seed(test_db, wt_path)
+
+        with patch("src.mcp.server._tmux_session_alive", return_value=False):
+            result = await _run_resume(test_db, "wf-git")
+
+        assert result["resumed"] == 1
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id="task-git").first()
+        agent = session.query(Agent).filter_by(id="agent-old").first()
+        assert task.status == "done"
+        assert agent.status == "terminated"
+        assert agent.current_task_id is None
+
+    @pytest.mark.asyncio
+    async def test_still_restarts_when_branch_not_yet_merged(self, test_db, tmp_path):
+        wt_path = _make_git_repo_with_worktree(tmp_path, branch_merged=False)
+        self._seed(test_db, wt_path)
+
+        with patch("src.mcp.server._tmux_session_alive", return_value=False):
+            result = await _run_resume(test_db, "wf-git")
+
+        assert result["resumed"] == 1
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id="task-git").first()
+        assert task.status == "in_progress"  # untouched here -- restart_agent handles it
+
+    @pytest.mark.asyncio
+    async def test_does_not_apply_to_other_phases(self, test_db, tmp_path):
+        """Only git_commit_push has this external-state check -- any other
+        phase falls straight through to the normal redispatch path even if
+        its branch happens to already be merged."""
+        wt_path = _make_git_repo_with_worktree(tmp_path, branch_merged=True)
+        self._seed(test_db, wt_path, phase_name="development")
+
+        with patch("src.mcp.server._tmux_session_alive", return_value=False):
+            result = await _run_resume(test_db, "wf-git")
+
+        assert result["resumed"] == 1
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id="task-git").first()
+        assert task.status == "in_progress"

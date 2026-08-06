@@ -531,6 +531,58 @@ async def verify_agent_authentication(agent_id: str) -> bool:
     return False
 
 
+def _git_commit_push_already_landed(session, task, config) -> bool:
+    """Check whether a git_commit_push task's actual git work (commit +
+    merge + push) already succeeded, even though the agent never reported
+    "done" -- e.g. its final complete_my_task call was lost to a
+    connection drop during a backend restart. Observed live: task
+    2b98bf74/agent ada62108 did the real merge+push (verified after the
+    fact via `git log`), but the connection dropped exactly as the
+    backend restarted, so the completion call never reached the handler.
+    Without this check, the orphan-resume loop below blindly redispatches
+    a fresh agent to redo the whole git sequence from scratch -- usually
+    a harmless no-op merge, but a wasted retry cycle every time this
+    collision happens.
+
+    Scoped to git_commit_push specifically: it's the one phase whose real
+    "done" signal is external git state, not a file artifact
+    verify_output_artifact can check (spec.py lists it in
+    OPTIONAL_PHASES, with no required output at all).
+    """
+    from pathlib import Path
+
+    from src.core.database import Phase, Workflow
+
+    phase = session.query(Phase).filter_by(id=task.phase_id).first()
+    if not phase or phase.name != "git_commit_push":
+        return False
+
+    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+    wd = wf.working_directory if wf else None
+    if not wd or not Path(wd).exists():
+        return False
+
+    try:
+        import subprocess
+
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=wd, capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        if not branch or branch == "HEAD":
+            return False
+        # <project>/.worktrees/wt_X -> <project>, the base repo the branch
+        # would be merged into.
+        base_repo = Path(wd).parent.parent
+        result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", branch, config.base_branch],
+            cwd=base_repo, capture_output=True, timeout=10,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def _tmux_session_alive(session_name: str) -> bool:
     """True if the named tmux session currently exists."""
     if not session_name:
@@ -680,6 +732,24 @@ async def _resume_interrupted_workflows(
             for agent in orphans:
                 if _tmux_session_alive(agent.tmux_session_name):
                     continue  # still alive (e.g., only the monitor restarted) — leave it
+
+                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                if task and _git_commit_push_already_landed(session, task, config):
+                    logger.info(f"[RESUME] Workflow {wf.id[:8]}: orphaned agent {agent.id[:8]}'s git_commit_push work already landed on {config.base_branch} -- marking done instead of redispatching")
+                    task.status = "done"
+                    task.completed_at = datetime.utcnow()
+                    task.failure_reason = None
+                    task.completion_notes = (
+                        (task.completion_notes or "")
+                        + "\n[auto-recovered: git work had already landed before the agent's completion call was lost]"
+                    ).strip()
+                    agent.status = "terminated"
+                    agent.terminated_at = datetime.utcnow()
+                    agent.current_task_id = None
+                    session.commit()
+                    resumed += 1
+                    continue
+
                 logger.info(f"[RESUME] Workflow {wf.id[:8]}: restarting orphaned phase agent {agent.id[:8]} (dead tmux session) to continue from committed state")
                 try:
                     await server_state.agent_manager.restart_agent(agent.id, reason="server restarted — resuming interrupted work")
