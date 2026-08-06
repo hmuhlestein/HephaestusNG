@@ -298,7 +298,8 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
         </Button>
       </div>
       <p className="text-xs text-gray-400">
-        Sorted by filename by default. Drag to reorder manually.
+        Sorted by filename by default. Drag to reorder manually. Or add to
+        <code>docs/design-queue</code> which finds them automatically.
       </p>
 
       {isLoading ? (

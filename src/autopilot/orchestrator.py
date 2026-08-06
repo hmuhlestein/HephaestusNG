@@ -36,6 +36,7 @@ from src.core.constants import (
     AUTOPILOT_STATE_DIR,
     CONTEXT_DIR_NAME,
     DESIGN_CONTEXT_SUBDIR,
+    DESIGN_QUEUE_FALLBACK_DIR,
     DIAGNOSTIC_TASK_PREFIX,
     GOTO_REASON_PREFIX,
 )
@@ -2031,52 +2032,66 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
     return "c"
 
 
-def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[DesignEntry]:
+def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: list = None) -> List[DesignEntry]:
     designs = []
-    if not queue_dir.exists():
-        return designs
+    dirs = [queue_dir]
+    # Also scan docs/design-queue if it exists as a sibling of the primary queue.
+    # queue_dir is typically <project>/.hephaestus/designs, so .parent.parent is
+    # the project root. docs/design-queue is the conventional fallback location.
+    if extra_dirs:
+        dirs.extend(extra_dirs)
+    elif queue_dir.parent.parent.exists():
+        fallback = queue_dir.parent.parent / DESIGN_QUEUE_FALLBACK_DIR
+        if fallback != queue_dir and fallback.exists():
+            dirs.append(fallback)
+    for scan_dir in dirs:
+        if not scan_dir.exists():
+            continue
 
-    for ext in ("*.md", "*.txt"):
-        for filepath in sorted(queue_dir.glob(ext)):
-            if filepath.is_dir():
-                continue
-            content_hash = file_hash(filepath)
-            if content_hash in processed_hashes:
-                # Self-heal: if the design is marked processed but its
-                # features are all pending (e.g. server crashed between
-                # marking processed and creating features), re-queue it.
-                try:
-                    from src.core.database import (
-                        AutopilotDesign as _AD,
-                    )
-                    from src.core.database import (
-                        Feature as _Feat,
-                    )
-                    from src.core.database import (
-                        get_db as _gdb,
-                    )
+    for scan_dir in dirs:
+        if not scan_dir.exists():
+            continue
+        for ext in ("*.md", "*.txt"):
+            for filepath in sorted(scan_dir.glob(ext)):
+                if filepath.is_dir():
+                    continue
+                content_hash = file_hash(filepath)
+                if content_hash in processed_hashes:
+                    # Self-heal: if the design is marked processed but its
+                    # features are all pending (e.g. server crashed between
+                    # marking processed and creating features), re-queue it.
+                    try:
+                        from src.core.database import (
+                            AutopilotDesign as _AD,
+                        )
+                        from src.core.database import (
+                            Feature as _Feat,
+                        )
+                        from src.core.database import (
+                            get_db as _gdb,
+                        )
 
-                    with _gdb() as _db:
-                        _des = _db.query(_AD).filter_by(content_hash=content_hash).first()
-                        if _des:
-                            _feats = _db.query(_Feat).filter_by(design_id=_des.id).all()
-                            if not _feats or all(f.status == "pending" for f in _feats):
-                                logger.warning(f"[SELF-HEAL] Design {_des.name} is in processed_hashes but has no features or all pending — re-queuing")
-                                processed_hashes.discard(content_hash)
+                        with _gdb() as _db:
+                            _des = _db.query(_AD).filter_by(content_hash=content_hash).first()
+                            if _des:
+                                _feats = _db.query(_Feat).filter_by(design_id=_des.id).all()
+                                if not _feats or all(f.status == "pending" for f in _feats):
+                                    logger.warning(f"[SELF-HEAL] Design {_des.name} is in processed_hashes but has no features or all pending — re-queuing")
+                                    processed_hashes.discard(content_hash)
+                                else:
+                                    continue
                             else:
                                 continue
-                        else:
-                            continue
-                except Exception:
-                    continue
-            name = filepath.stem.replace("_", " ").replace("-", " ").title()
-            designs.append(
-                DesignEntry(
-                    path=filepath,
-                    name=name,
-                    content_hash=content_hash,
+                    except Exception:
+                        continue
+                name = filepath.stem.replace("_", " ").replace("-", " ").title()
+                designs.append(
+                    DesignEntry(
+                        path=filepath,
+                        name=name,
+                        content_hash=content_hash,
+                    )
                 )
-            )
 
     # Check for manual reorder file — stored in .hephaestus/ (not in docs/design/)
     order_file = queue_dir.parent.parent / CONTEXT_DIR_NAME / ".queue_order.json"
