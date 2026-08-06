@@ -501,6 +501,7 @@ async def give_validation_review(
         if request.validation_passed:
             # 4a. Validation successful
             task.status = "done"
+            task.failure_reason = None
             task.review_done = True
             task.completed_at = datetime.utcnow()
 

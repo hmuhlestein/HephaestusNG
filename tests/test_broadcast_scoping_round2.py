@@ -316,5 +316,53 @@ class TestGiveValidationReviewBroadcast:
         assert call["project_name"] == "Project A"
 
 
+class TestGiveValidationReviewClearsStaleFailureReason:
+    """Regression, same class of bug as server.py's update_task_status:
+    a task validated as passed after an earlier failed attempt (goto/
+    retry reuses the same task row) kept that attempt's failure_reason
+    forever, feeding the "done but has failure_reason" self-heal that
+    wrongly resets genuinely-completed tasks back to failed."""
+
+    @pytest.mark.asyncio
+    async def test_success_clears_prior_failure_reason(self, db_manager, fake_state, monkeypatch):
+        from src.mcp.memory_api import GiveValidationReviewRequest, give_validation_review
+
+        async def noop_process_queue():
+            pass
+
+        monkeypatch.setattr("src.mcp.server.process_queue", noop_process_queue)
+
+        _seed_project_workflow(db_manager)
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(id="validator-1", system_prompt="t", status="working", cli_type="pi", agent_type="validator")
+            )
+            session.add(
+                Task(
+                    id="task-1",
+                    raw_description="d",
+                    done_definition="done",
+                    status="under_review",
+                    workflow_id="wf-1",
+                    assigned_agent_id="agent-1",
+                    validation_iteration=1,
+                    failure_reason="earlier attempt: output validation failed",
+                )
+            )
+
+        request = GiveValidationReviewRequest(
+            task_id="task-1",
+            validator_agent_id="validator-1",
+            validation_passed=True,
+            feedback="looks good",
+        )
+        await give_validation_review(request=request, agent_id="validator-1")
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "done"
+            assert task.failure_reason is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
