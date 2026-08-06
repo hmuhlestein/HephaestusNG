@@ -319,3 +319,78 @@ class TestUpdateTaskStatusClearsStaleFailureReason:
         task = session.query(Task).filter_by(id=task_id).first()
         assert task.status == "failed"
         assert task.failure_reason == "real failure"
+
+
+class TestUpdateTaskStatusIdempotentOnAlreadyTerminalTask:
+    """Regression, observed live: a CLI's own auto-compact replayed the
+    initial task prompt back to the agent after it had already completed
+    the task, which read as a fresh request to redo the work -- the agent
+    dutifully called complete_my_task again with the same content,
+    repeatedly (four times in one run before it finally stopped). Every
+    one of those redundant calls re-ran the full pipeline below --
+    record_learnings (duplicate memory writes each time), self-review,
+    output-artifact re-verification, cost re-collection -- none of which
+    are idempotent. A task already in a terminal state (done/failed/
+    duplicated) now short-circuits immediately instead."""
+
+    def test_redundant_done_call_skips_reprocessing(self, test_db, test_client, tmp_path):
+        task_id, agent_id = _seed(test_db, tmp_path)
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        task.status = "done"
+        task.completion_notes = "original completion"
+        session.commit()
+
+        with patch(
+            "src.services.task_completion_service.TaskCompletionService.record_learnings",
+            new_callable=AsyncMock,
+        ) as mock_record_learnings:
+            resp = test_client.post(
+                "/update_task_status",
+                json={
+                    "task_id": task_id,
+                    "status": "done",
+                    "summary": "redundant replay of the same completion",
+                    "key_learnings": ["some learning that would otherwise get duplicated"],
+                },
+                headers={"X-Agent-ID": agent_id},
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["success"] is True
+        mock_record_learnings.assert_not_awaited()
+
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        # Untouched by the redundant call -- proves it short-circuited
+        # rather than reprocessing and overwriting with the new summary.
+        assert task.completion_notes == "original completion"
+
+    def test_normal_first_completion_still_processes(self, test_db, test_client, tmp_path):
+        """Sanity check the guard doesn't fire for a task's real, first
+        completion -- only already-terminal tasks short-circuit."""
+        task_id, agent_id = _seed(test_db, tmp_path)
+
+        with patch(
+            "src.services.task_completion_service.TaskCompletionService.commit_and_link_ticket",
+            new_callable=AsyncMock,
+        ), patch(
+            "src.services.task_completion_service.TaskCompletionService.fire_spec_gate_if_ready",
+            new_callable=AsyncMock,
+        ):
+            resp = test_client.post(
+                "/update_task_status",
+                json={
+                    "task_id": task_id,
+                    "status": "done",
+                    "summary": "first real completion",
+                    "key_learnings": [],
+                },
+                headers={"X-Agent-ID": agent_id},
+            )
+
+        assert resp.status_code == 200, resp.text
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert task.status == "done"
+        assert task.completion_notes == "first real completion"
