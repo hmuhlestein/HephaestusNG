@@ -1542,6 +1542,49 @@ class PhaseManager:
                 .first()
             )
 
+        if next_phase and next_phase.order > current_phase.order + 1:
+            # An explicit action_target_phase (above) can jump past one or
+            # more intermediate phases -- e.g. product_validation goto's
+            # back to development with action_target_phase="product_validation",
+            # and once development's fix lands, resuming at product_validation
+            # correctly skips re-running architectural_review through
+            # qa_validation rather than walking the whole review chain again.
+            # But nothing marked those skipped phases' PhaseExecution rows
+            # as such -- they're left at whatever stale status an earlier
+            # goto's reset left them in (typically "pending"), forever
+            # indistinguishable from genuinely unstarted work. Every
+            # consumer of PhaseExecution.status that treats "pending" as
+            # "real work remains" (derive_workflow_status's completeness
+            # check chief among them) then sees this workflow as
+            # permanently incomplete, even after every phase that actually
+            # needed to run has finished and the whole feature has shipped.
+            # Only downgrade "pending" -- a genuinely "completed" phase
+            # (from an earlier pass that this jump doesn't need to redo)
+            # must not get overwritten to "skipped".
+            skipped_phases = (
+                session.query(Phase)
+                .filter(
+                    Phase.workflow_id == current_phase.workflow_id,
+                    Phase.order > current_phase.order,
+                    Phase.order < next_phase.order,
+                )
+                .all()
+            )
+            for sp in skipped_phases:
+                sp_execution = (
+                    session.query(PhaseExecution).filter_by(phase_id=sp.id).first()
+                )
+                if sp_execution and sp_execution.status == "pending":
+                    logger.info(
+                        f"[PHASE] {sp.name} skipped over by the jump from "
+                        f"{current_phase.name} to {next_phase.name} -- marking "
+                        "its PhaseExecution 'skipped' instead of leaving it "
+                        "'pending' forever"
+                    )
+                    sp_execution.status = "skipped"
+                    sp_execution.completed_at = datetime.utcnow()
+            session.commit()
+
         if next_phase:
             # Update execution status for pending or completed phases
             # (completed = re-run after goto reconvergence)

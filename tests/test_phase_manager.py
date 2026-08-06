@@ -1259,6 +1259,107 @@ class TestTagCompletingTask:
             assert task.action_target_phase == "architecture_design"
 
 
+class TestStartNextPhaseMarksJumpedOverPhasesSkipped:
+    """Regression, observed live: _start_next_phase honors an explicit
+    action_target_phase (e.g. product_validation goto's back to
+    development, then resumes at product_validation once the fix lands,
+    correctly skipping a redundant re-run of architectural_review through
+    qa_validation) but never touched the PhaseExecution rows for the
+    phases it jumped over -- they're left at whatever stale "pending"
+    status an earlier goto's reset left them in, forever. Every consumer
+    that treats "pending" as "real work remains" (derive_workflow_status's
+    completeness check chief among them) then sees the workflow as
+    permanently incomplete, even after the whole feature has shipped."""
+
+    @pytest.fixture
+    def real_db(self, tmp_path):
+        from src.core.database import DatabaseManager as _DBM
+
+        db = _DBM(str(tmp_path / "test.db"))
+        db.create_tables()
+        return db
+
+    def _seed(self, real_db, intermediate_status="pending"):
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+            )
+            phases = [
+                ("phase-dev", 4, "development"),
+                ("phase-arch-review", 5, "architectural_review"),
+                ("phase-adversarial", 6, "adversarial_review"),
+                ("phase-qa", 9, "qa_validation"),
+                ("phase-prodval", 10, "product_validation"),
+            ]
+            for pid, order, name in phases:
+                session.add(
+                    Phase(
+                        id=pid, workflow_id="wf-1", order=order, name=name,
+                        description="d", done_definitions=["x"],
+                    )
+                )
+            session.add(
+                PhaseExecution(id="exec-dev", phase_id="phase-dev", status="in_progress")
+            )
+            session.add(
+                PhaseExecution(id="exec-arch", phase_id="phase-arch-review", status=intermediate_status)
+            )
+            session.add(
+                PhaseExecution(id="exec-adv", phase_id="phase-adversarial", status=intermediate_status)
+            )
+            session.add(
+                PhaseExecution(id="exec-qa", phase_id="phase-qa", status=intermediate_status)
+            )
+            session.add(
+                PhaseExecution(id="exec-prodval", phase_id="phase-prodval", status="pending")
+            )
+            session.add(
+                Task(
+                    id="task-dev", raw_description="r", done_definition="d",
+                    status="done", phase_id="phase-dev", workflow_id="wf-1",
+                    action="goto", action_target_phase="product_validation",
+                )
+            )
+
+    def test_jumped_over_phases_marked_skipped(self, real_db):
+        from src.core.database import PhaseExecution
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(real_db)
+        pm = PhaseManager(db_manager=real_db)
+
+        with real_db.session_scope() as session:
+            next_phase = pm._start_next_phase(session, "phase-dev")
+            assert next_phase.name == "product_validation"
+
+        with real_db.session_scope() as session:
+            for phase_id in ("phase-arch-review", "phase-adversarial", "phase-qa"):
+                execution = session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+                assert execution.status == "skipped"
+                assert execution.completed_at is not None
+            prodval_execution = session.query(PhaseExecution).filter_by(phase_id="phase-prodval").first()
+            assert prodval_execution.status == "in_progress"
+
+    def test_does_not_downgrade_an_already_completed_intermediate_phase(self, real_db):
+        """A phase that genuinely completed in an earlier pass (its
+        PhaseExecution already "completed") must not get overwritten to
+        "skipped" just because this jump doesn't need to redo it."""
+        from src.core.database import PhaseExecution
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(real_db, intermediate_status="completed")
+        pm = PhaseManager(db_manager=real_db)
+
+        with real_db.session_scope() as session:
+            pm._start_next_phase(session, "phase-dev")
+
+        with real_db.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-arch-review").first()
+            assert execution.status == "completed"
+
+
 class TestGetPhaseContextUsesLiveRequiredOutput:
     """Regression: get_phase_context built each phase's SdkPhase.outputs
     from the raw Phase.outputs column -- a per-workflow-instance snapshot
