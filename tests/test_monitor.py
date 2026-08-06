@@ -2869,6 +2869,72 @@ class TestStuckTaskNudgeCap:
         session.close()
 
 
+class TestStuckTaskPromotionClearsStaleFailureReason:
+    """Regression, same class of bug as server.py's update_task_status: a
+    stuck in_progress task with completion_notes set (agent finished then
+    crashed before its update_task_status call landed) gets promoted to
+    done here -- but if this same task row carried a failure_reason from
+    an earlier failed attempt (goto/retry reuses the row), that reason
+    stuck around forever, feeding the "done but has failure_reason"
+    self-heal that wrongly resets genuinely-completed tasks back to
+    failed."""
+
+    @pytest.fixture
+    def real_db(self, tmp_path):
+        from src.core.database import DatabaseManager
+
+        db_path = tmp_path / "test.db"
+        db = DatabaseManager(str(db_path))
+        db.create_tables()
+        return db
+
+    @pytest.fixture
+    def audit_monitor(self, real_db, mock_agent_manager, mock_llm, mock_rag):
+        from src.monitoring.monitor import MonitoringLoop
+
+        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+            mock_cfg.return_value = Mock(stuck_detection_minutes=10, agent_timeout_minutes=60)
+            m = MonitoringLoop(
+                db_manager=real_db,
+                agent_manager=mock_agent_manager,
+                llm_provider=mock_llm,
+                rag_system=mock_rag,
+            )
+        return m
+
+    @pytest.mark.asyncio
+    async def test_promotion_clears_prior_failure_reason(self, audit_monitor, real_db):
+        from src.core.database import Agent, Task
+
+        session = real_db.get_session()
+        session.add(
+            Agent(
+                id="agent-crashed", system_prompt="p", status="terminated",
+                cli_type="pi", agent_type="phase",
+            )
+        )
+        session.add(
+            Task(
+                id="task-finished-then-crashed", raw_description="r", done_definition="d",
+                status="in_progress", assigned_agent_id="agent-crashed",
+                started_at=datetime.utcnow() - timedelta(minutes=20),
+                completion_notes="done, see report.md",
+                failure_reason="earlier attempt: agent timed out",
+            )
+        )
+        session.commit()
+        session.close()
+
+        with patch("src.mcp.autopilot_api.run_health_audit", return_value={"findings": []}):
+            await audit_monitor._audit_system_health()
+
+        session = real_db.get_session()
+        task = session.query(Task).filter_by(id="task-finished-then-crashed").first()
+        assert task.status == "done"
+        assert task.failure_reason is None
+        session.close()
+
+
 class TestAutoRestartFlushesCleanTranscript:
     """_auto_restart_agent kills a stuck agent's tmux session directly --
     it bypasses terminate_agent's own clean-shutdown flush entirely, so

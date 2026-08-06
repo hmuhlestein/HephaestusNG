@@ -2829,6 +2829,7 @@ class MonitoringLoop:
                             f"completion_notes — promoting to done (agent finished then crashed)"
                         )
                         task.status = "done"
+                        task.failure_reason = None
                         task.completed_at = datetime.utcnow()
                         # Fire spec gate for gated phases so phase execution
                         # is properly marked as completed
