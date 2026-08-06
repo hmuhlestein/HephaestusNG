@@ -1943,6 +1943,51 @@ class TestCaseCompletedWithSuccessor:
         assert result is True
         assert mock_create.call_args[0][:4] == ("wf-1", "phase-2", "implementation", "continue")
 
+    @patch("src.autopilot.orchestrator._create_phase_task")
+    def test_ignores_a_done_task_from_a_prior_cycle(self, mock_create, db_manager, sample_workflow):
+        """Regression, observed live: phase-2 succeeded once weeks ago,
+        then got reset back to "pending" by a later goto for a fresh pass
+        -- but its PhaseExecution never got a new started_at, and its only
+        Task row is the old 'done' one from that first cycle. The old
+        unscoped existing_tasks check saw that row, concluded "transition
+        already fired", and returned False forever -- the phase stalled
+        2+ days with zero tasks from its current cycle. Scoping to tasks
+        created since last_completed's own completion must exclude the
+        stale task and dispatch a fresh one."""
+        from datetime import datetime, timedelta
+
+        from src.autopilot.orchestrator import _case_completed_with_successor, _get_phase_statuses
+
+        self._seed_completed_with_pending_successor(db_manager)
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.completed_at = datetime.utcnow()
+            session.add(
+                Task(
+                    id="task-old",
+                    workflow_id="wf-1",
+                    phase_id="phase-2",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    created_at=datetime.utcnow() - timedelta(days=21),
+                    completed_at=datetime.utcnow() - timedelta(days=21),
+                )
+            )
+
+        mock_create.return_value = True
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            completed = [p for p in phase_statuses if p["status"] == "completed"]
+            pending = [p for p in phase_statuses if p["status"] == "pending"]
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_completed_with_successor(
+                session, "wf-1", completed, pending, in_progress, MagicMock()
+            )
+
+        assert result is True
+        assert mock_create.call_args[0][:4] == ("wf-1", "phase-2", "implementation", "continue")
+
 
 class TestGetPhaseStatuses:
     """Tests for _get_phase_statuses helper."""

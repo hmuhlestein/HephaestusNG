@@ -4846,8 +4846,24 @@ def _case_completed_with_successor(db, workflow_id: str, completed: list, pendin
                 default=None,
             )
         if successor:
-            # Check if successor already has tasks (transition already fired)
-            existing_tasks = db.query(Task).filter_by(phase_id=successor["phase"].id).count()
+            # Check if successor already has tasks from the CURRENT cycle
+            # (transition already fired this time around). Unscoped, an old
+            # task from a PRIOR cycle -- e.g. this phase succeeded weeks
+            # ago, then got reset back to "pending" by a later goto for a
+            # fresh pass -- looks identical to "transition already fired"
+            # and permanently blocks a fresh dispatch, even though the
+            # phase's own PhaseExecution has sat "pending" ever since with
+            # zero tasks from ITS current cycle. Observed live:
+            # product_validation stalled 2+ days this way, its only task a
+            # 'done' row from three weeks earlier -- every poll saw
+            # existing_tasks > 0 and silently backed off forever.
+            last_completed_execution = last_completed.get("execution")
+            cycle_filter = (
+                (Task.created_at >= last_completed_execution.completed_at,)
+                if last_completed_execution and last_completed_execution.completed_at
+                else ()
+            )
+            existing_tasks = db.query(Task).filter(Task.phase_id == successor["phase"].id, *cycle_filter).count()
             # This case only fires when last_completed's PhaseExecution.status
             # is ALREADY "completed" (that's what put it in the `completed`
             # list). Re-running the transition via _fire_phase_transition ->
