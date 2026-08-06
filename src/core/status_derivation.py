@@ -88,8 +88,26 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
         # No tasks yet - use DB status (set by orchestrator before tasks exist)
         return feature.status
 
-    # Derive from task statuses
-    task_statuses = {t.status for t in tasks}
+    # Derive from task statuses. DUPLICATED tasks are excluded entirely --
+    # every branch below is an exact-match or membership check against a
+    # specific set of "real work remains" statuses (DONE/IN_PROGRESS/
+    # ASSIGNED/FAILED/PENDING), and DUPLICATED was never one of them
+    # despite being a real terminal status (TaskStatus.TERMINAL includes
+    # it). Left in, a single duplicated task permanently breaks every
+    # `task_statuses == {DONE}` exact-set check for that feature (the set
+    # becomes {DONE, DUPLICATED}, matching nothing below), so a feature
+    # with real, fully-resolved work sits stuck at whatever it derived to
+    # before the duplicate was marked -- invisible in every branch, not
+    # done, not failed, not active for a real reason. Observed live: three
+    # debris tasks resolved as "duplicated" (superseded by sibling tasks
+    # that had already done the real work) kept their feature showing
+    # "active" indefinitely.
+    task_statuses = {t.status for t in tasks} - {TaskStatus.DUPLICATED}
+    if not task_statuses:
+        # Every task was a duplicate -- nothing left to derive from,
+        # preserve whatever the DB already has rather than claim a status
+        # (e.g. COMPLETED) that no task's real work ever earned.
+        return feature.status
 
     # "All existing tasks are done" isn't the same as "the feature is done"
     # -- a workflow that got marked failed, or paused mid-pipeline (e.g. a
@@ -388,7 +406,14 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
     # exactly the vacuous-truth case #1 above exists to rule out), only to
     # "active" (real, tracked work remains; the tasks that do exist just
     # haven't hit it yet).
-    task_statuses = {t.status for t in tasks}
+    #
+    # DUPLICATED excluded for the same reason as derive_feature_status: a
+    # single duplicated task (superseded by a sibling that did the real
+    # work) otherwise permanently breaks every exact-set check below. An
+    # all-duplicated task_statuses falls through to the final `else`
+    # fallback (existing DB status), same as today's untouched behavior
+    # for any other unrecognized combination.
+    task_statuses = {t.status for t in tasks} - {TaskStatus.DUPLICATED}
 
     if task_statuses == {TaskStatus.DONE}:
         derived = WorkflowStatus.ACTIVE if has_phases else WorkflowStatus.COMPLETED

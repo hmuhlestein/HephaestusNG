@@ -370,6 +370,42 @@ class TestDeriveFeatureStatus:
             feature = session.query(Feature).filter_by(id="feat-1").first()
             assert feature.status == "completed"
 
+    def test_completed_despite_a_duplicated_task(self, db_manager):
+        """Regression, observed live: a debris task resolved as
+        "duplicated" (superseded by a sibling task that did the real
+        work) permanently broke the `task_statuses == {DONE}` exact-set
+        check -- DUPLICATED was never referenced anywhere in this
+        function despite being a real terminal status, so a feature with
+        every real task done stayed stuck at "active" forever the moment
+        any task carried that status."""
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(id="wf-1", name="Test", status="active", phases_folder_path="/tmp/phases")
+            session.add(wf)
+            session.add(
+                Feature(
+                    id="feat-1", design_id="design-1", feature_key="test-feature",
+                    name="Test Feature", scope="Test scope", workflow_id="wf-1",
+                    status="active",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-real", workflow_id="wf-1", raw_description="r",
+                    done_definition="d", status="done",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-debris", workflow_id="wf-1", raw_description="r",
+                    done_definition="d", status="duplicated",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            result = derive_feature_status(session, "feat-1")
+        assert result == "completed"
+
 
 class TestDeriveWorkflowStatus:
     """Tests for derive_workflow_status function."""
@@ -555,6 +591,31 @@ class TestDeriveWorkflowStatus:
                     id="task-deploy-attempt-2", workflow_id="wf-1", phase_id="phase-deploy",
                     raw_description="deploy", done_definition="Done",
                     status="done",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            result = derive_workflow_status(session, "wf-1")
+        assert result == "completed"
+
+    def test_completed_despite_a_duplicated_task(self, db_manager):
+        """Same regression as TestDeriveFeatureStatus's version, one level
+        up: a task resolved as "duplicated" must not break the
+        `task_statuses == {DONE}` check here either."""
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(id="wf-1", name="Test", status="active", phases_folder_path="/tmp/phases")
+            session.add(wf)
+            session.add(
+                Task(
+                    id="task-real", workflow_id="wf-1", raw_description="r",
+                    done_definition="d", status="done",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-debris", workflow_id="wf-1", raw_description="r",
+                    done_definition="d", status="duplicated",
                 )
             )
 
