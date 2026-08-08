@@ -795,6 +795,58 @@ class AgentManager:
                 )
                 raise Exception("Tmux session died during initialization wait")
 
+            # The tmux session staying alive says nothing about whether
+            # launch_command itself actually started the CLI -- a missing
+            # binary just prints "command not found" and hands control
+            # straight back to the shell, which looks identical to a live,
+            # initializing pane to every check above. Left undetected, the
+            # initial task prompt below gets typed into a bare shell instead
+            # of the CLI, and the agent sits "working" with nothing behind
+            # it until a much slower frozen-output timeout eventually gives
+            # up on it. Observed live: cli_type=claude with no `claude`
+            # binary on PATH -- raising here routes into the existing
+            # fallback_cli_tool retry below instead of silently proceeding.
+            import re
+
+            try:
+                launch_check = pane.cmd("capture-pane", "-p", "-S", "-15").stdout
+                launch_check_text = "\n".join(launch_check) if launch_check else ""
+            except Exception:
+                launch_check_text = ""
+            if re.search(
+                r"command not found|No such file or directory",
+                launch_check_text,
+                re.IGNORECASE,
+            ):
+                logger.error(
+                    f"{cli_type} launch command failed in tmux session {session_name}: "
+                    f"{launch_check_text.strip()[-300:]}"
+                )
+                raise Exception(
+                    f"{cli_type} CLI failed to start -- shell reported the launch "
+                    "command was not found"
+                )
+
+            # A CLI's own first-run interactive gate can also strand a launch
+            # with no one at the keyboard to answer it -- e.g. Claude Code's
+            # "Bypass Permissions mode" warning, which --dangerously-skip-permissions
+            # does not suppress and which no CLIAgentInterface subclass currently
+            # dismisses via post_launch_confirmation_keys(). Observed live: this
+            # left an agent sitting at the dialog indefinitely (option 1 "No,
+            # exit" highlighted by default) until manually killed. Detected here
+            # rather than navigated, since guessing the wrong key risks selecting
+            # "No, exit" and looping.
+            if re.search(r"Bypass Permissions mode", launch_check_text):
+                logger.error(
+                    f"{cli_type} launch command is stuck on an unhandled confirmation "
+                    f"dialog in tmux session {session_name}: "
+                    f"{launch_check_text.strip()[-300:]}"
+                )
+                raise Exception(
+                    f"{cli_type} CLI is stuck on an unhandled first-run confirmation "
+                    "dialog"
+                )
+
             # Dismiss any CLI-specific one-time interactive confirmation
             # (e.g. Claude's bypass-permissions warning) before the real
             # task prompt arrives -- sending it into that dialog instead

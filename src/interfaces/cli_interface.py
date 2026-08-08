@@ -440,6 +440,18 @@ class ClaudeCodeAgent(CLIAgentInterface):
         from src.core.utils import is_glm_model
 
         resolved_model = "sonnet" if is_glm_model(model) else model
+        # NOTE: --permission-mode dontAsk looks like a fix for the
+        # "Bypass Permissions mode" confirmation dialog below (it does skip
+        # that dialog) but is NOT equivalent to --dangerously-skip-permissions
+        # -- dontAsk still runs every permission check, it just auto-DENIES
+        # instead of prompting when a decision has no pre-existing allow
+        # rule. Verified live: it silently denied Write, Bash redirects, and
+        # even the complete_my_task MCP call itself ("Permission has been
+        # denied because Claude Code is running in don't ask mode"),
+        # stranding a fully-completed review with no way to persist it.
+        # --dangerously-skip-permissions actually disables the permission
+        # system; the dialog it triggers is handled by the launch-failure
+        # detection in manager.py's create_agent_for_task instead.
         base_flags = (
             f'--model {resolved_model}{effort_flag} --dangerously-skip-permissions '
             f'{mcp_flag} --append-system-prompt "$(cat {prompt_file})" --verbose'
