@@ -2766,6 +2766,83 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
     )
 
 
+class BrowseEntry(BaseModel):
+    name: str
+    path: str
+    type: str  # "dir" or "file"
+
+
+class BrowseResult(BaseModel):
+    path: str
+    parent: Optional[str] = None
+    entries: List[BrowseEntry]
+
+
+@router.get("/projects/{project_id}/browse", response_model=BrowseResult)
+async def browse_project_files(project_id: str, path: str = Query("")):
+    """List directories and .md/.txt files under a project's base_dir.
+
+    `path` is relative to base_dir; traversal above base_dir is rejected
+    by `_safe_path`.
+    """
+    from src.core.database import AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        base_dir = proj.base_dir
+
+    base_resolved = Path(base_dir).resolve()
+    target = _safe_path(base_dir, path) if path else base_resolved
+    if not target.is_dir():
+        raise HTTPException(400, "Not a directory")
+
+    entries = []
+    for child in sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
+        if child.name.startswith("."):
+            continue
+        try:
+            rel = str(child.resolve().relative_to(base_resolved))
+        except ValueError:
+            # Symlink resolves outside base_dir -- skip rather than leak/crash.
+            continue
+        if child.is_dir():
+            entries.append(BrowseEntry(name=child.name, path=rel, type="dir"))
+        elif child.suffix in ALLOWED_EXTENSIONS:
+            entries.append(BrowseEntry(name=child.name, path=rel, type="file"))
+
+    rel_path = "" if target == base_resolved else str(target.relative_to(base_resolved))
+    parent = None
+    if rel_path:
+        parent_path = str(Path(rel_path).parent)
+        parent = "" if parent_path == "." else parent_path
+
+    return BrowseResult(path=rel_path, parent=parent, entries=entries)
+
+
+@router.get("/projects/{project_id}/browse/content")
+async def browse_project_file_content(project_id: str, path: str = Query(...)):
+    """Read the content of a .md/.txt file under a project's base_dir."""
+    from src.core.database import AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        base_dir = proj.base_dir
+
+    target = _safe_path(base_dir, path)
+    if not target.is_file() or target.suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, "Invalid file")
+
+    return {
+        "name": target.name,
+        "content": target.read_text(errors="replace"),
+        "size_bytes": target.stat().st_size,
+    }
+
+
 @router.put("/projects/{project_id}/designs/reorder")
 async def reorder_project_designs(project_id: str, req: DesignReorderRequest):
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
