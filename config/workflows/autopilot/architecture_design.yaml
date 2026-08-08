@@ -104,6 +104,11 @@ additional_notes: |
   STEP 3: READ REQUIREMENTS AND EXISTING FILES
   ═══════════════════════════════════════════════════════════════════════
 
+  First, initialize CodeGraph for fast codebase exploration:
+    codegraph init . 2>/dev/null || true
+  Then use it to explore: codegraph search <term> . , codegraph files .
+  If codegraph is not installed, use find/grep/ls instead.
+
   Read requirements.md from Phase 1. Understand:
   - All functional requirements (REQ-XX numbered)
   - Non-functional requirements (NFR-XX numbered)
@@ -121,7 +126,7 @@ additional_notes: |
 
   Also read the original design document to understand the overall vision.
   This context goes into architecture.md — the development agent reads it
-  from there (see STEP 7: do not call create_task to hand this to developers).
+  from there (see STEP 12: do not call create_task to hand this to developers).
   
   CRITICAL — CHECK EXISTING TEST FILES AND ESTABLISH FILE LAYOUT:
   Run: find . -name "test_*.py" -o -name "*_test.py" | head -20
@@ -198,9 +203,10 @@ additional_notes: |
   ### Infrastructure
   - Build configuration
   - Environment setup
+  - Secrets management: ALL credentials, API keys, tokens, and secrets MUST go in a .env file (or secrets manager like Vault/AWS Secrets Manager). NEVER in source code, config YAML, or this document. Document which secrets are needed and their expected format, but not their values.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4B: VERIFY ARCHITECTURE AGAINST EXISTING CODE (MANDATORY)
+  STEP 5: VERIFY ARCHITECTURE AGAINST EXISTING CODE (MANDATORY)
   ═══════════════════════════════════════════════════════════════════════
 
   ⚠️  THIS STEP CATCHES ARCHITECTURE THAT CONFLICTS WITH EXISTING CODE. ⚠️
@@ -235,7 +241,7 @@ additional_notes: |
 
   ═══════════════════════════════════════════════════════════════════════
   STEP 6: WRITE THE TASK BREAKDOWN INTO architecture.md (documentation only —
-  do not call create_task here, see STEP 7)
+  do not call create_task here, see STEP 12)
   ═══════════════════════════════════════════════════════════════════════
 
   Document a detailed task breakdown for Phase 3 (Development) as TEXT in
@@ -471,6 +477,213 @@ additional_notes: |
   Document OO decisions in architecture.md under "Object-Oriented Design".
   
   ═══════════════════════════════════════════════════════════════════════
+  STEP 12: IMPLEMENTATION READINESS PASS (MANDATORY — THE ARCHITECT'S
+           CONTRACT WITH THE IMPLEMENTER)
+  ═══════════════════════════════════════════════════════════════════════
+  
+  An architecture that requires the implementer to "figure out" details is a
+  FAILED architecture. This step forces you to produce a document an
+  implementer can follow mechanically — no ambiguity, no "use your judgment",
+  no hand-waving.
+  
+  If you cannot write the signature, you have not finished the design.
+  
+  ──────────────────────────────────────────────────────────────────────
+  STEP 13: CLASS SKELETONS WITH FULL SIGNATURES
+  ──────────────────────────────────────────────────────────────────────
+  
+  For every class in the architecture, write a code skeleton in the
+  architecture.md "Object-Oriented Design" section. Minimum content:
+  
+  ```python
+  class AuthService:
+      """One-line purpose. Thread-safety contract (e.g. 'Thread-safe.
+      All methods may be called concurrently from any thread.')."""
+  
+      def __init__(self, user_repo: UserRepository, token_encoder: TokenEncoder,
+                   config: AuthConfig) -> None:
+          """Store deps. Describe any init-time side effects (DB connections,
+          background tasks, cache warming)."""
+  
+      def authenticate(self, credentials: Credentials) -> AuthResult:
+          """Validate credentials, return token or raise.
+          
+          Args:
+              credentials: email/password or OAuth token bundle.
+          
+          Returns:
+              AuthResult with access_token, refresh_token, expires_at.
+          
+          Raises:
+              InvalidCredentials: email not found or password mismatch.
+              AccountLocked: too many failed attempts (lockout window in config).
+              RateLimited: per-IP rate limit exceeded.
+          """
+  
+      def refresh(self, refresh_token: str) -> AuthResult:
+          """..."""
+  
+      async def revoke(self, token: str) -> None:
+          """..."""
+  ```
+  
+  Rules:
+  - EVERY public method gets a full signature with types and docstring.
+  - EVERY custom exception class is listed with its purpose and fields.
+  - EVERY data class / Pydantic model / TypedDict is listed with its fields,
+    types, and constraints (min/max length, regex, default values).
+  - If a method is async, mark it `async`. If it may block, note what it blocks
+    on and whether the caller must run it in a thread pool.
+  - Return types must be explicit — `-> Result` not `-> Any`.
+  
+  ──────────────────────────────────────────────────────────────────────
+  STEP 14: CONCURRENCY MODEL
+  ──────────────────────────────────────────────────────────────────────
+  
+  For every component, state the concurrency contract explicitly:
+  
+  - **Thread safety**: Is the class thread-safe? Must callers hold a lock?
+    Are there mutable shared fields that need protection?
+  - **Async/sync boundary**: Which methods are async? Which block? Where
+    must the implementer use `asyncio.to_thread()` or a thread pool?
+  - **Shared mutable state**: List every piece of shared state (caches,
+    connection pools, in-memory counters) and the synchronization strategy
+    (lock, atomic op, per-request isolation, immutable after init).
+  - **Race conditions**: Identify known race conditions and the mitigation
+    (idempotency key, optimistic locking, mutex, CAS, queue serialization).
+  - **Deadlock risk**: If two locks exist, document acquisition order.
+  
+  If the system is single-threaded or uses a framework that serializes
+  access (e.g. SQLite with WAL + single writer), state that explicitly —
+  the implementer must not invent concurrency that isn't needed.
+  
+  ```markdown
+  ### Concurrency: AuthService
+  - Thread-safe: Yes. Stateless — all mutable state lives in UserRepository.
+  - Async: `revoke()` is async (writes to remote token blacklist via HTTP).
+    `authenticate()` and `refresh()` are sync (DB + crypto, no I/O wait).
+  - Shared state: None. Config is read-only after init.
+  - Race condition: Token refresh can race with revocation. Mitigation:
+    refresh() checks revocation list AFTER minting new token, revokes old
+    token atomically. If check fails, new token is still valid (acceptable
+    window: <1s).
+  ```
+  
+  ──────────────────────────────────────────────────────────────────────
+  STEP 15: ERROR HIERARCHY AND HANDLING CONTRACT
+  ──────────────────────────────────────────────────────────────────────
+  
+  Define the exception/error hierarchy for the system:
+  
+  ```python
+  # Base exception for the entire system
+  class AppError(Exception):
+      """Base. All app errors inherit from this."""
+      code: str        # machine-readable, e.g. "AUTH_INVALID_CREDENTIALS"
+      message: str     # human-readable
+      retryable: bool  # can the caller retry?
+  
+  class AuthError(AppError): ...
+  class InvalidCredentials(AuthError): ...
+  class AccountLocked(AuthError): ...
+  
+  class ValidationError(AppError): ...
+  class NotFoundError(AppError): ...
+  ```
+  
+  For each component, specify:
+  - What exceptions it raises (with the exact class).
+  - What exceptions it catches and how (retry? fallback? re-raise wrapped?).
+  - What error the API/CLI surface returns to the user (status code, message format).
+  
+  ──────────────────────────────────────────────────────────────────────
+  STEP 16: WIRING AND INITIALIZATION
+  ──────────────────────────────────────────────────────────────────────
+  
+  Describe exactly how components are wired together at startup:
+  
+  - **Dependency injection**: Is there a DI container, a factory function,
+    or manual wiring in `main()`? Show the exact wiring code or pattern.
+  - **Initialization order**: What starts first? What depends on what being
+    ready? (e.g. "Database must connect before repository is created.
+    Cache must warm before service accepts requests.")
+  - **Configuration source**: Where does each config value come from?
+    Env var? YAML file? CLI flag? Default? List the mapping.
+  - **Shutdown/cleanup**: What needs cleanup on exit? Who owns the
+    lifecycle? (connection pools, background tasks, temp files)
+  
+  ```python
+  # Example wiring in main()
+  config = load_config("config.yaml")
+  db = Database(config.db_url)          # connects on init
+  user_repo = UserRepository(db)        # uses db session factory
+  token_encoder = TokenEncoder(config.jwt_secret)
+  auth_service = AuthService(user_repo, token_encoder, config.auth)
+  api = create_app(auth_service)        # FastAPI / Flask / CLI app
+  ```
+  
+  ──────────────────────────────────────────────────────────────────────
+  STEP 17: GOTCHAS AND IMPLEMENTATION TRAPS
+  ──────────────────────────────────────────────────────────────────────
+  
+  List every non-obvious thing that will bite the implementer. Be
+  specific. Include:
+  
+  - **Framework quirks**: "SQLAlchemy sessions are not thread-safe. Use
+    scoped_session or create a session per request."
+  - **Library gotchas**: "fastembed's default model outputs 384-dim vectors.
+    If you switch models, update the Qdrant collection dimension config."
+  - **Ordering dependencies**: "You must create the index BEFORE inserting
+    documents, not after."
+  - **Silent failure modes**: "If the cache key collides (hash collision),
+    you'll serve stale data with no error. Use a content-addressable key."
+  - **Performance traps**: "N+1 query pattern: the loop in
+    `process_orders()` calls `get_user()` per iteration. Batch it."
+  - **Data consistency**: "The `total` column must be updated in the same
+    transaction as the line items, not in a separate call."
+  - **Testing gotchas**: "Mock the clock, not `time.time()`. The system
+    uses `datetime.utcnow()` everywhere — a `time.time()` mock won't
+    affect it."
+  
+  Format as a numbered list in a "Gotchas" subsection under each component.
+  If there are system-wide gotchas, put them in a top-level "System Gotchas"
+  section.
+  
+  ──────────────────────────────────────────────────────────────────────
+  STEP 18: HOOK-TOGETHER MAP
+  ──────────────────────────────────────────────────────────────────────
+  
+  For every interface boundary between two components, document:
+  
+  | Caller | Callee | Method | Data Passed | Data Returned | Error Propagation |
+  |--------|--------|--------|-------------|---------------|-------------------|
+  | API handler | AuthService | authenticate(Credentials) | email, password | AuthResult | InvalidCredentials → 401, AccountLocked → 423 |
+  | AuthService | UserRepository | find_by_email(str) | email string | User or None | NotFoundError (internal, not exposed) |
+  | Scheduler | TaskRunner | run(Task) | task payload | RunResult | TaskFailed → retry with backoff, max 3 |
+  
+  This table IS the architecture's contract. If a row is ambiguous, the
+  design is not done.
+  
+  ──────────────────────────────────────────────────────────────────────
+  STEP 19: SELF-CHECK: IS THIS ARCHITECTURE IMPLEMENTATION-READY?
+  ──────────────────────────────────────────────────────────────────────
+  
+  Before writing architecture.md, verify:
+  
+  □ Every public method has a full signature (types, params, return, raises).
+  □ Every custom type/model has its fields and constraints listed.
+  □ Every component has a concurrency contract.
+  □ Every exception in the hierarchy is defined with its fields.
+  □ The wiring code (or pattern) is shown.
+  □ The initialization order is documented.
+  □ Every interface boundary is in the hook-together map.
+  □ Gotchas are listed per-component and at system level.
+  □ There is no "TBD", "use your judgment", or "as appropriate" anywhere.
+  
+  If ANY checkbox fails, go back and fill the gap. A design with blanks is
+  not a design — it's a wish list.
+  
+  ═══════════════════════════════════════════════════════════════════════
   CRITICAL RULES
   ═══════════════════════════════════════════════════════════════════════
   
@@ -485,6 +698,13 @@ additional_notes: |
   - Perform an OO design pass before finalizing
   - Identify refactoring opportunities and shared abstractions
   - Push down details while keeping base interfaces clean
+  - Produce full class skeletons with typed method signatures and docstrings
+  - Document the concurrency model for every component (thread safety, async boundaries, shared state, race conditions)
+  - Define the exception hierarchy with fields and which component raises what
+  - Show the wiring/initialization code or pattern — who creates whom, in what order
+  - List gotchas per component: framework quirks, library traps, ordering deps, silent failure modes, performance traps, testing gotchas
+  - Fill the hook-together map: every inter-component call with data types and error propagation
+  - Pass the self-check: no TBD, no "use your judgment", no blanks
   
   DO NOT:
   - Skip component interface design
@@ -492,10 +712,16 @@ additional_notes: |
   - Forget edge cases in acceptance criteria
   - Ignore non-functional requirements
   - Skip the OO design pass
+  - Skip the implementation readiness pass (Steps 12-19)
   - Create tightly coupled components without abstractions
   - Use silent fallbacks that hide configuration errors — throw clear exceptions instead
     (Exception: retry logic, graceful degradation with explicit logging, and user-facing defaults are acceptable)
   - Hardcode values (ports, paths, URLs, timeouts) — put them in config with sensible defaults
+  - Leave method signatures incomplete (no `-> Any`, no `*args`, no missing types)
+  - Hand-wave concurrency ("should be thread-safe" without saying HOW)
+  - Omit exception classes the implementer must define
+  - Say "TBD", "as appropriate", "use your judgment", or "follow existing patterns" without specifying WHICH patterns
+  - Store credentials, API keys, secrets, or tokens in source code, config files, or architecture.md — ALL secrets go in a .env file (or equivalent secrets manager), never in code or docs. Specify this explicitly in your infrastructure section.
   
   
   ═══════════════════════════════════════════════════════════════════════
