@@ -658,7 +658,25 @@ if command -v pi >/dev/null 2>&1; then
     else
         ok "pi-codegraph-extension already installed"
     fi
-    
+
+    # ── CodeGraph MCP for Claude Code and other CLI agents ──
+    if command -v codegraph >/dev/null 2>&1; then
+        header "CodeGraph MCP Server Setup"
+        log "Installing CodeGraph MCP for all detected agents (Claude Code, pi, etc.)..."
+        codegraph install -y 2>&1 | tail -5
+        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            ok "CodeGraph MCP installed"
+            log "Agents can now use codegraph_search, codegraph_context, etc. via MCP."
+            log "CLI commands also work: codegraph init ., codegraph search <term> ."
+        else
+            warn "CodeGraph MCP install had issues (non-fatal)"
+            warn "You can retry later: codegraph install"
+        fi
+    else
+        log "CodeGraph CLI not found — skipping MCP server setup"
+        log "Install later: npm install -g codegraph && codegraph install"
+    fi
+
     # Generate and install Hephaestus pi agents from phase files
     log "Generating Hephaestus pi agents from phase definitions..."
     if [ -f "$PREFIX/scripts/generate_pi_agents.py" ]; then
@@ -862,6 +880,39 @@ else
     log "To configure later:"
     log "  1. Install pi-mcp-adapter: pi install npm:pi-mcp-adapter"
     log "  2. Create $PI_MCP_CONFIG with your MCP server configuration"
+fi
+
+# ─── Claude Code Agent Installation ───────────────────────────────
+
+header "Claude Code Agents"
+
+CLAUDE_AGENTS_DIR="$HOME/.claude/agents"
+
+# Check if Claude Code CLI is installed (must be on PATH)
+if command -v claude >/dev/null 2>&1; then
+    log "Claude Code detected — installing Hephaestus subagents"
+
+    if [ -f "$PREFIX/scripts/generate_claude_agents.py" ]; then
+        "$PYTHON_PATH" "$PREFIX/scripts/generate_claude_agents.py" 2>/dev/null
+        if [ $? -eq 0 ]; then
+            # Copy generated agents to Claude Code's user-level agents
+            # directory (~/.claude/agents/) so they're discoverable via
+            # `claude --agent <name>` regardless of which project a
+            # Hephaestus-launched agent is working in.
+            mkdir -p "$CLAUDE_AGENTS_DIR"
+            if [ -d "$PREFIX/agents/claude" ]; then
+                cp "$PREFIX/agents/claude"/*.md "$CLAUDE_AGENTS_DIR" 2>/dev/null
+                agent_count=$(ls -1 "$PREFIX/agents/claude"/*.md 2>/dev/null | wc -l)
+                ok "Installed $agent_count Hephaestus Claude Code agents"
+            fi
+        else
+            warn "Failed to generate Claude Code agents"
+        fi
+    else
+        warn "generate_claude_agents.py not found — skipping agent generation"
+    fi
+else
+    log "Claude Code not detected — skipping agent installation"
 fi
 
 header "Done"
