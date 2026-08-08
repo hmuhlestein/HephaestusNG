@@ -107,19 +107,36 @@ class TaskCompletionService:
 
         # wf.working_directory missing here is not "the agent didn't write the
         # file" -- it's a worktree-tracking bug (the workflow's shared worktree
-        # got lost or was never recorded). Try to recover from the agent's
-        # worktree record before giving up.
+        # got lost or was never recorded). Try to recover from a worktree
+        # record before giving up.
         if task.workflow_id and not (wf and wf.working_directory):
-            # Attempt recovery: get working_directory from assigned agent's worktree
+            # Attempt recovery: an AgentWorktree row only exists for an agent
+            # that fell back to an ISOLATED worktree (create_agent_for_task's
+            # shared_worktree branch reuses wf.working_directory directly and
+            # never creates one) -- which only happens when wf.working_directory
+            # was already empty at THAT agent's own dispatch time. Recovering
+            # from the CURRENTLY completing task's own agent is unstable: each
+            # recovery just adopts whoever happens to finish next, drifting the
+            # "shared" worktree to a different disconnected path every time
+            # working_directory goes empty. The workflow's EARLIEST isolated
+            # worktree is far more likely to be the one every other phase has
+            # actually been committing to and reading from -- recover that one
+            # instead, scoped to this workflow (not just this task's agent).
             recovered = False
-            if task.assigned_agent_id:
-                from src.core.database import AgentWorktree
-                wt_record = session.query(AgentWorktree).filter_by(agent_id=task.assigned_agent_id).first()
-                if wt_record and wt_record.worktree_path and _Path(wt_record.worktree_path).is_dir():
-                    if wf:
-                        wf.working_directory = wt_record.worktree_path
-                        logger.info(f"[TASK-COMPLETE] Recovered working_directory for workflow {task.workflow_id[:8]} from agent worktree: {wt_record.worktree_path}")
-                        recovered = True
+            from src.core.database import AgentWorktree, Task as _Task
+
+            wt_record = (
+                session.query(AgentWorktree)
+                .join(_Task, _Task.assigned_agent_id == AgentWorktree.agent_id)
+                .filter(_Task.workflow_id == task.workflow_id)
+                .order_by(AgentWorktree.created_at.asc())
+                .first()
+            )
+            if wt_record and wt_record.worktree_path and _Path(wt_record.worktree_path).is_dir():
+                if wf:
+                    wf.working_directory = wt_record.worktree_path
+                    logger.info(f"[TASK-COMPLETE] Recovered working_directory for workflow {task.workflow_id[:8]} from earliest agent worktree: {wt_record.worktree_path}")
+                    recovered = True
             if not recovered:
                 logger.error(
                     f"Task {task.id} (phase {phase.name}): workflow {task.workflow_id} "
