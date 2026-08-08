@@ -97,3 +97,49 @@ class TestGetLaunchCommandSessionOrdering:
             )
         mock_exists.assert_not_called()
         assert command.startswith("(claude --session-id ")
+
+
+class TestGetLaunchCommandInstalledAgent:
+    """When install.sh has generated+installed a per-phase Claude Code
+    subagent (~/.claude/agents/hephaestus-{phase}.md), the launch command
+    should use --agent <name> -- Claude Code's own officially supported
+    named-agent flag -- instead of hand-rolling --append-system-prompt.
+    Mirrors PiAgent's equivalent per-phase agent-file lookup."""
+
+    def test_uses_agent_flag_when_installed_file_exists(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        agents_dir = tmp_path / ".claude" / "agents"
+        agents_dir.mkdir(parents=True)
+        (agents_dir / "hephaestus-development.md").write_text("---\nname: x\n---\nbody")
+
+        agent = ClaudeCodeAgent()
+        command = agent.get_launch_command(
+            system_prompt="do the thing",
+            task_id="task-1",
+            phase_name="development",
+        )
+        assert "--agent hephaestus-development" in command
+        assert "--append-system-prompt" not in command
+
+    def test_falls_back_to_append_system_prompt_when_no_installed_file(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        agent = ClaudeCodeAgent()
+        command = agent.get_launch_command(
+            system_prompt="do the thing",
+            task_id="task-2",
+            phase_name="development",
+        )
+        assert "--append-system-prompt" in command
+        assert "--agent " not in command
+
+    def test_falls_back_to_append_system_prompt_without_phase_name(self):
+        agent = ClaudeCodeAgent()
+        command = agent.get_launch_command(
+            system_prompt="do the thing",
+            task_id="task-3",
+        )
+        assert "--append-system-prompt" in command
+        assert "--agent " not in command

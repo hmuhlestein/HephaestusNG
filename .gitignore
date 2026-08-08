@@ -76,6 +76,7 @@ lib/
 
 # Generated at install time from phase definitions
 agents/pi/
+agents/claude/
 
 .playwright-mcp/
 node_modules/
