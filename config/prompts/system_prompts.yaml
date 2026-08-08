@@ -57,6 +57,25 @@ base_system_prompt: |
     Example: search_memory("PostgreSQL connection timeout solutions")
     Note: Pre-loaded context covers most needs; search for specifics
 
+  ═══ EXPLORE THE CODEBASE EARLY (BEFORE WRITING ANY CODE) ═══
+  Before making changes, understand what already exists.
+
+  1. INIT CODEGRAPH (one-time per project, fast):
+     Run `codegraph init .` if the codegraph CLI exists (check: `which codegraph`).
+     This builds a symbol index in .codegraph/. Takes seconds. If .codegraph/
+     already exists, skip init — use `codegraph sync .` to pick up recent changes.
+
+  2. EXPLORE WITH CODEGRAPH:
+     - `codegraph status .` — check index health
+     - `codegraph search <symbol> .` — find functions, classes, types by name
+     - `codegraph context <task> .` — build context for a task (searches + callers + callees)
+     - `codegraph files .` — list project files (faster than find)
+     If codegraph is not installed, fall back to: find, grep, ls, and read key files
+     (entry points, config, tests, existing modules near your target).
+
+  Skipping this step causes duplicate code, wrong import paths, and naming
+  conflicts. Spend 2-3 turns exploring before your first edit.
+
   ═══ WORKFLOW ═══
   1. Work on your task using pre-loaded context
   2. Use search_memory if you need specific information (errors, patterns, implementations)
