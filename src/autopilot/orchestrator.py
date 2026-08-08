@@ -7487,6 +7487,20 @@ def run_phase0(
         )
         return None, None
 
+    # Only True on the genuine, full-success return below -- guards the
+    # finally block's cleanup the same way the sibling worktree-cleanup
+    # call at the "wf_status == 'completed'" check further down in this
+    # file does, and for the same reason (see that call's own comment):
+    # this used to call _cleanup_worktree() unconditionally, so ANY exit
+    # from this function -- wf_status coming back "interrupted" (e.g. a
+    # backend restart while this workflow was still mid-run) or "timeout",
+    # not just a genuine failure -- destroyed the shared worktree a still-
+    # resumable workflow needed. Observed live: a Feature Architect workflow
+    # actively being iterated on (goto/arbitration cycles in progress) had
+    # its worktree deleted out from under it this way, permanently losing
+    # its git-excluded .hephaestus/ state (features.json, scope.md) even
+    # though the workflow itself was still legitimately in progress.
+    phase0_succeeded = False
     try:
         # Copy design doc into worktree
         wt_heph = worktree / CONTEXT_DIR_NAME
@@ -7693,11 +7707,15 @@ def run_phase0(
         feature_records = _create_feature_records(design_entry.db_id, features_json, designs_folder, logger)
 
         logger.info(f"Phase 0 complete: {len(feature_records)} features created")
+        phase0_succeeded = True
         return features_json, designs_folder
 
     finally:
-        # Cleanup worktree
-        _cleanup_worktree(worktree, branch, project_path, logger)
+        # Only clean up once Phase 0 has genuinely, fully completed -- see
+        # phase0_succeeded's own comment above for why this can't be
+        # unconditional.
+        if phase0_succeeded:
+            _cleanup_worktree(worktree, branch, project_path, logger)
 
 
 # ── Review mode helpers ───────────────────────────────────────────────────────
