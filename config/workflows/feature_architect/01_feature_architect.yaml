@@ -1,5 +1,5 @@
 id: 1
-name: Feature Architect
+name: feature_architect
 description: "Decomposes a design document into discrete, implementable features with clear boundaries and dependencies"
 cli_tool: claude
 cli_model: sonnet

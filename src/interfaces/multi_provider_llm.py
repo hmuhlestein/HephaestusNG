@@ -114,9 +114,9 @@ class MultiProviderLLM(LLMProviderInterface):
             task: Task information
             memories: Relevant memories from RAG
             project_context: Current project context
-            phase_name: Phase name (e.g. "Feature Architect") -- selects a
+            phase_name: Phase name (e.g. "feature_architect") -- selects a
                 specialized prompt template downstream (see
-                get_feature_architect_system_prompt). This wrapper's
+                get_phase_system_prompt). This wrapper's
                 signature had drifted from both its caller
                 (agents/manager.py, which always passes phase_name) and
                 the underlying client it delegates to, causing every
