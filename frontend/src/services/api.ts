@@ -804,6 +804,16 @@ export const apiService = {
     return data;
   },
 
+  browseAutopilotProjectFiles: async (projectId: string, path: string = ''): Promise<{ path: string; parent: string | null; entries: { name: string; path: string; type: 'dir' | 'file' }[] }> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/browse`, { params: { path } });
+    return data;
+  },
+
+  getAutopilotProjectFileContent: async (projectId: string, path: string): Promise<{ name: string; content: string; size_bytes: number }> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/browse/content`, { params: { path } });
+    return data;
+  },
+
   reorderAutopilotProjectDesigns: async (projectId: string, designIds: string[]): Promise<void> => {
     await api.put(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/reorder`, { design_ids: designIds });
   },
