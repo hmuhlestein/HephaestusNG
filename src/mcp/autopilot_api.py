@@ -981,6 +981,7 @@ async def rerun_design(request: dict):
             CostEntry,
             DiagnosticRun,
             Memory,
+            Phase,
             PhaseExecution,
             TaskPromptOverride,
             Ticket,
@@ -1028,9 +1029,6 @@ async def rerun_design(request: dict):
                 db.query(Ticket).filter(Ticket.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(CostEntry).filter(CostEntry.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
-                # Delete phase executions
-                db.query(PhaseExecution).filter(PhaseExecution.workflow_execution_id.in_(wf_ids)).delete(synchronize_session=False)
-
                 # Collect worktree info before the Workflow rows are gone.
                 # Without this, _create_integration_worktree's deterministic
                 # per-design path (design_id-derived, unchanged by rerun)
@@ -1045,8 +1043,27 @@ async def rerun_design(request: dict):
                         lp = wf.launch_params if isinstance(wf.launch_params, dict) else {}
                         worktrees_to_clean.append((wf.working_directory, lp))
 
-                # Delete tasks
+                # Delete tasks -- must happen before Phase/PhaseExecution
+                # below: Task.phase_id is a FK to phases.id, so deleting
+                # Phase rows first (as an earlier version of this fix did)
+                # fails with the same FOREIGN KEY error, just one table over.
                 db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+
+                # Delete phase executions -- PhaseExecution links to a
+                # workflow via phase_id -> Phase.workflow_id, not the
+                # workflow_execution_id column (an unused legacy field
+                # that's never actually populated with a workflow id, so
+                # filtering on it matched zero rows and left every
+                # PhaseExecution -- and the Phase rows below -- behind).
+                phase_ids = [p.id for p in db.query(Phase.id).filter(Phase.workflow_id.in_(wf_ids)).all()]
+                if phase_ids:
+                    db.query(PhaseExecution).filter(PhaseExecution.phase_id.in_(phase_ids)).delete(synchronize_session=False)
+
+                # Delete phases -- Phase.workflow_id is a NOT NULL FK to
+                # workflows.id, so leaving these behind (as this always
+                # did) made the Workflow delete below fail with a
+                # FOREIGN KEY constraint error every time.
+                db.query(Phase).filter(Phase.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Delete workflows
                 db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(synchronize_session=False)
@@ -2789,6 +2806,7 @@ async def remove_project_design(project_id: str, filename: str):
         DiagnosticRun,
         Feature,
         Memory,
+        Phase,
         PhaseExecution,
         Task,
         TaskPromptOverride,
@@ -2886,9 +2904,6 @@ async def remove_project_design(project_id: str, filename: str):
                 db.query(Ticket).filter(Ticket.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
                 db.query(CostEntry).filter(CostEntry.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
-                # Delete phase executions
-                db.query(PhaseExecution).filter(PhaseExecution.workflow_execution_id.in_(wf_ids)).delete(synchronize_session=False)
-
                 # Collect worktree info before the Workflow rows are gone --
                 # otherwise these directories orphan permanently: they're
                 # deterministic per-feature paths (_create_integration_worktree),
@@ -2901,8 +2916,27 @@ async def remove_project_design(project_id: str, filename: str):
                         lp = wf.launch_params if isinstance(wf.launch_params, dict) else {}
                         worktrees_to_clean.append((wf.working_directory, lp))
 
-                # Delete tasks
+                # Delete tasks -- must happen before Phase/PhaseExecution
+                # below: Task.phase_id is a FK to phases.id, so deleting
+                # Phase rows first (as an earlier version of this fix did)
+                # fails with the same FOREIGN KEY error, just one table over.
                 db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+
+                # Delete phase executions -- PhaseExecution links to a
+                # workflow via phase_id -> Phase.workflow_id, not the
+                # workflow_execution_id column (an unused legacy field
+                # that's never actually populated with a workflow id, so
+                # filtering on it matched zero rows and left every
+                # PhaseExecution -- and the Phase rows below -- behind).
+                phase_ids = [p.id for p in db.query(Phase.id).filter(Phase.workflow_id.in_(wf_ids)).all()]
+                if phase_ids:
+                    db.query(PhaseExecution).filter(PhaseExecution.phase_id.in_(phase_ids)).delete(synchronize_session=False)
+
+                # Delete phases -- Phase.workflow_id is a NOT NULL FK to
+                # workflows.id, so leaving these behind (as this function
+                # always did) made the Workflow delete below fail with a
+                # FOREIGN KEY constraint error every time.
+                db.query(Phase).filter(Phase.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Delete workflows
                 db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(synchronize_session=False)
