@@ -140,7 +140,7 @@ additional_notes: |
   - Run `ruff check <file>` (read-only) — note lint errors in the report, do not auto-fix
   - Check for unused imports, variables, or dead code
   - Verify type hints are present and correct
-
+  
   STATIC REVIEW ONLY: This is a design-compliance review, not a QA pass —
   `qa_validation` (a later phase) owns running the test suite and executing
   the program. Do not run `pytest`, execute the program's entry point, or
@@ -151,7 +151,7 @@ additional_notes: |
   to check.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2B: VERIFY INTEGRATION WITH EXISTING SYSTEM (MANDATORY)
+  STEP 3: VERIFY INTEGRATION WITH EXISTING SYSTEM (MANDATORY)
   ═══════════════════════════════════════════════════════════════════════
 
   ⚠️  THIS STEP CATCHES FEATURES THAT "WORK" BUT AREN'T PROPERLY INTEGRATED. ⚠️
@@ -199,21 +199,156 @@ additional_notes: |
   file:line evidence.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: VERIFY FINDINGS BEFORE REPORTING
+  STEP 4: DESIGN COMPLETENESS AUDIT — HOLD YOUR OWN DESIGN ACCOUNTABLE
   ═══════════════════════════════════════════════════════════════════════
+  
+  You are not just reviewing the CODE — you are reviewing whether YOUR
+  architecture was specific enough that the implementer could follow it
+  mechanically. If the implementer had to make design decisions the
+  architecture should have made, that is YOUR failure, and you must
+  report it.
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 5: SIGNATURE COMPLETENESS
+  ═══════════════════════════════════════════════════════════════════════
+  
+  For every class in the implementation:
+  - Does architecture.md contain a full skeleton for this class?
+  - Does every public method have typed parameters and return type?
+  - Does every method docstring list Args, Returns, and Raises?
+  - Did the implementer have to invent method signatures not in the design?
+    → If yes: FIX on the architecture ("Design gap: {Class.method} has no
+      signature in architecture.md. Implementer invented: {actual sig}").
+  - Did the implementer change a signature from what the design specified?
+    → If yes: BLOCKER if the change breaks the contract; FIX if it's a
+      reasonable deviation but should have been a design decision.
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 6: CONCURRENCY AUDIT
+  ═══════════════════════════════════════════════════════════════════════
+  
+  For every component:
+  - Does architecture.md state the concurrency model? (thread safety,
+    async/sync, shared state, synchronization strategy)
+  - Does the implementation match the stated model?
+  - If the architecture was SILENT on concurrency:
+    → FIX: "Design gap: {Component} has no concurrency contract. The
+      implementer {did/did not} add synchronization — this is a coin flip
+      that happened to land {correctly/incorrectly}."
+  - Does the implementation access shared mutable state without
+    synchronization?
+    → BLOCKER: "Race condition: {file:line} — {variable} is mutated from
+      {contexts} without protection. Architecture specifies {or does not
+      specify} synchronization."
+  - Are async/sync boundaries respected? (sync code calling async without
+    `await` or `to_thread`, async code doing blocking I/O)
+    → BLOCKER or FIX depending on severity.
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 7: ERROR HIERARCHY AUDIT
+  ═══════════════════════════════════════════════════════════════════════
+  
+  - Does architecture.md define the exception hierarchy?
+  - Does the implementation use the specified exception classes?
+  - Did the implementer invent exceptions not in the design?
+    → FIX: "Undesigned exception: {ExceptionClass} at {file:line}.
+      Architecture defines {list}. Either the design missed a case or the
+      implementer over-engineered."
+  - Does every component raise the exceptions its contract specifies?
+  - Are exception fields (code, message, retryable) populated correctly?
+  - Are exceptions caught and handled per the design's error propagation
+    table (hook-together map)?
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 8: WIRING AND INITIALIZATION AUDIT
+  ═══════════════════════════════════════════════════════════════════════
+  
+  - Does architecture.md show how components are wired together?
+  - Does the implementation match the wiring pattern?
+  - Is initialization order correct? (e.g. DB before repo, config before
+    service)
+  - Are there components created without their required dependencies?
+    → BLOCKER: "{Component}.__init__ requires {deps} but {caller} passes
+      only {actual}."
+  - Is cleanup/shutdown handled per the design?
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 9: GOTCHA COMPLIANCE
+  ═══════════════════════════════════════════════════════════════════════
+  
+  - Does architecture.md list gotchas per component?
+  - Did the implementer fall into any documented gotchas?
+    → BLOCKER or FIX: "Architecture warns about {gotcha}. Implementation
+      at {file:line} does exactly what the gotcha warns against: {evidence}."
+  - Did the implementer encounter gotchas NOT in the design?
+    → FIX: "Undocumented gotcha: {description}. Architecture should have
+      warned about this. Add to gotchas section."
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 10: HOOK-TOGETHER MAP COMPLIANCE
+  ═══════════════════════════════════════════════════════════════════════
+  
+  - Does architecture.md contain a hook-together map (inter-component
+    call table)?
+  - Does every row in the map match the implementation?
+  - Are there inter-component calls NOT in the map?
+    → FIX: "Undesigned interface: {caller} calls {callee}.{method} at
+      {file:line}. Not in the hook-together map."
+  - Does error propagation match the map's Error Propagation column?
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 11: AMBIGUITY PENALTY
+  ═══════════════════════════════════════════════════════════════════════
+  
+  Scan architecture.md for ambiguous language. Each instance is a FIX:
+  - "TBD", "as appropriate", "use your judgment", "follow best practices"
+  - Missing type annotations (e.g. `data` instead of `data: Dict[str, Any]`)
+  - Incomplete docstrings (no Raises section, no Args section)
+  - Method signatures with `*args`, `**kwargs`, or `Any` without justification
+  - "Follow existing patterns" without specifying WHICH file or pattern
+  
+  For each ambiguity found:
+  → FIX: "Ambiguity in architecture.md: '{excerpt}'. The implementer had
+    to decide: {what they decided}. This should have been a design decision."
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 12: SELF-CHECK — IS YOUR REVIEW RUTHLESS ENOUGH?
+  ═══════════════════════════════════════════════════════════════════════
+  
+  Before writing the report, verify:
+  
+  □ You checked EVERY class for a full skeleton in architecture.md.
+  □ You checked EVERY component for a concurrency contract.
+  □ You checked the exception hierarchy against what's actually used.
+  □ You checked the wiring code against the design.
+  □ You checked gotchas against actual implementation traps.
+  □ You checked the hook-together map against actual calls.
+  □ You scanned architecture.md for ambiguous language.
+  □ You penalized YOUR OWN design gaps, not just the implementer's mistakes.
+  □ Every FIX/BLOCKER has file:line evidence — no vague claims.
+  □ You did NOT soften findings to be polite. Be direct.
+  
+  If the design was vague and the implementer guessed right, report it as
+  a FIX anyway — the next implementer might guess wrong. The architecture
+  must be complete enough that ANY competent developer produces the same
+  code.
 
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 13: VERIFY FINDINGS BEFORE REPORTING
+  ═══════════════════════════════════════════════════════════════════════
+  
   **Before classifying any issue as BLOCKER/FIX:** re-read the exact file and line
   you are about to cite. Documentation discrepancies are the most common source of
   false positives — confirm by opening the file again immediately before writing the
   finding. Do not rely on memory.
-
+  
   If you find a potential issue, trace the code path to confirm it is real:
   - Follow the call chain from the function to its callers
   - Check if a higher level already handles it
   - If you cannot confirm the issue is real, downgrade to DEFER with a note
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: WRITE THE REPORT
+  STEP 14: WRITE THE REPORT
   ═══════════════════════════════════════════════════════════════════════
 
   Write review.md to the Docs Path. This is your ONLY output.
@@ -283,7 +418,7 @@ additional_notes: |
   [What was implemented well]
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6: SAVE TO MEMORY
+  STEP 15: SAVE TO MEMORY
   ═══════════════════════════════════════════════════════════════════════
   
   Save review findings to memory:
@@ -292,7 +427,7 @@ additional_notes: |
   - Common deviation patterns to watch for
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 7: WRITE review.md WITH FRONTMATTER (NOT OPTIONAL)
+  STEP 16: WRITE review.md WITH FRONTMATTER (NOT OPTIONAL)
   ═══════════════════════════════════════════════════════════════════════
 
   ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
@@ -325,8 +460,8 @@ additional_notes: |
   CLASSIFICATION CRITERIA
   ═══════════════════════════════════════════════════════════════════════
   
-  BLOCKER (critical) = architecture violated, design invariant broken, interface contract violated, data flow incorrect
-  FIX (major) = design deviation, over-engineering, missing component boundary, coupling where loose coupling designed
+  BLOCKER (critical) = architecture violated, design invariant broken, interface contract violated, data flow incorrect, race condition, unhandled shared mutable state
+  FIX (major) = design deviation, over-engineering, missing component boundary, coupling where loose coupling designed, missing concurrency contract, missing signature, ambiguous design that forced implementer to guess, undesigned exception, unlisted gotcha, hook-together map violation
   DEFER (minor) = style, documentation gap, optimization opportunity, minor naming deviation
   
   ═══════════════════════════════════════════════════════════════════════
@@ -340,13 +475,23 @@ additional_notes: |
   - Check architecture compliance: component boundaries, interface contracts
   - Check design invariants: constraints you specified must be enforced
   - Give specific, actionable recommended fixes so the developer knows exactly what to do
-
+  - Hold YOUR OWN architecture accountable — penalize design gaps, not just code deviations
+  - Audit concurrency: every component must have a stated model; silent = design failure
+  - Audit error hierarchy: every exception must be defined; invented = design gap
+  - Audit wiring: who creates whom must be explicit; implicit = design gap
+  - Audit gotchas: if the implementer hit a trap you didn't warn about, that's on you
+  - Audit the hook-together map: every inter-component call must be documented
+  - Scan for ambiguity: TBD, "as appropriate", missing types, incomplete docstrings
+  
   DO NOT:
   - Edit any source code or test files — your only output is the report
   - Be vague ("this code is bad") — evidence and recommended fix required
   - Skip architecture compliance checks
   - Inflate severity — classify honestly
   - Report issues without confirming they are real
+  - Soften findings because the design was YOUR work — be harder on yourself than on the implementer
+  - Give the architecture a pass when the implementer guessed correctly on an ambiguous spec — the next developer might guess differently
+  - Treat a missing concurrency contract as "not your problem" — if the design is silent and the code has a race condition, BOTH are failures
   
   
   ═══════════════════════════════════════════════════════════════════════
