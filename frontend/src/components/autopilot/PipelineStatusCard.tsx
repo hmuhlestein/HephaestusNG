@@ -138,7 +138,7 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, pending
                 <div className="flex items-center justify-center gap-1 mb-1">
                   <span className="text-xs text-white/60 uppercase tracking-wider">Budget</span>
                 </div>
-                <CostDisplay currentCost={costTotal} costLimit={costLimit} showProgress={false} />
+                <CostDisplay currentCost={costTotal} costLimit={costLimit} showProgress={false} variant="large" />
               </button>
             )}
 

@@ -6,6 +6,7 @@ interface CostDisplayProps {
   costLimit?: number | null;
   className?: string;
   showProgress?: boolean;
+  variant?: 'default' | 'large';
 }
 
 /**
@@ -18,6 +19,7 @@ const CostDisplay: React.FC<CostDisplayProps> = ({
   costLimit,
   className = '',
   showProgress = true,
+  variant = 'default',
 }) => {
   const isOverBudget = costLimit != null && currentCost >= costLimit;
   const progressPercent = costLimit ? Math.min((currentCost / costLimit) * 100, 100) : costLimit === 0 ? 100 : null;
@@ -29,13 +31,20 @@ const CostDisplay: React.FC<CostDisplayProps> = ({
     return `$${cost.toFixed(2)}`;
   };
 
+  const valueClasses = variant === 'large'
+    ? 'text-2xl font-bold text-white'
+    : 'font-mono text-sm font-medium';
+  const limitClasses = variant === 'large'
+    ? 'text-sm text-white/60'
+    : 'text-xs text-gray-500';
+
   return (
     <div className={`flex items-center gap-2 ${className}`}>
-      <span className="font-mono text-sm font-medium">
+      <span className={valueClasses}>
         {formatCost(currentCost)}
       </span>
       {costLimit != null && (
-        <span className="text-xs text-gray-500">
+        <span className={limitClasses}>
           / {formatCost(costLimit)}
         </span>
       )}
