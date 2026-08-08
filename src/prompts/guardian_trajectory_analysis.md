@@ -321,8 +321,25 @@ Only if BOTH conditions are true:
 This means the agent gave their final response but hasn't continued work or updated task status.
 
 **WHAT TO DO**:
-Look at the agent's current phase and done definition to determine the appropriate next action:
-- **If work appears complete** → Tell agent to mark it done using `heph_complete_my_task` (no task_id needed)
+First, check whether the agent's own recent output says it is BLOCKED from
+completing the required steps -- e.g. a tool call denied ("Permission has
+been denied...", a Write/Bash/MCP call failing, a required output file
+that could not be created. This is NOT the same as "work appears
+complete" even if the agent's analysis or reasoning is genuinely
+finished -- the done definition is about the required OUTPUT (a file
+existing, complete_my_task succeeding), not about the agent's narrative.
+
+- **If the agent reports being blocked from writing required output or
+  calling complete_my_task** → Do NOT tell it to report status='done'.
+  Never invent a capability that doesn't exist (e.g. "the workflow engine
+  will synthesize the file from your findings" -- there is no such
+  mechanism; a task is only done when its actual required output exists).
+  Tell it to retry the specific blocked action once, and if it is
+  genuinely blocked, to report `status='failed'` with the blocker and its
+  completed analysis in the failure reason, so the real infrastructure
+  problem surfaces instead of being hidden behind a false success signal.
+- **If work appears complete AND nothing indicates a blocker** → Tell
+  agent to mark it done using `heph_complete_my_task` (no task_id needed)
 - **If work is incomplete** → Tell agent to continue with the next logical step
 - **If in verification phase** → Remind agent to test, then update status
 - **If unclear** → Ask agent to assess whether to continue or mark task done
@@ -332,6 +349,7 @@ Look at the agent's current phase and done definition to determine the appropria
 - "You finished the exploration phase but haven't started implementation yet. Please proceed to implement the authentication endpoints as described in the task."
 - "You're in the verification phase - please run tests to verify your implementation, then update task status accordingly."
 - "It looks like you've paused after planning. Review the done definition and either continue with implementation or update your status if you believe the task is complete."
+- "Your analysis is complete, but you've reported that writing the output file failed. Retry that write once. If it fails again, call complete_my_task with status='failed' and include your full analysis in the failure reason -- do not report done without the actual file existing."
 
 Flag as: `"steering_type": "idle"`
 
