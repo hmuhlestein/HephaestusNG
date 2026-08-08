@@ -97,14 +97,29 @@ def get_base_system_prompt(
     })
 
 
-def get_feature_architect_system_prompt(
+def get_phase_system_prompt(
+    phase_name: Optional[str],
     agent_id: str,
     task_id: str,
     memory_context: str,
     project_context: str,
-) -> str:
-    """Get the Feature Architect system prompt with variables interpolated."""
-    return get_prompt("feature_architect_system_prompt", {
+) -> Optional[str]:
+    """Get a phase-specific system prompt, or None if this phase doesn't
+    have one.
+
+    Looked up by convention -- "{phase_name}_system_prompt" in
+    system_prompts.yaml -- so a phase opts into a specialized prompt purely
+    by that template existing (e.g. feature_architect_system_prompt for the
+    feature_architect phase). Callers fall back to get_base_system_prompt
+    (or their own equivalent) on None; no caller needs to know which phase
+    names have a specialized prompt.
+    """
+    if not phase_name:
+        return None
+    key = f"{phase_name}_system_prompt"
+    if key not in _load_prompts():
+        return None
+    return get_prompt(key, {
         "agent_id": agent_id,
         "task_id": task_id,
         "memory_context": memory_context,

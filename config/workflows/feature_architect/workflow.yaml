@@ -26,7 +26,7 @@ orchestrator:
   max_phase_retries: 1
   max_total_gotos: 3
   evaluation_points:
-    - after_phase: Feature Architect
+    - after_phase: feature_architect
       evaluator: heuristic
       max_retries: 1
       conditions:
@@ -40,10 +40,11 @@ orchestrator:
     - after_phase: feature_review
       evaluator: heuristic
       max_retries: 2
+      on_budget_exhausted: arbitrate
       conditions:
         - if: "score < 0.3"
           action: goto
-          target: Feature Architect
+          target: feature_architect
           reason: "Feature review found BLOCKER or FIX findings, re-decompose"
         - if: "score < 0.6"
           action: retry
@@ -67,7 +68,7 @@ workflow:
 # spec-gate scorer's read_okf_report call for feature_review passes
 # subdir=CONTEXT_DIR_NAME explicitly to match.
 required_output:
-  Feature Architect: features.json
+  feature_architect: features.json
   feature_review: review.md
 
 launch_template:
