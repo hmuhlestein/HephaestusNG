@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, CheckCircle2, RotateCcw, Clock, DollarSign, Layers, Eye, FileText, ListChecks } from 'lucide-react';
+import { X, CheckCircle2, RotateCcw, Clock, DollarSign, Layers, Eye, FileText, ListChecks, GitPullRequest } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { StatusBadge, StatusIcon, formatTime } from '@/pages/Autopilot';
 import toast from 'react-hot-toast';
@@ -206,6 +206,17 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
                 )}
                 {feature?.scope && (
                   <p className="text-xs text-gray-500 leading-relaxed line-clamp-4">{feature.scope}</p>
+                )}
+                {feature?.pr_url && (
+                  <a
+                    href={feature.pr_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 hover:underline mt-2"
+                  >
+                    <GitPullRequest className="w-4 h-4" />
+                    View Pull Request
+                  </a>
                 )}
               </div>
 

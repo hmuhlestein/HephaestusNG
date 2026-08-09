@@ -267,6 +267,40 @@ def _feature_status(metrics: dict) -> str:
     return "needs_review"
 
 
+def _extract_pr_url(db, workflow_id: str, phase_map: dict) -> Optional[str]:
+    """Extract PR URL from the git_commit_push task's key_learnings."""
+    import re
+    from src.core.database import Memory, Task, Phase
+    if not workflow_id:
+        return None
+    # Find the git_commit_push phase
+    git_phase = db.query(Phase).filter_by(
+        workflow_id=workflow_id, name="git_commit_push"
+    ).first()
+    if not git_phase:
+        return None
+    # Find the completed task for that phase
+    git_task = db.query(Task).filter_by(
+        phase_id=git_phase.id, status="done"
+    ).first()
+    if not git_task:
+        return None
+    # Look for PR URL in key_learnings (stored as memories)
+    memories = db.query(Memory).filter_by(
+        related_task_id=git_task.id, memory_type="learning"
+    ).all()
+    pr_pattern = re.compile(r"https://github\.com/[^\s]+/pull/\d+")
+    for mem in memories:
+        match = pr_pattern.search(mem.content or "")
+        if match:
+            return match.group(0)
+    # Also check completion_notes
+    match = pr_pattern.search(git_task.completion_notes or "")
+    if match:
+        return match.group(0)
+    return None
+
+
 # ── File I/O ─────────────────────────────────────────────────────
 
 
@@ -3467,6 +3501,7 @@ async def get_project_design_status(project_id: str, filename: str):
                     "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
                     "has_report": has_report,
                     "cost_total_usd": feat.cost_total_usd or 0.0,
+                    "pr_url": _extract_pr_url(db, feat_wf_id, phase_map) if feat_wf_id else None,
                     # Review mode fields
                     "review_pending": (
                         feat_wf_id is not None
