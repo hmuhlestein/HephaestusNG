@@ -3,7 +3,7 @@
 # Hephaestus Uninstall Script
 #
 # Removes Hephaestus agents from all configured CLI agent systems
-# (pi, Claude Code, CodeGraph MCP) and optionally deletes the install.
+# (pi, Claude Code, OpenCode, CodeGraph MCP) and optionally deletes the install.
 #
 # Usage:
 #   ./uninstall.sh              # interactive — asks before each step
@@ -66,6 +66,7 @@ log "This will remove Hephaestus agents from:"
 log "  • pi          ($PI_AGENTS_DIR)"
 log "  • Claude Code ($CLAUDE_AGENTS_DIR)"
 log "  • CodeGraph   (MCP server config)"
+log "  • OpenCode    (MCP config)"
 if ! $AGENTS_ONLY; then
 log "  • Install dir ($PREFIX)"
 fi
@@ -184,6 +185,53 @@ else:
     fi
 else
     log "No hephaestus MCP entry in pi config — skipping"
+fi
+
+# ── OpenCode agents and MCP config ──
+header "OpenCode"
+OPENCODE_CONFIG="$HOME/.config/opencode/opencode.jsonc"
+if [ -f "$OPENCODE_CONFIG" ] 2>/dev/null; then
+    if confirm "Remove hephaestus MCP server from OpenCode config?"; then
+        if command -v python3 >/dev/null 2>&1; then
+            python3 -c "
+import json, sys, re
+path = '$OPENCODE_CONFIG'
+with open(path) as f:
+    raw = f.read()
+# Strip JSONC comments for parsing
+raw = re.sub(r'//.*$', '', raw, flags=re.MULTILINE)
+cfg = json.loads(raw)
+changed = False
+if 'mcp' in cfg and 'heph' in cfg['mcp']:
+    del cfg['mcp']['heph']
+    changed = True
+if changed:
+    with open(path, 'w') as f:
+        json.dump(cfg, f, indent=2)
+        f.write('\n')
+    print('Removed hephaestus from OpenCode config')
+else:
+    print('No hephaestus entry found')
+" 2>/dev/null && ok "OpenCode config updated" || warn "Could not update OpenCode config"
+        else
+            warn "python3 not found — manually remove 'heph' from $OPENCODE_CONFIG"
+        fi
+    fi
+else
+    log "OpenCode config not found — skipping"
+fi
+
+# Remove generated OpenCode agent files (documentation only — not used at runtime)
+OPENCODE_AGENTS_DIR="$PREFIX/agents/opencode"
+if [ -d "$OPENCODE_AGENTS_DIR" ]; then
+    _oc_count=$(ls -1 "$OPENCODE_AGENTS_DIR"/hephaestus-*.md 2>/dev/null | wc -l)
+    if [ "$_oc_count" -gt 0 ]; then
+        if confirm "Remove $_oc_count generated OpenCode agent file(s)?"; then
+            rm -f "$OPENCODE_AGENTS_DIR"/hephaestus-*.md
+            ok "Removed $_oc_count OpenCode agent file(s)"
+            removed=$((removed + _oc_count))
+        fi
+    fi
 fi
 
 # ── Install directory ──
