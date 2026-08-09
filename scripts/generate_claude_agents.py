@@ -56,7 +56,7 @@ scratch/exploratory output that isn't part of the deliverable goes under
 to your task? Don't write reports about it — work around it or fail the
 task with a reason.
 
-When your work is complete, call your update_task_status tool with
+When your work is complete, call heph_complete_my_task with
 status="done" and a summary. If you cannot proceed, call it with
 status="failed" and explain why.
 """
