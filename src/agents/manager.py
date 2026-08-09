@@ -26,7 +26,7 @@ from src.core.database import (
 )
 from src.core.simple_config import get_config
 from src.core.worktree_manager import WorktreeManager
-from src.interfaces import LLMProviderInterface, get_cli_agent
+from src.interfaces import LLMProviderInterface, LaunchResult, get_cli_agent
 
 logger = logging.getLogger(__name__)
 
@@ -692,7 +692,7 @@ class AgentManager:
                     f"[SESSION] Using session ID: {session_id} for phase {phase_name}"
                 )
 
-            launch_command = cli_agent.get_launch_command(
+            launch_result = cli_agent.get_launch_command(
                 system_prompt=system_prompt,
                 task_id=task.id,
                 model=model,  # Pass phase-specific or global model
@@ -704,6 +704,7 @@ class AgentManager:
                 session_id=session_id,
                 working_directory=branch_path,
             )
+            launch_command = launch_result.command
 
             # Send launch command to tmux
             pane = tmux_session.attached_window.attached_pane
@@ -780,12 +781,12 @@ class AgentManager:
                 task, agent_id, branch_path, agent_type, enriched_data
             )
 
-            # When using --agent (Claude Code subagent file), the system
-            # prompt is NOT sent via --append-system-prompt — Claude Code
-            # reads the agent file instead. Prepend the system prompt to
-            # the initial message so the agent still gets safety rules,
-            # tool descriptions, memory context, and phase instructions.
-            if "--agent " in launch_command and system_prompt:
+            # When the CLI loads an agent file as its system prompt
+            # (e.g. Claude Code with --agent), the system prompt is not
+            # sent via a flag. Prepend it to the initial message so the
+            # agent still gets safety rules, tool descriptions, memory
+            # context, and phase instructions.
+            if launch_result.prompt_delivery == LaunchResult.AGENT_FILE and system_prompt:
                 initial_message = (
                     system_prompt
                     + "\n\n---\n\n"
@@ -2150,7 +2151,7 @@ class AgentManager:
                         f"[SESSION] Could not generate session ID for restart: {e}"
                     )
 
-            launch_command = cli_agent.get_launch_command(
+            launch_result = cli_agent.get_launch_command(
                 system_prompt=restart_system_prompt,
                 task_id=task.id,
                 model=model,
@@ -2162,6 +2163,7 @@ class AgentManager:
                 session_id=session_id,
                 working_directory=restart_wd,
             )
+            launch_command = launch_result.command
 
             pane = tmux_session.attached_window.attached_pane
 
@@ -2194,11 +2196,12 @@ class AgentManager:
                 )
             )
 
-            # When using --agent (Claude Code subagent file), the system
-            # prompt is dropped by get_launch_command. Prepend the restart
-            # system prompt (which includes the original system prompt) so
-            # the agent gets safety rules, tools, and context.
-            if "--agent " in launch_command and restart_system_prompt:
+            # When the CLI loads an agent file as its system prompt
+            # (e.g. Claude Code with --agent), the system prompt is
+            # dropped by get_launch_command. Prepend the restart system
+            # prompt (which includes the original system prompt) so the
+            # agent gets safety rules, tools, and context.
+            if launch_result.prompt_delivery == LaunchResult.AGENT_FILE and restart_system_prompt:
                 restart_message = (
                     restart_system_prompt
                     + "\n\n---\n\n"

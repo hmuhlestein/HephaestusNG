@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.interfaces.cli_interface import LaunchResult
+
 from src.core.database import (
     Agent,
     AgentLog,
@@ -130,7 +132,7 @@ class TestCreateAgentForTask:
         with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
-            mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+            mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
             mock_get_cli.return_value = mock_cli
 
@@ -192,7 +194,7 @@ class TestCreateAgentForTask:
         with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
-            mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+            mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
             mock_get_cli.return_value = mock_cli
 
@@ -260,7 +262,7 @@ class TestCreateAgentForTask:
         with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
-            mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+            mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
             mock_get_cli.return_value = mock_cli
 
@@ -325,7 +327,7 @@ class TestCreateAgentForTask:
         with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
-            mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+            mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
             mock_get_cli.return_value = mock_cli
 
@@ -368,7 +370,7 @@ class TestCreateAgentForTask:
         with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
-            mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+            mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
             mock_get_cli.return_value = mock_cli
 
@@ -426,7 +428,7 @@ class TestCreateAgentForTask:
         with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
-            mock_cli.get_launch_command.return_value = ["claude", "--model", "sonnet"]
+            mock_cli.get_launch_command.return_value = LaunchResult("claude --model sonnet", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
             mock_get_cli.return_value = mock_cli
 
@@ -470,7 +472,7 @@ class TestCreateAgentForTask:
         with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
-            mock_cli.get_launch_command.return_value = ["claude", "--model", "sonnet"]
+            mock_cli.get_launch_command.return_value = LaunchResult("claude --model sonnet", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
             mock_get_cli.return_value = mock_cli
 
@@ -612,7 +614,7 @@ class TestProjectScopedWorktreeManager:
                 "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
             ):
                 mock_cli = MagicMock()
-                mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+                mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
                 mock_cli.default_model = "sonnet"
                 mock_get_cli.return_value = mock_cli
 
@@ -710,7 +712,7 @@ class TestCreateAgentForTaskFallback:
                 "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
             ):
                 mock_cli = MagicMock()
-                mock_cli.get_launch_command.return_value = ["claude", "--task", "test"]
+                mock_cli.get_launch_command.return_value = LaunchResult("claude --task test", LaunchResult.FLAG)
                 mock_cli.default_model = "test-model"
                 mock_get_cli.return_value = mock_cli
 
@@ -813,7 +815,7 @@ class TestCreateAgentForTaskSessionLimitPause:
             "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
         ):
             mock_cli = MagicMock()
-            mock_cli.get_launch_command.return_value = ["claude", "--task", "test"]
+            mock_cli.get_launch_command.return_value = LaunchResult("claude --task test", LaunchResult.FLAG)
             mock_cli.default_model = "test-model"
             mock_get_cli.return_value = mock_cli
 

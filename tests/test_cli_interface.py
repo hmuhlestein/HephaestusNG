@@ -59,28 +59,28 @@ class TestGetLaunchCommandSessionOrdering:
         with patch.object(
             ClaudeCodeAgent, "_claude_session_exists", return_value=True
         ):
-            command = agent.get_launch_command(
+            result = agent.get_launch_command(
                 system_prompt="do the thing",
                 task_id="task-1",
                 session_id="hephaestus-proj-design-role-abcd1234",
                 working_directory="/tmp/some/worktree",
             )
-        assert command.startswith("(claude --resume ")
-        assert " || claude --session-id " in command
+        assert result.command.startswith("(claude --resume ")
+        assert " || claude --session-id " in result.command
 
     def test_tries_session_id_first_when_session_is_new(self):
         agent = self._agent()
         with patch.object(
             ClaudeCodeAgent, "_claude_session_exists", return_value=False
         ):
-            command = agent.get_launch_command(
+            result = agent.get_launch_command(
                 system_prompt="do the thing",
                 task_id="task-2",
                 session_id="hephaestus-proj-design-role-abcd1234",
                 working_directory="/tmp/some/worktree",
             )
-        assert command.startswith("(claude --session-id ")
-        assert " || claude --resume " in command
+        assert result.command.startswith("(claude --session-id ")
+        assert " || claude --resume " in result.command
 
     def test_defaults_to_session_id_first_without_working_directory(self):
         # No working_directory means the existence check can't run at all --
@@ -90,13 +90,13 @@ class TestGetLaunchCommandSessionOrdering:
         with patch.object(
             ClaudeCodeAgent, "_claude_session_exists"
         ) as mock_exists:
-            command = agent.get_launch_command(
+            result = agent.get_launch_command(
                 system_prompt="do the thing",
                 task_id="task-3",
                 session_id="hephaestus-proj-design-role-abcd1234",
             )
         mock_exists.assert_not_called()
-        assert command.startswith("(claude --session-id ")
+        assert result.command.startswith("(claude --session-id ")
 
 
 class TestGetLaunchCommandInstalledAgent:
@@ -113,13 +113,14 @@ class TestGetLaunchCommandInstalledAgent:
         (agents_dir / "hephaestus-development.md").write_text("---\nname: x\n---\nbody")
 
         agent = ClaudeCodeAgent()
-        command = agent.get_launch_command(
+        result = agent.get_launch_command(
             system_prompt="do the thing",
             task_id="task-1",
             phase_name="development",
         )
-        assert "--agent hephaestus-development" in command
-        assert "--append-system-prompt" not in command
+        assert "--agent hephaestus-development" in result.command
+        assert "--append-system-prompt" not in result.command
+        assert result.prompt_delivery == "agent_file"
 
     def test_falls_back_to_append_system_prompt_when_no_installed_file(
         self, tmp_path, monkeypatch
@@ -127,19 +128,21 @@ class TestGetLaunchCommandInstalledAgent:
         monkeypatch.setenv("HOME", str(tmp_path))
 
         agent = ClaudeCodeAgent()
-        command = agent.get_launch_command(
+        result = agent.get_launch_command(
             system_prompt="do the thing",
             task_id="task-2",
             phase_name="development",
         )
-        assert "--append-system-prompt" in command
-        assert "--agent " not in command
+        assert "--append-system-prompt" in result.command
+        assert "--agent " not in result.command
+        assert result.prompt_delivery == "flag"
 
     def test_falls_back_to_append_system_prompt_without_phase_name(self):
         agent = ClaudeCodeAgent()
-        command = agent.get_launch_command(
+        result = agent.get_launch_command(
             system_prompt="do the thing",
             task_id="task-3",
         )
-        assert "--append-system-prompt" in command
-        assert "--agent " not in command
+        assert "--append-system-prompt" in result.command
+        assert "--agent " not in result.command
+        assert result.prompt_delivery == "flag"

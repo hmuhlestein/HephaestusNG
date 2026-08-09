@@ -25,6 +25,40 @@ logger = logging.getLogger(__name__)
 AGENT_SAFE_BIN_DIR = str(Path(__file__).parent.parent.parent / "scripts" / "agent-safe-bin")
 
 
+class LaunchResult:
+    """Result of get_launch_command — the CLI command plus metadata about
+    how the system prompt was delivered, so the caller doesn't have to
+    string-match on the command to decide behavior."""
+
+    __slots__ = ("command", "prompt_delivery")
+
+    # The CLI loads an agent file as its system prompt (e.g. Claude Code
+    # with --agent).  The caller must include the system prompt in the
+    # initial message since the CLI won't surface it otherwise.
+    AGENT_FILE = "agent_file"
+
+    # The system prompt is passed via a CLI flag (e.g. --append-system-prompt).
+    # No extra handling needed — the initial message is task-specific only.
+    FLAG = "flag"
+
+    # The system prompt IS the initial message (e.g. OpenCode's
+    # `opencode run "$(cat prompt_file)"`).  The caller's initial message
+    # is already the system prompt.
+    MESSAGE = "message"
+
+    # The system prompt is ignored (e.g. Droid, Codex).  The caller's
+    # initial message carries all the context.
+    NONE = "none"
+
+    def __init__(self, command: str, prompt_delivery: str) -> None:
+        self.command = command
+        self.prompt_delivery = prompt_delivery
+
+    def __str__(self) -> str:
+        return self.command
+
+
+
 class CLIAgentInterface(ABC):
     """Abstract interface for CLI AI agents.
 
@@ -84,7 +118,7 @@ class CLIAgentInterface(ABC):
         return []
 
     @abstractmethod
-    def get_launch_command(self, system_prompt: str, **kwargs) -> str:
+    def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
         """Generate the launch command for the CLI tool.
 
         Args:
@@ -92,7 +126,7 @@ class CLIAgentInterface(ABC):
             **kwargs: Additional parameters for the CLI tool
 
         Returns:
-            Complete command to launch the CLI tool
+            LaunchResult with the command string and prompt_delivery strategy.
         """
         pass
 
@@ -405,7 +439,7 @@ class ClaudeCodeAgent(CLIAgentInterface):
                 f"Could not pre-trust {canonical_path} for Claude Code: {e}"
             )
 
-    def get_launch_command(self, system_prompt: str, **kwargs) -> str:
+    def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
         from src.core.simple_config import get_config
 
         config = get_config()
@@ -428,9 +462,11 @@ class ClaudeCodeAgent(CLIAgentInterface):
         task_id = kwargs.get("task_id", "default")
         if claude_agent_file and os.path.exists(claude_agent_file):
             prompt_flag = f"--agent {claude_agent_name}"
+            delivery = LaunchResult.AGENT_FILE
         else:
             prompt_file = self._save_prompt_to_file(system_prompt, "claude_prompt", task_id)
             prompt_flag = f'--append-system-prompt "$(cat {prompt_file})"'
+            delivery = LaunchResult.FLAG
         model = self._get_model(kwargs, self.default_model)
 
         # Reasoning budget
@@ -502,7 +538,7 @@ class ClaudeCodeAgent(CLIAgentInterface):
         else:
             command = f"claude {base_flags}"
 
-        return command
+        return LaunchResult(command, delivery)
 
     @staticmethod
     def _claude_session_exists(working_directory: str, session_uuid: str) -> bool:
@@ -576,7 +612,7 @@ class OpenCodeAgent(CLIAgentInterface):
 
     default_model = "anthropic/claude-sonnet-4"
 
-    def get_launch_command(self, system_prompt: str, **kwargs) -> str:
+    def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
         from src.core.simple_config import get_config
 
         get_config()
@@ -593,9 +629,10 @@ class OpenCodeAgent(CLIAgentInterface):
         # claude/pi launch -- an agent that exits before the real task
         # arrives). -i keeps it running interactively after the initial
         # message, matching how claude/pi stay alive for MCP tool calls.
-        return (
+        return LaunchResult(
             f'opencode run -i --dangerously-skip-permissions --model {model} '
-            f'"$(cat {prompt_file})"'
+            f'"$(cat {prompt_file})"',
+            LaunchResult.MESSAGE,
         )
 
     def get_health_check_pattern(self) -> str:
@@ -645,8 +682,8 @@ class DroidAgent(CLIAgentInterface):
     display_name = "Droid"
     needs_chunked_delivery = True
 
-    def get_launch_command(self, system_prompt: str, **kwargs) -> str:
-        return "droid"
+    def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
+        return LaunchResult("droid", LaunchResult.NONE)
 
     def get_health_check_pattern(self) -> str:
         return r"(›|>|droid>)"
@@ -695,8 +732,11 @@ class CodexAgent(CLIAgentInterface):
     display_name = "Codex"
     needs_chunked_delivery = True
 
-    def get_launch_command(self, system_prompt: str, **kwargs) -> str:
-        return "codex --dangerously-bypass-approvals-and-sandbox"
+    def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
+        return LaunchResult(
+            "codex --dangerously-bypass-approvals-and-sandbox",
+            LaunchResult.NONE,
+        )
 
     def get_health_check_pattern(self) -> str:
         return r"(>|codex>|Ready)"
@@ -763,7 +803,7 @@ class PiAgent(CLIAgentInterface):
             return f"--session-id {session_id}"
         return "--no-session"
 
-    def get_launch_command(self, system_prompt: str, **kwargs) -> str:
+    def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
         from src.core.simple_config import get_config
 
         config = get_config()
@@ -814,7 +854,10 @@ class PiAgent(CLIAgentInterface):
             session_args = self.get_session_args(kwargs.get("session_id", ""))
             command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model}{thinking_flag} --approve --no-context-files {session_args}'
 
-        return f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" {command}'
+        return LaunchResult(
+            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" {command}',
+            LaunchResult.FLAG,
+        )
 
     def get_tui_status_patterns(self) -> List[str]:
         """Pi TUI status bar patterns that look like garbled output but aren't."""
