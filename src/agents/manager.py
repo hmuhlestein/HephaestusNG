@@ -2194,6 +2194,17 @@ class AgentManager:
                 )
             )
 
+            # When using --agent (Claude Code subagent file), the system
+            # prompt is dropped by get_launch_command. Prepend the restart
+            # system prompt (which includes the original system prompt) so
+            # the agent gets safety rules, tools, and context.
+            if "--agent " in launch_command and restart_system_prompt:
+                restart_message = (
+                    restart_system_prompt
+                    + "\n\n---\n\n"
+                    + restart_message
+                )
+
             # Update agent record
             agent.tmux_session_name = new_session_name
             agent.status = "working"
