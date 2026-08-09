@@ -1750,6 +1750,18 @@ class DatabaseManager:
         except Exception as e:
             logger.debug(f"features table creation (may already exist): {e}")
 
+        # Add pr_url column to features table for existing databases
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE features ADD COLUMN pr_url TEXT"))
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated features.pr_url column")
+        except Exception as e:
+            logger.debug(f"features.pr_url migration (may already exist): {e}")
+
     def _migrate_total_gotos_column(self):
         """Add workflows.total_gotos for existing databases.
 
