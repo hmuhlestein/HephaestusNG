@@ -1134,6 +1134,9 @@ class Feature(Base):
     reviewed_at = Column(DateTime, nullable=True)
     reviewed_by = Column(String(100), nullable=True, default=None)
 
+    # Pull request URL — populated by git_commit_push phase after creating PR
+    pr_url = Column(Text, nullable=True)
+
     # Relationships
     design = relationship("AutopilotDesign", back_populates="features")
     workflow = relationship("Workflow", foreign_keys=[workflow_id])

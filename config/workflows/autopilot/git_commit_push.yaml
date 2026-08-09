@@ -158,9 +158,16 @@ additional_notes: |
   git push $REMOTE $DEFAULT_BRANCH  # skip if no remote
   ```
 
-  Optionally create a PR for visibility (does not replace local merge):
+  CREATE A PR (mandatory — the review modal links to it):
   ```bash
-  gh pr create --title "feat: <feature name>" --body "..." 2>/dev/null || true
+  PR_URL=$(gh pr create --title "feat: <feature name>" --body "Autopilot-validated feature.
+
+  Merged commit: $(git rev-parse HEAD)" 2>/dev/null || echo "")
+  if [ -n "$PR_URL" ]; then
+    echo "PR created: $PR_URL"
+  else
+    echo "gh not available or PR creation failed — no PR URL"
+  fi
   ```
   
   ═══════════════════════════════════════════════════════════════════════
@@ -225,11 +232,11 @@ additional_notes: |
   without this call. The pipeline WILL get stuck.
   
   After all git operations complete, call:
-  
+
   complete_my_task({
     "status": "done",
     "summary": "<brief summary of what was committed and merged>",
-    "key_learnings": ["<commit hash>", "<PR URL if created>"]
+    "key_learnings": ["<commit hash>", "<PR URL if created, or 'no PR'>"]
   })
   
   Then wait for confirmation. Do NOT exit until you see the task marked as done.
