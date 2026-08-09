@@ -779,6 +779,19 @@ class AgentManager:
             initial_message = self._format_initial_message(
                 task, agent_id, branch_path, agent_type, enriched_data
             )
+
+            # When using --agent (Claude Code subagent file), the system
+            # prompt is NOT sent via --append-system-prompt — Claude Code
+            # reads the agent file instead. Prepend the system prompt to
+            # the initial message so the agent still gets safety rules,
+            # tool descriptions, memory context, and phase instructions.
+            if "--agent " in launch_command and system_prompt:
+                initial_message = (
+                    system_prompt
+                    + "\n\n---\n\n"
+                    + initial_message
+                )
+
             logger.info(f"Initial message length: {len(initial_message)} characters")
 
             # Wait for CLI to initialize first
