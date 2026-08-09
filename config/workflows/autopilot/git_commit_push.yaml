@@ -166,7 +166,13 @@ additional_notes: |
   if [ -n "$PR_URL" ]; then
     echo "PR created: $PR_URL"
   else
-    echo "gh not available or PR creation failed — no PR URL"
+    # PR may already exist for this branch — try to get it
+    PR_URL=$(gh pr view --json url --jq '.url' 2>/dev/null || echo "")
+    if [ -n "$PR_URL" ]; then
+      echo "PR already exists: $PR_URL"
+    else
+      echo "gh not available or PR creation failed — no PR URL"
+    fi
   fi
   ```
   
