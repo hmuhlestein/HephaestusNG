@@ -83,18 +83,19 @@ additional_notes: |
   these IDs when documenting findings that violate specific requirements.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: ATTACK VECTORS — WORK THROUGH EACH SYSTEMATICALLY
+  STEP 2: EXCEPTION PROPAGATION
   ═══════════════════════════════════════════════════════════════════════
 
-  For EVERY function and class in the changed files, apply each lens:
-
-  ### 2a. Exception Propagation
+  For EVERY function and class in the changed files:
   - What exceptions can this function raise?
   - Does every caller handle them — or does one unhandled exception kill the process?
   - Are there bare `except:` or `except Exception:` that swallow failures silently?
   - Does a failure in a helper leave the system in a partially-written state?
 
-  ### 2b. Concurrency and Shared State
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 3: CONCURRENCY AND SHARED STATE
+  ═══════════════════════════════════════════════════════════════════════
+
   - Is any shared object (dict, list, file handle, DB session) accessed from
     multiple threads without a lock?
   - Does a "pause all active X before starting Y" pattern break when Y runs in
@@ -103,7 +104,10 @@ additional_notes: |
   - Does the thread pool size match the number of concurrent operations the system
     can actually sustain?
 
-  ### 2c. Silent Data Corruption
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 4: SILENT DATA CORRUPTION
+  ═══════════════════════════════════════════════════════════════════════
+
   - Do any SQL defaults retroactively relabel historical rows with the wrong value?
     (e.g., `DEFAULT 'feature'` on a column added to a table with existing rows)
   - Is a path stored in the DB before the file at that path is actually created?
@@ -112,40 +116,58 @@ additional_notes: |
   - Are status fields updated in the right order? (persist the parent before the
     children that reference it)
 
-  ### 2d. Resource Leaks
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 5: RESOURCE LEAKS
+  ═══════════════════════════════════════════════════════════════════════
+
   - Is every DB session, file handle, network connection, or thread pool
     closed/released in a `finally` block?
   - Are context managers used where they should be?
   - Does each call to a constructor that opens a resource have a matching close
     in all code paths (including exception paths)?
 
-  ### 2e. Cascade Logic
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 6: CASCADE LOGIC
+  ═══════════════════════════════════════════════════════════════════════
+
   - If A fails and B depends on A, is B correctly skipped/failed?
   - Does the cascade propagate transitively, or only one level deep?
     (If B is skipped because A failed, is C — which depends on B — also skipped?)
   - Is an all-skipped result treated as success when it should be failure?
 
-  ### 2f. Path and Naming Collisions
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 7: PATH AND NAMING COLLISIONS
+  ═══════════════════════════════════════════════════════════════════════
+
   - Do two independent runs of the same code produce the same path, branch name,
     or key — and collide silently?
   - Does the collision guard (e.g., `if not path.exists()`) reuse a stale
     artifact from a previous run instead of failing loudly?
   - Are temp directories, branch names, or file names globally unique per run?
 
-  ### 2g. Timeout and Deadline Logic
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 8: TIMEOUT AND DEADLINE LOGIC
+  ═══════════════════════════════════════════════════════════════════════
+
   - Is there a timeout? Is it actually enforced via the right variable, or does
     a named constant exist but reference the wrong value?
   - Does a timeout correctly propagate — or does it only stop the inner loop
     while the outer loop retries indefinitely?
 
-  ### 2h. Test Coverage Gaps
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 9: TEST COVERAGE GAPS
+  ═══════════════════════════════════════════════════════════════════════
+
   - Are tests only covering the happy path?
   - Is any test asserting implementation details (insertion order, internal state)
     rather than behavior?
   - Is the most likely production failure mode — the one that would wake you up
     at 3am — covered by a test?
 
-  ### 2i. Code Composition and Hierarchy
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 10: CODE COMPOSITION AND HIERARCHY
+  ═══════════════════════════════════════════════════════════════════════
+
   - Do high-level classes/modules import or reference low-level implementation
     details? (e.g. a service layer importing database column names, a controller
     knowing about file paths)
@@ -162,7 +184,10 @@ additional_notes: |
   - Is the module dependency graph acyclic, or do low-level modules import from
     high-level ones?
 
-  ### 2j. Root Causes, Silent Failures, and Error Surfacing
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 11: ROOT CAUSES, SILENT FAILURES, AND ERROR SURFACING
+  ═══════════════════════════════════════════════════════════════════════
+
   - Does any code catch exceptions and return a fallback value instead of fixing
     the root cause? (Unless the design explicitly calls for a fallback.)
   - Is any `except` block silent — no logging, no re-raise, just swallowed?
@@ -210,7 +235,10 @@ additional_notes: |
   the caller expected to happen, and what actually happens (silent wrong
   result, stale data, corrupted state).
 
-  ### 2k. UI/Frontend Integration
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 12: UI/FRONTEND INTEGRATION
+  ═══════════════════════════════════════════════════════════════════════
+
   - Are new UI components actually imported and rendered anywhere?
   - Do buttons/links trigger the correct API calls?
   - Is data from the API actually displayed in the UI (not just fetched)?
@@ -221,7 +249,7 @@ additional_notes: |
   - Is state management connected to UI updates?
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: CONFIRM BEFORE REPORTING
+  STEP 13: CONFIRM BEFORE REPORTING
   ═══════════════════════════════════════════════════════════════════════
 
   Before classifying any issue as BLOCKER:
@@ -246,60 +274,18 @@ additional_notes: |
   IOError (out-of-scope: not specified in design.md)".
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: WRITE adversarial.md
+  STEP 14: WRITE adversarial.md
   ═══════════════════════════════════════════════════════════════════════
+
+  ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
 
   Write the report to the Docs Path. This is your ONLY output — do NOT edit source.
   The developer reads this report and fixes the code. Make recommended fixes
   specific enough to act on without guessing.
 
-  # Adversarial Review Report
-
-  **Reviewer:** Adversarial (failure-mode analysis)
-  **Date:** {date}
-  **Attack vectors applied:** [list the 2a–2j lenses above]
-
-  ## Summary
-  - **BLOCKERs:** [count] — process death, data corruption, or silent wrong result
-  - **WARNINGs:** [count] — fails under real load or error conditions
-  - **NITs:** [count] — minor robustness or clarity improvements
-  - **Overall:** PASS / NEEDS_WORK / FAIL
-
-  ## Findings
-
-  ### [BLOCKER] {title}
-  - **Attack vector:** {lens — 2a/2b/2c/...}
-  - **File:** {path}:{line}
-  - **Failure sequence:** {exact call chain — A calls B(x), B raises Y, Z catches nothing}
-  - **Impact:** {what breaks and how badly}
-  - **Recommended fix:** {specific enough to implement without guessing}
-
-  ### [WARNING] {title}
-  - **Attack vector:** {lens}
-  - **File:** {path}:{line}
-  - **Failure sequence:** {how it fails}
-  - **Recommended fix:** {specific direction}
-
-  ### [NIT] {title}
-  - **File:** {path}:{line}
-  - **Reason:** {brief}
-
-  ## Gaps in Test Coverage
-  [Failure modes with no test — state the scenario and the missing assertion]
-
-  ═══════════════════════════════════════════════════════════════════════
-
-  STEP 5: WRITE adversarial.md WITH FRONTMATTER (NOT OPTIONAL)
-  ═══════════════════════════════════════════════════════════════════════
-
-  ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
-
-  adversarial.md is ONE file: a YAML frontmatter block
-  followed by the full report above. The frontmatter is what drives the
-  pipeline: if BLOCKERs are found, the pipeline sends the FULL report
-  straight to the developer agent as its next task -- without a nonzero
-  blocker_count here, the pipeline can't tell BLOCKERs were found at all
-  and will silently continue regardless.
+  adversarial.md is ONE file: a YAML frontmatter block followed by the full
+  report. The frontmatter drives the pipeline — without nonzero blocker_count,
+  the pipeline can't tell BLOCKERs were found.
 
   Write the ENTIRE file at once with frontmatter at the top:
 
@@ -313,7 +299,38 @@ additional_notes: |
   ---
 
   # Adversarial Review Report
-  ... (the full report from the steps above) ...
+
+  **Reviewer:** Adversarial (failure-mode analysis)
+  **Date:** {date}
+  **Attack vectors applied:** [list the steps above]
+
+  ## Summary
+  - **BLOCKERs:** [count] — process death, data corruption, or silent wrong result
+  - **WARNINGs:** [count] — fails under real load or error conditions
+  - **NITs:** [count] — minor robustness or clarity improvements
+  - **Overall:** PASS / NEEDS_WORK / FAIL
+
+  ## Findings
+
+  ### [BLOCKER] {title}
+  - **Attack vector:** {step number}
+  - **File:** {path}:{line}
+  - **Failure sequence:** {exact call chain}
+  - **Impact:** {what breaks and how badly}
+  - **Recommended fix:** {specific enough to implement without guessing}
+
+  ### [WARNING] {title}
+  - **Attack vector:** {step number}
+  - **File:** {path}:{line}
+  - **Failure sequence:** {how it fails}
+  - **Recommended fix:** {specific direction}
+
+  ### [NIT] {title}
+  - **File:** {path}:{line}
+  - **Reason:** {brief}
+
+  ## Gaps in Test Coverage
+  [Failure modes with no test — state the scenario and the missing assertion]
   ```
 
   Counts must match the report's own Summary section exactly.
