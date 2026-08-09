@@ -29,7 +29,7 @@ description: |
 done_definitions:
   - "Every public function traced for exception propagation"
   - "All concurrent code paths examined for race conditions and resource contention"
-  - "All error handling branches verified — no silent swallows, no bare excepts"
+  - "All error handling branches verified — no silent swallows, no bare excepts, no swallowed exceptions without logging"
   - "All defaults and constants verified correct (no retroactive data poisoning)"
   - "All DB/file/network operations checked for connection leaks and missing closes"
   - "Cascade and ordering invariants verified (no time-of-check/time-of-use gaps)"
@@ -162,7 +162,7 @@ additional_notes: |
   - Is the module dependency graph acyclic, or do low-level modules import from
     high-level ones?
 
-  ### 2j. Root Causes and Silent Failures
+  ### 2j. Root Causes, Silent Failures, and Error Surfacing
   - Does any code catch exceptions and return a fallback value instead of fixing
     the root cause? (Unless the design explicitly calls for a fallback.)
   - Is any `except` block silent — no logging, no re-raise, just swallowed?
@@ -170,6 +170,45 @@ additional_notes: |
   - Does any code use `if path.exists() ... else fallback` instead of fixing the
     code that should have created the file?
   - Is every exception and error logged with enough context to diagnose it?
+
+  **ERROR SURFACING PRINCIPLE:** Errors must be surfaced, not hidden. The
+  system should fail loudly and early rather than continue in a bad state.
+  Penalize code that:
+
+  - Catches an exception and returns None/empty/default silently — the caller
+    has no idea something went wrong and proceeds with garbage data.
+  - Uses a bare `except:` or `except Exception:` without re-raising — this
+    masks bugs. If you must catch broadly, LOG the exception with full
+    traceback AND either re-raise or return an explicit error object.
+  - Swallows errors in "cleanup" or "best-effort" code without logging — even
+    cleanup failures matter (a failed temp-file delete leaks disk; a failed
+    notification leaves the user unaware).
+  - Uses silent fallbacks: `try: x = primary() except: x = fallback()` — the
+    primary failure is invisible. At minimum, log a WARNING with the error.
+  - Checks return codes and ignores them: `result = do_thing()` followed by
+    code that doesn't check `result` for failure.
+  - Hides errors behind optional/nullable returns — prefer raising an
+    exception with context over returning None and hoping the caller checks.
+
+  The correct pattern is:
+  ```python
+  # GOOD: error is surfaced with context
+  try:
+      result = risky_operation()
+  except SpecificError as e:
+      logger.error(f"risky_operation failed for {context}: {e}", exc_info=True)
+      raise  # or return ErrorResult(...) — caller knows something went wrong
+
+  # BAD: error is swallowed silently
+  try:
+      result = risky_operation()
+  except Exception:
+      result = default  # caller has no idea this happened
+  ```
+
+  Every BLOCKER in this category must show: what error was swallowed, what
+  the caller expected to happen, and what actually happens (silent wrong
+  result, stale data, corrupted state).
 
   ### 2k. UI/Frontend Integration
   - Are new UI components actually imported and rendered anywhere?
@@ -288,6 +327,10 @@ additional_notes: |
   BLOCKER = high-level class directly references low-level internals (e.g. service
             imports DB column names, controller knows file paths) — adding a new
             type requires touching 3+ high-level files instead of 1 low-level one
+  BLOCKER = exception caught and swallowed silently — caller proceeds with wrong
+            data, no log, no re-raise, no error object returned
+  WARNING = exception caught but only logged at DEBUG level (production logs won't show it)
+            or logged without enough context to diagnose
   WARNING = fails under concurrent load, specific error conditions, or edge
             inputs that are plausible in production
   WARNING = complex conditionals where polymorphism would prevent future bugs
