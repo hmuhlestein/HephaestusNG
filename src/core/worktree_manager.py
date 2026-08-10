@@ -592,54 +592,6 @@ class WorktreeManager:
                 self._release_merge_lock(lock_file, agent_id)
             session.close()
 
-    def merge_main_into_branch(self, agent_id: str, branch_name: str) -> Dict[str, Any]:
-        """Merge the base branch into an agent's worktree to keep it up-to-date."""
-        logger.info(f"[WORKTREE:{agent_id}] Merging main into {branch_name}")
-
-        session = self.db_manager.get_session()
-        lock_file = None
-        try:
-            lock_file = self._acquire_merge_lock(agent_id)
-            base_ref = self.config.base_branch
-            base_commit = self.main_repo.heads[base_ref].commit.hexsha
-
-            wt_repo = self._agent_repo(agent_id)
-
-            if wt_repo.head.commit.hexsha == base_commit:
-                return {"status": "up_to_date", "total_conflicts": 0}
-
-            conflicts_resolved = []
-            try:
-                wt_repo.git.merge(
-                    base_commit,
-                    no_ff=True,
-                    m=f"[Auto-Merge] Merged {base_ref} into {branch_name}",
-                )
-                status = "success"
-            except GitCommandError as e:
-                if "CONFLICT" in str(e):
-                    conflicts_resolved = self._resolve_conflicts(
-                        agent_id, session, wt_repo
-                    )
-                    wt_repo.git.commit(
-                        "-m",
-                        f"[Auto-Merge] Resolved conflicts merging main into {branch_name}",
-                        "--no-verify",
-                    )
-                    status = "conflict_resolved"
-                else:
-                    raise
-
-            return {
-                "status": status,
-                "total_conflicts": len(conflicts_resolved),
-                "conflicts_resolved": conflicts_resolved,
-            }
-        finally:
-            if lock_file:
-                self._release_merge_lock(lock_file, agent_id)
-            session.close()
-
     # ── Conflict resolution ──────────────────────────────────────
 
     def _resolve_conflicts(
@@ -962,10 +914,6 @@ class WorktreeManager:
             }
         finally:
             session.close()
-
-    def cleanup_branch(self, agent_id: str) -> Dict[str, Any]:
-        """Remove an agent's worktree and delete its branch (discard semantics)."""
-        return self.cleanup_worktree(agent_id, delete_branch=True)
 
     def discard_agent(self, agent_id: str) -> Dict[str, Any]:
         """Discard a failed agent: remove worktree + branch, nothing merged.

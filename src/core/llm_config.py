@@ -310,16 +310,3 @@ def get_config(config_path: str = "./hephaestus_config.yaml") -> SimpleConfig:
         _config = SimpleConfig(config_path)
     return _config
 
-
-def reload_config(config_path: str = "./hephaestus_config.yaml") -> SimpleConfig:
-    """Reload configuration from file.
-
-    Args:
-        config_path: Path to configuration file
-
-    Returns:
-        New configuration instance
-    """
-    global _config
-    _config = SimpleConfig(config_path)
-    return _config
