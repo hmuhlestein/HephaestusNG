@@ -65,8 +65,10 @@ class TestGetLaunchCommandSessionOrdering:
                 session_id="hephaestus-proj-design-role-abcd1234",
                 working_directory="/tmp/some/worktree",
             )
-        assert result.command.startswith("(claude --resume ")
-        assert " || claude --session-id " in result.command
+        assert result.command.startswith('(PATH="')
+        assert '" claude --resume ' in result.command
+        assert '" claude --session-id ' in result.command
+        assert " || " in result.command
 
     def test_tries_session_id_first_when_session_is_new(self):
         agent = self._agent()
@@ -79,8 +81,10 @@ class TestGetLaunchCommandSessionOrdering:
                 session_id="hephaestus-proj-design-role-abcd1234",
                 working_directory="/tmp/some/worktree",
             )
-        assert result.command.startswith("(claude --session-id ")
-        assert " || claude --resume " in result.command
+        assert result.command.startswith('(PATH="')
+        assert '" claude --session-id ' in result.command
+        assert '" claude --resume ' in result.command
+        assert " || " in result.command
 
     def test_defaults_to_session_id_first_without_working_directory(self):
         # No working_directory means the existence check can't run at all --
@@ -96,7 +100,8 @@ class TestGetLaunchCommandSessionOrdering:
                 session_id="hephaestus-proj-design-role-abcd1234",
             )
         mock_exists.assert_not_called()
-        assert result.command.startswith("(claude --session-id ")
+        assert result.command.startswith('(PATH="')
+        assert '" claude --session-id ' in result.command
 
 
 class TestGetLaunchCommandInstalledAgent:

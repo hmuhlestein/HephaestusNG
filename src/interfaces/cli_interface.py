@@ -541,12 +541,13 @@ class ClaudeCodeAgent(CLIAgentInterface):
                 working_directory, session_uuid
             ):
                 first, second = "--resume", "--session-id"
+            claude_cmd = f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" claude'
             command = (
-                f"(claude {first} {session_uuid} {base_flags} || "
-                f"claude {second} {session_uuid} {base_flags})"
+                f"({claude_cmd} {first} {session_uuid} {base_flags} || "
+                f"{claude_cmd} {second} {session_uuid} {base_flags})"
             )
         else:
-            command = f"claude {base_flags}"
+            command = f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" claude {base_flags}'
 
         return LaunchResult(command, delivery)
 
@@ -654,8 +655,8 @@ class OpenCodeAgent(CLIAgentInterface):
         # arrives). -i keeps it running interactively after the initial
         # message, matching how claude/pi stay alive for MCP tool calls.
         return LaunchResult(
-            f'opencode run -i --dangerously-skip-permissions --model {model} '
-            f'"$(cat {prompt_file})"',
+            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" opencode run -i --dangerously-skip-permissions '
+            f'--model {model} "$(cat {prompt_file})"',
             LaunchResult.MESSAGE,
         )
 
@@ -707,7 +708,9 @@ class DroidAgent(CLIAgentInterface):
     needs_chunked_delivery = True
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
-        return LaunchResult("droid", LaunchResult.NONE)
+        return LaunchResult(
+            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" droid', LaunchResult.NONE
+        )
 
     def get_health_check_pattern(self) -> str:
         return r"(›|>|droid>)"
@@ -758,7 +761,7 @@ class CodexAgent(CLIAgentInterface):
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
         return LaunchResult(
-            "codex --dangerously-bypass-approvals-and-sandbox",
+            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" codex --dangerously-bypass-approvals-and-sandbox',
             LaunchResult.NONE,
         )
 
@@ -1016,7 +1019,8 @@ class SwarmCodeAgent(CLIAgentInterface):
         escaped_prompt = system_prompt.replace("'", "'\"'\"'")
         prompt_file = f"/tmp/hep_prompt_{kwargs.get('task_id', 'default')}.txt"
         return LaunchResult(
-            f"echo '{escaped_prompt}' > {prompt_file} && swarmcode --autonomous --context {prompt_file}",
+            f"echo '{escaped_prompt}' > {prompt_file} && "
+            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" swarmcode --autonomous --context {prompt_file}',
             LaunchResult.NONE,
         )
 
