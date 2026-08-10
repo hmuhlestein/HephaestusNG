@@ -1838,9 +1838,9 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         try:
             # Skip workflows actively monitored by run_single_workflow —
             # its inline _advance_phases is the main path; the sweep is a
-            # fallback for workflows that lost their poll loop.
-            from src.autopilot.orchestrator import _actively_monitored_workflows
-            if wf_id not in _actively_monitored_workflows:
+            # fallback for workflows that lost their loop.
+            from src.autopilot.orchestrator import _is_workflow_monitored
+            if not _is_workflow_monitored(wf_id):
                 _advance_phases(wf_id, sweep_logger)
         except Exception as e:
             logger.error(f"[PHASE-SWEEP] Error advancing workflow {wf_id[:8]}: {e}")

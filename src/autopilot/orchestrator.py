@@ -150,8 +150,21 @@ _orchestrator_agent_id: Optional[str] = None
 # call in run_single_workflow is the main path for phase advancement;
 # the sweep is a fallback for workflows that lost their poll loop
 # (e.g. backend restart).
+import threading as _threading
+_actively_monitored_lock = _threading.Lock()
 _actively_monitored_workflows: set = set()
 
+def _register_monitored_workflow(workflow_id: str) -> None:
+    with _actively_monitored_lock:
+        _actively_monitored_workflows.add(workflow_id)
+
+def _unregister_monitored_workflow(workflow_id: str) -> None:
+    with _actively_monitored_lock:
+        _actively_monitored_workflows.discard(workflow_id)
+
+def _is_workflow_monitored(workflow_id: str) -> bool:
+    with _actively_monitored_lock:
+        return workflow_id in _actively_monitored_workflows
 
 def get_litellm_config() -> Dict[str, str]:
     """Read LiteLLM proxy config from environment variables."""
@@ -7138,7 +7151,7 @@ def run_single_workflow(
         except Exception as _e:
             logger.warning(f"Phase transition check failed: {_e}")
 
-    _actively_monitored_workflows.add(exec_id)
+    _register_monitored_workflow(exec_id)
     try:
         while True:
             time.sleep(POLL_INTERVAL)
@@ -7395,7 +7408,7 @@ def run_single_workflow(
         logger.info("Interrupted by user")
         return "interrupted"
     finally:
-        _actively_monitored_workflows.discard(exec_id)
+        _unregister_monitored_workflow(exec_id)
         # Clean up: terminate all agents for this workflow and mark as paused
         if exec_id:
             try:
