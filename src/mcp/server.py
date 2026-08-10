@@ -1819,13 +1819,17 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         # unresolved (the claim it holds has no expiry) until the workflow
         # is resumed -- the very next sweep tick after that picks it up and
         # resolves it normally. Not a permanent stall, just deferred.
+        # Clean stale tasks for ALL workflows (active + completed).
+        # Completed workflows can still have orphaned tasks (assigned to
+        # terminated agents) that were never cleaned up.
+        from src.core.log_context import set_log_context
+        set_log_context(workflow=wf_id)
+        try:
+            _clean_stale_assigned_tasks(wf_id, sweep_logger)
+        except Exception as e:
+            logger.error(f"[PHASE-SWEEP] Stale-task cleanup error for {wf_id[:8]}: {e}")
+
         if wf_status == "active":
-            from src.core.log_context import set_log_context
-            set_log_context(workflow=wf_id)
-            try:
-                _clean_stale_assigned_tasks(wf_id, sweep_logger)
-            except Exception as e:
-                logger.error(f"[PHASE-SWEEP] Stale-task cleanup error for {wf_id[:8]}: {e}")
             try:
                 _retry_failed_tasks(wf_id, sweep_logger)
             except Exception as e:
