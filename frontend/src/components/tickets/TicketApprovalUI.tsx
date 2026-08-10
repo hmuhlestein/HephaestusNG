@@ -66,19 +66,19 @@ const TicketApprovalUI: React.FC<TicketApprovalUIProps> = ({
   const isLoading = approveMutation.isPending || rejectMutation.isPending;
 
   return (
-    <div className="bg-orange-50 border-2 border-orange-300 rounded-lg p-6 mb-6">
+    <div className="bg-orange-50 dark:bg-orange-900/30 border-2 border-orange-300 dark:border-orange-600 rounded-lg p-6 mb-6">
       <div className="flex items-start space-x-4">
         <div className="flex-shrink-0">
-          <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center">
-            <Clock className="w-6 h-6 text-orange-600 animate-pulse" />
+          <div className="w-12 h-12 bg-orange-100 dark:bg-orange-800/50 rounded-full flex items-center justify-center">
+            <Clock className="w-6 h-6 text-orange-600 dark:text-orange-400 animate-pulse" />
           </div>
         </div>
 
         <div className="flex-1">
-          <h3 className="text-lg font-bold text-orange-900 mb-2">
+          <h3 className="text-lg font-bold text-orange-900 dark:text-orange-200 mb-2">
             Ticket Pending Human Review
           </h3>
-          <p className="text-sm text-orange-800 mb-4">
+          <p className="text-sm text-orange-800 dark:text-orange-300 mb-4">
             An agent has requested to create this ticket. Please review the details below and
             decide whether to approve or reject it. The agent is waiting for your decision.
           </p>
@@ -115,14 +115,14 @@ const TicketApprovalUI: React.FC<TicketApprovalUIProps> = ({
             ) : (
               <div className="w-full space-y-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Rejection Reason (required)
                   </label>
                   <textarea
                     value={rejectionReason}
                     onChange={(e) => setRejectionReason(e.target.value)}
                     placeholder="Explain why this ticket should be rejected..."
-                    className="w-full px-3 py-2 border rounded-lg resize-none focus:ring-2 focus:ring-orange-500"
+                    className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg resize-none bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-orange-500"
                     rows={3}
                     disabled={isLoading}
                   />
@@ -150,7 +150,7 @@ const TicketApprovalUI: React.FC<TicketApprovalUIProps> = ({
                     disabled={isLoading}
                     className={cn(
                       "px-4 py-2 rounded-lg font-medium transition-all",
-                      "bg-gray-200 text-gray-700 hover:bg-gray-300",
+                      "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600",
                       "disabled:opacity-50 disabled:cursor-not-allowed"
                     )}
                   >

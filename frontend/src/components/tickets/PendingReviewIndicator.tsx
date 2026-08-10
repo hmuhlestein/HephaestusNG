@@ -48,8 +48,8 @@ const PendingReviewIndicator: React.FC<PendingReviewIndicatorProps> = ({ onClick
       onClick={onClick}
       className={cn(
         "flex items-center space-x-2 px-3 py-2 rounded-lg transition-all",
-        "bg-orange-100 border border-orange-300 text-orange-800",
-        "hover:bg-orange-200 hover:shadow-md",
+        "bg-orange-100 dark:bg-orange-900/40 border border-orange-300 dark:border-orange-600 text-orange-800 dark:text-orange-300",
+        "hover:bg-orange-200 dark:hover:bg-orange-800/50 hover:shadow-md",
         "animate-pulse"
       )}
       title="Click to view tickets pending review"

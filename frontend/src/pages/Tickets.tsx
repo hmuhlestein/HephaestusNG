@@ -86,8 +86,8 @@ const Tickets: React.FC = () => {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="text-center">
-          <Loader2 className="w-12 h-12 text-blue-600 animate-spin mx-auto mb-4" />
-          <p className="text-gray-600 dark:text-gray-400 dark:text-gray-500">Loading workflow...</p>
+          <Loader2 className="w-12 h-12 text-blue-600 dark:text-blue-400 animate-spin mx-auto mb-4" />
+          <p className="text-gray-600 dark:text-gray-400">Loading workflow...</p>
         </div>
       </div>
     );
@@ -97,7 +97,7 @@ const Tickets: React.FC = () => {
   if (!selectedWorkflowId) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="text-center text-gray-500 dark:text-gray-400 dark:text-gray-500">
+        <div className="text-center text-gray-500 dark:text-gray-400">
           <p className="text-lg font-semibold mb-2">No workflow found</p>
           <p className="text-sm">Please create a workflow first</p>
         </div>
@@ -111,7 +111,7 @@ const Tickets: React.FC = () => {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Ticket Tracking</h1>
-          <p className="text-sm text-gray-600 mt-1">
+          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
             Manage and track tickets across your workflow
           </p>
         </div>
@@ -123,8 +123,8 @@ const Tickets: React.FC = () => {
               onClick={() => setShowStatusFilter(!showStatusFilter)}
               className="flex items-center px-3 py-2 bg-white dark:bg-gray-800 border dark:border-gray-700 border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm text-sm"
             >
-              <Filter className="w-4 h-4 mr-1.5 text-gray-500 dark:text-gray-400 dark:text-gray-500" />
-              <span className="text-gray-700 capitalize">{statusFilter === 'all' ? 'All States' : statusFilter}</span>
+              <Filter className="w-4 h-4 mr-1.5 text-gray-500 dark:text-gray-400" />
+              <span className="text-gray-700 dark:text-gray-300 capitalize">{statusFilter === 'all' ? 'All States' : statusFilter}</span>
               <ChevronDown className={`w-3.5 h-3.5 ml-1.5 text-gray-400 transition-transform ${showStatusFilter ? 'rotate-180' : ''}`} />
             </button>
 
@@ -132,7 +132,7 @@ const Tickets: React.FC = () => {
               <div className="absolute right-0 mt-2 w-40 bg-white dark:bg-gray-800 border dark:border-gray-700 border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50">
                 <button
                   onClick={() => { setStatusFilter('all'); setShowStatusFilter(false); }}
-                  className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 dark:bg-gray-700 rounded-t-lg ${statusFilter === 'all' ? 'bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400 font-medium' : 'text-gray-700'}`}
+                  className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 rounded-t-lg ${statusFilter === 'all' ? 'bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400 font-medium' : 'text-gray-700 dark:text-gray-300'}`}
                 >
                   All States
                 </button>
@@ -140,7 +140,7 @@ const Tickets: React.FC = () => {
                   <button
                     key={status}
                     onClick={() => { setStatusFilter(status); setShowStatusFilter(false); }}
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 capitalize ${statusFilter === status ? 'bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400 font-medium' : 'text-gray-700'} ${i === availableStatuses.length - 1 ? 'rounded-b-lg' : ''}`}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 capitalize ${statusFilter === status ? 'bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400 font-medium' : 'text-gray-700 dark:text-gray-300'} ${i === availableStatuses.length - 1 ? 'rounded-b-lg' : ''}`}
                   >
                     <span className={`inline-block w-2 h-2 rounded-full mr-2 ${
                       status === 'active' ? 'bg-green-500' :
@@ -161,10 +161,10 @@ const Tickets: React.FC = () => {
               onClick={() => setShowWorkflowDropdown(!showWorkflowDropdown)}
               className="flex items-center px-4 py-2 bg-white dark:bg-gray-800 border dark:border-gray-700 border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm min-w-[200px]"
             >
-              <span className="flex-1 text-left text-sm text-gray-700 truncate">
+              <span className="flex-1 text-left text-sm text-gray-700 dark:text-gray-300 truncate">
                 {!selectedExecutionId ? `📁 ${selectedProject?.name || 'Project'} Level` : selectedProject?.name || selectedWorkflow?.definition_name || 'Select Workflow'}
               </span>
-              <ChevronDown className={`w-4 h-4 ml-2 text-gray-500 transition-transform ${showWorkflowDropdown ? 'rotate-180' : ''}`} />
+              <ChevronDown className={`w-4 h-4 ml-2 text-gray-500 dark:text-gray-400 transition-transform ${showWorkflowDropdown ? 'rotate-180' : ''}`} />
             </button>
 
             {showWorkflowDropdown && (
@@ -175,20 +175,20 @@ const Tickets: React.FC = () => {
                     selectExecution(null);
                     setShowWorkflowDropdown(false);
                   }}
-                  className={`w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 ${
+                  className={`w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 ${
                     !selectedExecutionId ? 'bg-violet-50 dark:bg-violet-900/30' : ''
                   }`}
                 >
-                  <div className="text-sm font-medium text-violet-800">
+                  <div className="text-sm font-medium text-violet-800 dark:text-violet-300">
                     📁 Project Level
                   </div>
-                  <div className="text-xs text-gray-500 mt-1">
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     All tickets in {selectedProject?.name || 'project'}
                   </div>
                 </button>
                 
                 {filteredExecutions.length === 0 ? (
-                  <div className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 dark:text-gray-500">
+                  <div className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
                     {executions.length === 0 ? 'No workflows available' : `No ${statusFilter} workflows`}
                   </div>
                 ) : (
@@ -199,11 +199,11 @@ const Tickets: React.FC = () => {
                         selectExecution(execution.id);
                         setShowWorkflowDropdown(false);
                       }}
-                      className={`w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 last:border-b-0 ${
-                        execution.id === selectedExecutionId ? 'bg-blue-50' : ''
+                      className={`w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-b-0 ${
+                        execution.id === selectedExecutionId ? 'bg-blue-50 dark:bg-blue-900/30' : ''
                       }`}
                     >
-                      <div className="text-sm font-medium text-gray-800 truncate">
+                      <div className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
                         {execution.definition_name || execution.description?.split('\n')[0] || 'Unnamed Workflow'}
                       </div>
                       <div className="text-xs text-gray-400 mt-1">
@@ -221,7 +221,7 @@ const Tickets: React.FC = () => {
 
           <button
             onClick={handleNewTicket}
-            className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+            className="flex items-center px-4 py-2 bg-blue-600 dark:bg-blue-700 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors shadow-sm"
           >
             <Plus className="w-5 h-5 mr-2" />
             New Ticket
@@ -240,8 +240,8 @@ const Tickets: React.FC = () => {
                 flex items-center px-1 py-4 border-b-2 font-medium text-sm transition-colors
                 ${
                   activeTab === id
-                    ? 'border-blue-600 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:border-gray-600'
+                    ? 'border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
                 }
               `}
             >

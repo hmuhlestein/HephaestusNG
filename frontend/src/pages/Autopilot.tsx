@@ -287,7 +287,7 @@ const Autopilot: React.FC = () => {
             variant="outline"
             size="sm"
             onClick={() => refetchStatus()}
-            className="text-gray-600"
+            className="text-gray-600 dark:text-gray-400"
           >
             <RefreshCw className="w-4 h-4 mr-1" />
             Refresh

@@ -12,20 +12,20 @@ interface CreateTicketModalProps {
 }
 
 const TICKET_TYPES = [
-  { value: 'feature', label: 'Feature', color: 'bg-blue-100 text-blue-700' },
-  { value: 'bug', label: 'Bug', color: 'bg-red-100 text-red-700' },
-  { value: 'improvement', label: 'Improvement', color: 'bg-green-100 text-green-700' },
-  { value: 'task', label: 'Task', color: 'bg-gray-100 text-gray-700' },
-  { value: 'infrastructure', label: 'Infrastructure', color: 'bg-orange-100 text-orange-700' },
-  { value: 'security', label: 'Security', color: 'bg-purple-100 text-purple-700' },
-  { value: 'documentation', label: 'Documentation', color: 'bg-cyan-100 text-cyan-700' },
-  { value: 'spike', label: 'Spike', color: 'bg-yellow-100 text-yellow-700' },
+  { value: 'feature', label: 'Feature', color: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' },
+  { value: 'bug', label: 'Bug', color: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' },
+  { value: 'improvement', label: 'Improvement', color: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300' },
+  { value: 'task', label: 'Task', color: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300' },
+  { value: 'infrastructure', label: 'Infrastructure', color: 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300' },
+  { value: 'security', label: 'Security', color: 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' },
+  { value: 'documentation', label: 'Documentation', color: 'bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-300' },
+  { value: 'spike', label: 'Spike', color: 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300' },
 ];
 
 const PRIORITIES = [
-  { value: 'low', label: 'Low', color: 'bg-gray-100 text-gray-600' },
-  { value: 'medium', label: 'Medium', color: 'bg-yellow-100 text-yellow-700' },
-  { value: 'high', label: 'High', color: 'bg-red-100 text-red-700' },
+  { value: 'low', label: 'Low', color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' },
+  { value: 'medium', label: 'Medium', color: 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300' },
+  { value: 'high', label: 'High', color: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' },
 ];
 
 const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, workflowId, projectId }) => {
@@ -92,16 +92,16 @@ const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
         {/* Header */}
         <div className="px-6 py-4 border-b flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-100 rounded-lg">
-              <Ticket className="w-5 h-5 text-blue-600" />
+            <div className="p-2 bg-blue-100 dark:bg-blue-800/50 rounded-lg">
+              <Ticket className="w-5 h-5 text-blue-600 dark:text-blue-400" />
             </div>
-            <h2 className="text-lg font-bold text-gray-800">Create Ticket</h2>
+            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Create Ticket</h2>
           </div>
-          <button onClick={handleClose} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500">
+          <button onClick={handleClose} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -120,32 +120,32 @@ const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, 
         >
           {/* Title */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Title</label>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Brief description of the ticket"
-              className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
               autoFocus
             />
           </div>
 
           {/* Description */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Detailed description, acceptance criteria, etc."
               rows={4}
-              className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
             />
           </div>
 
           {/* Warning when no workflows available */}
           {!workflowId && executions && executions.length === 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700">
+            <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-600 rounded-xl px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
               No active workflows found. Start a pipeline first to create tickets.
             </div>
           )}
@@ -153,11 +153,11 @@ const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, 
           {/* Workflow selector (only when no workflow is pre-selected) */}
           {!workflowId && executions && executions.length > 0 && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Workflow</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Workflow</label>
               <select
                 value={selectedWorkflow}
                 onChange={(e) => setSelectedWorkflow(e.target.value)}
-                className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="">Select workflow...</option>
                 {executions.map((exec: any) => (
@@ -172,11 +172,11 @@ const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, 
           {/* Type and Priority */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Type</label>
               <select
                 value={ticketType}
                 onChange={(e) => setTicketType(e.target.value)}
-                className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {availableTypes.map((type) => (
                   <option key={type} value={type}>
@@ -186,11 +186,11 @@ const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, 
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Priority</label>
               <select
                 value={priority}
                 onChange={(e) => setPriority(e.target.value)}
-                className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {PRIORITIES.map((p) => (
                   <option key={p.value} value={p.value}>{p.label}</option>
@@ -201,13 +201,13 @@ const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, 
 
           {/* Tags */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Tags <span className="text-gray-400 font-normal">(comma separated)</span></label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tags <span className="text-gray-400 dark:text-gray-500 font-normal">(comma separated)</span></label>
             <input
               type="text"
               value={tags}
               onChange={(e) => setTags(e.target.value)}
               placeholder="e.g. frontend, api, urgent"
-              className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
@@ -216,14 +216,14 @@ const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, 
             <button
               type="button"
               onClick={handleClose}
-              className="px-4 py-2 text-sm border border-gray-200 rounded-xl hover:bg-gray-50"
+              className="px-4 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={createMutation.isPending || !title.trim() || (!workflowId && !selectedWorkflow && (!executions || executions.length === 0))}
-              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+              className="px-4 py-2 text-sm bg-blue-600 dark:bg-blue-700 text-white rounded-xl hover:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 flex items-center gap-2"
             >
               {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
               Create Ticket
