@@ -41,7 +41,7 @@ def mock_llm_provider():
 def mock_worktree_manager():
     """Create a mock worktree manager."""
     worktree_manager = Mock()
-    worktree_manager.create_agent_branch = Mock(
+    worktree_manager.create_agent_worktree = Mock(
         return_value={
             "working_directory": "/tmp/test-worktree",
             "branch_name": "agent/test-branch",

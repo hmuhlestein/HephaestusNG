@@ -238,7 +238,7 @@ class WorktreeManager:
 
     # ── Worktree creation ────────────────────────────────────────
 
-    def create_agent_branch(
+    def create_agent_worktree(
         self,
         agent_id: str,
         parent_agent_id: Optional[str] = None,
@@ -361,15 +361,15 @@ class WorktreeManager:
             session.close()
 
     # Upstream-compatible name for the same operation.
-    def create_agent_worktree(
+    def create_agent_branch(
         self,
         agent_id: str,
         parent_agent_id: Optional[str] = None,
         base_commit_sha: Optional[str] = None,
         context_files: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
-        """Alias for create_agent_branch (creates an isolated worktree + branch)."""
-        return self.create_agent_branch(
+        """Deprecated alias for create_agent_worktree."""
+        return self.create_agent_worktree(
             agent_id, parent_agent_id, base_commit_sha, context_files
         )
 
