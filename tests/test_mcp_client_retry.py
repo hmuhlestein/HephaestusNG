@@ -16,6 +16,35 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
+
+def _ensure_real_mcp_sdk_importable() -> None:
+    """A few other test modules (test_diagnostic_agent.py,
+    test_diagnostic_integration.py, test_orchestrator.py) do
+    `sys.path.insert(0, .../src)` at their own import time -- once any of
+    those has been collected earlier in the same pytest session, a bare
+    `import mcp` resolves to this project's OWN src/mcp/__init__.py (the
+    FastAPI app package) instead of the installed `mcp` SDK, since src/
+    now sits ahead of site-packages on sys.path. mcp_client.py's `from
+    fastmcp import FastMCP` transitively needs the real SDK's
+    `mcp.server.Server` -- purge the shadowing entries and drop src/ back
+    off sys.path so the import below resolves correctly regardless of
+    what already ran this session. Safe to remove unconditionally: each
+    of those three modules re-inserts it fresh at ITS OWN import time
+    rather than checking for an existing entry, so nothing downstream
+    depends on it staying present between test modules.
+    """
+    for name in list(sys.modules):
+        if name == "mcp" or name.startswith("mcp."):
+            mod = sys.modules[name]
+            origin = getattr(mod, "__file__", "") or ""
+            if "site-packages" not in origin:
+                del sys.modules[name]
+
+    project_src = str(Path(__file__).resolve().parents[1] / "src")
+    sys.path[:] = [p for p in sys.path if p != project_src]
+
+
+_ensure_real_mcp_sdk_importable()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mcp"))
 import mcp_client  # noqa: E402
 

@@ -1898,6 +1898,45 @@ def _get_design_queue_dir(project_base: str) -> Path:
     return Path(project_base) / DESIGN_CONTEXT_SUBDIR
 
 
+def _find_archived_feature_report(project_base: str, workflow_id: str) -> Optional[Path]:
+    """Find a workflow's feature_report.html in the archived features
+    gallery, once its worktree (and Workflow.working_directory) is gone.
+
+    PhaseManager._populate_feature_folder archives a durable copy to
+    <project_base>/.hephaestus/features/<timestamp>_<design-name>/ at full
+    workflow completion, right before _cleanup_worktree removes the
+    worktree that would otherwise be the only copy. Folder names are
+    timestamp+design-name only, not feature-specific, so a design with
+    more than one feature can't be matched by name alone -- match instead
+    via the workflow_id each folder's own pipeline_metrics.json records.
+
+    Shared by get_project_design_status's has_report flag and
+    get_workflow_feature_report's actual file serving, so both agree on
+    exactly the same report once a feature has fully completed.
+    """
+    features_gallery = Path(project_base) / CONTEXT_DIR_NAME / "features"
+    if not features_gallery.is_dir():
+        return None
+    for gallery_dir in features_gallery.iterdir():
+        metrics_path = gallery_dir / "docs" / "pipeline_metrics.json"
+        if not metrics_path.is_file():
+            continue
+        try:
+            metrics = json.loads(metrics_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if metrics.get("workflow_id") != workflow_id:
+            continue
+        for candidate in (
+            gallery_dir / "docs" / "feature_report.html",
+            gallery_dir / "feature_report.html",
+        ):
+            if candidate.is_file():
+                return candidate
+        return None
+    return None
+
+
 def _extract_ordinal(filename: str) -> Optional[int]:
     """Extract numeric ordinal from filename prefix (e.g. '01-foo.md' → 1).
 
@@ -3479,21 +3518,30 @@ async def get_project_design_status(project_id: str, filename: str):
             has_report = False
             if feat_wf_id:
                 feat_wf = next((wf for wf in matching_workflows if wf.id == feat_wf_id), None)
-                if feat_wf and feat_wf.working_directory:
-                    # Only show report if doc_review phase has completed
-                    # (prevents showing stale reports from previous runs)
-                    from src.core.database import Phase as _Phase
-                    doc_review_phase = db.query(_Phase).filter_by(
-                        workflow_id=feat_wf_id, name="doc_review"
+                # Only show report if doc_review phase has completed
+                # (prevents showing stale reports from previous runs)
+                from src.core.database import Phase as _Phase
+                doc_review_phase = db.query(_Phase).filter_by(
+                    workflow_id=feat_wf_id, name="doc_review"
+                ).first()
+                if doc_review_phase:
+                    doc_review_done = db.query(Task).filter(
+                        Task.phase_id == doc_review_phase.id,
+                        Task.status == "done",
                     ).first()
-                    if doc_review_phase:
-                        doc_review_done = db.query(Task).filter(
-                            Task.phase_id == doc_review_phase.id,
-                            Task.status == "done",
-                        ).first()
-                        if doc_review_done:
+                    if doc_review_done:
+                        if feat_wf and feat_wf.working_directory:
                             has_report = (Path(feat_wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html").is_file() or \
                                          (Path(feat_wf.working_directory) / "docs" / "feature_report.html").is_file()
+                        if not has_report:
+                            # working_directory is null/gone once the feature's
+                            # worktree is cleaned up on full completion (see
+                            # _cleanup_worktree) -- the live-worktree checks
+                            # above go permanently False at that point even
+                            # though PhaseManager._populate_feature_folder
+                            # already archived a durable copy to the features
+                            # gallery first.
+                            has_report = _find_archived_feature_report(base_dir, feat_wf_id) is not None
 
             features.append(
                 {
@@ -3633,29 +3681,45 @@ async def get_project_design_status(project_id: str, filename: str):
 
 @router.get("/workflows/{workflow_id}/feature_report")
 async def get_workflow_feature_report(workflow_id: str):
-    """Serve doc_review's HTML feature report straight from the workflow's
-    live worktree.
+    """Serve doc_review's HTML feature report, preferring the workflow's
+    live worktree and falling back to the archived features gallery copy
+    once that worktree is gone.
 
-    The features gallery's /features/{feature_id}/report only has a copy
-    once PhaseManager._populate_feature_folder archives it at FULL
-    workflow completion (2 phases after doc_review) -- this is what lets
-    the report show up on the feature row right after doc_review itself
-    finishes, matching the has_report flag computed in
-    get_project_design_status above.
+    Checking the live worktree first is what lets the report show up on
+    the feature row right after doc_review itself finishes -- before
+    PhaseManager._populate_feature_folder archives a copy to the features
+    gallery at FULL workflow completion (2 phases later). But
+    _cleanup_worktree removes the worktree (and nulls
+    Workflow.working_directory) once the feature is fully done, which is
+    exactly when the archived copy becomes the only one left -- must fall
+    back to it or a fully-completed feature's report 404s forever, same
+    bug class as get_project_design_status's has_report flag, which this
+    matches via the same _find_archived_feature_report helper.
     """
-    from src.core.database import Workflow, get_db
+    from src.core.database import AutopilotProject, Workflow, get_db
 
     with get_db() as db:
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
-        if not wf or not wf.working_directory:
-            raise HTTPException(404, "Workflow not found or has no working directory")
+        if not wf:
+            raise HTTPException(404, "Workflow not found")
         working_directory = wf.working_directory
+        project_base_dir = None
+        if wf.project_id:
+            proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
+            project_base_dir = proj.base_dir if proj else None
 
-    report_path = Path(working_directory) / CONTEXT_DIR_NAME / "feature_report.html"
-    if not report_path.is_file():
-        # Also check docs/ directory
-        report_path = Path(working_directory) / "docs" / "feature_report.html"
-    if not report_path.is_file():
+    report_path = None
+    if working_directory:
+        candidate = Path(working_directory) / CONTEXT_DIR_NAME / "feature_report.html"
+        if not candidate.is_file():
+            candidate = Path(working_directory) / "docs" / "feature_report.html"
+        if candidate.is_file():
+            report_path = candidate
+
+    if report_path is None and project_base_dir:
+        report_path = _find_archived_feature_report(project_base_dir, workflow_id)
+
+    if report_path is None:
         raise HTTPException(404, "Report not found")
     return HTMLResponse(content=report_path.read_text(errors="replace"))
 
