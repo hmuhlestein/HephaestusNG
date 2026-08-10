@@ -169,7 +169,7 @@ class TestSweepSelfHealing:
 
         await server.background_phase_advancement_sweep()
 
-        assert cleaned_ids == ["wf-active"]
+        assert cleaned_ids == ["wf-active", "wf-paused"]
         assert retried_ids == ["wf-active"]
 
 
