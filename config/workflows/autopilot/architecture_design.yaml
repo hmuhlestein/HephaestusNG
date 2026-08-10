@@ -1,6 +1,8 @@
 id: 3
 name: architecture_design
 thinking_level: high
+self_review:
+  enabled: true
 cli_tool: claude
 cli_model: sonnet
 fallback_cli_tool: pi
