@@ -1402,7 +1402,7 @@ class AgentManager:
         AgentPromptBuilder.format_initial_message), not task.done_definition
         -- a goal built from it would describe someone else's task.
         """
-        if agent_type != "phase":
+        if agent_type in ("validator", "result_validator", "diagnostic", "arbitration"):
             return
         condition = (task.done_definition or "").strip()
         if not condition:
