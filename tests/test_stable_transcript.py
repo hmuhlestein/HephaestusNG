@@ -393,3 +393,60 @@ class TestGetAgentOutputUsesCleanTranscript:
 
         assert "live-correctly-rendered-line" in output
         assert "raw-duplicated-streaming-line" not in output
+
+    def test_terminated_agent_prefers_clean_transcript_over_garbled_raw(
+        self, agent_manager, db_manager, tmp_path, monkeypatch
+    ):
+        """Regression: get_agent_output used to try the raw pipe-pane
+        transcript FIRST for terminated agents, only falling back to the
+        clean transcript's own data (via AgentLog.final_output) if that
+        came up empty -- even though terminate_agent() already does a
+        final unconditional flush of clean.log right before killing the
+        session, specifically so it stays authoritative after death. A
+        terminated agent with a perfectly good clean.log therefore still
+        returned garbled text reconstructed from the raw transcript by
+        regex alone (e.g. cursor-painted text collapsing together with no
+        spaces). The clean transcript must win."""
+        from src.core.database import Workflow
+
+        session_name = "sess-terminated-clean"
+        task_id = str(uuid.uuid4())
+        agent_id = str(uuid.uuid4())
+        workflow_id = str(uuid.uuid4())
+        session_db = db_manager.get_session()
+        session_db.add(
+            Workflow(
+                id=workflow_id, name="t", phases_folder_path="/tmp",
+                status="active", definition_id="autopilot",
+                working_directory=str(tmp_path),
+            )
+        )
+        session_db.add(
+            Agent(
+                id=agent_id, system_prompt="p", status="terminated", cli_type="claude",
+                tmux_session_name=session_name, current_task_id=None,
+            )
+        )
+        session_db.add(
+            Task(
+                id=task_id, workflow_id=workflow_id, raw_description="r",
+                done_definition="d", status="done", assigned_agent_id=agent_id,
+            )
+        )
+        session_db.commit()
+        session_db.close()
+
+        tmux_dir = tmp_path / ".hephaestus" / "tmux"
+        tmux_dir.mkdir(parents=True)
+        (tmux_dir / f"{session_name}.clean.log").write_text("clean-final-line\n")
+        (tmux_dir / f"{session_name}.transcript.log").write_text(
+            "garbledrawpipepanebytes\n"
+        )
+
+        # Session is gone (agent terminated) -- capture-pane can't see it.
+        monkeypatch.setattr(agent_manager, "_capture_pane_lines", lambda _sn: None)
+
+        output = agent_manager.get_agent_output(agent_id, lines=100)
+
+        assert "clean-final-line" in output
+        assert "garbledrawpipepanebytes" not in output

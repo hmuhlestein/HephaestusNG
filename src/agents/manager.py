@@ -726,6 +726,22 @@ class AgentManager:
                     f"[SESSION] Using session ID: {session_id} for phase {phase_name}"
                 )
 
+            # Build the task-instructions file and its pointer BEFORE the
+            # launch command. Most CLIs get the pointer delivered as a
+            # short tmux message later (step 7 below), but a CLI like
+            # OpenCode has no separate post-launch "send a message" step --
+            # its launch argument IS its first turn -- so it needs the
+            # pointer available now, via the instructions_pointer kwarg.
+            initial_message = self._format_initial_message(
+                task, agent_id, branch_path, agent_type, enriched_data
+            )
+            instructions_rel_path = self._write_task_instructions(
+                branch_path, task.id, initial_message
+            )
+            instructions_pointer = self._build_instructions_pointer(
+                task.id, instructions_rel_path
+            )
+
             launch_result = cli_agent.get_launch_command(
                 system_prompt=system_prompt,
                 task_id=task.id,
@@ -737,6 +753,7 @@ class AgentManager:
                 phase_id=task.phase_id,
                 session_id=session_id,
                 working_directory=branch_path,
+                instructions_pointer=instructions_pointer,
             )
             launch_command = launch_result.command
 
@@ -810,14 +827,10 @@ class AgentManager:
             logger.info(f"CLI type: {cli_type}")
             logger.info(f"Tmux session: {session_name}")
 
-            # Get the initial message with worktree path
-            initial_message = self._format_initial_message(
-                task, agent_id, branch_path, agent_type, enriched_data
-            )
-
             # When the CLI loads an agent file as its system prompt
             # (e.g. Claude Code with --agent), the system prompt is not
-            # sent via a flag. Prepend it to the initial message so the
+            # sent via a flag. Prepend it to the instructions file (already
+            # written above and referenced by instructions_pointer) so the
             # agent still gets safety rules, tool descriptions, memory
             # context, and phase instructions.
             if launch_result.prompt_delivery == LaunchResult.AGENT_FILE and system_prompt:
@@ -826,6 +839,7 @@ class AgentManager:
                     + "\n\n---\n\n"
                     + initial_message
                 )
+                self._write_task_instructions(branch_path, task.id, initial_message)
 
             logger.info(f"Initial message length: {len(initial_message)} characters")
 
@@ -903,15 +917,29 @@ class AgentManager:
                 pane.send_keys(key)
                 await asyncio.sleep(1.5)
 
+            # Set a self-checked completion condition (CLIs that support one)
+            # before the task pointer so the agent can't quietly stop before
+            # task.done_definition is actually met.
+            await self._send_goal_command(pane, cli_agent, task, agent_type)
+
             # Send initial prompt (or just Enter for OpenCode)
             await self._send_initial_prompt_with_retry(
                 pane=pane,
                 cli_agent=cli_agent,
                 cli_type=cli_type,
-                initial_message=initial_message,
+                initial_message=instructions_pointer,
                 agent_id=agent_id,
                 task_id=task.id,
                 max_retries=3,
+            )
+
+            # Best-effort check that the agent actually engaged with its
+            # instructions file, not just that the (tiny, always-delivered)
+            # pointer text landed in the pane -- logs a warning only, never
+            # blocks agent creation, since it's a heuristic across CLIs with
+            # very different tool-call rendering.
+            await self._verify_instructions_file_read(
+                pane, instructions_rel_path, agent_id
             )
 
             logger.info(f"=== END INITIAL PROMPT DELIVERY for agent {agent_id} ===")
@@ -1304,6 +1332,116 @@ class AgentManager:
                 f"[ENV-EXPORT] {label}: readback for {check_key} didn't match "
                 f"on attempt {attempt + 1} -- "
                 f"{'retrying' if attempt == 0 else 'giving up, launching anyway'}"
+            )
+
+    def _write_task_instructions(
+        self, worktree_path: str, task_id: str, content: str
+    ) -> str:
+        """Persist an agent's full initial instructions as a markdown file in
+        its worktree, so every phase agent -- the first in a workflow
+        included -- receives its task the same way later phases already
+        receive prior phases' outputs (design.md, architecture.md,
+        requirements.md written by _gather_worktree_context): as a file to
+        read, not a wall of text pasted live into the terminal.
+
+        Returns the path relative to the worktree, for use in the short
+        pointer message actually sent over tmux.
+        """
+        tasks_dir = Path(worktree_path) / ".hephaestus" / "tasks"
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        instructions_path = tasks_dir / f"{task_id}.md"
+        instructions_path.write_text(content)
+        instructions_path.chmod(0o644)
+        return f".hephaestus/tasks/{task_id}.md"
+
+    @staticmethod
+    def _build_instructions_pointer(
+        task_id: str, instructions_rel_path: str, restarted: bool = False
+    ) -> str:
+        """Short, constant-size message pointing an agent at its full
+        instructions file. This -- not the file's content -- is what
+        actually reaches the CLI: over tmux for most CLIs (step 7 in
+        create_agent_for_task/restart_agent), or embedded directly in the
+        launch command for a CLI like OpenCode that has no separate
+        post-launch "send a message" step (see instructions_pointer kwarg
+        on CLIAgentInterface.get_launch_command).
+        """
+        detail = " (including the restart note)" if restarted else ""
+        verb = "continue" if restarted else "begin"
+        return (
+            f"Task ID: {task_id}\n\n"
+            f"Your full task instructions{detail} are in {instructions_rel_path} "
+            f"-- read that file now, then {verb}."
+        )
+
+    async def _send_goal_command(
+        self, pane, cli_agent, task: Task, agent_type: str
+    ) -> None:
+        """Set a self-checked completion condition (e.g. Claude Code's
+        `/goal <condition>`, via cli_agent.format_goal_command -- a no-op
+        empty string for CLIs with no such mechanism) so the agent keeps
+        working until task.done_definition is actually met, instead of
+        stopping on its own judgment. Sent BEFORE the task pointer (see
+        _build_instructions_pointer) since a command like /goal is consumed
+        by the CLI itself rather than as a chat turn, so ordering relative
+        to the task description doesn't matter -- but sending it after
+        would risk landing while the agent is mid-tool-call reading its
+        instructions file, the same interleaving problem chunked delivery
+        already works around.
+
+        Only meaningful for phase agents: validator/result_validator/
+        diagnostic/arbitration agents work from a specialized
+        validation_prompt in enriched_data (see
+        AgentPromptBuilder.format_initial_message), not task.done_definition
+        -- a goal built from it would describe someone else's task.
+        """
+        if agent_type != "phase":
+            return
+        condition = (task.done_definition or "").strip()
+        if not condition:
+            return
+        goal_command = cli_agent.format_goal_command(condition)
+        if not goal_command:
+            return
+
+        if cli_agent.needs_chunked_delivery:
+            chunk_size = 2500
+            for i in range(0, len(goal_command), chunk_size):
+                pane.send_keys(goal_command[i : i + chunk_size], enter=False)
+                await asyncio.sleep(0.2)
+            await asyncio.sleep(0.5)
+            pane.send_keys("", enter=True)
+        else:
+            pane.send_keys(goal_command, enter=True)
+        logger.info(
+            f"[GOAL] Set /goal for task {task.id[:8]} ({len(condition)} chars)"
+        )
+        await asyncio.sleep(3)
+
+    async def _verify_instructions_file_read(
+        self, pane, instructions_rel_path: str, agent_id: str
+    ) -> None:
+        """Best-effort signal that the agent actually opened its
+        instructions file, not just that the pointer text was delivered.
+        Most CLIs echo the path of a file they Read/cat as part of their
+        own tool-call rendering, so a short wait followed by one capture-
+        pane check catches the common "agent never touched the file"
+        failure mode. Logs a warning only -- never raises or retries, since
+        this is a heuristic across CLIs with very different TUI rendering,
+        not a reliable contract.
+        """
+        await asyncio.sleep(15)
+        try:
+            captured = pane.cmd("capture-pane", "-p", "-S", "-200").stdout
+            output = "\n".join(captured) if captured else ""
+        except Exception:
+            return
+        filename = instructions_rel_path.rsplit("/", 1)[-1]
+        if filename not in output and instructions_rel_path not in output:
+            logger.warning(
+                f"[INSTRUCTIONS-CHECK] Agent {agent_id[:8]} shows no sign of "
+                f"having opened {instructions_rel_path} within 15s of the "
+                "pointer being sent -- it may be idle instead of working."
             )
 
     def _gather_worktree_context(self, task: Task) -> Dict[str, str]:
@@ -2087,6 +2225,22 @@ class AgentManager:
                         restart_wd = wf.working_directory
                 finally:
                     restart_sess.close()
+            if not restart_wd:
+                # Workflow.working_directory is only tracked for shared-
+                # worktree workflows. Fall back to this agent's own tracked
+                # worktree (the legacy isolated-per-agent-worktree path --
+                # validators, diagnostics) so restart still lands in the
+                # git worktree holding its already-committed work, instead
+                # of relaunching with no working_directory at all.
+                try:
+                    candidate = self.branch_manager.get_agent_branch_path(agent_id)
+                    if candidate and Path(candidate).exists():
+                        restart_wd = candidate
+                except Exception as e:
+                    logger.debug(
+                        f"[RESTART] Could not resolve agent branch path for "
+                        f"{agent_id[:8]}: {e}"
+                    )
             # Relaunch agent
             cli_agent = get_cli_agent(agent.cli_type)
             if restart_wd:
@@ -2185,6 +2339,32 @@ class AgentManager:
                         f"[SESSION] Could not generate session ID for restart: {e}"
                     )
 
+            # Build the resume message NOW, while the ORM objects are still attached.
+            # It MUST carry the agent-id header (via _format_initial_message → "🔑 Your
+            # Agent ID:") — otherwise the agent has no agent_id and uses the task_id in
+            # MCP calls, so update_task_status/submit_result fail ("Agent not found").
+            #
+            # Built BEFORE the launch command (same reasoning as
+            # create_agent_for_task): OpenCode has no separate post-launch
+            # "send a message" step, so it needs the pointer embedded in
+            # the launch command itself via instructions_pointer.
+            restart_message = (
+                f"⚠️ You were restarted ({reason}). Your prior work is committed in this "
+                f"worktree — do NOT redo it; run `git log` / `git status` and inspect existing "
+                f"files first, then continue toward completion.\n\n"
+                + self._format_initial_message(
+                    task, agent_id, agent_type=(agent.agent_type or "phase")
+                )
+            )
+            instructions_pointer = ""
+            if restart_wd:
+                instructions_rel_path = self._write_task_instructions(
+                    restart_wd, task.id, restart_message
+                )
+                instructions_pointer = self._build_instructions_pointer(
+                    task.id, instructions_rel_path, restarted=True
+                )
+
             launch_result = cli_agent.get_launch_command(
                 system_prompt=restart_system_prompt,
                 task_id=task.id,
@@ -2196,6 +2376,7 @@ class AgentManager:
                 thinking_level=restart_thinking_level,
                 session_id=session_id,
                 working_directory=restart_wd,
+                instructions_pointer=instructions_pointer,
             )
             launch_command = launch_result.command
 
@@ -2215,32 +2396,24 @@ class AgentManager:
             # Launch the CLI (pi/claude/etc.) in the fresh session
             pane.send_keys(launch_command, enter=True)
 
-            # Build the resume message NOW, while the ORM objects are still attached.
-            # It MUST carry the agent-id header (via _format_initial_message → "🔑 Your
-            # Agent ID:") — otherwise the agent has no agent_id and uses the task_id in
-            # MCP calls, so update_task_status/submit_result fail ("Agent not found").
             restart_cli_type = agent.cli_type
             restart_task_id = task.id
-            restart_message = (
-                f"⚠️ You were restarted ({reason}). Your prior work is committed in this "
-                f"worktree — do NOT redo it; run `git log` / `git status` and inspect existing "
-                f"files first, then continue toward completion.\n\n"
-                + self._format_initial_message(
-                    task, agent_id, agent_type=(agent.agent_type or "phase")
-                )
-            )
 
             # When the CLI loads an agent file as its system prompt
             # (e.g. Claude Code with --agent), the system prompt is
             # dropped by get_launch_command. Prepend the restart system
             # prompt (which includes the original system prompt) so the
-            # agent gets safety rules, tools, and context.
+            # agent gets safety rules, tools, and context, then refresh
+            # the instructions file already referenced by
+            # instructions_pointer above.
             if launch_result.prompt_delivery == LaunchResult.AGENT_FILE and restart_system_prompt:
                 restart_message = (
                     restart_system_prompt
                     + "\n\n---\n\n"
                     + restart_message
                 )
+                if restart_wd:
+                    self._write_task_instructions(restart_wd, task.id, restart_message)
 
             # Update agent record
             agent.tmux_session_name = new_session_name
@@ -2269,15 +2442,27 @@ class AgentManager:
                     for key in cli_agent.post_launch_confirmation_keys():
                         pane.send_keys(key)
                         await asyncio.sleep(1.5)
+                    # Re-set (a fresh session doesn't necessarily inherit an
+                    # active goal from before the restart).
+                    await self._send_goal_command(
+                        pane, cli_agent, task, agent.agent_type or "phase"
+                    )
+                    # Falls back to the full restart_message text when no
+                    # worktree location was known (restart_wd is None), the
+                    # same as the pre-fallback behavior above.
                     await self._send_initial_prompt_with_retry(
                         pane=pane,
                         cli_agent=cli_agent,
                         cli_type=restart_cli_type,
-                        initial_message=restart_message,
+                        initial_message=instructions_pointer if restart_wd else restart_message,
                         agent_id=agent_id,
                         task_id=restart_task_id,
                         max_retries=3,
                     )
+                    if restart_wd:
+                        await self._verify_instructions_file_read(
+                            pane, instructions_rel_path, agent_id
+                        )
                     logger.info(
                         f"[RESTART] Delivered continue-prompt to agent {agent_id} ({restart_cli_type})"
                     )
@@ -2319,19 +2504,56 @@ class AgentManager:
             if agent.agent_type == "orchestrator":
                 return self._get_orchestrator_output(agent, lines)
 
-            # Check if agent is terminated - try transcript log first, then AgentLog
+            # The stability-tracked "clean" transcript (tmux's own capture-
+            # pane rendering -- cursor positioning, overwrites, and line
+            # wrapping already correctly resolved) is authoritative
+            # whether the agent is still running or has terminated:
+            # terminate_agent() does a final unconditional flush of it
+            # right before killing the session, specifically so it stays
+            # correct once capture-pane can no longer see anything. Check
+            # it first regardless of status -- a terminated agent used to
+            # skip straight to the raw pipe-pane transcript below, which
+            # re-shows every intermediate \r/cursor-redrawn TUI frame as
+            # its own line and can't always be reconstructed by regex
+            # stripping alone (text painted via cursor movement rather
+            # than literal spaces comes out concatenated). See
+            # _read_transcript_log.
+            if agent.tmux_session_name:
+                transcript_dir = self._resolve_tmux_transcript_dir(agent)
+                if transcript_dir:
+                    clean_path = transcript_dir / f"{agent.tmux_session_name}.clean.log"
+                    if agent.status != "terminated":
+                        self._poll_stable_transcript(agent.tmux_session_name, clean_path)
+                    if clean_path.exists() and clean_path.stat().st_size > 0:
+                        with open(clean_path, "r", errors="replace") as f:
+                            clean_lines = f.read().splitlines()
+                        if lines > 0:
+                            clean_lines = clean_lines[-lines:]
+                        return "\n".join(clean_lines)
+
+                # No clean transcript yet (e.g. still within the first
+                # couple of confirmation polls, or mid-stream on a long
+                # response that hasn't settled anywhere yet). A live
+                # capture-pane snapshot is tmux's own correctly-emulated
+                # rendering too -- just not yet "confirmed stable" enough
+                # to persist. Returns None once the session itself is
+                # gone, which is always true for a terminated agent, so
+                # this is a no-op there.
+                current_lines = self._capture_pane_lines(agent.tmux_session_name)
+                if current_lines is not None:
+                    if lines > 0:
+                        current_lines = current_lines[-lines:]
+                    return "\n".join(current_lines)
+
             if agent.status == "terminated":
                 logger.debug(
-                    f"Agent {agent_id} is terminated, trying transcript log"
+                    f"Agent {agent_id} is terminated with no clean transcript, "
+                    "falling back to termination-time capture"
                 )
 
-                # Try transcript log first (has full history)
-                transcript_output = self._read_transcript_log(agent, lines)
-                if transcript_output:
-                    return transcript_output
-
-                # Fall back to stored output in AgentLog
-                # Get the most recent termination log with output
+                # capture-pane snapshot taken by terminate_agent() right
+                # before the session was killed -- also proper tmux
+                # rendering, not raw pty bytes.
                 termination_log = (
                     session.query(AgentLog)
                     .filter_by(agent_id=agent_id, log_type="terminated")
@@ -2350,6 +2572,13 @@ class AgentManager:
                             output_lines = final_output.split("\n")
                             return "\n".join(output_lines[-lines:])
                         return final_output
+
+                # Last resort: the raw pipe-pane transcript (has ANSI
+                # colors), only reached if every tmux-emulated source
+                # above came up empty.
+                transcript_output = self._read_transcript_log(agent, lines)
+                if transcript_output:
+                    return transcript_output
 
                 logger.warning(
                     f"No stored output found for terminated agent {agent_id}"
@@ -2381,45 +2610,9 @@ class AgentManager:
                 logger.warning(f"Agent {agent_id} has no tmux session name")
                 return ""
 
-            # Prefer the stability-tracked "clean" transcript: it's built
-            # from tmux's own capture-pane (cursor positioning, overwrites,
-            # and line wrapping already correctly resolved), polled and
-            # appended to right here, rather than the raw pipe-pane byte
-            # stream (_read_transcript_log below) -- see
-            # _poll_stable_transcript for why raw bytes can't be turned
-            # into correct text by regex stripping alone.
-            transcript_dir = self._resolve_tmux_transcript_dir(agent)
-            if transcript_dir:
-                clean_path = transcript_dir / f"{agent.tmux_session_name}.clean.log"
-                self._poll_stable_transcript(agent.tmux_session_name, clean_path)
-                if clean_path.exists() and clean_path.stat().st_size > 0:
-                    with open(clean_path, "r", errors="replace") as f:
-                        clean_lines = f.read().splitlines()
-                    if lines > 0:
-                        clean_lines = clean_lines[-lines:]
-                    return "\n".join(clean_lines)
-
-            # Fall back to an unprocessed capture-pane snapshot if the clean
-            # transcript couldn't produce anything yet (e.g. the whole
-            # session is still within the first couple of confirmation
-            # polls, or it's mid-stream on a long response that hasn't
-            # settled anywhere yet). This is tmux's own correctly-emulated
-            # rendering -- just not yet "confirmed stable" enough to
-            # persist -- so it's still a faithful snapshot, unlike the raw
-            # pipe-pane transcript below. Observed live: a long streaming
-            # response with nothing committed to clean.log yet fell
-            # through to the raw transcript, which re-shows every
-            # intermediate \r-redrawn state as its own line -- the exact
-            # duplication problem the clean transcript exists to avoid.
-            current_lines = self._capture_pane_lines(agent.tmux_session_name)
-            if current_lines is not None:
-                if lines > 0:
-                    current_lines = current_lines[-lines:]
-                return "\n".join(current_lines)
-
-            # Last resort: the raw pipe-pane transcript (has ANSI colors),
-            # only reached if even a live capture-pane snapshot failed
-            # (e.g. the tmux session itself is gone).
+            # Live agent with a session name, but capture-pane came up
+            # empty (e.g. a transient health-check race) -- last resort is
+            # the raw pipe-pane transcript.
             logger.debug(
                 f"capture-pane unavailable for {agent.tmux_session_name}, "
                 "falling back to raw transcript"

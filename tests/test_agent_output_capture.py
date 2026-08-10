@@ -171,20 +171,18 @@ class TestAgentOutputCapture:
 
         # Setup database session mock
         mock_db_session = Mock()
-        # Flow: 1) Agent query, 2) _read_transcript_log Task query, 3) AgentLog query
+        # Flow: 1) Agent query, 2) AgentLog query -- tmux_session_name is
+        # None, so the clean-transcript/capture-pane check (and the raw
+        # transcript's own Task lookup) never run; the termination-time
+        # AgentLog is checked directly.
         mock_agent_query = Mock()
         mock_agent_query.filter_by.return_value.first.return_value = mock_agent
-
-        mock_task_query = Mock()
-        mock_task_query.filter_by.return_value.order_by.return_value.first.return_value = None
-        mock_task_query.filter_by.return_value.first.return_value = None
 
         mock_log_query = Mock()
         mock_log_query.filter_by.return_value.order_by.return_value.first.return_value = mock_log
 
         mock_db_session.query.side_effect = [
             mock_agent_query,  # Agent query
-            mock_task_query,   # _read_transcript_log Task query
             mock_log_query,    # AgentLog query
         ]
         mock_db_manager.get_session.return_value = mock_db_session
@@ -219,20 +217,18 @@ class TestAgentOutputCapture:
 
         # Setup database session mock
         mock_db_session = Mock()
-        # Flow: 1) Agent query, 2) _read_transcript_log Task query, 3) AgentLog query
+        # Flow: 1) Agent query, 2) AgentLog query -- tmux_session_name is
+        # None, so the clean-transcript/capture-pane check (and the raw
+        # transcript's own Task lookup) never run; the termination-time
+        # AgentLog is checked directly.
         mock_agent_query = Mock()
         mock_agent_query.filter_by.return_value.first.return_value = mock_agent
-
-        mock_task_query = Mock()
-        mock_task_query.filter_by.return_value.order_by.return_value.first.return_value = None
-        mock_task_query.filter_by.return_value.first.return_value = None
 
         mock_log_query = Mock()
         mock_log_query.filter_by.return_value.order_by.return_value.first.return_value = mock_log
 
         mock_db_session.query.side_effect = [
             mock_agent_query,  # Agent query
-            mock_task_query,   # _read_transcript_log Task query
             mock_log_query,    # AgentLog query
         ]
         mock_db_manager.get_session.return_value = mock_db_session
@@ -294,6 +290,8 @@ class TestAgentOutputCapture:
         mock_agent = Mock(spec=Agent)
         mock_agent.id = agent_id
         mock_agent.status = "terminated"
+        mock_agent.current_task_id = None
+        mock_agent.tmux_session_name = None
 
         # No AgentLog found
         mock_db_session = Mock()

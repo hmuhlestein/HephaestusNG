@@ -389,7 +389,7 @@ class TestCreateAgentForTask:
 
     @pytest.mark.asyncio
     async def test_ignores_stale_phase_cli_model_when_phase_cli_tool_unset(
-        self, mock_agent_manager, sample_task, db_manager
+        self, mock_agent_manager, sample_task, db_manager, monkeypatch
     ):
         """Regression: a Phase row can have cli_model populated from
         whatever the global default was AT THE TIME it was created, with
@@ -406,8 +406,12 @@ class TestCreateAgentForTask:
             phase.cli_tool = None
             phase.cli_model = "xiaomi/mimo-v2.5-pro"
 
-        mock_agent_manager.config.default_cli_tool = "claude"
-        mock_agent_manager.config.cli_model = "sonnet"
+        # mock_agent_manager.config is get_config()'s process-wide singleton
+        # (AgentManager.__init__ never gets a fixture-isolated instance), so
+        # a raw attribute assignment here leaks into every other test in the
+        # same pytest session -- monkeypatch restores it at teardown instead.
+        monkeypatch.setattr(mock_agent_manager.config, "default_cli_tool", "claude")
+        monkeypatch.setattr(mock_agent_manager.config, "cli_model", "sonnet")
 
         mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
             return_value={
