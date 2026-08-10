@@ -102,7 +102,8 @@ def run(args):
     # instance of each service. A watchdog-respawned monitor/backend that
     # never got its pidfile entry synced (or a process started outside
     # `heph start` entirely) would otherwise survive this command.
-    for pattern in ("run_watchdog.py", "run_server.py", "run_monitor.py"):
+    # Includes vite to catch orphaned dev-server processes from start_all.sh.
+    for pattern in ("run_watchdog.py", "run_server.py", "run_monitor.py", "vite"):
         try:
             result = subprocess.run(
                 ["pgrep", "-f", pattern], capture_output=True, text=True
