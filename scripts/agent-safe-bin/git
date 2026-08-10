@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Protected `git` wrapper for CLI agent sessions.
+#
+# In review mode, `git merge` is blocked unless the feature has been
+# approved (signaled by .hephaestus/review_approved marker file).
+# This prevents the agent from merging to main before human review.
+#
+# All other git commands pass through unmodified.
+#
+# This is a hard technical guardrail — the LLM cannot talk its way
+# past a PATH-resolved script that says no.
+
+set -euo pipefail
+
+# Find the real git binary, skipping past this wrapper's own directory.
+real_git=""
+IFS=':' read -ra path_dirs <<< "$PATH"
+for dir in "${path_dirs[@]}"; do
+    if [[ "$dir" == "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" ]]; then
+        continue
+    fi
+    if [[ -x "$dir/git" ]]; then
+        real_git="$dir/git"
+        break
+    fi
+done
+if [[ -z "$real_git" ]]; then
+    real_git="/usr/bin/git"
+fi
+
+# Check if this is a merge command
+is_merge=0
+for arg in "$@"; do
+    case "$arg" in
+        merge)
+            is_merge=1
+            break
+            ;;
+    esac
+done
+
+# Block merge unless review_approved marker exists
+if [[ "$is_merge" -eq 1 ]]; then
+    # Walk up to find the worktree root (contains .hephaestus/)
+    marker=""
+    check_dir="$PWD"
+    while [[ "$check_dir" != "/" ]]; do
+        if [[ -f "$check_dir/.hephaestus/review_approved" ]]; then
+            marker="$check_dir/.hephaestus/review_approved"
+            break
+        fi
+        check_dir="$(dirname "$check_dir")"
+    done
+
+    if [[ -z "$marker" ]]; then
+        echo "BLOCKED: git merge is not allowed until the feature has been reviewed and approved." >&2
+        echo "In review mode, create a PR instead of merging. The merge will happen after" >&2
+        echo "human approval creates the .hephaestus/review_approved marker." >&2
+        echo "" >&2
+        echo "To create a PR: gh pr create --title 'feat: ...' --body '...'" >&2
+        exit 1
+    fi
+fi
+
+exec "$real_git" "$@"

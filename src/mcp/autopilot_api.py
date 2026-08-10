@@ -3923,6 +3923,35 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             feature.status = "active"
             db.commit()
 
+            # Create review_approved marker so the safe git wrapper
+            # allows git merge. Without this, the agent-safe-bin/git
+            # script blocks all merge commands.
+            if wf.working_directory:
+                from pathlib import Path
+                marker_dir = Path(wf.working_directory) / ".hephaestus"
+                marker_dir.mkdir(parents=True, exist_ok=True)
+                marker = marker_dir / "review_approved"
+                marker.write_text(f"Approved at {datetime.utcnow().isoformat()}\n")
+                logger.info(f"[REVIEW] Created review_approved marker at {marker}")
+
+            # In review mode, git_commit_push created a PR but didn't merge.
+            # Merge it now that the feature is approved.
+            pr_url = feature.pr_url or _extract_pr_url(db, wf.id, {})
+            if pr_url:
+                import subprocess
+                try:
+                    # Try gh pr merge first
+                    result = subprocess.run(
+                        ["gh", "pr", "merge", pr_url, "--merge"],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    if result.returncode == 0:
+                        logger.info(f"[REVIEW] Merged PR {pr_url} after approval")
+                    else:
+                        logger.warning(f"[REVIEW] gh pr merge failed: {result.stderr}")
+                except Exception as e:
+                    logger.warning(f"[REVIEW] Failed to merge PR: {e}")
+
             # Check if all tasks are done — if so, mark as completed
             from src.core.database import Task as _Task
             from src.autopilot.spec import DIAGNOSTIC_TASK_PREFIX
