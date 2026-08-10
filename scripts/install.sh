@@ -747,15 +747,23 @@ MCPEOF
                 warn "Failed to write MCP config"
             fi
         else
-            # Check if hephaestus is already configured
-            if grep -q '"heph"' "$PI_MCP_CONFIG" 2>/dev/null; then
-                ok "Hephaestus MCP already configured"
-            else
-                # Add hephaestus to existing config using python for safe JSON merge
-                log "Adding heph to existing MCP config..."
-                "$MCP_PYTHON" -c "
+            # Always run the merge, even if "heph" is already configured --
+            # NOT just when it's missing. A prior install (before this
+            # server was renamed from "hephaestus" to "heph") can leave a
+            # stale second entry under the old name, pointing at the exact
+            # same mcp_client.py script. A CLI agent that loads mcpServers
+            # from this file launches mcp_client.py once per registered
+            # name -- two entries for the identical script means two live
+            # subprocesses per agent, both advertising the same tool
+            # names. Observed live: an agent's complete_my_task call
+            # rendered as sent in its own transcript but never reached
+            # either subprocess, permanently stranding a finished task.
+            # Short-circuiting here on "heph already present" (the old
+            # behavior) never gave a re-run of this installer a chance to
+            # clean that up.
+            log "Merging heph into MCP config (and removing any stale duplicate entry)..."
+            "$MCP_PYTHON" -c "
 import json
-import sys
 import os
 
 config_path = '$PI_MCP_CONFIG'
@@ -769,7 +777,7 @@ try:
             config = json.loads(content)
         else:
             config = {}
-except (json.JSONDecodeError, FileNotFoundError) as e:
+except (json.JSONDecodeError, FileNotFoundError):
     # If backup exists, restore it
     if os.path.exists(backup_path):
         with open(backup_path, 'r') as f:
@@ -781,8 +789,23 @@ except (json.JSONDecodeError, FileNotFoundError) as e:
 if 'mcpServers' not in config:
     config['mcpServers'] = {}
 
-# Add hephaestus server
-config['mcpServers']['heph'] = {
+servers = config['mcpServers']
+
+# Remove any OTHER entry pointing at this same mcp_client.py script --
+# a stale alias (e.g. a pre-rename 'hephaestus' key) registers the
+# identical server twice under two names, which is what caused the
+# incident this closes.
+stale = [
+    key for key, entry in servers.items()
+    if key != 'heph'
+    and isinstance(entry, dict)
+    and any(os.path.basename(str(a)) == 'mcp_client.py' for a in entry.get('args', []))
+]
+for key in stale:
+    del servers[key]
+
+# Add/update the canonical heph server
+servers['heph'] = {
     'command': '$MCP_PYTHON',
     'args': ['$MCP_SCRIPT_PATH']
 }
@@ -791,17 +814,19 @@ config['mcpServers']['heph'] = {
 with open(config_path, 'w') as f:
     json.dump(config, f, indent=2)
 
-print('OK')
+if stale:
+    print(f'OK removed_stale={stale}')
+else:
+    print('OK')
 " 2>/dev/null
-                if [ $? -eq 0 ]; then
-                    ok "Added heph to MCP config"
-                else
-                    warn "Failed to update MCP config"
-                    # Restore backup if it exists
-                    if [ -f "$PI_MCP_BACKUP" ]; then
-                        cp "$PI_MCP_BACKUP" "$PI_MCP_CONFIG" 2>/dev/null
-                        log "Restored backup config"
-                    fi
+            if [ $? -eq 0 ]; then
+                ok "MCP config up to date (heph)"
+            else
+                warn "Failed to update MCP config"
+                # Restore backup if it exists
+                if [ -f "$PI_MCP_BACKUP" ]; then
+                    cp "$PI_MCP_BACKUP" "$PI_MCP_CONFIG" 2>/dev/null
+                    log "Restored backup config"
                 fi
             fi
         fi
