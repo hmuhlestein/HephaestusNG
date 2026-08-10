@@ -162,7 +162,9 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
               <h3 className="text-lg font-semibold text-gray-800 dark:text-white">
                 Agent {agent.id.substring(0, 8)} - Output
               </h3>
-              {isConnected ? <Wifi className="w-4 h-4 text-green-500" /> : <WifiOff className="w-4 h-4 text-red-500" />}
+              {(agent.status !== 'terminated' && agent.current_task?.status !== 'done') && (
+                isConnected ? <Wifi className="w-4 h-4 text-green-500" /> : <WifiOff className="w-4 h-4 text-red-500" />
+              )}
               {lastUpdateTime && (
                 <div className="flex items-center text-sm text-gray-500 dark:text-gray-400">
                   <Clock className="w-3 h-3 mr-1" />
