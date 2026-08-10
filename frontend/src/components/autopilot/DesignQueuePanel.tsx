@@ -455,13 +455,10 @@ const TASK_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode 
   blocked: { color: 'text-amber-500', icon: <PauseCircle className="w-4 h-4" /> },
 };
 
-const TaskStatusIcon: React.FC<{ status: string; reviewMode?: boolean }> = ({ status, reviewMode }) => {
+const TaskStatusIcon: React.FC<{ status: string }> = ({ status }) => {
   const config = TASK_STATUS_CONFIG[status];
   if (!config) return <Clock className="w-4 h-4 text-gray-400" />;
-  // When review mode is on and task is in_progress, show yellow to indicate
-  // it will pause and wait for review when done
-  const color = reviewMode && status === 'in_progress' ? 'text-amber-500' : config.color;
-  return <span className={color}>{config.icon}</span>;
+  return <span className={config.color}>{config.icon}</span>;
 };
 
 // ── Shared row action icons (Pause / Stop / Resume / Rerun) ────
@@ -860,6 +857,12 @@ const FeatureRow: React.FC<{
   const isRealFeature = !feature.id.startsWith('phase0-') && !feature.id.startsWith('placeholder-');
   const hasWorkflow = !!feature.workflow_id;
   const reviewPending = !!feature.review_pending;
+  // In review mode, flag the feature currently in flight too, not just
+  // one already paused awaiting approval -- gives an at-a-glance "this is
+  // the one that'll need your review soon" cue while it's still running.
+  // Does NOT gate the "Review" badge/button below -- those stay tied to
+  // reviewPending specifically, since there's nothing to approve yet.
+  const highlightForReview = reviewPending || (!!reviewMode && feature.status === 'active');
 
   const runFeatureAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun' | 'delete') => {
     if (action === 'delete' && !confirm(
@@ -897,10 +900,13 @@ const FeatureRow: React.FC<{
 
   return (
     <div className={`rounded-lg border overflow-hidden transition-colors ${
-      reviewPending
+      highlightForReview
         ? 'bg-amber-50 dark:bg-amber-900/20 border-l-4 border-amber-400 border-t-amber-200 dark:border-t-amber-800 border-b-amber-200 dark:border-b-amber-800 border-r-amber-200 dark:border-r-amber-800'
         : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700'
     }`}>
+      {/* Pulse reserved for reviewPending specifically -- "needs your
+          review right now" is more urgent than "will need it once this
+          finishes", which gets the steady amber highlight only. */}
       <div className={`flex items-center gap-3 px-3 py-2 ${reviewPending ? 'animate-pulse-subtle' : ''}`}>
         <div
           className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors rounded"
@@ -1015,7 +1021,7 @@ const FeatureRow: React.FC<{
         <div className="border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-3 py-2">
           <div className="space-y-1">
             {tasks.map((task: any) => (
-              <TaskRow key={task.id} task={task} onTaskClick={onTaskClick} onTaskUpdate={onFeatureUpdate} reviewMode={reviewMode} />
+              <TaskRow key={task.id} task={task} onTaskClick={onTaskClick} onTaskUpdate={onFeatureUpdate} />
             ))}
           </div>
         </div>
@@ -1030,8 +1036,7 @@ const TaskRow: React.FC<{
   task: any;
   onTaskClick: (taskId: string) => void;
   onTaskUpdate?: () => void;
-  reviewMode?: boolean;
-}> = ({ task, onTaskClick, onTaskUpdate, reviewMode }) => {
+}> = ({ task, onTaskClick, onTaskUpdate }) => {
   const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean; delete?: boolean }>({});
   const [tmuxAgent, setTmuxAgent] = useState<Agent | null>(null);
 
@@ -1133,7 +1138,7 @@ const TaskRow: React.FC<{
         ? 'bg-gray-100 dark:bg-gray-700/50 border-gray-200 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700'
         : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:border-gray-200 dark:hover:border-gray-600'
     }`}>
-      <TaskStatusIcon status={task.status} reviewMode={reviewMode} />
+      <TaskStatusIcon status={task.status} />
       <div
         className="flex-1 min-w-0 cursor-pointer"
         onClick={() => onTaskClick(task.id)}
@@ -1154,22 +1159,15 @@ const TaskRow: React.FC<{
           )}
           {task.agent_status && task.agent_status !== 'terminated' && (
             <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-              task.agent_status === 'working'
-                ? (reviewMode && task.status === 'in_progress'
-                    ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
-                    : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400')
-                : task.agent_status === 'idle' ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' :
+              task.agent_status === 'working' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' :
+              task.agent_status === 'idle' ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' :
               'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
             }`}>
               {task.agent_status}
             </span>
           )}
           {task.agent_status === 'terminated' && task.status === 'done' && (
-            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-              reviewMode
-                ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
-                : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
-            }`}>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-medium">
               done
             </span>
           )}
@@ -1202,11 +1200,7 @@ const TaskRow: React.FC<{
           className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400 rounded hover:bg-violet-200 dark:hover:bg-violet-900/50 transition-colors"
           title="View live tmux output"
         >
-          <span className={task.agent_status === 'working'
-            ? (reviewMode && task.status === 'in_progress'
-                ? 'w-1 h-1 rounded-full bg-amber-500'
-                : 'w-1 h-1 rounded-full bg-green-500')
-            : 'w-1 h-1 rounded-full bg-gray-400 dark:bg-gray-500'}></span>
+          <span className={task.agent_status === 'working' ? 'w-1 h-1 rounded-full bg-green-500' : 'w-1 h-1 rounded-full bg-gray-400 dark:bg-gray-500'}></span>
           {task.agent_id.substring(0, 6)}
         </button>
       )}
