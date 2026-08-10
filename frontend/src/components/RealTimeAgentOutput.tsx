@@ -403,10 +403,12 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
                 <h3 className="text-lg font-semibold text-gray-800 dark:text-white">
                   {agent.current_task?.phase_info?.name || fallbackPhaseName || agent.agent_type || 'Agent'} {agent.id.substring(0, 8)} - Output
                 </h3>
-                {isConnected ? (
-                  <Wifi className="w-4 h-4 text-green-500" />
-                ) : (
-                  <WifiOff className="w-4 h-4 text-red-500" />
+                {(currentStatus !== 'terminated' && agent.current_task?.status !== 'done') && (
+                  isConnected ? (
+                    <Wifi className="w-4 h-4 text-green-500" />
+                  ) : (
+                    <WifiOff className="w-4 h-4 text-red-500" />
+                  )
                 )}
 
                 <StatusBadge status={currentStatus} size="sm" />

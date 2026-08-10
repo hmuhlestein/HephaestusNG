@@ -56,7 +56,6 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' }) => {
 
     if (
       [
-        'done',
         'completed',
         'healthy',
         'validated',
@@ -68,6 +67,7 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' }) => {
 
     if (
       [
+        'done',
         'in_progress',
         'working',
         'assigned',

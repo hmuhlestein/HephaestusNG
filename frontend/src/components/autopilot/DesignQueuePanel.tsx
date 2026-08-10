@@ -58,6 +58,14 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     refetchInterval: 5000,
   });
 
+  // Fetch project status for review_mode flag
+  const { data: projectStatus } = useQuery({
+    queryKey: ['autopilot-status', projectId],
+    queryFn: () => projectId ? apiService.getAutopilotStatus(projectId) : Promise.resolve(null),
+    enabled: !!projectId,
+  });
+  const reviewMode = projectStatus?.review_mode ?? false;
+
   // Fetch design statuses using React Query (M-5 fix)
   const { data: designStatuses = {} } = useQuery({
     queryKey: ['autopilot-design-statuses', projectId, designs?.length],
@@ -356,6 +364,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                       removeMutation.mutate(filename);
                     }
                   }}
+                  reviewMode={reviewMode}
                 />
               ))}
             </div>
@@ -441,15 +450,18 @@ const TASK_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode 
   under_review: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
   validation_in_progress: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
   needs_work: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
-  done: { color: 'text-green-500', icon: <CheckCircle2 className="w-4 h-4" /> },
+  done: { color: 'text-blue-500', icon: <CheckCircle2 className="w-4 h-4" /> },
   failed: { color: 'text-red-500', icon: <XCircle className="w-4 h-4" /> },
   blocked: { color: 'text-amber-500', icon: <PauseCircle className="w-4 h-4" /> },
 };
 
-const TaskStatusIcon: React.FC<{ status: string }> = ({ status }) => {
+const TaskStatusIcon: React.FC<{ status: string; reviewMode?: boolean }> = ({ status, reviewMode }) => {
   const config = TASK_STATUS_CONFIG[status];
   if (!config) return <Clock className="w-4 h-4 text-gray-400" />;
-  return <span className={config.color}>{config.icon}</span>;
+  // When review mode is on and task is in_progress, show yellow to indicate
+  // it will pause and wait for review when done
+  const color = reviewMode && status === 'in_progress' ? 'text-amber-500' : config.color;
+  return <span className={color}>{config.icon}</span>;
 };
 
 // ── Shared row action icons (Pause / Stop / Resume / Rerun) ────
@@ -533,9 +545,10 @@ interface SortableDesignItemProps {
   pausedBy?: string | null;
   statusReason?: string | null;
   projectId: string | null;
+  reviewMode?: boolean;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, projectId }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, projectId, reviewMode }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -754,6 +767,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                       onReviewFeature={onReviewFeature}
                       projectId={projectId ?? undefined}
                       onFeatureUpdate={() => refetchFeatures()}
+                      reviewMode={reviewMode}
                     />
                   ))}
                 </div>
@@ -810,7 +824,8 @@ const FeatureRow: React.FC<{
   onReviewFeature?: (featureId: string, feature: any) => void;
   projectId?: string;
   onFeatureUpdate?: () => void;
-}> = ({ feature, onTaskClick, onSelectFeature, onReviewFeature, onFeatureUpdate }) => {
+  reviewMode?: boolean;
+}> = ({ feature, onTaskClick, onSelectFeature, onReviewFeature, onFeatureUpdate, reviewMode }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-features');
@@ -1000,7 +1015,7 @@ const FeatureRow: React.FC<{
         <div className="border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-3 py-2">
           <div className="space-y-1">
             {tasks.map((task: any) => (
-              <TaskRow key={task.id} task={task} onTaskClick={onTaskClick} onTaskUpdate={onFeatureUpdate} />
+              <TaskRow key={task.id} task={task} onTaskClick={onTaskClick} onTaskUpdate={onFeatureUpdate} reviewMode={reviewMode} />
             ))}
           </div>
         </div>
@@ -1015,7 +1030,8 @@ const TaskRow: React.FC<{
   task: any;
   onTaskClick: (taskId: string) => void;
   onTaskUpdate?: () => void;
-}> = ({ task, onTaskClick, onTaskUpdate }) => {
+  reviewMode?: boolean;
+}> = ({ task, onTaskClick, onTaskUpdate, reviewMode }) => {
   const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean; delete?: boolean }>({});
   const [tmuxAgent, setTmuxAgent] = useState<Agent | null>(null);
 
@@ -1117,7 +1133,7 @@ const TaskRow: React.FC<{
         ? 'bg-gray-100 dark:bg-gray-700/50 border-gray-200 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700'
         : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:border-gray-200 dark:hover:border-gray-600'
     }`}>
-      <TaskStatusIcon status={task.status} />
+      <TaskStatusIcon status={task.status} reviewMode={reviewMode} />
       <div
         className="flex-1 min-w-0 cursor-pointer"
         onClick={() => onTaskClick(task.id)}
@@ -1138,15 +1154,22 @@ const TaskRow: React.FC<{
           )}
           {task.agent_status && task.agent_status !== 'terminated' && (
             <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-              task.agent_status === 'working' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' :
-              task.agent_status === 'idle' ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' :
+              task.agent_status === 'working'
+                ? (reviewMode && task.status === 'in_progress'
+                    ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
+                    : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400')
+                : task.agent_status === 'idle' ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' :
               'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
             }`}>
               {task.agent_status}
             </span>
           )}
           {task.agent_status === 'terminated' && task.status === 'done' && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-medium">
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+              reviewMode
+                ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
+                : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+            }`}>
               done
             </span>
           )}
@@ -1179,7 +1202,11 @@ const TaskRow: React.FC<{
           className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400 rounded hover:bg-violet-200 dark:hover:bg-violet-900/50 transition-colors"
           title="View live tmux output"
         >
-          <span className={task.agent_status === 'working' ? 'w-1 h-1 rounded-full bg-green-500' : 'w-1 h-1 rounded-full bg-gray-400 dark:bg-gray-500'}></span>
+          <span className={task.agent_status === 'working'
+            ? (reviewMode && task.status === 'in_progress'
+                ? 'w-1 h-1 rounded-full bg-amber-500'
+                : 'w-1 h-1 rounded-full bg-green-500')
+            : 'w-1 h-1 rounded-full bg-gray-400 dark:bg-gray-500'}></span>
           {task.agent_id.substring(0, 6)}
         </button>
       )}
