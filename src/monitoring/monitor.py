@@ -119,6 +119,26 @@ _BAD_MODEL_ERROR_RE = re.compile(
     r"issue with the selected model", re.IGNORECASE
 )
 
+# Matches a complete_my_task/update_task_status tool-call rendering with a
+# terminal status (done/failed), e.g. Claude Code's
+# "complete_my_task (MCP)(status: "done", ...)". Deliberately requires
+# BOTH the tool name and a quoted done/failed status close together (not
+# just the tool name alone, which would also match a self-review's
+# in_progress re-check) -- see _detect_unconfirmed_task_completion, which
+# uses this to catch a completion call that rendered as sent in the
+# agent's own transcript but never actually reached the server (dropped
+# connection, backend restart mid-call).
+#
+# DOTALL, not [^\n]-bounded: different CLIs (pi, Codex, ...) pretty-print
+# a tool call's arguments across multiple lines rather than Claude Code's
+# single-line rendering -- anchoring to one exact layout would silently
+# miss every other CLI. This project defaults to Claude Code today, but
+# the phase config can select any CLIAgentInterface subclass per-phase.
+_COMPLETION_ATTEMPT_RE = re.compile(
+    r"(?:complete_my_task|update_task_status).{0,300}?status[\"']?\s*[:=]\s*[\"']?(done|failed)[\"']?",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 def _strip_sgr(text: str) -> str:
     """Strip SGR color escape codes (\\x1b[...m).
@@ -1279,6 +1299,125 @@ class MonitoringLoop:
             logger.warning(f"[MAX-TOKEN-LIMIT] check failed for {agent.id[:8]}: {e}")
         return False
 
+    #: After this many consecutive nudges for the SAME task without it
+    #: reaching a terminal state, stop nudging and restart the agent
+    #: instead. A nudge only helps if the agent can actually act on it --
+    #: if the underlying transport is persistently broken (not a one-off
+    #: blip the client-side retry in mcp_client.py already absorbs), every
+    #: further nudge just repeats the same failure. Matches the escalation
+    #: pattern _auto_restart_agent already provides for ignored Guardian
+    #: steering.
+    UNCONFIRMED_COMPLETION_ESCALATE_AFTER = 3
+
+    async def _detect_unconfirmed_task_completion(self, agent) -> bool:
+        """Detect an agent whose own transcript shows a complete_my_task/
+        update_task_status call for a terminal status, while its assigned
+        task is still sitting non-terminal on the server -- the call never
+        actually landed.
+
+        Observed live: an agent's Write() and complete_my_task calls both
+        rendered as succeeded in its tmux transcript, but a `heph restart`
+        landed mid-turn and killed the session before either actually
+        reached disk/the server -- the task sat "in_progress" forever with
+        no error ever shown to the agent, since from its own point of view
+        nothing looked wrong. The generic frozen-output detector eventually
+        catches the resulting idle agent too, but only after 5+ minutes and
+        with a generic "you appear stuck" nudge -- this fires immediately
+        with a nudge that names the exact task_id and asks for a retry,
+        the same way _detect_mcp_disconnected does for a visibly-dropped
+        connection. This covers the case where nothing about the MCP
+        connection looked broken to the agent at all.
+
+        Escalates to a full agent restart after
+        UNCONFIRMED_COMPLETION_ESCALATE_AFTER consecutive nudges for the
+        same task -- if the transport is persistently broken rather than a
+        one-off blip, no amount of re-nudging the same broken connection
+        helps.
+        """
+        if agent.status != "working" or not agent.current_task_id:
+            return False
+        try:
+            if not hasattr(self, "_nudged_unconfirmed_completion"):
+                self._nudged_unconfirmed_completion = {}
+            if not hasattr(self, "_unconfirmed_completion_state"):
+                # agent_id -> {"task_id": str, "count": int} -- tracks
+                # consecutive nudges for the CURRENT task specifically, so
+                # a later task's unrelated occurrence starts fresh instead
+                # of inheriting an old count.
+                self._unconfirmed_completion_state = {}
+
+            out = self.agent_manager.get_agent_output(agent.id, lines=60)
+            if not out:
+                return False
+            # Only the LAST attempt in the visible window matters -- an
+            # earlier one followed by more work (e.g. a self-review
+            # round) means the agent has already moved on.
+            match = None
+            for m in _COMPLETION_ATTEMPT_RE.finditer(_strip_sgr(out)):
+                match = m
+            if not match:
+                return False
+
+            with self.db_manager.session_scope() as session:
+                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                if not task or task.status not in ("in_progress", "assigned"):
+                    # Already terminal, under_review (validation spawned),
+                    # etc. -- the call landed, or the task moved on for an
+                    # unrelated reason. Nothing to do.
+                    return False
+                if task.self_review_started_at is not None:
+                    # The call DID land -- it correctly triggered the
+                    # self-review gate (update_task_status's first "done"
+                    # for a self_review-enabled phase deliberately leaves
+                    # status as "in_progress" and sends the agent a
+                    # checklist, expecting a second "done" call). That
+                    # message already tells the agent what to do; a nudge
+                    # here would be redundant and, worse, actively
+                    # misleading -- it'd claim a connection problem that
+                    # never happened.
+                    return False
+                task_id = task.id
+
+            # Cooldown, not a permanent one-shot flag -- same reasoning as
+            # the other mechanical detectors: if the retry also fails to
+            # land, keep nudging (up to the escalation threshold below)
+            # rather than going silent after the first attempt.
+            last_nudged = self._nudged_unconfirmed_completion.get(agent.id)
+            if last_nudged is not None and time.time() - last_nudged < 60:
+                return False
+            self._nudged_unconfirmed_completion[agent.id] = time.time()
+
+            state = self._unconfirmed_completion_state.get(agent.id)
+            if not state or state["task_id"] != task_id:
+                state = {"task_id": task_id, "count": 0}
+                self._unconfirmed_completion_state[agent.id] = state
+            state["count"] += 1
+
+            if state["count"] > self.UNCONFIRMED_COMPLETION_ESCALATE_AFTER:
+                logger.warning(
+                    f"[UNCONFIRMED-COMPLETION] Agent {agent.id[:8]} still hasn't "
+                    f"confirmed completion of task {task_id[:8]} after "
+                    f"{state['count'] - 1} nudges — restarting instead of nudging again"
+                )
+                del self._unconfirmed_completion_state[agent.id]
+                await self._auto_restart_agent(agent)
+                return True
+
+            logger.warning(
+                f"[UNCONFIRMED-COMPLETION] Agent {agent.id[:8]} shows a "
+                f"complete_my_task/update_task_status attempt but task "
+                f"{task_id[:8]} is still non-terminal — nudging to retry "
+                f"({state['count']}/{self.UNCONFIRMED_COMPLETION_ESCALATE_AFTER})"
+            )
+            await self.agent_manager.send_message_to_agent(
+                agent.id,
+                get_monitor_nudge("task_completion_unconfirmed", task_id=task_id),
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"[UNCONFIRMED-COMPLETION] check failed for {agent.id[:8]}: {e}")
+        return False
+
     async def _detect_mcp_disconnected(self, agent) -> bool:
         """Detect a dropped MCP server connection (pi's "MCP: 0/N servers"
         status line) and nudge the agent to reconnect, instead of leaving
@@ -1878,8 +2017,10 @@ class MonitoringLoop:
         #      in the last 80 lines (LLM cycling "Actually, let me try…")
         #   f) pending rm confirmation — auto-deny immediately, don't wait for (c)
         #   g) max output token limit hit — nudge immediately, don't wait for (c)
-        #   h) MCP server disconnected — nudge to `mcp connect`, don't wait for (c)
-        #   i) Claude Code rejected its launch model — fix directly with a
+        #   h) completion call apparently sent but task still non-terminal —
+        #      nudge to retry immediately, don't wait for (c)
+        #   i) MCP server disconnected — nudge to `mcp connect`, don't wait for (c)
+        #   j) Claude Code rejected its launch model — fix directly with a
         #      real `/model <x>` keystroke send, since the agent can't
         #      invoke that slash command itself
         mechanically_intervened = set()
@@ -1903,6 +2044,8 @@ class MonitoringLoop:
             if await self._detect_dangerous_command_confirmation(agent):
                 mechanically_intervened.add(agent.id)
             if await self._detect_max_token_limit_error(agent):
+                mechanically_intervened.add(agent.id)
+            if await self._detect_unconfirmed_task_completion(agent):
                 mechanically_intervened.add(agent.id)
             if await self._detect_mcp_disconnected(agent):
                 mechanically_intervened.add(agent.id)
