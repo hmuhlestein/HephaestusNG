@@ -81,7 +81,15 @@ if ! lsof -iTCP:5300 -sTCP:LISTEN -Pn >/dev/null 2>&1; then
     (cd "$FE_DIR" && npm ci)
   fi
   (cd "$FE_DIR" && nohup npm run dev -- --port 5300 --strictPort > "$LOG_DIR/frontend.out" 2>&1 &)
+  # $! gives the subshell PID, not the npm child. Use pgrep to find the
+  # actual vite process that just started.
   sleep 1
+  FE_PID=$(pgrep -f "vite.*5300" | head -1 || true)
+  if [ -n "$FE_PID" ]; then
+    PID_DIR="$HOME/.hephaestus/pids"
+    mkdir -p "$PID_DIR"
+    echo "$FE_PID" > "$PID_DIR/frontend.pid"
+  fi
 fi
 
 echo "[start] Summary:"
