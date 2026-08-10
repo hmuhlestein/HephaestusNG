@@ -117,6 +117,16 @@ class CLIAgentInterface(ABC):
         dialog). Empty = no confirmation needed for this CLI."""
         return []
 
+    def format_goal_command(self, condition: str) -> str:
+        """CLI-native command text that sets a self-checked completion
+        condition, keeping the agent working until it's actually met
+        instead of stopping on its own judgment (e.g. Claude Code's
+        `/goal <condition>`). Sent by the caller exactly like any other
+        message -- chunked per needs_chunked_delivery, no per-CLI dispatch
+        needed there. Empty = no such mechanism for this CLI (the caller
+        skips sending anything)."""
+        return ""
+
     @abstractmethod
     def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
         """Generate the launch command for the CLI tool.
@@ -565,6 +575,9 @@ class ClaudeCodeAgent(CLIAgentInterface):
     def get_health_check_pattern(self) -> str:
         return r"(Assistant:|Human:|›)"
 
+    def format_goal_command(self, condition: str) -> str:
+        return f"/goal {condition}"
+
     def format_message(self, message: str) -> str:
         return message
 
@@ -618,8 +631,19 @@ class OpenCodeAgent(CLIAgentInterface):
         get_config()
 
         task_id = kwargs.get("task_id", "default")
+        # LaunchResult.MESSAGE means system_prompt IS the initial message --
+        # manager.py never sends a separate task message afterward for this
+        # CLI (see the is_opencode branch in _send_initial_prompt_with_retry),
+        # so the task's instructions-file pointer must be folded in here or
+        # the agent never receives it at all.
+        instructions_pointer = kwargs.get("instructions_pointer", "")
+        full_prompt = (
+            f"{system_prompt}\n\n---\n\n{instructions_pointer}"
+            if instructions_pointer
+            else system_prompt
+        )
         prompt_file = self._save_prompt_to_file(
-            system_prompt, "opencode_prompt", task_id
+            full_prompt, "opencode_prompt", task_id
         )
         model = self._get_model(kwargs, self.default_model)
 
@@ -988,10 +1012,13 @@ class PiAgent(CLIAgentInterface):
 class SwarmCodeAgent(CLIAgentInterface):
     """Implementation for SwarmCode CLI (hypothetical advanced agent)."""
 
-    def get_launch_command(self, system_prompt: str, **kwargs) -> str:
+    def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
         escaped_prompt = system_prompt.replace("'", "'\"'\"'")
         prompt_file = f"/tmp/hep_prompt_{kwargs.get('task_id', 'default')}.txt"
-        return f"echo '{escaped_prompt}' > {prompt_file} && swarmcode --autonomous --context {prompt_file}"
+        return LaunchResult(
+            f"echo '{escaped_prompt}' > {prompt_file} && swarmcode --autonomous --context {prompt_file}",
+            LaunchResult.NONE,
+        )
 
     def get_health_check_pattern(self) -> str:
         return r"(SWARM>|Ready|Processing)"

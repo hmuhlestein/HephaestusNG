@@ -322,6 +322,72 @@ async def get_agent_output(agent_id: str, lines: int = 200, request: Request = N
         session.close()
 
 
+@router.get("/api/tasks/{task_id}/instructions")
+async def get_task_instructions(task_id: str, request: Request = None):
+    """Read the markdown instructions file an agent was launched with.
+
+    Agents now receive their task as a short tmux pointer to
+    .hephaestus/tasks/{task_id}.md in their worktree, not a live-pasted
+    message -- this is the only remaining way to see what an agent was
+    actually told without shelling into the worktree.
+    """
+    server_state = _get_server_state()
+    if request:
+        _require_localhost(request)
+    session = server_state.db_manager.get_session()
+    try:
+        task = session.query(Task).filter_by(id=task_id).first()
+        if not task:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+        worktree_path = None
+        if task.workflow_id:
+            from src.core.database import Workflow
+
+            wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+            if wf and wf.working_directory:
+                worktree_path = wf.working_directory
+
+        if not worktree_path and task.assigned_agent_id:
+            try:
+                worktree_path = (
+                    server_state.agent_manager.branch_manager.get_agent_branch_path(
+                        task.assigned_agent_id
+                    )
+                )
+            except Exception:
+                worktree_path = None
+
+        if not worktree_path:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Could not resolve a worktree for task {task_id}",
+            )
+
+        from pathlib import Path
+
+        instructions_path = (
+            Path(worktree_path) / ".hephaestus" / "tasks" / f"{task_id}.md"
+        )
+        if not instructions_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"No instructions file found for task {task_id}",
+            )
+
+        return {
+            "content": instructions_path.read_text(),
+            "path": str(instructions_path),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to read task instructions for {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
 # ── Parent-Child Agent Communication ──────────────────────────────────
 
 

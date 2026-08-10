@@ -41,7 +41,7 @@ def mock_llm_provider():
 def mock_worktree_manager():
     """Create a mock worktree manager."""
     worktree_manager = Mock()
-    worktree_manager.create_agent_worktree = Mock(
+    worktree_manager.create_agent_branch = Mock(
         return_value={
             "working_directory": "/tmp/test-worktree",
             "branch_name": "agent/test-branch",
@@ -84,7 +84,7 @@ async def test_agent_and_task_cleanup_on_prompt_delivery_failure(
     )
 
     # Replace worktree manager and tmux server with mocks
-    agent_manager.worktree_manager = mock_worktree_manager
+    agent_manager.branch_manager = mock_worktree_manager
     agent_manager.tmux_server = mock_tmux_server
 
     # Create a mock task
@@ -177,7 +177,7 @@ async def test_cleanup_handles_database_errors_gracefully(
     )
 
     # Replace worktree manager and tmux server with mocks
-    agent_manager.worktree_manager = mock_worktree_manager
+    agent_manager.branch_manager = mock_worktree_manager
     agent_manager.tmux_server = mock_tmux_server
 
     # Create a mock task
@@ -260,7 +260,7 @@ async def test_cleanup_handles_tmux_kill_errors_gracefully(
     )
 
     # Replace worktree manager and tmux server with mocks
-    agent_manager.worktree_manager = mock_worktree_manager
+    agent_manager.branch_manager = mock_worktree_manager
     agent_manager.tmux_server = mock_tmux_server
 
     # Create a mock task
