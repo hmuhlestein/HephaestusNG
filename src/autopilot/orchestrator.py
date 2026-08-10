@@ -966,6 +966,34 @@ def create_agent_for_task_direct(
                 if getattr(task, "completion_criteria", None):
                     enriched_data["completion_criteria"] = task.completion_criteria
 
+            # Guard: don't dispatch if the phase already has another active
+            # task. _retry_failed_tasks (task-level, no claim) and
+            # _advance_phases (phase-level, with claim) can both decide to
+            # dispatch for the same phase in adjacent sweep ticks -- the
+            # former retries the old failed task while the latter's
+            # _fire_phase_transition created a fresh one via goto. This
+            # check is the last line of defense before the tmux session is
+            # created. Observed live: two development agents invoked
+            # simultaneously for the same workflow.
+            if task.phase_id:
+                phase_sibling = (
+                    session.query(Task)
+                    .filter(
+                        Task.phase_id == task.phase_id,
+                        Task.id != task_id,
+                        Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+                    )
+                    .first()
+                )
+                if phase_sibling is not None:
+                    logger.warning(
+                        f"[create_agent_for_task_direct] Skipping dispatch for task "
+                        f"{task_id[:8]}: phase {task.phase_id[:8]} already has active "
+                        f"task {phase_sibling.id[:8]} ({phase_sibling.status}) -- "
+                        f"avoiding duplicate agent"
+                    )
+                    return None
+
             # Per-cli/model concurrency gate (e.g. a local model's single
             # inference slot) -- this is the orchestrator's OWN direct
             # dispatch path for phase transitions, entirely bypassing
