@@ -205,7 +205,7 @@ const ResultContentDialog: React.FC<{
           </DialogTitle>
           {result && (
             <DialogDescription asChild>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">
                 <Badge variant="outline" className="uppercase">
                   {result.scope}
                 </Badge>
@@ -235,7 +235,7 @@ const ResultContentDialog: React.FC<{
         <ScrollArea className="max-h-[70vh]">
           <div className="space-y-4 pr-4">
             {isLoading && (
-              <div className="text-sm text-gray-500">Loading content...</div>
+              <div className="text-sm text-gray-500 dark:text-gray-400 dark:text-gray-500">Loading content...</div>
             )}
             {error && (
               <div className="text-sm text-red-500">
@@ -243,7 +243,7 @@ const ResultContentDialog: React.FC<{
               </div>
             )}
             {data === null && !isLoading && !error && (
-              <div className="rounded border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
+              <div className="rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-3 text-sm text-gray-600 dark:text-gray-400 dark:text-gray-500">
                 Result content is not available yet.
               </div>
             )}
@@ -269,7 +269,7 @@ const ResultContentDialog: React.FC<{
                     ),
                     code: ({ className, children, ...props }) => (
                       !className ? (
-                        <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs break-words" {...props}>
+                        <code className="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs break-words" {...props}>
                           {children}
                         </code>
                       ) : (
@@ -319,19 +319,19 @@ const ResultContentDialog: React.FC<{
                   const filename = filePath.split('/').pop() || filePath;
 
                   return (
-                    <div key={fileKey} className="border rounded-lg overflow-hidden bg-white">
+                    <div key={fileKey} className="border rounded-lg overflow-hidden bg-white dark:bg-gray-800 dark:bg-gray-800">
                       <button
                         onClick={() => handleToggleExtraFile(result.result_id, index)}
-                        className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
+                        className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700 transition-colors"
                       >
                         <div className="flex items-center gap-2">
                           <FileText className="h-4 w-4 text-blue-600" />
-                          <span className="text-sm font-medium text-gray-700">{filename}</span>
+                          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{filename}</span>
                         </div>
                         {isFileExpanded ? (
-                          <ChevronUp className="h-4 w-4 text-gray-400" />
+                          <ChevronUp className="h-4 w-4 text-gray-400 dark:text-gray-500" />
                         ) : (
-                          <ChevronDown className="h-4 w-4 text-gray-400" />
+                          <ChevronDown className="h-4 w-4 text-gray-400 dark:text-gray-500" />
                         )}
                       </button>
 
@@ -342,7 +342,7 @@ const ResultContentDialog: React.FC<{
                             animate={{ height: 'auto', opacity: 1 }}
                             exit={{ height: 0, opacity: 0 }}
                             transition={{ duration: 0.2 }}
-                            className="border-t bg-gray-50 overflow-hidden"
+                            className="border-t bg-gray-50 dark:bg-gray-800 overflow-hidden"
                           >
                             <div className="max-h-96 overflow-y-auto px-4 py-3">
                               {extraFileContents[fileKey] ? (
@@ -351,8 +351,8 @@ const ResultContentDialog: React.FC<{
                                 </pre>
                               ) : (
                                 <div className="flex items-center justify-center py-4">
-                                  <RefreshCw className="h-4 w-4 animate-spin text-gray-400" />
-                                  <span className="ml-2 text-sm text-gray-500">Loading...</span>
+                                  <RefreshCw className="h-4 w-4 animate-spin text-gray-400 dark:text-gray-500" />
+                                  <span className="ml-2 text-sm text-gray-500 dark:text-gray-400 dark:text-gray-500">Loading...</span>
                                 </div>
                               )}
                             </div>
@@ -379,7 +379,7 @@ const ResultContentDialog: React.FC<{
               </button>
             )}
             {result?.task_id && (
-              <span className="flex items-center gap-1 text-gray-500">
+              <span className="flex items-center gap-1 text-gray-500 dark:text-gray-400 dark:text-gray-500">
                 <FileText className="w-4 h-4" />
                 Linked Task: <span className="font-mono">{result.task_id}</span>
               </span>
@@ -411,12 +411,12 @@ const ResultValidationDialog: React.FC<{
                 <div className="flex items-center gap-2 text-sm">
                   <StatusBadge status={data.status} size="sm" />
                   {data.validator_agent_id && (
-                    <span className="text-gray-600">
+                    <span className="text-gray-600 dark:text-gray-400 dark:text-gray-500">
                       Validator: <span className="font-mono">{data.validator_agent_id}</span>
                     </span>
                   )}
                 </div>
-                <div className="flex flex-col text-xs text-gray-500">
+                <div className="flex flex-col text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">
                   {data.started_at && (
                     <span>
                       Started: {format(new Date(data.started_at), 'PPpp')}
@@ -435,7 +435,7 @@ const ResultValidationDialog: React.FC<{
 
         <div className="space-y-4">
           {isLoading && (
-            <div className="text-sm text-gray-500">Loading validation...</div>
+            <div className="text-sm text-gray-500 dark:text-gray-400 dark:text-gray-500">Loading validation...</div>
           )}
           {error && (
             <div className="text-sm text-red-500">
@@ -443,7 +443,7 @@ const ResultValidationDialog: React.FC<{
             </div>
           )}
           {data === null && !isLoading && !error && (
-            <div className="rounded border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
+            <div className="rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-3 text-sm text-gray-600 dark:text-gray-400 dark:text-gray-500">
               Validation details are not available yet.
             </div>
           )}
@@ -451,7 +451,7 @@ const ResultValidationDialog: React.FC<{
             <div className="space-y-4">
               {data.feedback && (
                 <div className="space-y-2">
-                  <h4 className="text-sm font-semibold text-gray-700">Feedback</h4>
+                  <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Feedback</h4>
                   <ScrollArea className="max-h-[40vh] rounded border">
                     <div className="markdown-body p-4 overflow-x-auto max-w-full">
                       <ReactMarkdown
@@ -473,7 +473,7 @@ const ResultValidationDialog: React.FC<{
                           ),
                           code: ({ className, children, ...props }) => (
                             !className ? (
-                              <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs break-words" {...props}>
+                              <code className="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs break-words" {...props}>
                                 {children}
                               </code>
                             ) : (
@@ -512,7 +512,7 @@ const ResultValidationDialog: React.FC<{
               )}
               {data.evidence && data.evidence.length > 0 && (
                 <div className="space-y-2">
-                  <h4 className="text-sm font-semibold text-gray-700">Evidence</h4>
+                  <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Evidence</h4>
                   <ScrollArea className="max-h-[40vh] rounded border p-2">
                     <div className="space-y-2">
                       {data.evidence.map((item, index) => (
@@ -521,7 +521,7 @@ const ResultValidationDialog: React.FC<{
                         className="flex items-start justify-between rounded border px-3 py-2"
                       >
                         <div>
-                          <p className="text-sm font-medium text-gray-800" title={item.criterion}>
+                          <p className="text-sm font-medium text-gray-800 dark:text-gray-200" title={item.criterion}>
                             {truncateText(item.criterion, 80)}
                           </p>
                           {item.notes && (
@@ -785,8 +785,8 @@ const Results: React.FC = () => {
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Results</h1>
-            <p className="text-gray-600">
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Results</h1>
+            <p className="text-gray-600 dark:text-gray-400 dark:text-gray-500">
               Monitor submitted solutions, validation status, and supporting evidence
             </p>
           </div>
@@ -804,7 +804,7 @@ const Results: React.FC = () => {
       </div>
 
       {connectivityWarning && (
-        <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
+        <div className="rounded border border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:bg-amber-900/20 p-3 text-sm text-amber-700">
           {connectivityWarning}
         </div>
       )}
@@ -815,13 +815,13 @@ const Results: React.FC = () => {
           return (
             <Card key={metric.key} className={cn('border-l-4', metric.accent)}>
               <CardHeader className="pb-2">
-                <CardTitle className="flex items-center justify-between text-base font-medium text-gray-600">
+                <CardTitle className="flex items-center justify-between text-base font-medium text-gray-600 dark:text-gray-400 dark:text-gray-500">
                   {metric.label}
-                  <Icon className="w-5 h-5 text-gray-400" />
+                  <Icon className="w-5 h-5 text-gray-400 dark:text-gray-500" />
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-3xl font-semibold text-gray-900">
+                <p className="text-3xl font-semibold text-gray-900 dark:text-gray-100">
                   {metrics[metric.key as keyof typeof metrics]}
                 </p>
               </CardContent>
@@ -830,10 +830,10 @@ const Results: React.FC = () => {
         })}
       </div>
 
-      <div className="rounded-lg border bg-white shadow-sm">
+      <div className="rounded-lg border bg-white dark:bg-gray-800 shadow-sm">
         <div className="flex flex-col gap-4 border-b px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-gray-700">Scope:</span>
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Scope:</span>
             {(['all', 'workflow', 'task'] as ScopeFilter[]).map((option) => (
               <Button
                 key={option}
@@ -847,7 +847,7 @@ const Results: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Filter className="w-4 h-4 text-gray-400" />
+            <Filter className="w-4 h-4 text-gray-400 dark:text-gray-500" />
             {statusOptions.map((option) => (
               <Button
                 key={option.value}
@@ -862,13 +862,13 @@ const Results: React.FC = () => {
         </div>
 
         <div className="flex flex-col gap-4 border-b px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
+          <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600 dark:text-gray-400 dark:text-gray-500">
             <label className="flex items-center gap-2">
-              <Layers className="w-4 h-4 text-gray-400" />
+              <Layers className="w-4 h-4 text-gray-400 dark:text-gray-500" />
               <select
                 value={workflowId}
                 onChange={(event) => setWorkflowId(event.target.value)}
-                className="rounded border border-gray-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                className="rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
               >
                 <option value="all">All workflows</option>
                 {workflows.map(([id, name]) => (
@@ -880,11 +880,11 @@ const Results: React.FC = () => {
             </label>
 
             <label className="flex items-center gap-2">
-              <User className="w-4 h-4 text-gray-400" />
+              <User className="w-4 h-4 text-gray-400 dark:text-gray-500" />
               <select
                 value={agentId}
                 onChange={(event) => setAgentId(event.target.value)}
-                className="rounded border border-gray-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                className="rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
               >
                 <option value="all">All agents</option>
                 {agents.map(([id, label]) => (
@@ -896,11 +896,11 @@ const Results: React.FC = () => {
             </label>
 
             <label className="flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-gray-400" />
+              <Calendar className="w-4 h-4 text-gray-400 dark:text-gray-500" />
               <select
                 value={dateRange}
                 onChange={(event) => setDateRange(event.target.value as DateRangeFilter)}
-                className="rounded border border-gray-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                className="rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
               >
                 <option value="all">All time</option>
                 <option value="24h">Last 24 hours</option>
@@ -912,19 +912,19 @@ const Results: React.FC = () => {
 
           <form onSubmit={handleSearchSubmit} className="flex items-center gap-2">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
               <input
                 type="search"
                 placeholder="Search by summary, ID, or text"
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
-                className="h-10 rounded-md border border-gray-200 pl-10 pr-10 text-sm focus:border-blue-500 focus:outline-none"
+                className="h-10 rounded-md border border-gray-200 dark:border-gray-700 pl-10 pr-10 text-sm focus:border-blue-500 focus:outline-none"
               />
               {activeSearch && (
                 <button
                   type="button"
                   onClick={handleClearSearch}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:text-gray-500"
                 >
                   Clear
                 </button>
@@ -947,20 +947,20 @@ const Results: React.FC = () => {
           </div>
 
           {isLoading && (
-            <div className="flex h-32 items-center justify-center text-gray-500">
+            <div className="flex h-32 items-center justify-center text-gray-500 dark:text-gray-400 dark:text-gray-500">
               Loading results...
             </div>
           )}
 
           {error && (
-            <div className="rounded border border-red-200 bg-red-50 p-4 text-red-600">
+            <div className="rounded border border-red-200 bg-red-50 dark:bg-red-900/20 dark:bg-red-900/20 p-4 text-red-600">
               Failed to load results. Please try refreshing.
             </div>
           )}
 
           {!isLoading && !error && results.length === 0 && (
-            <div className="flex h-32 flex-col items-center justify-center text-gray-500">
-              <ClipboardList className="mb-2 h-6 w-6 text-gray-400" />
+            <div className="flex h-32 flex-col items-center justify-center text-gray-500 dark:text-gray-400 dark:text-gray-500">
+              <ClipboardList className="mb-2 h-6 w-6 text-gray-400 dark:text-gray-500" />
               <p>No results match the current filters.</p>
             </div>
           )}
@@ -976,7 +976,7 @@ const Results: React.FC = () => {
                     initial={isHighlighted ? { backgroundColor: '#DBEAFE' } : false}
                     animate={{ backgroundColor: isHighlighted ? '#DBEAFE' : '#FFFFFF' }}
                     transition={{ duration: 0.5, backgroundColor: { duration: 2.5 } }}
-                    className="rounded border border-gray-100 bg-white shadow-sm"
+                    className="rounded border border-gray-100 bg-white dark:bg-gray-800 shadow-sm"
                   >
                     <div
                       className="flex flex-col gap-3 px-4 py-3 lg:grid lg:grid-cols-12 lg:items-center"
@@ -1004,7 +1004,7 @@ const Results: React.FC = () => {
                         <p className="text-sm font-medium text-gray-900 line-clamp-3" title={result.summary || undefined}>
                           {truncateText(result.summary, 240)}
                         </p>
-                        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">
                           <span>
                             Submitted {formatRelativeTime(result.created_at)}
                           </span>
@@ -1029,7 +1029,7 @@ const Results: React.FC = () => {
                           {result.scope}
                         </Badge>
                         <div className="flex items-center gap-2">
-                          <GitBranch className="w-4 h-4 text-gray-400" />
+                          <GitBranch className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                           {result.workflow_name || result.workflow_id || '—'}
                         </div>
                       </div>
@@ -1037,7 +1037,7 @@ const Results: React.FC = () => {
                       <div className="lg:col-span-2">
                         {result.task_id ? (
                           <div className="flex items-center gap-2 text-sm">
-                            <FileText className="w-4 h-4 text-gray-400" />
+                            <FileText className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                             <button
                               type="button"
                               className="text-blue-600 hover:text-blue-700"
@@ -1050,12 +1050,12 @@ const Results: React.FC = () => {
                             </button>
                           </div>
                         ) : (
-                          <span className="text-sm text-gray-500">Workflow-level</span>
+                          <span className="text-sm text-gray-500 dark:text-gray-400 dark:text-gray-500">Workflow-level</span>
                         )}
                       </div>
 
                       <div className="flex items-center gap-2 text-sm text-gray-600 lg:col-span-1">
-                        <User className="w-4 h-4 text-gray-400" />
+                        <User className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                         {result.agent_label || result.agent_id}
                       </div>
 
@@ -1094,17 +1094,17 @@ const Results: React.FC = () => {
                           animate={{ height: 'auto', opacity: 1 }}
                           exit={{ height: 0, opacity: 0 }}
                           transition={{ duration: 0.25 }}
-                          className="border-t bg-gray-50"
+                          className="border-t bg-gray-50 dark:bg-gray-800 dark:bg-gray-800"
                         >
                           <div className="grid gap-4 px-5 py-4 md:grid-cols-2">
                             <div className="space-y-2">
-                              <h4 className="text-sm font-semibold text-gray-700">
+                              <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
                                 Validation Summary
                               </h4>
                               <p className="text-sm text-gray-600 whitespace-pre-line" title={result.validation_feedback || undefined}>
                                 {truncateText(result.validation_feedback || 'No validation feedback available yet.', 320)}
                               </p>
-                              <div className="flex flex-wrap gap-2 text-xs text-gray-500">
+                              <div className="flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">
                                 <span>
                                   Result ID: <span className="font-mono">{result.result_id}</span>
                                 </span>
@@ -1114,7 +1114,7 @@ const Results: React.FC = () => {
                                   </span>
                                 )}
                               </div>
-                              <div className="flex flex-wrap gap-3 text-xs text-gray-500">
+                              <div className="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">
                                 <span>
                                   Submitted: {format(new Date(result.created_at), 'PPpp')}
                                 </span>
@@ -1127,7 +1127,7 @@ const Results: React.FC = () => {
                             </div>
 
                             <div className="space-y-2">
-                              <h4 className="text-sm font-semibold text-gray-700">
+                              <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
                                 Evidence Snapshot
                               </h4>
                               {result.validation_evidence && result.validation_evidence.length > 0 ? (
@@ -1135,14 +1135,14 @@ const Results: React.FC = () => {
                                   {result.validation_evidence.slice(0, 3).map((evidence, index) => (
                                     <div
                                       key={`${result.result_id}-evidence-${index}`}
-                                      className="flex items-center justify-between rounded border border-gray-200 bg-white px-3 py-2"
+                                      className="flex items-center justify-between rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2"
                                     >
                                       <div>
-                                        <p className="text-sm font-medium text-gray-800" title={evidence.criterion}>
+                                        <p className="text-sm font-medium text-gray-800 dark:text-gray-200" title={evidence.criterion}>
                                           {truncateText(evidence.criterion, 80)}
                                         </p>
                                         {evidence.notes && (
-                                          <p className="text-xs text-gray-500" title={evidence.notes}>
+                                          <p className="text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500" title={evidence.notes}>
                                             {truncateText(evidence.notes, 120)}
                                           </p>
                                         )}
@@ -1162,7 +1162,7 @@ const Results: React.FC = () => {
                                   ))}
                                 </div>
                               ) : (
-                                <p className="text-sm text-gray-500">No evidence attached yet.</p>
+                                <p className="text-sm text-gray-500 dark:text-gray-400 dark:text-gray-500">No evidence attached yet.</p>
                               )}
 
                               <div className="flex flex-wrap gap-4 text-xs text-blue-600">
@@ -1199,19 +1199,19 @@ const Results: React.FC = () => {
                                   const filename = filePath.split('/').pop() || filePath;
 
                                   return (
-                                    <div key={fileKey} className="border rounded-lg overflow-hidden bg-white">
+                                    <div key={fileKey} className="border rounded-lg overflow-hidden bg-white dark:bg-gray-800 dark:bg-gray-800">
                                       <button
                                         onClick={() => handleToggleExtraFile(result.result_id, index)}
-                                        className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
+                                        className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700 transition-colors"
                                       >
                                         <div className="flex items-center gap-2">
                                           <FileText className="h-4 w-4 text-blue-600" />
-                                          <span className="text-sm font-medium text-gray-700">{filename}</span>
+                                          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{filename}</span>
                                         </div>
                                         {isFileExpanded ? (
-                                          <ChevronUp className="h-4 w-4 text-gray-400" />
+                                          <ChevronUp className="h-4 w-4 text-gray-400 dark:text-gray-500" />
                                         ) : (
-                                          <ChevronDown className="h-4 w-4 text-gray-400" />
+                                          <ChevronDown className="h-4 w-4 text-gray-400 dark:text-gray-500" />
                                         )}
                                       </button>
 
@@ -1222,7 +1222,7 @@ const Results: React.FC = () => {
                                             animate={{ height: 'auto', opacity: 1 }}
                                             exit={{ height: 0, opacity: 0 }}
                                             transition={{ duration: 0.2 }}
-                                            className="border-t bg-gray-50"
+                                            className="border-t bg-gray-50 dark:bg-gray-800 dark:bg-gray-800"
                                           >
                                             <div className="px-4 py-3 max-h-96 overflow-auto">
                                               {extraFileContents[fileKey] ? (
@@ -1231,8 +1231,8 @@ const Results: React.FC = () => {
                                                 </pre>
                                               ) : (
                                                 <div className="flex items-center justify-center py-4">
-                                                  <RefreshCw className="h-4 w-4 animate-spin text-gray-400" />
-                                                  <span className="ml-2 text-sm text-gray-500">Loading...</span>
+                                                  <RefreshCw className="h-4 w-4 animate-spin text-gray-400 dark:text-gray-500" />
+                                                  <span className="ml-2 text-sm text-gray-500 dark:text-gray-400 dark:text-gray-500">Loading...</span>
                                                 </div>
                                               )}
                                             </div>

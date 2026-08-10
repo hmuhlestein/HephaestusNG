@@ -180,7 +180,7 @@ export default function ConductorSummaryCard({ analysis }: ConductorSummaryCardP
             variant="ghost"
             size="sm"
             onClick={() => setShowHistory(!showHistory)}
-            className="w-full justify-between text-gray-600 hover:text-gray-900"
+            className="w-full justify-between text-gray-600 hover:text-gray-900 dark:text-gray-100"
           >
             <div className="flex items-center">
               <History className="w-4 h-4 mr-2" />
@@ -198,7 +198,7 @@ export default function ConductorSummaryCard({ analysis }: ConductorSummaryCardP
         {showHistory && (
           <div className="mt-4 space-y-2">
             {loadingHistory ? (
-              <div className="text-center py-4 text-gray-500">
+              <div className="text-center py-4 text-gray-500 dark:text-gray-400 dark:text-gray-500">
                 Loading history...
               </div>
             ) : historyData.length > 0 ? (
@@ -209,16 +209,16 @@ export default function ConductorSummaryCard({ analysis }: ConductorSummaryCardP
                     return (
                       <div
                         key={item.id}
-                        className="border rounded-lg p-3 hover:bg-gray-50 transition-colors"
+                        className="border rounded-lg p-3 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
-                              <Clock className="w-3 h-3 text-gray-400" />
-                              <span className="text-xs text-gray-500">
+                              <Clock className="w-3 h-3 text-gray-400 dark:text-gray-500" />
+                              <span className="text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">
                                 {formatDistanceToNow(new Date(item.timestamp), { addSuffix: true })}
                               </span>
-                              <span className="text-xs text-gray-400">
+                              <span className="text-xs text-gray-400 dark:text-gray-500">
                                 ({format(new Date(item.timestamp), 'PPpp')})
                               </span>
                             </div>
@@ -259,7 +259,7 @@ export default function ConductorSummaryCard({ analysis }: ConductorSummaryCardP
                 </div>
               </ScrollArea>
             ) : (
-              <div className="text-center py-4 text-gray-500">
+              <div className="text-center py-4 text-gray-500 dark:text-gray-400 dark:text-gray-500">
                 No history available
               </div>
             )}

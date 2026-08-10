@@ -87,7 +87,7 @@ const Tickets: React.FC = () => {
       <div className="h-full flex items-center justify-center">
         <div className="text-center">
           <Loader2 className="w-12 h-12 text-blue-600 animate-spin mx-auto mb-4" />
-          <p className="text-gray-600">Loading workflow...</p>
+          <p className="text-gray-600 dark:text-gray-400 dark:text-gray-500">Loading workflow...</p>
         </div>
       </div>
     );
@@ -97,7 +97,7 @@ const Tickets: React.FC = () => {
   if (!selectedWorkflowId) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="text-center text-gray-500">
+        <div className="text-center text-gray-500 dark:text-gray-400 dark:text-gray-500">
           <p className="text-lg font-semibold mb-2">No workflow found</p>
           <p className="text-sm">Please create a workflow first</p>
         </div>
@@ -110,7 +110,7 @@ const Tickets: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Ticket Tracking</h1>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Ticket Tracking</h1>
           <p className="text-sm text-gray-600 mt-1">
             Manage and track tickets across your workflow
           </p>
@@ -121,18 +121,18 @@ const Tickets: React.FC = () => {
           <div className="relative" ref={statusFilterRef}>
             <button
               onClick={() => setShowStatusFilter(!showStatusFilter)}
-              className="flex items-center px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm text-sm"
+              className="flex items-center px-3 py-2 bg-white dark:bg-gray-800 border dark:border-gray-700 border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm text-sm"
             >
-              <Filter className="w-4 h-4 mr-1.5 text-gray-500" />
+              <Filter className="w-4 h-4 mr-1.5 text-gray-500 dark:text-gray-400 dark:text-gray-500" />
               <span className="text-gray-700 capitalize">{statusFilter === 'all' ? 'All States' : statusFilter}</span>
               <ChevronDown className={`w-3.5 h-3.5 ml-1.5 text-gray-400 transition-transform ${showStatusFilter ? 'rotate-180' : ''}`} />
             </button>
 
             {showStatusFilter && (
-              <div className="absolute right-0 mt-2 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-50">
+              <div className="absolute right-0 mt-2 w-40 bg-white dark:bg-gray-800 border dark:border-gray-700 border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50">
                 <button
                   onClick={() => { setStatusFilter('all'); setShowStatusFilter(false); }}
-                  className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 rounded-t-lg ${statusFilter === 'all' ? 'bg-violet-50 text-violet-700 font-medium' : 'text-gray-700'}`}
+                  className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 dark:bg-gray-700 rounded-t-lg ${statusFilter === 'all' ? 'bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400 font-medium' : 'text-gray-700'}`}
                 >
                   All States
                 </button>
@@ -140,7 +140,7 @@ const Tickets: React.FC = () => {
                   <button
                     key={status}
                     onClick={() => { setStatusFilter(status); setShowStatusFilter(false); }}
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 capitalize ${statusFilter === status ? 'bg-violet-50 text-violet-700 font-medium' : 'text-gray-700'} ${i === availableStatuses.length - 1 ? 'rounded-b-lg' : ''}`}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 capitalize ${statusFilter === status ? 'bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400 font-medium' : 'text-gray-700'} ${i === availableStatuses.length - 1 ? 'rounded-b-lg' : ''}`}
                   >
                     <span className={`inline-block w-2 h-2 rounded-full mr-2 ${
                       status === 'active' ? 'bg-green-500' :
@@ -159,7 +159,7 @@ const Tickets: React.FC = () => {
           <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => setShowWorkflowDropdown(!showWorkflowDropdown)}
-              className="flex items-center px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm min-w-[200px]"
+              className="flex items-center px-4 py-2 bg-white dark:bg-gray-800 border dark:border-gray-700 border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm min-w-[200px]"
             >
               <span className="flex-1 text-left text-sm text-gray-700 truncate">
                 {!selectedExecutionId ? `📁 ${selectedProject?.name || 'Project'} Level` : selectedProject?.name || selectedWorkflow?.definition_name || 'Select Workflow'}
@@ -168,15 +168,15 @@ const Tickets: React.FC = () => {
             </button>
 
             {showWorkflowDropdown && (
-              <div className="absolute right-0 mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
+              <div className="absolute right-0 mt-2 w-72 bg-white dark:bg-gray-800 border dark:border-gray-700 border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
                 {/* Project Level option */}
                 <button
                   onClick={() => {
                     selectExecution(null);
                     setShowWorkflowDropdown(false);
                   }}
-                  className={`w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 ${
-                    !selectedExecutionId ? 'bg-violet-50' : ''
+                  className={`w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 ${
+                    !selectedExecutionId ? 'bg-violet-50 dark:bg-violet-900/30' : ''
                   }`}
                 >
                   <div className="text-sm font-medium text-violet-800">
@@ -188,7 +188,7 @@ const Tickets: React.FC = () => {
                 </button>
                 
                 {filteredExecutions.length === 0 ? (
-                  <div className="px-4 py-3 text-sm text-gray-500">
+                  <div className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 dark:text-gray-500">
                     {executions.length === 0 ? 'No workflows available' : `No ${statusFilter} workflows`}
                   </div>
                 ) : (
@@ -199,7 +199,7 @@ const Tickets: React.FC = () => {
                         selectExecution(execution.id);
                         setShowWorkflowDropdown(false);
                       }}
-                      className={`w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 ${
+                      className={`w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 last:border-b-0 ${
                         execution.id === selectedExecutionId ? 'bg-blue-50' : ''
                       }`}
                     >
@@ -230,7 +230,7 @@ const Tickets: React.FC = () => {
       </div>
 
       {/* Tab Navigation */}
-      <div className="border-b border-gray-200 mb-6">
+      <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
         <nav className="flex space-x-8">
           {tabs.map(({ id, label, icon: Icon }) => (
             <button
@@ -241,7 +241,7 @@ const Tickets: React.FC = () => {
                 ${
                   activeTab === id
                     ? 'border-blue-600 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:border-gray-600'
                 }
               `}
             >

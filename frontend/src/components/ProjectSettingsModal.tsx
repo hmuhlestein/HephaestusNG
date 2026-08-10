@@ -145,22 +145,22 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
           initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           exit={{ scale: 0.9, opacity: 0 }}
-          className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col"
+          className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
           <div className="px-6 py-4 border-b bg-gradient-to-r from-gray-50 to-slate-50">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-3">
-                <Settings className="w-6 h-6 text-gray-600" />
+                <Settings className="w-6 h-6 text-gray-600 dark:text-gray-400 dark:text-gray-500" />
                 <div>
-                  <h3 className="text-xl font-semibold text-gray-800">Project Settings</h3>
-                  <p className="text-sm text-gray-600">Manage your projects</p>
+                  <h3 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Project Settings</h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 dark:text-gray-500">Manage your projects</p>
                 </div>
               </div>
               <button
                 onClick={onClose}
-                className="p-2 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                className="p-2 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -180,7 +180,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                   New Project
                 </button>
               ) : (
-                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
                   <h4 className="text-sm font-semibold text-gray-700 mb-3">Create New Project</h4>
                   <div className="space-y-3">
                     <div>
@@ -190,7 +190,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                         value={newProjectName}
                         onChange={(e) => setNewProjectName(e.target.value)}
                         placeholder="My Project"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent text-sm"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent text-sm"
                       />
                     </div>
                     <div>
@@ -200,7 +200,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                         value={newProjectPath}
                         onChange={(e) => setNewProjectPath(e.target.value)}
                         placeholder="/Users/you/code/my-project"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent text-sm font-mono"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent text-sm font-mono"
                       />
                     </div>
                     <div className="flex items-center gap-2">
@@ -222,7 +222,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                           setNewProjectName('');
                           setNewProjectPath('');
                         }}
-                        className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors text-sm"
+                        className="px-4 py-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-sm"
                       >
                         Cancel
                       </button>
@@ -237,7 +237,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
               <h4 className="text-sm font-semibold text-gray-700 mb-3">Existing Projects</h4>
               {isLoading ? (
                 <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+                  <Loader2 className="w-6 h-6 animate-spin text-gray-400 dark:text-gray-500" />
                 </div>
               ) : projects && projects.length > 0 ? (
                 <div className="space-y-2">
@@ -246,8 +246,8 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                       key={project.id}
                       className={`flex items-center justify-between p-4 rounded-lg border transition-colors ${
                         project.is_active
-                          ? 'bg-violet-50 border-violet-200'
-                          : 'bg-white border-gray-200 hover:border-gray-300'
+                          ? 'bg-violet-50 dark:bg-violet-900/30 border-violet-200'
+                          : 'bg-white border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:border-gray-600'
                       }`}
                     >
                       <div className="flex items-center space-x-3 min-w-0">
@@ -256,12 +256,12 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                           <div className="flex items-center gap-2">
                             <p className="text-sm font-medium text-gray-800 truncate">{project.name}</p>
                             {project.is_active && (
-                              <span className="px-2 py-0.5 text-xs font-semibold bg-violet-100 text-violet-700 rounded-full">
+                              <span className="px-2 py-0.5 text-xs font-semibold bg-violet-100 text-violet-700 dark:text-violet-400 rounded-full">
                                 Active
                               </span>
                             )}
                             {project.is_default && (
-                              <span className="px-2 py-0.5 text-xs font-semibold bg-gray-100 text-gray-600 rounded-full">
+                              <span className="px-2 py-0.5 text-xs font-semibold bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded-full">
                                 Default
                               </span>
                             )}
@@ -272,7 +272,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                           <div className="mt-2">
                             {editingBudget === project.id ? (
                               <div className="flex items-center gap-2">
-                                <DollarSign className="w-3 h-3 text-gray-400" />
+                                <DollarSign className="w-3 h-3 text-gray-400 dark:text-gray-500" />
                                 <input
                                   type="number"
                                   value={budgetValue}
@@ -280,7 +280,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                                   placeholder="No limit"
                                   min="0"
                                   step="0.01"
-                                  className="w-24 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-violet-500"
+                                  className="w-24 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500"
                                   autoFocus
                                 />
                                 <button
@@ -292,7 +292,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                                 </button>
                                 <button
                                   onClick={() => { setEditingBudget(null); setBudgetValue(''); }}
-                                  className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 rounded"
+                                  className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
                                 >
                                   Cancel
                                 </button>
@@ -303,7 +303,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                                   setEditingBudget(project.id);
                                   setBudgetValue(project.cost_limit_usd?.toString() || '');
                                 }}
-                                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+                                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-300"
                               >
                                 <DollarSign className="w-3 h-3" />
                                 {project.cost_limit_usd != null ? (
@@ -323,7 +323,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                         {/* Budget display and edit */}
                         {editingBudget === project.id ? (
                           <div className="flex items-center gap-1 mr-2">
-                            <span className="text-xs text-gray-500">$</span>
+                            <span className="text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">$</span>
                             <input
                               type="number"
                               value={budgetValue}
@@ -332,13 +332,13 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                               min="0"
                               max="100000"
                               step="0.01"
-                              className="w-20 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-violet-500"
+                              className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500"
                               autoFocus
                             />
                             <button
                               onClick={() => handleSaveBudget(project.id)}
                               disabled={updateBudgetMutation.isPending}
-                              className="p-1 text-green-600 hover:bg-green-50 rounded"
+                              className="p-1 text-green-600 hover:bg-green-50 dark:bg-green-900/20 rounded"
                               title="Save budget"
                             >
                               <CheckCircle2 className="w-4 h-4" />
@@ -348,7 +348,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                                 setEditingBudget(null);
                                 setBudgetValue('');
                               }}
-                              className="p-1 text-gray-400 hover:bg-gray-100 rounded"
+                              className="p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
                               title="Cancel"
                             >
                               <X className="w-4 h-4" />
@@ -356,7 +356,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                             {project.cost_limit_usd != null && (
                               <button
                                 onClick={() => handleClearBudget(project.id)}
-                                className="p-1 text-red-400 hover:bg-red-50 rounded text-xs"
+                                className="p-1 text-red-400 hover:bg-red-50 dark:bg-red-900/20 rounded text-xs"
                                 title="Remove budget limit"
                               >
                                 Clear
@@ -368,14 +368,14 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                             {project.cost_total_usd > 0 && (
                               <div className="text-right mr-2">
                                 <div className="flex items-center gap-1">
-                                  <DollarSign className="w-3 h-3 text-gray-500" />
+                                  <DollarSign className="w-3 h-3 text-gray-500 dark:text-gray-400 dark:text-gray-500" />
                                   <span className="text-sm font-mono">
                                     {project.cost_total_usd >= 1000
                                       ? `$${(project.cost_total_usd / 1000).toFixed(1)}k`
                                       : `$${project.cost_total_usd.toFixed(2)}`}
                                   </span>
                                   {project.cost_limit_usd != null && (
-                                    <span className="text-xs text-gray-400">
+                                    <span className="text-xs text-gray-400 dark:text-gray-500">
                                       / ${project.cost_limit_usd.toFixed(0)}
                                     </span>
                                   )}
@@ -393,7 +393,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                                 setEditingBudget(project.id);
                                 setBudgetValue(project.cost_limit_usd?.toString() || '');
                               }}
-                              className="p-1 text-gray-400 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors"
+                              className="p-1 text-gray-400 hover:text-violet-600 hover:bg-violet-50 dark:bg-violet-900/30 rounded-lg transition-colors"
                               title={project.cost_limit_usd ? 'Edit budget' : 'Set budget'}
                             >
                               <Edit3 className="w-4 h-4" />
@@ -416,7 +416,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                             </button>
                             <button
                               onClick={() => setDeleteConfirm(null)}
-                              className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors text-xs"
+                              className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-xs"
                             >
                               Cancel
                             </button>
@@ -424,7 +424,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                         ) : (
                           <button
                             onClick={() => setDeleteConfirm(project.id)}
-                            className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:bg-red-900/20 rounded-lg transition-colors"
                             title="Delete project"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -435,7 +435,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-8 text-gray-500">
+                <div className="text-center py-8 text-gray-500 dark:text-gray-400 dark:text-gray-500">
                   <FolderOpen className="w-8 h-8 mx-auto mb-2 text-gray-300" />
                   <p className="text-sm">No projects yet</p>
                 </div>

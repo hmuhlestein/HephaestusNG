@@ -58,9 +58,9 @@ export const ExecutionSelector: React.FC = () => {
       <div className="relative" ref={dropdownRef}>
         <button
           onClick={() => setShowDropdown(!showDropdown)}
-          className="flex items-center px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm min-w-[200px]"
+          className="flex items-center px-4 py-2 bg-white border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm min-w-[200px]"
         >
-          <Workflow className="w-4 h-4 mr-2 text-gray-500" />
+          <Workflow className="w-4 h-4 mr-2 text-gray-500 dark:text-gray-400" />
           <span className="flex-1 text-left text-sm text-gray-700 truncate">
             {selectedExecution?.definition_name || selectedExecution?.description?.split('\n')[0] || 'Select Workflow'}
           </span>
@@ -68,7 +68,7 @@ export const ExecutionSelector: React.FC = () => {
         </button>
 
         {showDropdown && (
-          <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-80 overflow-y-auto">
+          <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 max-h-80 overflow-y-auto">
             {/* Active Executions */}
             {activeExecutions.length > 0 && (
               <>
@@ -82,7 +82,7 @@ export const ExecutionSelector: React.FC = () => {
                       selectExecution(execution.id);
                       setShowDropdown(false);
                     }}
-                    className={`w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 ${
+                    className={`w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 last:border-b-0 ${
                       execution.id === selectedExecutionId ? 'bg-blue-50' : ''
                     }`}
                   >
@@ -115,7 +115,7 @@ export const ExecutionSelector: React.FC = () => {
                       selectExecution(execution.id);
                       setShowDropdown(false);
                     }}
-                    className={`w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 ${
+                    className={`w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 last:border-b-0 ${
                       execution.id === selectedExecutionId ? 'bg-blue-50' : ''
                     }`}
                   >
@@ -125,7 +125,7 @@ export const ExecutionSelector: React.FC = () => {
                     <div className="text-xs text-gray-500 flex items-center gap-2 mt-1">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
                         execution.status === 'completed' ? 'bg-blue-100 text-blue-700' :
-                        execution.status === 'failed' ? 'bg-red-100 text-red-700' :
+                        execution.status === 'failed' ? 'bg-red-100 text-red-700 dark:text-red-400' :
                         'bg-gray-100 text-gray-700'
                       }`}>
                         {execution.status}

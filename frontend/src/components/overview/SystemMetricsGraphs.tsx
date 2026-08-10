@@ -62,8 +62,8 @@ export default function SystemMetricsGraphs({ metricsHistory, phases = [] }: Sys
     const data = payload[0].payload;
 
     return (
-      <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3">
-        <div className="text-sm font-medium text-gray-900">
+      <div className="bg-white border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3">
+        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
           {formatDistanceToNow(new Date(data.timestamp), { addSuffix: true })}
         </div>
         {data.phase && (
@@ -76,7 +76,7 @@ export default function SystemMetricsGraphs({ metricsHistory, phases = [] }: Sys
                 className="w-3 h-3 rounded mr-2"
                 style={{ backgroundColor: entry.color }}
               />
-              <span className="text-gray-600">
+              <span className="text-gray-600 dark:text-gray-400 dark:text-gray-500">
                 {entry.name}: <span className="font-semibold">{entry.value}{entry.dataKey.includes('Percent') ? '%' : ''}</span>
               </span>
             </div>
@@ -91,7 +91,7 @@ export default function SystemMetricsGraphs({ metricsHistory, phases = [] }: Sys
       {/* Controls */}
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-2">
-          <Filter className="w-4 h-4 text-gray-500" />
+          <Filter className="w-4 h-4 text-gray-500 dark:text-gray-400 dark:text-gray-500" />
           <div className="flex space-x-1">
             {['1h', '6h', '24h', 'all'].map((range) => (
               <button
@@ -111,7 +111,7 @@ export default function SystemMetricsGraphs({ metricsHistory, phases = [] }: Sys
 
         {phases.length > 0 && (
           <div className="flex items-center space-x-2">
-            <span className="text-xs text-gray-500">Phase:</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">Phase:</span>
             <select
               value={selectedPhase || ''}
               onChange={(e) => setSelectedPhase(e.target.value || null)}
@@ -231,7 +231,7 @@ export default function SystemMetricsGraphs({ metricsHistory, phases = [] }: Sys
           <Card className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-gray-500">Current Coherence</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">Current Coherence</p>
                 <p className="text-2xl font-bold text-blue-600">
                   {filteredData[filteredData.length - 1].coherencePercent}%
                 </p>
@@ -243,7 +243,7 @@ export default function SystemMetricsGraphs({ metricsHistory, phases = [] }: Sys
           <Card className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-gray-500">Current Alignment</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">Current Alignment</p>
                 <p className="text-2xl font-bold text-green-600">
                   {filteredData[filteredData.length - 1].alignmentPercent}%
                 </p>
@@ -255,7 +255,7 @@ export default function SystemMetricsGraphs({ metricsHistory, phases = [] }: Sys
           <Card className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-gray-500">Active Agents</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">Active Agents</p>
                 <p className="text-2xl font-bold text-purple-600">
                   {filteredData[filteredData.length - 1].agentCount}
                 </p>

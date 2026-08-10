@@ -49,20 +49,20 @@ const FeatureGallery: React.FC<FeatureGalleryProps> = ({ onSelectFeature, projec
             placeholder="Search features..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
+            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500"
           />
         </div>
 
         {/* Status filter pills */}
-        <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+        <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
           {(['all', 'validated', 'needs_review', 'failed'] as StatusFilter[]).map((s) => (
             <button
               key={s}
               onClick={() => setStatusFilter(s)}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
                 statusFilter === s
-                  ? 'bg-white shadow-sm text-gray-800'
-                  : 'text-gray-500 hover:text-gray-700'
+                  ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-800 dark:text-gray-100'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
               }`}
             >
               {s === 'all' ? 'All' : s.replace(/_/g, ' ')}
@@ -71,18 +71,18 @@ const FeatureGallery: React.FC<FeatureGalleryProps> = ({ onSelectFeature, projec
         </div>
 
         {/* View mode toggle */}
-        <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+        <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
           <button
             onClick={() => setViewMode('grid')}
-            className={`p-1.5 rounded-md transition-colors ${viewMode === 'grid' ? 'bg-white shadow-sm' : ''}`}
+            className={`p-1.5 rounded-md transition-colors ${viewMode === 'grid' ? 'bg-white dark:bg-gray-600 shadow-sm' : ''}`}
           >
-            <Grid className="w-4 h-4 text-gray-600" />
+            <Grid className="w-4 h-4 text-gray-600 dark:text-gray-400" />
           </button>
           <button
             onClick={() => setViewMode('list')}
-            className={`p-1.5 rounded-md transition-colors ${viewMode === 'list' ? 'bg-white shadow-sm' : ''}`}
+            className={`p-1.5 rounded-md transition-colors ${viewMode === 'list' ? 'bg-white dark:bg-gray-600 shadow-sm' : ''}`}
           >
-            <List className="w-4 h-4 text-gray-600" />
+            <List className="w-4 h-4 text-gray-600 dark:text-gray-400" />
           </button>
         </div>
       </div>
@@ -93,10 +93,10 @@ const FeatureGallery: React.FC<FeatureGalleryProps> = ({ onSelectFeature, projec
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-500" />
         </div>
       ) : filtered.length === 0 ? (
-        <div className="bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl p-12 text-center">
-          <Layers className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-lg font-semibold text-gray-600 mb-2">No features found</h3>
-          <p className="text-sm text-gray-400">
+        <div className="bg-gray-50 dark:bg-gray-800 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-2xl p-12 text-center">
+          <Layers className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-gray-600 dark:text-gray-300 mb-2">No features found</h3>
+          <p className="text-sm text-gray-400 dark:text-gray-500">
             {search || statusFilter !== 'all'
               ? 'Try adjusting your filters'
               : 'Processed features will appear here'}
@@ -114,7 +114,7 @@ const FeatureGallery: React.FC<FeatureGalleryProps> = ({ onSelectFeature, projec
           ))}
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm overflow-hidden">
           <div className="divide-y">
             {filtered.map((feature: any) => (
               <FeatureRow
@@ -143,7 +143,7 @@ const FeatureCard: React.FC<{
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.05 }}
       onClick={onClick}
-      className="bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-lg transition-all cursor-pointer group"
+      className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-lg transition-all cursor-pointer group"
     >
       {/* Status stripe */}
       <div className={`h-1.5 rounded-t-xl ${
@@ -167,12 +167,12 @@ const FeatureCard: React.FC<{
         </div>
 
         {/* Name */}
-        <h3 className="text-base font-semibold text-gray-800 mb-2 line-clamp-2 group-hover:text-violet-700 transition-colors">
+        <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200 mb-2 line-clamp-2 group-hover:text-violet-700 transition-colors">
           {feature.name}
         </h3>
 
         {/* Metadata */}
-        <div className="flex items-center gap-3 text-xs text-gray-500 mb-3">
+        <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 mb-3">
           <span className="flex items-center gap-1">
             <Layers className="w-3 h-3" />
             {feature.iterations} iter{feature.iterations !== 1 ? 's' : ''}
@@ -190,7 +190,7 @@ const FeatureCard: React.FC<{
         </div>
 
         {/* Footer */}
-        <div className="text-xs text-gray-400">
+        <div className="text-xs text-gray-400 dark:text-gray-500">
           {formatDistanceToNow(new Date(feature.created_at), { addSuffix: true })}
         </div>
       </div>
@@ -207,15 +207,15 @@ const FeatureRow: React.FC<{
   return (
     <div
       onClick={onClick}
-      className="flex items-center gap-4 px-5 py-4 hover:bg-gray-50 cursor-pointer transition-colors group"
+      className="flex items-center gap-4 px-5 py-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors group"
     >
       <StatusIcon status={feature.status} />
 
       <div className="flex-1 min-w-0">
-        <h4 className="text-sm font-semibold text-gray-800 truncate group-hover:text-violet-700 transition-colors">
+        <h4 className="text-sm font-semibold text-gray-800 dark:text-gray-200 truncate group-hover:text-violet-700 transition-colors">
           {feature.name}
         </h4>
-        <p className="text-xs text-gray-500 mt-0.5">
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
           {feature.iterations} iteration{feature.iterations !== 1 ? 's' : ''} ·{' '}
           {formatTime(feature.total_time_seconds)} ·{' '}
           {feature.stop_reason.replace(/_/g, ' ')}

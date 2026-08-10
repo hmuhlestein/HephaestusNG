@@ -13,34 +13,34 @@ import FeatureDetailModal from './FeatureDetailModal';
 import toast from 'react-hot-toast';
 
 const eventTypeConfig: Record<string, { icon: React.ElementType; color: string; bg: string; label?: string }> = {
-  design_queued: { icon: FileText, color: 'text-blue-600', bg: 'bg-blue-100' },
-  design_started: { icon: Play, color: 'text-violet-600', bg: 'bg-violet-100' },
-  design_completed: { icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-100' },
-  design_complete: { icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-100' },
-  design_failed: { icon: XCircle, color: 'text-red-600', bg: 'bg-red-100' },
-  phase_started: { icon: ArrowRight, color: 'text-indigo-600', bg: 'bg-indigo-100' },
-  phase_completed: { icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-100' },
-  workflow_started: { icon: Rocket, color: 'text-violet-600', bg: 'bg-violet-100' },
-  workflow_launch: { icon: Rocket, color: 'text-violet-600', bg: 'bg-violet-100' },
-  workflow_completed: { icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-100' },
-  iteration_started: { icon: Layers, color: 'text-blue-600', bg: 'bg-blue-100' },
-  iteration_completed: { icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-100' },
-  pipeline_started: { icon: Zap, color: 'text-amber-600', bg: 'bg-amber-100' },
-  pipeline_stopped: { icon: Pause, color: 'text-gray-600', bg: 'bg-gray-100' },
-  pipeline_stop: { icon: Pause, color: 'text-gray-600', bg: 'bg-gray-100' },
-  warning: { icon: AlertTriangle, color: 'text-amber-600', bg: 'bg-amber-100' },
-  error: { icon: XCircle, color: 'text-red-600', bg: 'bg-red-100' },
-  stuck_agent: { icon: AlertTriangle, color: 'text-orange-600', bg: 'bg-orange-100' },
-  credit_exhausted: { icon: AlertTriangle, color: 'text-red-600', bg: 'bg-red-100' },
-  human_input_required: { icon: AlertCircle, color: 'text-amber-600', bg: 'bg-amber-100' },
-  human_input: { icon: Reply, color: 'text-blue-600', bg: 'bg-blue-100' },
+  design_queued: { icon: FileText, color: 'text-blue-600 dark:text-blue-400', bg: 'bg-blue-100 dark:bg-blue-900/30' },
+  design_started: { icon: Play, color: 'text-violet-600 dark:text-violet-400', bg: 'bg-violet-100 dark:bg-violet-900/30' },
+  design_completed: { icon: CheckCircle2, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-100 dark:bg-emerald-900/30' },
+  design_complete: { icon: CheckCircle2, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-100 dark:bg-emerald-900/30' },
+  design_failed: { icon: XCircle, color: 'text-red-600 dark:text-red-400', bg: 'bg-red-100 dark:bg-red-900/30' },
+  phase_started: { icon: ArrowRight, color: 'text-indigo-600 dark:text-indigo-400', bg: 'bg-indigo-100 dark:bg-indigo-900/30' },
+  phase_completed: { icon: CheckCircle2, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-100 dark:bg-emerald-900/30' },
+  workflow_started: { icon: Rocket, color: 'text-violet-600 dark:text-violet-400', bg: 'bg-violet-100 dark:bg-violet-900/30' },
+  workflow_launch: { icon: Rocket, color: 'text-violet-600 dark:text-violet-400', bg: 'bg-violet-100 dark:bg-violet-900/30' },
+  workflow_completed: { icon: CheckCircle2, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-100 dark:bg-emerald-900/30' },
+  iteration_started: { icon: Layers, color: 'text-blue-600 dark:text-blue-400', bg: 'bg-blue-100 dark:bg-blue-900/30' },
+  iteration_completed: { icon: CheckCircle2, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-100 dark:bg-emerald-900/30' },
+  pipeline_started: { icon: Zap, color: 'text-amber-600 dark:text-amber-400', bg: 'bg-amber-100 dark:bg-amber-900/30' },
+  pipeline_stopped: { icon: Pause, color: 'text-gray-600 dark:text-gray-400', bg: 'bg-gray-100 dark:bg-gray-700' },
+  pipeline_stop: { icon: Pause, color: 'text-gray-600 dark:text-gray-400', bg: 'bg-gray-100 dark:bg-gray-700' },
+  warning: { icon: AlertTriangle, color: 'text-amber-600 dark:text-amber-400', bg: 'bg-amber-100 dark:bg-amber-900/30' },
+  error: { icon: XCircle, color: 'text-red-600 dark:text-red-400', bg: 'bg-red-100 dark:bg-red-900/30' },
+  stuck_agent: { icon: AlertTriangle, color: 'text-orange-600 dark:text-orange-400', bg: 'bg-orange-100 dark:bg-orange-900/30' },
+  credit_exhausted: { icon: AlertTriangle, color: 'text-red-600 dark:text-red-400', bg: 'bg-red-100 dark:bg-red-900/30' },
+  human_input_required: { icon: AlertCircle, color: 'text-amber-600 dark:text-amber-400', bg: 'bg-amber-100 dark:bg-amber-900/30' },
+  human_input: { icon: Reply, color: 'text-blue-600 dark:text-blue-400', bg: 'bg-blue-100 dark:bg-blue-900/30' },
 };
 
 // Status-based display config for design_complete events
 const designStatusConfig: Record<string, { icon: React.ElementType; color: string; bg: string; label: string }> = {
-  completed: { icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-100', label: 'Design Complete' },
-  failed: { icon: XCircle, color: 'text-red-600', bg: 'bg-red-100', label: 'Design Failed' },
-  validating: { icon: AlertTriangle, color: 'text-amber-600', bg: 'bg-amber-100', label: 'Design Validating' },
+  completed: { icon: CheckCircle2, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-100 dark:bg-emerald-900/30', label: 'Design Complete' },
+  failed: { icon: XCircle, color: 'text-red-600 dark:text-red-400', bg: 'bg-red-100 dark:bg-red-900/30', label: 'Design Failed' },
+  validating: { icon: AlertTriangle, color: 'text-amber-600 dark:text-amber-400', bg: 'bg-amber-100 dark:bg-amber-900/30', label: 'Design Validating' },
 };
 
 interface MessageCenterProps {
@@ -138,10 +138,10 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
 
   if (!messages || messages.length === 0) {
     return (
-      <div className="bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl p-12 text-center">
-        <MessageSquare className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-        <h3 className="text-lg font-semibold text-gray-600 mb-2">No messages yet</h3>
-        <p className="text-sm text-gray-400">Pipeline events will appear here as they happen</p>
+      <div className="bg-gray-50 dark:bg-gray-800 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-2xl p-12 text-center">
+        <MessageSquare className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+        <h3 className="text-lg font-semibold text-gray-600 dark:text-gray-300 mb-2">No messages yet</h3>
+        <p className="text-sm text-gray-400 dark:text-gray-500">Pipeline events will appear here as they happen</p>
       </div>
     );
   }
@@ -290,7 +290,7 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
             <button
               onClick={() => setShowArchived(false)}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                !showArchived ? 'bg-violet-100 text-violet-700' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                !showArchived ? 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}
             >
               Active ({messages.length - archivedIds.size})
@@ -298,7 +298,7 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
             <button
               onClick={() => setShowArchived(true)}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                showArchived ? 'bg-violet-100 text-violet-700' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                showArchived ? 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}
             >
               Archived ({archivedIds.size})
@@ -319,7 +319,7 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
           <div key={date}>
             <div className="flex items-center gap-3 mb-4">
               <div className="h-px flex-1 bg-gray-200" />
-              <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">{date}</span>
+              <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{date}</span>
               <div className="h-px flex-1 bg-gray-200" />
             </div>
 
@@ -333,8 +333,8 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
                 
                 const config = statusConfig || eventTypeConfig[msg.type] || {
                   icon: MessageSquare,
-                  color: 'text-gray-600',
-                  bg: 'bg-gray-100',
+                  color: 'text-gray-600 dark:text-gray-400',
+                  bg: 'bg-gray-100 dark:bg-gray-700',
                 };
                 const Icon = config.icon;
                 const actions = getMessageActions(msg);
@@ -347,8 +347,8 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: index * 0.02 }}
                     onClick={() => hasActions && actions[0].onClick()}
-                    className={`flex items-start gap-3 px-4 py-3 bg-white rounded-xl border border-gray-100 transition-all ${
-                      hasActions ? 'hover:shadow-md hover:border-gray-200 cursor-pointer' : 'hover:shadow-sm'
+                    className={`flex items-start gap-3 px-4 py-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 transition-all ${
+                      hasActions ? 'hover:shadow-md hover:border-gray-200 dark:hover:border-gray-600 cursor-pointer' : 'hover:shadow-sm'
                     }`}
                   >
                     <div className={`p-2 rounded-lg ${config.bg} flex-shrink-0`}>
@@ -357,32 +357,32 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-gray-800">
+                        <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
                           {statusConfig?.label || formatEventType(msg.type)}
                         </span>
-                        <span className="text-xs text-gray-400 font-mono">{msg.type}</span>
+                        <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{msg.type}</span>
                         {hasActions && <ChevronRight className="w-3 h-3 text-gray-300" />}
                       </div>
                       
                       {/* Error display - prominent red styling */}
                       {data.error && (
-                        <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-lg">
-                          <div className="flex items-center gap-1 text-xs font-medium text-red-700 mb-1">
+                        <div className="mt-2 p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                          <div className="flex items-center gap-1 text-xs font-medium text-red-700 dark:text-red-400 mb-1">
                             <XCircle className="w-3 h-3" />
                             Error
                           </div>
-                          <p className="text-xs text-red-600">{String(data.error)}</p>
+                          <p className="text-xs text-red-600 dark:text-red-400">{String(data.error)}</p>
                         </div>
                       )}
                       
                       {/* Reason display for human_input_required */}
                       {msg.type === 'human_input_required' && data.reason && (
-                        <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
-                          <div className="flex items-center gap-1 text-xs font-medium text-amber-700 mb-1">
+                        <div className="mt-2 p-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                          <div className="flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400 mb-1">
                             <AlertCircle className="w-3 h-3" />
                             Reason
                           </div>
-                          <p className="text-xs text-amber-600">{String(data.reason)}</p>
+                          <p className="text-xs text-amber-600 dark:text-amber-400">{String(data.reason)}</p>
                         </div>
                       )}
                       
@@ -406,7 +406,7 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
                             {displayFields.map(([key, value]) => (
                               <span
                                 key={key}
-                                className="inline-flex items-center gap-1 text-xs text-gray-500 bg-gray-50 px-2 py-0.5 rounded"
+                                className="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700 px-2 py-0.5 rounded"
                               >
                                 <span className="text-gray-400">{formatFieldLabel(key)}:</span>
                                 <span className="font-medium text-gray-600 truncate max-w-[200px]">
@@ -432,7 +432,7 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
                             archiveMessage(msg);
                           }
                         }}
-                        className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+                        className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
                         title={showArchived ? 'Restore message' : 'Archive message'}
                       >
                         {showArchived ? (

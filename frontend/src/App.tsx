@@ -4,6 +4,7 @@ import { Toaster } from 'react-hot-toast';
 import { WebSocketProvider } from '@/context/WebSocketContext';
 import { WorkflowProvider } from '@/context/WorkflowContext';
 import { ProjectProvider } from '@/context/ProjectContext';
+import { ThemeProvider } from '@/context/ThemeContext';
 import Layout from '@/components/Layout';
 import Dashboard from '@/pages/Dashboard';
 import Overview from '@/pages/Overview';
@@ -30,6 +31,7 @@ const queryClient = new QueryClient({
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
       <ProjectProvider>
         <WorkflowProvider>
           <WebSocketProvider>
@@ -64,6 +66,7 @@ function App() {
           </WebSocketProvider>
         </WorkflowProvider>
       </ProjectProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }
