@@ -438,7 +438,7 @@ class AgentManager:
                 )
             else:
                 # Create an isolated worktree for the agent (legacy path)
-                branch_info = wt_mgr.create_agent_branch(
+                branch_info = wt_mgr.create_agent_worktree(
                     agent_id=agent_id,
                     parent_agent_id=getattr(task, "created_by_agent_id", None),
                     context_files=context_files,

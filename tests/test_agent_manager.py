@@ -109,10 +109,10 @@ class TestCreateAgentForTask:
     @pytest.mark.asyncio
     async def test_creates_agent_with_valid_task(self, mock_agent_manager, sample_task, db_manager):
         """Should create agent successfully with valid task."""
-        # Mock dependencies — must mock create_agent_branch (not create_worktree)
+        # Mock dependencies — must mock create_agent_worktree (not create_worktree)
         # because the workflow's working_directory doesn't contain '.worktrees/'
         # so the code takes the isolated-worktree branch.
-        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-agent",
                 "branch_name": "agent-test-branch",
@@ -175,7 +175,7 @@ class TestCreateAgentForTask:
         showed extensive fresh output the whole time. sysread() in an
         explicit loop (not -pe's implicit while(<>)) fixes the input side
         too: it returns as soon as ANY data is available on the pipe."""
-        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-agent",
                 "branch_name": "agent-test-branch",
@@ -243,7 +243,7 @@ class TestCreateAgentForTask:
                 "feature_id": "calculator-module",
             }
 
-        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-agent",
                 "branch_name": "agent-test-branch",
@@ -308,7 +308,7 @@ class TestCreateAgentForTask:
                 "feature_id": "calculator-module",
             }
 
-        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-agent",
                 "branch_name": "agent-test-branch",
@@ -351,7 +351,7 @@ class TestCreateAgentForTask:
     @pytest.mark.asyncio
     async def test_creates_agent_log_entry(self, mock_agent_manager, sample_task, db_manager):
         """Should create agent log entry when agent is created."""
-        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-agent",
                 "branch_name": "agent-test-branch",
@@ -413,7 +413,7 @@ class TestCreateAgentForTask:
         monkeypatch.setattr(mock_agent_manager.config, "default_cli_tool", "claude")
         monkeypatch.setattr(mock_agent_manager.config, "cli_model", "sonnet")
 
-        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-agent",
                 "branch_name": "agent-test-branch",
@@ -457,7 +457,7 @@ class TestCreateAgentForTask:
         -- without it, every session-reuse launch always tries --session-id
         first and eats a guaranteed "already in use" error before falling
         back to --resume."""
-        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-agent",
                 "branch_name": "agent-test-branch",
@@ -589,7 +589,7 @@ class TestProjectScopedWorktreeManager:
             def reload(self, path):
                 captured["reloaded_to"] = path
 
-            def create_agent_branch(self, **kwargs):
+            def create_agent_worktree(self, **kwargs):
                 return {
                     "working_directory": "/tmp/project-x-repo/.worktrees/wt_x",
                     "branch_name": "agent-x",
@@ -692,7 +692,7 @@ class TestCreateAgentForTaskFallback:
                 )
             )
 
-        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-fb-agent",
                 "branch_name": "agent-fb-branch",
@@ -789,7 +789,7 @@ class TestCreateAgentForTaskSessionLimitPause:
                 )
             )
 
-        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-sl-agent",
                 "branch_name": "agent-sl-branch",
