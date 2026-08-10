@@ -7,6 +7,7 @@ the filename, it's a generic MCP server usable by any compatible CLI agent
 -- not exclusive to Claude.
 """
 
+import asyncio
 import atexit
 import logging
 import os
@@ -359,6 +360,18 @@ async def update_task_status(
     return await _post_task_status(task_id, agent_id, status, summary, failure_reason, key_learnings)
 
 
+# Retry tuning for _post_task_status: a completion report is too important
+# to drop silently on a transient blip (e.g. the backend restarting
+# mid-call, observed live to strand an actually-finished task in-progress
+# forever with no error ever surfaced to the agent). 5 attempts with
+# exponential backoff (2/4/8/16/20s, ~50s worst case) comfortably outlasts
+# a `heph restart` cycle (observed ~8-14s to come back) without leaving
+# the agent hanging indefinitely if the server is genuinely down.
+_STATUS_POST_MAX_ATTEMPTS = 5
+_STATUS_POST_BASE_DELAY = 2.0
+_STATUS_POST_MAX_DELAY = 20.0
+
+
 async def _post_task_status(
     task_id: str,
     agent_id: str,
@@ -369,7 +382,15 @@ async def _post_task_status(
 ) -> str:
     """Shared HTTP call + response formatting for update_task_status and
     complete_my_task -- the only difference between them is how task_id/
-    agent_id get resolved before reaching here."""
+    agent_id get resolved before reaching here.
+
+    Retries with exponential backoff on connectivity failures (refused/
+    reset/timed-out connections) and 5xx responses -- see
+    _STATUS_POST_MAX_ATTEMPTS's comment for why. A 4xx response (bad
+    task_id, unauthenticated, missing summary, output-artifact rejection,
+    etc.) is a real problem retrying can't fix, so it's returned
+    immediately instead.
+    """
     logger.info(
         f"_post_task_status CALL task_id={task_id} agent_id={agent_id} status={status}"
     )
@@ -378,29 +399,33 @@ async def _post_task_status(
             "❌ Failed to complete task: summary is required when status='done' "
             "— describe what you accomplished."
         )
-    try:
-        async with httpx.AsyncClient() as client:
-            payload = {
-                "task_id": task_id,
-                "status": status,
-                "agent_id": agent_id,
-                "key_learnings": key_learnings or [],
-            }
 
-            if summary:
-                payload["summary"] = summary
-            if failure_reason:
-                payload["failure_reason"] = failure_reason
+    payload = {
+        "task_id": task_id,
+        "status": status,
+        "agent_id": agent_id,
+        "key_learnings": key_learnings or [],
+    }
+    if summary:
+        payload["summary"] = summary
+    if failure_reason:
+        payload["failure_reason"] = failure_reason
+    headers = {"Content-Type": "application/json", "X-Agent-ID": agent_id}
 
-            response = await client.post(
-                f"{HEPHAESTUS_URL}/update_task_status",
-                json=payload,
-                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
-                timeout=10.0,
-            )
+    last_error = "unknown error"
+    for attempt in range(1, _STATUS_POST_MAX_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{HEPHAESTUS_URL}/update_task_status",
+                    json=payload,
+                    headers=headers,
+                    timeout=10.0,
+                )
             logger.info(
-                f"_post_task_status RESPONSE task_id={task_id} "
-                f"status_code={response.status_code} body={response.text[:500]}"
+                f"_post_task_status RESPONSE task_id={task_id} attempt={attempt}/"
+                f"{_STATUS_POST_MAX_ATTEMPTS} status_code={response.status_code} "
+                f"body={response.text[:500]}"
             )
 
             if response.status_code == 200:
@@ -418,13 +443,44 @@ async def _post_task_status(
                     status_emoji = "🔄"
 
                 return f"{status_emoji} {message}"
-            else:
+
+            if response.status_code < 500:
+                # Client error -- not transient, retrying won't help.
                 return f"❌ Failed to update task status: {response.text}"
-    except Exception as e:
-        logger.exception(
-            f"_post_task_status EXCEPTION task_id={task_id} agent_id={agent_id} status={status}"
-        )
-        return f"❌ Error updating task status: {str(e)}"
+
+            last_error = f"HTTP {response.status_code}: {response.text[:300]}"
+        except (httpx.TransportError, httpx.TimeoutException) as e:
+            # Connection refused/reset, DNS failure, request/connect
+            # timeout -- exactly what a backend restart looks like from
+            # here. Worth retrying.
+            last_error = f"{type(e).__name__}: {e}"
+        except Exception as e:
+            # Anything else (malformed JSON response, etc.) isn't a
+            # connectivity blip -- report it immediately, don't retry.
+            logger.exception(
+                f"_post_task_status EXCEPTION task_id={task_id} agent_id={agent_id} status={status}"
+            )
+            return f"❌ Error updating task status: {str(e)}"
+
+        if attempt < _STATUS_POST_MAX_ATTEMPTS:
+            delay = min(
+                _STATUS_POST_BASE_DELAY * (2 ** (attempt - 1)), _STATUS_POST_MAX_DELAY
+            )
+            logger.warning(
+                f"_post_task_status RETRY task_id={task_id} attempt={attempt}/"
+                f"{_STATUS_POST_MAX_ATTEMPTS} after {last_error!r} -- "
+                f"retrying in {delay:.0f}s"
+            )
+            await asyncio.sleep(delay)
+
+    logger.error(
+        f"_post_task_status GAVE UP task_id={task_id} agent_id={agent_id} "
+        f"status={status} after {_STATUS_POST_MAX_ATTEMPTS} attempts: {last_error}"
+    )
+    return (
+        f"❌ Error updating task status after {_STATUS_POST_MAX_ATTEMPTS} attempts: "
+        f"{last_error} -- the server may still be unreachable, try again once it's back."
+    )
 
 
 @mcp.tool(name="complete_my_task")

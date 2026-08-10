@@ -305,6 +305,16 @@ monitor_nudges:
     If you have called it and are still here, say so explicitly and
     stop.
 
+  task_completion_unconfirmed: >-
+    Your last tool call looked like a completion report
+    (complete_my_task or update_task_status) for task_id {task_id},
+    but that task is still showing as in-progress on the server —
+    your call may not have actually reached it (e.g. a dropped
+    connection, or a backend restart at that exact moment). Call
+    complete_my_task again now with the same status and summary. If
+    it fails again, wait a few seconds and retry once more before
+    giving up.
+
 # Guardian's fallback steering message after repeated LLM-analysis timeouts
 # (src/monitoring/guardian.py's _get_timeout_escalation_analysis).
 guardian_unresponsive_steering: >-
