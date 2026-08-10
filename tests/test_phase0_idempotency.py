@@ -383,6 +383,15 @@ class TestRunPhase0Tiers:
             )
             session.commit()
             session.close()
+            # run_single_workflow now persists phase0_workflow_id itself,
+            # immediately after launch (not after this mock's caller sees
+            # "completed") -- replicate that here since this fake replaces
+            # the whole function.
+            session = db_manager.get_session()
+            d = session.query(AutopilotDesign).filter_by(id=design).first()
+            d.phase0_workflow_id = real_workflow_id
+            session.commit()
+            session.close()
             return "completed"
 
         with patch(

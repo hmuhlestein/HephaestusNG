@@ -508,10 +508,18 @@ async def get_pipeline_status(
     run_dir = _get_latest_run_dir()
     running = service_status.get("running", False)
 
-    # When project_id is provided, check if THIS project has active
-    # workflows OR active agents (the service.running flag is global,
-    # not per-project).
-    if project_id:
+    # When project_id is provided, also check if THIS project has an active
+    # workflow OR an active agent -- a belt-and-suspenders promotion for
+    # when the service object itself missed something (e.g. it crashed but
+    # an agent it spawned is still working). This must only ever promote
+    # False -> True, never demote a True from service_status: the pipeline
+    # loop is legitimately "running" (alive, watching the queue) between
+    # designs or while idling on an empty queue, with zero active
+    # workflows/agents at that instant -- demoting to False here used to
+    # flip the Play button straight back to "Paused" during any such lull,
+    # even though get_autopilot_service(project_id) is already correctly
+    # scoped per-project (unlike when this check was first written).
+    if project_id and not running:
         try:
             from src.core.database import Agent, Task, Workflow, get_db
 

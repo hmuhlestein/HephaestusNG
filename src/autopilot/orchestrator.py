@@ -7005,6 +7005,33 @@ def run_single_workflow(
                 design_id=design_id,
             )
             logger.info(f"Workflow launched: {exec_id}")
+
+        if workflow_id == "feature_architect" and design_id:
+            # Persist immediately, not only after this function later
+            # returns "completed" (see run_phase0's analogous designs_folder
+            # comment) -- run_phase0's own Tier 2 recovery path
+            # (_get_phase0_completion) requires design.phase0_workflow_id to
+            # already point at this workflow to find anything to recover.
+            # Without this, a Phase 0 run that gets interrupted (crash,
+            # restart, or the agent simply outliving an orchestrator-side
+            # false "interrupted" read) but whose agent finishes anyway
+            # leaves nothing for that recovery path to find, permanently
+            # stranding otherwise-good work behind a "failed" design that
+            # never gets retried.
+            #
+            # Gated on this literal definition id, not just design_id being
+            # set: a design's per-feature "autopilot" workflow runs also
+            # pass the same design_id and must never overwrite this field.
+            try:
+                from src.core.database import AutopilotDesign
+
+                with get_db() as _db_p0:
+                    _db_p0.query(AutopilotDesign).filter_by(id=design_id).update(
+                        {AutopilotDesign.phase0_workflow_id: exec_id}
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to persist phase0_workflow_id immediately after launch: {e}")
+
         if state:
             state.current_workflow_id = exec_id
             # Store branch name for final merge
@@ -7461,12 +7488,18 @@ def run_phase0(
                     f"recovery failed ({branch_err}) — falling through to a full re-run"
                 )
 
-    # Update design status to decomposing
-    _update_design_status(design_entry.db_id, "decomposing", logger=logger)
-
     # Create permanent designs folder
     designs_folder = _create_designs_folder(project_path, design_entry, logger)
     design_entry.designs_folder = designs_folder
+    # Persist to the DB now, not only after the workflow below is confirmed
+    # "completed" -- _get_phase0_completion (this function's own Tier 2
+    # recovery path) requires design.designs_folder to already be set to
+    # find anything to recover. Without this, a Phase 0 run that gets
+    # interrupted (crash, restart, or the agent simply outliving an
+    # orchestrator-side false "interrupted" read) but whose agent finishes
+    # anyway leaves nothing for that recovery path to find, permanently
+    # stranding otherwise-good work.
+    _update_design_status(design_entry.db_id, "decomposing", designs_folder=str(designs_folder), logger=logger)
 
     # Copy design document to permanent storage
     dest = designs_folder / design_entry.path.name
@@ -7540,19 +7573,9 @@ def run_phase0(
             )
             return None, None
 
-        # Persist phase0_workflow_id IMMEDIATELY after workflow completes,
-        # before any post-processing that could fail or crash. This ensures
-        # _get_phase0_completion can find the completed workflow for recovery
-        # even if the server crashes before _create_feature_records runs.
-        from src.core.database import AutopilotDesign as _ADModel, Workflow as _WfModel
-
-
-        with _get_db() as _db:
-            _phase0_wf = _db.query(_WfModel).filter_by(design_id=design_entry.db_id, definition_id="feature_architect").order_by(_WfModel.created_at.desc()).first()
-            if _phase0_wf:
-                _db.query(_ADModel).filter_by(id=design_entry.db_id).update({_ADModel.phase0_workflow_id: _phase0_wf.id})
-                _db.flush()
-                logger.info(f"Persisted phase0_workflow_id={_phase0_wf.id[:8]} for {design_entry.name}")
+        # phase0_workflow_id was already persisted immediately after launch,
+        # inside run_single_workflow -- see its comment for why that can't
+        # wait until this synchronous "completed" return.
 
         # Read and validate features.json
         features_json_path = worktree / CONTEXT_DIR_NAME / "features.json"
