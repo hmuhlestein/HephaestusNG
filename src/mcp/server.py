@@ -1090,6 +1090,14 @@ async def startup_event():
     logger.info("Server started successfully")
 
 
+# How long shutdown_event waits after notifying in-flight agents before
+# actually pausing pipelines -- see its own comment for why. Bounded by
+# mcp_client.py's own request timeout (10s) plus its retry backoff, not
+# by anything TUI-related: this only needs to outlast an HTTP call already
+# in flight, not an agent's own generation time.
+SAFE_RESTART_GRACE_SECONDS = 10
+
+
 async def _notify_agents_of_restart(project_id: str) -> int:
     """Best-effort checkpoint nudge to every working phase agent in this
     project, sent right before pausing its pipeline for a restart -- see
@@ -1145,6 +1153,74 @@ async def _notify_agents_of_restart(project_id: str) -> int:
     return notified
 
 
+async def _notify_and_pause_for_restart(running_services: list) -> None:
+    """Notify every in-flight agent across `running_services`' projects,
+    give them a grace window to let any already-in-flight call land, then
+    pause each service for restart.
+
+    Extracted from shutdown_event as its own function so this specific
+    notify -> wait -> pause sequence is unit-testable without exercising
+    the rest of shutdown_event's unrelated steps (queue processor
+    shutdown, etc).
+
+    Notify in-flight agents first (best-effort), then pause: an agent
+    mid-step benefits most from knowing a restart is coming before its
+    session goes quiet, not after. pause_for_restart() (unlike stop())
+    keeps the persisted "was running" marker intact, so
+    _resume_interrupted_workflows still auto-resumes each project on the
+    next startup.
+    """
+    if not running_services:
+        return
+
+    logger.info(
+        f"[SAFE-RESTART] Pausing {len(running_services)} running "
+        "autopilot pipeline(s) for restart..."
+    )
+    total_notified = 0
+    for service in running_services:
+        try:
+            notified = await _notify_agents_of_restart(service.project_id)
+            total_notified += notified
+            if notified:
+                logger.info(
+                    f"[SAFE-RESTART] Notified {notified} agent(s) "
+                    f"in project {service.project_id[:8]}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[SAFE-RESTART] Failed to notify agents for project "
+                f"{service.project_id[:8]}: {e}"
+            )
+
+    # Give notified agents a real chance to finish an atomic step before
+    # this process actually stops accepting connections, instead of
+    # proceeding immediately -- the notification above was previously
+    # pure courtesy, with nothing waiting on it. This doesn't confirm any
+    # specific agent acted on the message (tmux text injection can't
+    # synchronize with a process synchronously blocked on its own LLM
+    # call, see _notify_agents_of_restart's docstring), but it does keep
+    # this server accepting connections for SAFE_RESTART_GRACE_SECONDS
+    # longer -- long enough for an in-flight HTTP call already on the wire
+    # (e.g. complete_my_task, bounded by mcp_client.py's own 10s request
+    # timeout) to land before the backend actually goes down, instead of
+    # racing it. Skipped entirely when nothing was notified -- the common
+    # case of no agents actively working shouldn't pay this delay on
+    # every restart.
+    if total_notified:
+        logger.info(
+            f"[SAFE-RESTART] Waiting {SAFE_RESTART_GRACE_SECONDS}s before "
+            "pausing pipelines, so in-flight agent calls have a chance to "
+            "land first..."
+        )
+        await asyncio.sleep(SAFE_RESTART_GRACE_SECONDS)
+
+    await asyncio.gather(
+        *(service.pause_for_restart() for service in running_services),
+        return_exceptions=True,
+    )
+
+
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown."""
@@ -1168,38 +1244,11 @@ async def shutdown_event():
 
     # Pause every running project's autopilot pipeline gracefully, instead
     # of letting asyncio hard-cancel it when the event loop closes later in
-    # this shutdown -- see docs/SAFE_RESTART_DESIGN.md §3.1/§3.2. Notify
-    # in-flight agents first (best-effort), then pause: an agent mid-step
-    # benefits most from knowing a restart is coming before its session
-    # goes quiet, not after. pause_for_restart() (unlike stop()) keeps the
-    # persisted "was running" marker intact, so _resume_interrupted_workflows
-    # still auto-resumes each project on the next startup.
+    # this shutdown -- see docs/SAFE_RESTART_DESIGN.md §3.1/§3.2.
     try:
         from src.autopilot.service import get_registry
 
-        running_services = get_registry().running()
-        if running_services:
-            logger.info(
-                f"[SAFE-RESTART] Pausing {len(running_services)} running "
-                "autopilot pipeline(s) for restart..."
-            )
-            for service in running_services:
-                try:
-                    notified = await _notify_agents_of_restart(service.project_id)
-                    if notified:
-                        logger.info(
-                            f"[SAFE-RESTART] Notified {notified} agent(s) "
-                            f"in project {service.project_id[:8]}"
-                        )
-                except Exception as e:
-                    logger.warning(
-                        f"[SAFE-RESTART] Failed to notify agents for project "
-                        f"{service.project_id[:8]}: {e}"
-                    )
-            await asyncio.gather(
-                *(service.pause_for_restart() for service in running_services),
-                return_exceptions=True,
-            )
+        await _notify_and_pause_for_restart(get_registry().running())
     except Exception as e:
         logger.error(f"[SAFE-RESTART] Graceful pipeline pause failed: {e}")
 
