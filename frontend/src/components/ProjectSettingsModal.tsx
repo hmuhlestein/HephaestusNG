@@ -68,10 +68,6 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
     updateBudgetMutation.mutate({ projectId, costLimit: value });
   };
 
-  const handleClearBudget = (projectId: string) => {
-    updateBudgetMutation.mutate({ projectId, clearLimit: true });
-  };
-
   const createMutation = useMutation({
     mutationFn: async ({ name, path }: { name: string; path: string }) => {
       const response = await apiService.createProject(name, path);
@@ -106,7 +102,6 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
   const handleUpdateBudget = (projectId: string) => {
     const value = budgetValue.trim();
     if (value === '') {
-      // Clear the budget limit
       updateBudgetMutation.mutate({ projectId, clearLimit: true });
     } else {
       const parsed = parseFloat(value);
@@ -130,6 +125,8 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
     deleteMutation.mutate(projectId);
   };
 
+  const inputClass = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500";
+
   if (!isOpen) return null;
 
   return (
@@ -149,18 +146,18 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
-          <div className="px-6 py-4 border-b bg-gradient-to-r from-gray-50 to-slate-50">
+          <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-gradient-to-r from-gray-50 to-slate-50 dark:from-gray-800 dark:to-gray-700">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-3">
-                <Settings className="w-6 h-6 text-gray-600 dark:text-gray-400 dark:text-gray-500" />
+                <Settings className="w-6 h-6 text-gray-600 dark:text-gray-400" />
                 <div>
                   <h3 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Project Settings</h3>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 dark:text-gray-500">Manage your projects</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">Manage your projects</p>
                 </div>
               </div>
               <button
                 onClick={onClose}
-                className="p-2 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                className="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -180,27 +177,27 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                   New Project
                 </button>
               ) : (
-                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
-                  <h4 className="text-sm font-semibold text-gray-700 mb-3">Create New Project</h4>
+                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+                  <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Create New Project</h4>
                   <div className="space-y-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Project Name</label>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Project Name</label>
                       <input
                         type="text"
                         value={newProjectName}
                         onChange={(e) => setNewProjectName(e.target.value)}
                         placeholder="My Project"
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent text-sm"
+                        className={inputClass}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Project Path (absolute)</label>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Project Path (absolute)</label>
                       <input
                         type="text"
                         value={newProjectPath}
                         onChange={(e) => setNewProjectPath(e.target.value)}
                         placeholder="/Users/you/code/my-project"
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent text-sm font-mono"
+                        className={`${inputClass} font-mono`}
                       />
                     </div>
                     <div className="flex items-center gap-2">
@@ -222,7 +219,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                           setNewProjectName('');
                           setNewProjectPath('');
                         }}
-                        className="px-4 py-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-sm"
+                        className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-sm"
                       >
                         Cancel
                       </button>
@@ -234,7 +231,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
 
             {/* Projects List */}
             <div>
-              <h4 className="text-sm font-semibold text-gray-700 mb-3">Existing Projects</h4>
+              <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Existing Projects</h4>
               {isLoading ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="w-6 h-6 animate-spin text-gray-400 dark:text-gray-500" />
@@ -246,28 +243,28 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                       key={project.id}
                       className={`flex items-center justify-between p-4 rounded-lg border transition-colors ${
                         project.is_active
-                          ? 'bg-violet-50 dark:bg-violet-900/30 border-violet-200'
-                          : 'bg-white border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:border-gray-600'
+                          ? 'bg-violet-50 dark:bg-violet-900/30 border-violet-200 dark:border-violet-700'
+                          : 'bg-white dark:bg-gray-700/50 border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                       }`}
                     >
                       <div className="flex items-center space-x-3 min-w-0">
-                        <FolderOpen className={`w-5 h-5 flex-shrink-0 ${project.is_active ? 'text-violet-600' : 'text-gray-400'}`} />
+                        <FolderOpen className={`w-5 h-5 flex-shrink-0 ${project.is_active ? 'text-violet-600 dark:text-violet-400' : 'text-gray-400 dark:text-gray-500'}`} />
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
-                            <p className="text-sm font-medium text-gray-800 truncate">{project.name}</p>
+                            <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{project.name}</p>
                             {project.is_active && (
-                              <span className="px-2 py-0.5 text-xs font-semibold bg-violet-100 text-violet-700 dark:text-violet-400 rounded-full">
+                              <span className="px-2 py-0.5 text-xs font-semibold bg-violet-100 dark:bg-violet-800 text-violet-700 dark:text-violet-300 rounded-full">
                                 Active
                               </span>
                             )}
                             {project.is_default && (
-                              <span className="px-2 py-0.5 text-xs font-semibold bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded-full">
+                              <span className="px-2 py-0.5 text-xs font-semibold bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-full">
                                 Default
                               </span>
                             )}
                           </div>
-                          <p className="text-xs text-gray-500 font-mono truncate">{project.base_dir}</p>
-                          <p className="text-xs text-gray-400 mt-1">{project.design_count || 0} designs</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">{project.base_dir}</p>
+                          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{project.design_count || 0} designs</p>
                           {/* Budget display */}
                           <div className="mt-2">
                             {editingBudget === project.id ? (
@@ -280,7 +277,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                                   placeholder="No limit"
                                   min="0"
                                   step="0.01"
-                                  className="w-24 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500"
+                                  className="w-24 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
                                   autoFocus
                                 />
                                 <button
@@ -292,7 +289,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                                 </button>
                                 <button
                                   onClick={() => { setEditingBudget(null); setBudgetValue(''); }}
-                                  className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                                  className="px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
                                 >
                                   Cancel
                                 </button>
@@ -303,7 +300,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                                   setEditingBudget(project.id);
                                   setBudgetValue(project.cost_limit_usd?.toString() || '');
                                 }}
-                                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-300"
+                                className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
                               >
                                 <DollarSign className="w-3 h-3" />
                                 {project.cost_limit_usd != null ? (
@@ -323,7 +320,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                         {/* Budget display and edit */}
                         {editingBudget === project.id ? (
                           <div className="flex items-center gap-1 mr-2">
-                            <span className="text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">$</span>
+                            <span className="text-xs text-gray-500 dark:text-gray-400">$</span>
                             <input
                               type="number"
                               value={budgetValue}
@@ -332,13 +329,13 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                               min="0"
                               max="100000"
                               step="0.01"
-                              className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500"
+                              className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
                               autoFocus
                             />
                             <button
                               onClick={() => handleSaveBudget(project.id)}
                               disabled={updateBudgetMutation.isPending}
-                              className="p-1 text-green-600 hover:bg-green-50 dark:bg-green-900/20 rounded"
+                              className="p-1 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded"
                               title="Save budget"
                             >
                               <CheckCircle2 className="w-4 h-4" />
@@ -348,15 +345,15 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                                 setEditingBudget(null);
                                 setBudgetValue('');
                               }}
-                              className="p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                              className="p-1 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
                               title="Cancel"
                             >
                               <X className="w-4 h-4" />
                             </button>
                             {project.cost_limit_usd != null && (
                               <button
-                                onClick={() => handleClearBudget(project.id)}
-                                className="p-1 text-red-400 hover:bg-red-50 dark:bg-red-900/20 rounded text-xs"
+                                onClick={() => handleUpdateBudget(project.id)}
+                                className="p-1 text-red-400 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded text-xs"
                                 title="Remove budget limit"
                               >
                                 Clear
@@ -368,8 +365,8 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                             {project.cost_total_usd > 0 && (
                               <div className="text-right mr-2">
                                 <div className="flex items-center gap-1">
-                                  <DollarSign className="w-3 h-3 text-gray-500 dark:text-gray-400 dark:text-gray-500" />
-                                  <span className="text-sm font-mono">
+                                  <DollarSign className="w-3 h-3 text-gray-500 dark:text-gray-400" />
+                                  <span className="text-sm font-mono text-gray-800 dark:text-gray-200">
                                     {project.cost_total_usd >= 1000
                                       ? `$${(project.cost_total_usd / 1000).toFixed(1)}k`
                                       : `$${project.cost_total_usd.toFixed(2)}`}
@@ -383,7 +380,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                                 {project.cost_limit_usd != null && project.cost_total_usd >= project.cost_limit_usd && (
                                   <div className="flex items-center gap-1 mt-0.5">
                                     <AlertTriangle className="w-3 h-3 text-red-500" />
-                                    <span className="text-xs text-red-600">Over budget</span>
+                                    <span className="text-xs text-red-600 dark:text-red-400">Over budget</span>
                                   </div>
                                 )}
                               </div>
@@ -393,7 +390,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                                 setEditingBudget(project.id);
                                 setBudgetValue(project.cost_limit_usd?.toString() || '');
                               }}
-                              className="p-1 text-gray-400 hover:text-violet-600 hover:bg-violet-50 dark:bg-violet-900/30 rounded-lg transition-colors"
+                              className="p-1 text-gray-400 dark:text-gray-500 hover:text-violet-600 dark:hover:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 rounded-lg transition-colors"
                               title={project.cost_limit_usd ? 'Edit budget' : 'Set budget'}
                             >
                               <Edit3 className="w-4 h-4" />
@@ -402,7 +399,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                         )}
                         {deleteConfirm === project.id ? (
                           <div className="flex items-center gap-2">
-                            <span className="text-xs text-red-600">Delete?</span>
+                            <span className="text-xs text-red-600 dark:text-red-400">Delete?</span>
                             <button
                               onClick={() => handleDelete(project.id)}
                               disabled={deleteMutation.isPending}
@@ -416,7 +413,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                             </button>
                             <button
                               onClick={() => setDeleteConfirm(null)}
-                              className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-xs"
+                              className="px-3 py-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg transition-colors text-xs"
                             >
                               Cancel
                             </button>
@@ -424,7 +421,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                         ) : (
                           <button
                             onClick={() => setDeleteConfirm(project.id)}
-                            className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:bg-red-900/20 rounded-lg transition-colors"
+                            className="p-2 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
                             title="Delete project"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -435,8 +432,8 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-8 text-gray-500 dark:text-gray-400 dark:text-gray-500">
-                  <FolderOpen className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                  <FolderOpen className="w-8 h-8 mx-auto mb-2 text-gray-300 dark:text-gray-600" />
                   <p className="text-sm">No projects yet</p>
                 </div>
               )}

@@ -225,6 +225,36 @@ class AgentManager:
         wt_mgr.reload(base_dir)
         return wt_mgr
 
+    @staticmethod
+    def _ensure_codegraph_initialized(working_directory: str) -> None:
+        """Pre-warm the codegraph daemon so agents don't race to launch it.
+
+        Runs `codegraph status .` which connects to the existing daemon or
+        launches one if needed. After this returns, the daemon is running
+        and subsequent pi instances (with the codegraph extension) will
+        connect to it instead of each spawning their own.
+        """
+        import subprocess
+        from pathlib import Path
+
+        try:
+            result = subprocess.run(
+                ["which", "codegraph"],
+                capture_output=True, timeout=5,
+            )
+            if result.returncode != 0:
+                return  # codegraph not installed, skip
+
+            logger.info(f"[CODEGRAPH] Pre-warming daemon in {working_directory}")
+            subprocess.run(
+                ["codegraph", "status", "."],
+                cwd=working_directory,
+                capture_output=True,
+                timeout=30,
+            )
+        except Exception as e:
+            logger.warning(f"[CODEGRAPH] Pre-warm failed (non-fatal): {e}")
+
     async def create_agent_for_task(
         self,
         task: Task,
@@ -511,6 +541,10 @@ class AgentManager:
             # 4. Create tmux session IN THE WORKTREE with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)
             cli_agent.prepare_working_directory(branch_path)
+
+            # Pre-initialize codegraph index so agents don't race on
+            # `codegraph init .` (which spawns duplicate daemon MCP servers).
+            self._ensure_codegraph_initialized(branch_path)
 
             # Create phase-specific output directory in .hephaestus/ so agents
             # don't have to create it themselves
