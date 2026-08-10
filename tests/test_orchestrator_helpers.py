@@ -1962,6 +1962,87 @@ class TestCreateAgentForTaskDirectAppStateGuard:
         assert result is None
 
 
+class TestCreateAgentForTaskDirectPhaseSiblingGuard:
+    """The phase-sibling guard blocks dispatch when the phase already has
+    another active SYSTEM-created task (the _retry_failed_tasks vs.
+    _advance_phases race it exists for), but must not block a legitimate
+    agent-created subtask sharing the same phase_id -- create_task's own
+    documented contract has phase agents pass their OWN phase_id to spawn
+    subtasks within their phase."""
+
+    def _server_state(self, db):
+        server_state = Mock()
+        server_state.db_manager = db
+        server_state.agent_manager.create_agent_for_task = AsyncMock(
+            return_value=Mock(id="new-agent")
+        )
+        server_state.queue_service = None
+        return server_state
+
+    def _seed_phase_and_task(self, db):
+        from src.core.database import Phase, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp"))
+            session.add(
+                Phase(
+                    id="phase-1", workflow_id="wf-1", order=1, name="development",
+                    description="d", done_definitions=[],
+                )
+            )
+            session.add(
+                Task(
+                    id="task-1", raw_description="r", done_definition="d",
+                    status="pending", phase_id="phase-1", workflow_id="wf-1",
+                )
+            )
+
+    def test_blocks_when_sibling_is_system_created(self, orch_db_env):
+        from src.autopilot.orchestrator import create_agent_for_task_direct
+        from src.core.database import Task
+
+        self._seed_phase_and_task(orch_db_env)
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-sibling-system", raw_description="r", done_definition="d",
+                    status="in_progress", phase_id="phase-1", workflow_id="wf-1",
+                    created_by_agent_id=None,
+                )
+            )
+
+        server_state = self._server_state(orch_db_env)
+        with patch("src.core.app_context.get_app_state", return_value=server_state):
+            result = create_agent_for_task_direct("task-1", "wf-1", "phase-1")
+
+        assert result is None
+        server_state.agent_manager.create_agent_for_task.assert_not_called()
+
+    def test_does_not_block_when_sibling_is_agent_created_subtask(self, orch_db_env):
+        from src.autopilot.orchestrator import create_agent_for_task_direct
+        from src.core.database import Agent, Task
+
+        self._seed_phase_and_task(orch_db_env)
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Agent(id="creator-agent", system_prompt="p", status="working", cli_type="pi")
+            )
+            session.add(
+                Task(
+                    id="task-sibling-subtask", raw_description="r", done_definition="d",
+                    status="in_progress", phase_id="phase-1", workflow_id="wf-1",
+                    created_by_agent_id="creator-agent",
+                )
+            )
+
+        server_state = self._server_state(orch_db_env)
+        with patch("src.core.app_context.get_app_state", return_value=server_state):
+            result = create_agent_for_task_direct("task-1", "wf-1", "phase-1")
+
+        assert result == {"agent_id": "new-agent", "status": "created"}
+        server_state.agent_manager.create_agent_for_task.assert_called_once()
+
+
 class TestCreateAgentForTaskDirectCliModelConcurrencyLimit:
     """Regression: create_agent_for_task_direct is the orchestrator's OWN
     direct dispatch path for phase transitions -- it's what actually
@@ -3352,6 +3433,134 @@ class TestRunOneFeatureWorktreeCleanupTiming:
 
         assert status == "failed"
         mock_cleanup.assert_not_called()
+
+
+class TestRunOneFeatureWithDependencies:
+    """Regression: _run_one_feature's local `from src.core.database import
+    Feature, Workflow, get_db` (for its "find feature record" section)
+    re-imported get_db and Workflow even though both are already imported
+    at this module's top level -- Python treats a name as function-local
+    for its ENTIRE enclosing function once it's assigned anywhere in that
+    function, including via a later import statement. That made the
+    EARLIER `with get_db() as db:` in the depends_on check above raise
+    "cannot access local variable 'get_db'" the moment any feature
+    actually had a non-empty depends_on list -- every dependent feature in
+    every design, unconditionally. Never caught because every other test
+    here mocks _run_one_feature itself instead of exercising its real
+    body (see TestRunFeaturePipelinesDependencyHandling in
+    test_run_feature_pipelines.py)."""
+
+    def _make_design_entry(self, tmp_path, design_id):
+        from src.autopilot.orchestrator import DesignEntry
+
+        design_path = tmp_path / "design.md"
+        design_path.write_text("# Design\n")
+        return DesignEntry(path=design_path, name="Test Design", content_hash="hash", db_id=design_id)
+
+    def test_feature_with_satisfied_dependency_does_not_crash(
+        self, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger, _run_one_feature
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        design_id = "design-1"
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Feature(
+                    id="feature-dep",
+                    design_id=design_id,
+                    feature_key="dep-feature",
+                    name="Dependency Feature",
+                    scope="s",
+                    status="completed",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1",
+                    design_id=design_id,
+                    feature_key="feat-a",
+                    name="Feature A",
+                    scope="s",
+                    status="pending",
+                    depends_on=["dep-feature"],
+                )
+            )
+
+        design_entry = self._make_design_entry(tmp_path, design_id)
+        feature = {"id": "feat-a", "name": "Feature A", "depends_on": ["dep-feature"]}
+        designs_folder = tmp_path / "designs"
+        (designs_folder / "features" / "feat-a").mkdir(parents=True)
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+        worktree_dir = tmp_path / "worktree"
+        worktree_dir.mkdir()
+
+        with patch(
+            "src.autopilot.orchestrator._create_integration_worktree",
+            return_value=worktree_dir,
+        ), patch(
+            "src.autopilot.orchestrator.run_single_workflow",
+            return_value="completed",
+        ), patch(
+            "src.autopilot.orchestrator._cleanup_worktree"
+        ):
+            status = _run_one_feature(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                feature=feature,
+                designs_folder=designs_folder,
+                project_path=project_path,
+                logger=OrchestratorLogger(tmp_path),
+                state=None,
+            )
+
+        assert status == "completed"
+
+    def test_feature_with_unsatisfied_dependency_is_skipped_not_crashed(
+        self, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger, _run_one_feature
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        design_id = "design-2"
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-2", name="p", base_dir="/tmp/proj-2"))
+            session.add(
+                AutopilotDesign(id=design_id, project_id="proj-2", filename="d.md", name="D")
+            )
+            session.add(
+                Feature(
+                    id="feature-dep-2",
+                    design_id=design_id,
+                    feature_key="dep-feature",
+                    name="Dependency Feature",
+                    scope="s",
+                    status="pending",
+                )
+            )
+
+        design_entry = self._make_design_entry(tmp_path, design_id)
+        feature = {"id": "feat-b", "name": "Feature B", "depends_on": ["dep-feature"]}
+        designs_folder = tmp_path / "designs"
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+
+        status = _run_one_feature(
+            sdk=MagicMock(),
+            design_entry=design_entry,
+            feature=feature,
+            designs_folder=designs_folder,
+            project_path=project_path,
+            logger=OrchestratorLogger(tmp_path),
+            state=None,
+        )
+
+        assert status == "skipped"
 
 
 class TestRunOneFeatureThreadsProjectId:

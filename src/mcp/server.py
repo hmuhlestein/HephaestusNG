@@ -1714,7 +1714,7 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     exercise the pipeline-resync path don't need to fake one up.
     """
     from src.autopilot.orchestrator import (
-        _advance_phases,
+        _try_advance_phases,
         _clean_stale_assigned_tasks,
         _maybe_resolve_arbitration,
         _recover_abandoned_workflows_missing_worktree,
@@ -1819,9 +1819,12 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         # unresolved (the claim it holds has no expiry) until the workflow
         # is resumed -- the very next sweep tick after that picks it up and
         # resolves it normally. Not a permanent stall, just deferred.
-        # Clean stale tasks for ALL workflows (active + completed).
-        # Completed workflows can still have orphaned tasks (assigned to
-        # terminated agents) that were never cleaned up.
+        # Clean stale tasks for both active AND paused workflows (this
+        # loop's own query above is already scoped to status in
+        # ["active", "paused"] -- a genuinely completed/failed/cancelled
+        # workflow never reaches this loop at all). Paused workflows can
+        # still have orphaned tasks (assigned to terminated agents) that
+        # were never cleaned up while active.
         from src.core.log_context import set_log_context
         set_log_context(workflow=wf_id)
         try:
@@ -1840,12 +1843,16 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
                 logger.error(f"[PHASE-SWEEP] Arbitration resolve error for {wf_id[:8]}: {e}")
 
         try:
-            # Skip workflows actively monitored by run_single_workflow —
-            # its inline _advance_phases is the main path; the sweep is a
-            # fallback for workflows that lost their loop.
+            # Skip workflows actively monitored by run_single_workflow as a
+            # cheap early-out — its inline _advance_phases is the main
+            # path; the sweep is a fallback for workflows that lost their
+            # loop. _try_advance_phases (not _advance_phases) is the actual
+            # correctness guarantee: it holds a per-workflow lock, so even
+            # if this check races a workflow's poll loop just starting up,
+            # only one of the two callers actually runs _advance_phases.
             from src.autopilot.orchestrator import _is_workflow_monitored
             if not _is_workflow_monitored(wf_id):
-                _advance_phases(wf_id, sweep_logger)
+                _try_advance_phases(wf_id, sweep_logger)
         except Exception as e:
             logger.error(f"[PHASE-SWEEP] Error advancing workflow {wf_id[:8]}: {e}")
 

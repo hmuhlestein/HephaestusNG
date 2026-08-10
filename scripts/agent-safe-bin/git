@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 # Protected `git` wrapper for CLI agent sessions.
 #
-# In review mode, `git merge` is blocked unless the feature has been
-# approved (signaled by .hephaestus/review_approved marker file).
-# This prevents the agent from merging to main before human review.
+# In review mode, landing a feature's work on a protected branch (main,
+# master) is blocked unless the feature has been approved (signaled by
+# .hephaestus/review_approved marker file). This covers both `git merge`
+# and `git push` targeting a protected branch directly -- a push-to-main
+# achieves the same "land on main before review" outcome as a merge and
+# was previously not caught at all.
 #
 # All other git commands pass through unmodified.
 #
-# This is a hard technical guardrail — the LLM cannot talk its way
-# past a PATH-resolved script that says no.
+# This is a hard technical guardrail against the NORMAL, non-adversarial
+# agent behavior instructed against in git_commit_push.yaml (same threat
+# model as the `rm` wrapper in this same directory) -- it is not hardened
+# against an agent deliberately evading it (e.g. invoking git by absolute
+# path, or pushing to an upstream configured to point at main under a
+# differently-named local branch). Closing those requires server-side
+# branch protection, not a PATH trick.
 
 set -euo pipefail
 
@@ -28,19 +36,76 @@ if [[ -z "$real_git" ]]; then
     real_git="/usr/bin/git"
 fi
 
-# Check if this is a merge command
-is_merge=0
+protected_branches="main master"
+
+# First non-flag argument is the subcommand.
+subcommand=""
 for arg in "$@"; do
     case "$arg" in
-        merge)
-            is_merge=1
-            break
-            ;;
+        -*) continue ;;
+        *) subcommand="$arg"; break ;;
     esac
 done
 
-# Block merge unless review_approved marker exists
-if [[ "$is_merge" -eq 1 ]]; then
+blocked_reason=""
+
+if [[ "$subcommand" == "merge" ]]; then
+    blocked_reason="git merge"
+elif [[ "$subcommand" == "push" ]]; then
+    # --all/--mirror can push a local main/master along with everything
+    # else even with no refspec naming it explicitly -- block outright.
+    for arg in "$@"; do
+        case "$arg" in
+            --all|--mirror)
+                blocked_reason="git push $arg"
+                ;;
+        esac
+    done
+
+    # Collect non-flag tokens after "push" (remote name and/or refspecs).
+    push_tokens=()
+    seen_push=0
+    for arg in "$@"; do
+        if [[ "$seen_push" -eq 0 ]]; then
+            [[ "$arg" == "push" ]] && seen_push=1
+            continue
+        fi
+        case "$arg" in
+            -*) continue ;;
+        esac
+        push_tokens+=("$arg")
+    done
+
+    # Each token is either a remote name or a refspec (local:remote, or a
+    # bare branch name pushing to the same-named remote branch). The
+    # target branch is what's after ':', or the whole token if there's
+    # no colon. Checking every token (including what's probably the
+    # remote name) is harmless -- "origin" never equals "main".
+    for tok in "${push_tokens[@]}"; do
+        target="${tok##*:}"
+        for b in $protected_branches; do
+            if [[ "$target" == "$b" || "$target" == "refs/heads/$b" ]]; then
+                blocked_reason="git push targeting $b"
+            fi
+        done
+    done
+
+    # No explicit refspec at all (`git push` / `git push origin`) pushes
+    # the CURRENT branch to its configured upstream -- block if the
+    # current branch itself is main/master. (Does not catch a
+    # differently-named local branch whose upstream was separately
+    # configured to point at main -- see header.)
+    if [[ -z "$blocked_reason" ]]; then
+        current_branch="$("$real_git" symbolic-ref --short HEAD 2>/dev/null || echo "")"
+        for b in $protected_branches; do
+            if [[ "$current_branch" == "$b" ]]; then
+                blocked_reason="git push of current branch ($b)"
+            fi
+        done
+    fi
+fi
+
+if [[ -n "$blocked_reason" ]]; then
     # Walk up to find the worktree root (contains .hephaestus/)
     marker=""
     check_dir="$PWD"
@@ -53,8 +118,8 @@ if [[ "$is_merge" -eq 1 ]]; then
     done
 
     if [[ -z "$marker" ]]; then
-        echo "BLOCKED: git merge is not allowed until the feature has been reviewed and approved." >&2
-        echo "In review mode, create a PR instead of merging. The merge will happen after" >&2
+        echo "BLOCKED: $blocked_reason is not allowed until the feature has been reviewed and approved." >&2
+        echo "In review mode, create a PR instead. The merge/push will happen after" >&2
         echo "human approval creates the .hephaestus/review_approved marker." >&2
         echo "" >&2
         echo "To create a PR: gh pr create --title 'feat: ...' --body '...'" >&2

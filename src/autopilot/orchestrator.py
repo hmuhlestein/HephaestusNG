@@ -166,6 +166,46 @@ def _is_workflow_monitored(workflow_id: str) -> bool:
     with _actively_monitored_lock:
         return workflow_id in _actively_monitored_workflows
 
+# Per-workflow locks providing true mutual exclusion around _advance_phases
+# calls. _actively_monitored_workflows above is an optimization (the sweep
+# skips a workflow entirely rather than attempting it) but is advisory
+# only -- _is_workflow_monitored() and the caller's subsequent
+# _advance_phases() call are two separate, non-atomic steps, so a workflow
+# whose run_single_workflow poll loop is just starting up (registered
+# after the sweep's check but before its _advance_phases call returns)
+# could still race. _try_advance_phases below is the actual guarantee:
+# only one caller can be inside _advance_phases for a given workflow_id
+# at a time, whether that's the sweep, run_single_workflow, or (in the
+# rare case _actively_monitored_workflows didn't already prevent it) both.
+_advance_phases_locks: Dict[str, "_threading.Lock"] = {}
+_advance_phases_locks_guard = _threading.Lock()
+
+
+def _try_advance_phases(workflow_id: str, call_logger: "OrchestratorLogger") -> bool:
+    """Call _advance_phases for workflow_id, skipping (and logging) if
+    another caller is already inside it for the same workflow. Both
+    run_single_workflow's inline call and the background sweep's call
+    must go through this, not _advance_phases directly.
+
+    Uses the module-level `logger` for the skip notice, not call_logger --
+    callers pass either the module logger (run_single_workflow) or an
+    OrchestratorLogger instance (the sweep, which has no .debug method), so
+    this can't assume call_logger supports every level.
+    """
+    with _advance_phases_locks_guard:
+        lock = _advance_phases_locks.setdefault(workflow_id, _threading.Lock())
+    if not lock.acquire(blocking=False):
+        logger.debug(
+            f"[ADVANCE-PHASES] Skipping concurrent call for workflow "
+            f"{workflow_id[:8]} -- already in progress elsewhere"
+        )
+        return False
+    try:
+        return _advance_phases(workflow_id, call_logger)
+    finally:
+        lock.release()
+
+
 def get_litellm_config() -> Dict[str, str]:
     """Read LiteLLM proxy config from environment variables."""
     return {
@@ -987,21 +1027,37 @@ def create_agent_for_task_direct(
                     enriched_data["completion_criteria"] = task.completion_criteria
 
             # Guard: don't dispatch if the phase already has another active
-            # task. _retry_failed_tasks (task-level, no claim) and
-            # _advance_phases (phase-level, with claim) can both decide to
-            # dispatch for the same phase in adjacent sweep ticks -- the
-            # former retries the old failed task while the latter's
+            # SYSTEM-created task. _retry_failed_tasks (task-level, no
+            # claim) and _advance_phases (phase-level, with claim) can both
+            # decide to dispatch for the same phase in adjacent sweep ticks
+            # -- the former retries the old failed task while the latter's
             # _fire_phase_transition created a fresh one via goto. This
             # check is the last line of defense before the tmux session is
             # created. Observed live: two development agents invoked
             # simultaneously for the same workflow.
+            #
+            # Scoped to created_by_agent_id in (None, orchestrator) --
+            # i.e. tasks _fire_phase_transition/_create_phase_task create --
+            # not to every task sharing this phase_id. create_task's own
+            # contract has phase agents pass their OWN phase_id to spawn
+            # legitimate subtasks within their phase (see mcp_client.py's
+            # create_task docstring); scoping to Task.id != task_id alone
+            # would block dispatch of a second such subtask just because
+            # the first is still active, which isn't the race this guard
+            # exists for.
             if task.phase_id:
+                from sqlalchemy import or_
+
                 phase_sibling = (
                     session.query(Task)
                     .filter(
                         Task.phase_id == task.phase_id,
                         Task.id != task_id,
                         Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+                        or_(
+                            Task.created_by_agent_id.is_(None),
+                            Task.created_by_agent_id == _orchestrator_agent_id,
+                        ),
                     )
                     .first()
                 )
@@ -7203,7 +7259,7 @@ def run_single_workflow(
 
             # Phase progression — the single source of truth for advancing phases.
             # This replaces the monitor's phase progression logic.
-            _advance_phases(exec_id, logger)
+            _try_advance_phases(exec_id, logger)
 
             # Refresh ALL counts after phase advancement. _advance_phases
             # may have created a new task + agent — active_agents/done/failed/
@@ -7946,6 +8002,19 @@ def _run_one_feature(
 
     logger.info(f"Starting feature pipeline: {feature_name} ({feature_key})")
 
+    # Feature isn't in the module-level database import list (unlike
+    # Workflow/get_db, already imported at top of this file). Imported
+    # once here, at the top of the function, and used for every Feature
+    # lookup below -- a second, later local re-import of it (or of
+    # Workflow/get_db) anywhere else in this function would shadow the
+    # name for the function's ENTIRE body, not just from that later point
+    # on: Python treats a name as function-local if it's assigned
+    # ANYWHERE in the function, including via a later import statement.
+    # That exact mistake used to make the depends_on check below raise
+    # "cannot access local variable 'get_db'"/'Feature' the moment any
+    # feature actually had a dependency.
+    from src.core.database import Feature
+
     # Check if all dependencies are completed before starting
     depends_on = feature.get("depends_on", [])
     if depends_on:
@@ -7967,7 +8036,6 @@ def _run_one_feature(
     set_log_context(workflow=feature_key, phase="feature_pipeline")
 
     # Find feature record in DB
-    from src.core.database import Feature, Workflow, get_db
     from src.core.cost_derivation import check_budget_before_new_work
 
     feature_id = None
