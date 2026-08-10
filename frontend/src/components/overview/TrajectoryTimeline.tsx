@@ -165,15 +165,15 @@ export default function TrajectoryTimeline({ alignments }: TrajectoryTimelinePro
           <div className="flex items-center justify-center space-x-4 text-xs">
             <div className="flex items-center">
               <div className="w-3 h-3 bg-green-500 rounded mr-1"></div>
-              <span className="text-gray-600">Aligned (&gt;80%)</span>
+              <span className="text-gray-600 dark:text-gray-400 dark:text-gray-500">Aligned (&gt;80%)</span>
             </div>
             <div className="flex items-center">
               <div className="w-3 h-3 bg-yellow-500 rounded mr-1"></div>
-              <span className="text-gray-600">Partial (40-80%)</span>
+              <span className="text-gray-600 dark:text-gray-400 dark:text-gray-500">Partial (40-80%)</span>
             </div>
             <div className="flex items-center">
               <div className="w-3 h-3 bg-red-500 rounded mr-1"></div>
-              <span className="text-gray-600">Misaligned (&lt;40%)</span>
+              <span className="text-gray-600 dark:text-gray-400 dark:text-gray-500">Misaligned (&lt;40%)</span>
             </div>
           </div>
         </div>

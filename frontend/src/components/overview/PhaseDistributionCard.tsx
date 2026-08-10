@@ -83,7 +83,7 @@ export default function PhaseDistributionCard({ phases }: PhaseDistributionCardP
             <div className="bg-gray-50 rounded-lg p-3">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium">Overall Progress</span>
-                <span className="text-sm text-gray-600">
+                <span className="text-sm text-gray-600 dark:text-gray-400 dark:text-gray-500">
                   {completedTasks} / {totalTasks} tasks
                 </span>
               </div>
@@ -147,8 +147,8 @@ export default function PhaseDistributionCard({ phases }: PhaseDistributionCardP
                     {/* Task & Agent Counts */}
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       <div className="flex items-center">
-                        <ListTodo className="w-3 h-3 mr-1 text-gray-500" />
-                        <span className="text-gray-600">
+                        <ListTodo className="w-3 h-3 mr-1 text-gray-500 dark:text-gray-400 dark:text-gray-500" />
+                        <span className="text-gray-600 dark:text-gray-400 dark:text-gray-500">
                           {phase.active_tasks > 0 && (
                             <span className="font-medium text-blue-600">{phase.active_tasks} active</span>
                           )}
@@ -157,14 +157,14 @@ export default function PhaseDistributionCard({ phases }: PhaseDistributionCardP
                             <span>{phase.pending_tasks} pending</span>
                           )}
                           {phase.active_tasks === 0 && phase.pending_tasks === 0 && (
-                            <span className="text-gray-400">No tasks</span>
+                            <span className="text-gray-400 dark:text-gray-500">No tasks</span>
                           )}
                         </span>
                       </div>
                       <div className="flex items-center">
-                        <Users className="w-3 h-3 mr-1 text-gray-500" />
+                        <Users className="w-3 h-3 mr-1 text-gray-500 dark:text-gray-400 dark:text-gray-500" />
                         <span className={cn(
-                          "text-gray-600",
+                          "text-gray-600 dark:text-gray-400 dark:text-gray-500",
                           phase.active_agents > 0 && "font-medium text-green-600"
                         )}>
                           {phase.active_agents} agents

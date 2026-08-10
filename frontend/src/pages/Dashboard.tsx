@@ -28,16 +28,16 @@ const StatCard: React.FC<{
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       onClick={href ? () => navigate(href) : undefined}
-      className={`bg-white rounded-lg shadow-md p-6${href ? ' cursor-pointer hover:shadow-lg transition-shadow' : ''}`}
+      className={`bg-white dark:bg-gray-800 rounded-lg shadow-md p-6${href ? ' cursor-pointer hover:shadow-lg transition-shadow' : ''}`}
     >
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-sm text-gray-600">{title}</p>
+          <p className="text-sm text-gray-600 dark:text-gray-400">{title}</p>
           <motion.p
             key={value}
             initial={{ scale: 0.8 }}
             animate={{ scale: 1 }}
-            className="text-3xl font-bold text-gray-800 mt-2"
+            className="text-3xl font-bold text-gray-800 dark:text-gray-100 mt-2"
           >
             {value}
           </motion.p>
@@ -63,11 +63,11 @@ const ActivityItem: React.FC<{ activity: any; isNew?: boolean }> = ({ activity, 
     <motion.div
       initial={isNew ? { opacity: 0, x: -20 } : false}
       animate={{ opacity: 1, x: 0 }}
-      className={`flex items-center p-3 ${isNew ? 'bg-blue-50' : ''} hover:bg-gray-50 transition-colors`}
+      className={`flex items-center p-3 ${isNew ? 'bg-blue-50 dark:bg-blue-900/20' : ''} hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors`}
     >
       <div className="flex-1">
-        <p className="text-sm text-gray-800">{activity.message}</p>
-        <p className="text-xs text-gray-500 mt-1">
+        <p className="text-sm text-gray-800 dark:text-gray-200">{activity.message}</p>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
           {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}
         </p>
       </div>
@@ -102,7 +102,7 @@ const Dashboard: React.FC = () => {
   const { data: blockedTasks } = useQuery({
     queryKey: ['blocked-tasks', projectId],
     queryFn: () => apiService.getBlockedTasks(undefined, projectId || undefined),
-    refetchInterval: 5000, // Refresh every 5 seconds
+    refetchInterval: 5000,
     enabled: !!projectId,
   });
 
@@ -170,12 +170,12 @@ const Dashboard: React.FC = () => {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-800">Dashboard</h1>
-            <p className="text-gray-600 mt-1">Real-time system overview</p>
+            <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-100">Dashboard</h1>
+            <p className="text-gray-600 dark:text-gray-400 mt-1">Real-time system overview</p>
           </div>
         </div>
-        <div className="bg-gray-50 border border-gray-200 rounded-lg p-12 text-center">
-          <p className="text-gray-500 text-lg">Select a workflow to view dashboard statistics</p>
+        <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-12 text-center">
+          <p className="text-gray-500 dark:text-gray-400 text-lg">Select a workflow to view dashboard statistics</p>
         </div>
       </div>
     );
@@ -186,8 +186,8 @@ const Dashboard: React.FC = () => {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-800">Dashboard</h1>
-            <p className="text-gray-600 mt-1">Real-time system overview</p>
+            <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-100">Dashboard</h1>
+            <p className="text-gray-600 dark:text-gray-400 mt-1">Real-time system overview</p>
           </div>
         </div>
         <div className="flex items-center justify-center h-64">
@@ -202,12 +202,12 @@ const Dashboard: React.FC = () => {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-800">Dashboard</h1>
-            <p className="text-gray-600 mt-1">Real-time system overview</p>
+            <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-100">Dashboard</h1>
+            <p className="text-gray-600 dark:text-gray-400 mt-1">Real-time system overview</p>
           </div>
         </div>
-        <div className="bg-red-50 border border-red-200 rounded-lg p-6">
-          <p className="text-red-600">Failed to load dashboard stats</p>
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">
+          <p className="text-red-600 dark:text-red-400">Failed to load dashboard stats</p>
         </div>
       </div>
     );
@@ -217,8 +217,8 @@ const Dashboard: React.FC = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-800">Dashboard</h1>
-          <p className="text-gray-600 mt-1">
+          <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-100">Dashboard</h1>
+          <p className="text-gray-600 dark:text-gray-400 mt-1">
             {selectedExecution
               ? `Workflow: ${selectedExecution.definition_name}`
               : 'Real-time system overview'}
@@ -309,17 +309,17 @@ const Dashboard: React.FC = () => {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           onClick={() => navigate('/autopilot')}
-          className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-300 rounded-xl p-4 cursor-pointer hover:shadow-md transition-shadow"
+          className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 border-2 border-amber-300 dark:border-amber-700 rounded-xl p-4 cursor-pointer hover:shadow-md transition-shadow"
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-amber-100 rounded-lg animate-pulse">
-              <AlertTriangle className="w-5 h-5 text-amber-600" />
+            <div className="p-2 bg-amber-100 dark:bg-amber-900/40 rounded-lg animate-pulse">
+              <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
             </div>
             <div className="flex-1 min-w-0">
-              <h4 className="text-sm font-bold text-amber-900">Autopilot needs your input</h4>
-              <p className="text-xs text-amber-700 truncate">{autopilotInput.reason}</p>
+              <h4 className="text-sm font-bold text-amber-900 dark:text-amber-200">Autopilot needs your input</h4>
+              <p className="text-xs text-amber-700 dark:text-amber-400 truncate">{autopilotInput.reason}</p>
             </div>
-            <span className="text-xs font-medium text-amber-700 bg-amber-100 px-3 py-1.5 rounded-lg">
+            <span className="text-xs font-medium text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/40 px-3 py-1.5 rounded-lg">
               Take Action →
             </span>
           </div>
@@ -327,15 +327,15 @@ const Dashboard: React.FC = () => {
       )}
 
       {/* Recent Activity */}
-      <div className="bg-white rounded-lg shadow-md">
-        <div className="px-6 py-4 border-b flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-800">Recent Activity</h2>
-          <div className="flex items-center text-sm text-gray-500">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md">
+        <div className="px-6 py-4 border-b dark:border-gray-700 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100">Recent Activity</h2>
+          <div className="flex items-center text-sm text-gray-500 dark:text-gray-400">
             <Clock className="w-4 h-4 mr-1" />
             Live Updates
           </div>
         </div>
-        <div className="divide-y">
+        <div className="divide-y dark:divide-gray-700">
           {recentActivities.length > 0 ? (
             recentActivities.map((activity, index) => (
               <ActivityItem
@@ -345,7 +345,7 @@ const Dashboard: React.FC = () => {
               />
             ))
           ) : (
-            <div className="p-6 text-center text-gray-500">
+            <div className="p-6 text-center text-gray-500 dark:text-gray-400">
               No recent activity
             </div>
           )}

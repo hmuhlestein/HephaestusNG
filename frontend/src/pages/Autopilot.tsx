@@ -278,8 +278,8 @@ const Autopilot: React.FC = () => {
             <Rocket className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h1 className="text-3xl font-bold text-gray-800">Autopilot</h1>
-            <p className="text-gray-500 text-sm">Continuous design-to-deploy pipeline</p>
+            <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-100">Autopilot</h1>
+            <p className="text-gray-500 dark:text-gray-400 text-sm">Continuous design-to-deploy pipeline</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -334,7 +334,7 @@ const Autopilot: React.FC = () => {
       />
 
       {/* Tab Navigation + Review Mode Toggle */}
-      <div className="border-b border-gray-200">
+      <div className="border-b border-gray-200 dark:border-gray-700">
         <nav className="flex items-center justify-between -mb-px">
           <div className="flex space-x-1">
             {tabs.map((tab) => (
@@ -344,14 +344,14 @@ const Autopilot: React.FC = () => {
                 className={`
                   flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
                   ${activeTab === tab.id
-                    ? 'border-violet-500 text-violet-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}
+                    ? 'border-violet-500 text-violet-600 dark:text-violet-400'
+                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600'}
                 `}
               >
                 <tab.icon className="w-4 h-4" />
                 {tab.label}
                 {tab.badge !== undefined && tab.badge > 0 && (
-                  <span className="ml-1 px-2 py-0.5 text-xs rounded-full bg-violet-100 text-violet-700 font-medium">
+                  <span className="ml-1 px-2 py-0.5 text-xs rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400 font-medium">
                     {tab.badge}
                   </span>
                 )}
@@ -470,11 +470,11 @@ const LogsPanel: React.FC<{ projectId: string | null }> = ({ projectId }) => {
 
 export const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
   const styles: Record<string, string> = {
-    validated: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-    needs_review: 'bg-amber-100 text-amber-700 border-amber-200',
-    failed: 'bg-red-100 text-red-700 border-red-200',
-    in_progress: 'bg-blue-100 text-blue-700 border-blue-200',
-    pending: 'bg-gray-100 text-gray-600 border-gray-200',
+    validated: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800',
+    needs_review: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800',
+    failed: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800',
+    in_progress: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800',
+    pending: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-600',
   };
 
   return (

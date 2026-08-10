@@ -22,7 +22,7 @@ const DesignCostRow: React.FC<DesignCostRowProps> = ({
 
   return (
     <div
-      className={`flex items-center justify-between p-2 hover:bg-gray-50 rounded ${className}`}
+      className={`flex items-center justify-between p-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded ${className}`}
     >
       <span className="text-sm text-gray-700 truncate flex-1 mr-2">
         {designName}

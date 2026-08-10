@@ -114,19 +114,19 @@ export default function SystemHealthCard({ systemHealth }: SystemHealthProps) {
               <Bot className="w-4 h-4 text-blue-600 mr-1" />
               <span className="text-2xl font-bold">{systemHealth.active_agents}</span>
             </div>
-            <div className="text-xs text-gray-600">Active Agents</div>
+            <div className="text-xs text-gray-600 dark:text-gray-400 dark:text-gray-500">Active Agents</div>
           </div>
           <div className="text-center p-3 bg-gray-50 rounded-lg">
             <div className="flex items-center justify-center mb-1">
               <TrendingUp className="w-4 h-4 text-blue-600 mr-1" />
               <span className="text-2xl font-bold">{systemHealth.running_tasks}</span>
             </div>
-            <div className="text-xs text-gray-600">Running Tasks</div>
+            <div className="text-xs text-gray-600 dark:text-gray-400 dark:text-gray-500">Running Tasks</div>
           </div>
         </div>
 
         {/* Status */}
-        <div className={cn("flex items-center p-3 rounded-lg bg-gray-50", healthStatus.color)}>
+        <div className={cn("flex items-center p-3 rounded-lg bg-gray-50 dark:bg-gray-800", healthStatus.color)}>
           <StatusIcon className="w-5 h-5 mr-2" />
           <span className="font-medium">{healthStatus.text}</span>
         </div>

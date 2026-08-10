@@ -68,7 +68,7 @@ export default function Phases() {
                       : "bg-purple-50 border-purple-200 hover:bg-purple-100"
                   )}
                 >
-                  <div className="font-medium text-gray-800">{def.name}</div>
+                  <div className="font-medium text-gray-800 dark:text-gray-200">{def.name}</div>
                   <div className="text-sm text-gray-600 line-clamp-2 mt-1">{def.description}</div>
                   <div className="text-xs text-purple-600 mt-2 flex items-center gap-1">
                     {def.phases_count} phases
@@ -113,8 +113,8 @@ export default function Phases() {
                       className={cn(
                         "border rounded-lg p-4 cursor-pointer transition-all",
                         expandedPhaseIndex === index
-                          ? "border-blue-300 bg-blue-50/50"
-                          : "border-gray-200 hover:border-gray-300 bg-white hover:bg-gray-50"
+                          ? "border-blue-300 bg-blue-50 dark:bg-blue-900/20 dark:bg-blue-900/20/50"
+                          : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700 dark:bg-gray-800"
                       )}
                     >
                       <div className="flex items-center gap-3">
@@ -128,14 +128,14 @@ export default function Phases() {
                             <span className="bg-blue-100 text-blue-700 text-xs font-medium px-2 py-0.5 rounded">
                               Phase {index + 1}
                             </span>
-                            <span className="font-medium text-gray-800">{phase.name}</span>
+                            <span className="font-medium text-gray-800 dark:text-gray-200">{phase.name}</span>
                           </div>
                           {phase.description && (
                             <p className="text-sm text-gray-500 mt-1 line-clamp-1">
                               {phase.description}
                             </p>
                           )}
-                          <div className="flex items-center gap-4 mt-2 text-xs text-gray-400">
+                          <div className="flex items-center gap-4 mt-2 text-xs text-gray-400 dark:text-gray-500">
                             {phase.done_definitions && (
                               <span>{phase.done_definitions.length} completion criteria</span>
                             )}
@@ -147,7 +147,7 @@ export default function Phases() {
                             )}
                           </div>
                         </div>
-                        <Edit2 className="w-4 h-4 text-gray-400" />
+                        <Edit2 className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                       </div>
                     </div>
 
@@ -160,7 +160,7 @@ export default function Phases() {
 
                     {/* Expanded phase definition (numeric ID from definition JSON) */}
                     {expandedPhaseIndex === index && (!phase.id || typeof phase.id === 'number' || (typeof phase.id === 'string' && !phase.id.includes('-'))) && (
-                      <div className="ml-8 mt-2 mb-4 bg-gray-50 border border-gray-200 rounded-lg p-4">
+                      <div className="ml-8 mt-2 mb-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
                         <div className="space-y-4">
                           {/* Description */}
                           <div>
@@ -176,7 +176,7 @@ export default function Phases() {
                                 {phase.done_definitions.map((def: string, i: number) => (
                                   <li key={i} className="flex items-start gap-2 text-sm">
                                     <span className="text-green-500 mt-0.5">✓</span>
-                                    <span className="text-gray-700">{def}</span>
+                                    <span className="text-gray-700 dark:text-gray-300">{def}</span>
                                   </li>
                                 ))}
                               </ul>
@@ -187,22 +187,22 @@ export default function Phases() {
                           {phase.additional_notes && (
                             <div>
                               <h4 className="text-xs font-semibold text-gray-500 mb-1">Additional Notes</h4>
-                              <div className="text-sm text-gray-600 bg-blue-50 p-2 rounded prose prose-sm prose-violet max-w-none">
+                              <div className="text-sm text-gray-600 bg-blue-50 dark:bg-blue-900/20 dark:bg-blue-900/20 p-2 rounded prose prose-sm prose-violet max-w-none">
                                 <MarkdownRenderer content={phase.additional_notes} />
                               </div>
                             </div>
                           )}
 
                           {/* Config */}
-                          <div className="flex gap-4 text-xs text-gray-500">
+                          <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">
                             {phase.cli_tool && (
-                              <span>Tool: <code className="bg-gray-100 px-1 rounded">{phase.cli_tool}</code></span>
+                              <span>Tool: <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{phase.cli_tool}</code></span>
                             )}
                             {phase.cli_model && (
-                              <span>Model: <code className="bg-gray-100 px-1 rounded">{phase.cli_model}</code></span>
+                              <span>Model: <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{phase.cli_model}</code></span>
                             )}
                             {phase.working_directory && (
-                              <span>Dir: <code className="bg-gray-100 px-1 rounded">{phase.working_directory}</code></span>
+                              <span>Dir: <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{phase.working_directory}</code></span>
                             )}
                           </div>
                         </div>

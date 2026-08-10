@@ -61,11 +61,11 @@ export default function WorkflowExecutions() {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-gray-800 flex items-center">
+          <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-200 flex items-center">
             <Workflow className="w-8 h-8 mr-3 text-blue-600" />
             Workflows
           </h1>
-          <p className="text-gray-600 mt-1">Manage workflow definitions and executions</p>
+          <p className="text-gray-600 dark:text-gray-400 mt-1">Manage workflow definitions and executions</p>
         </div>
         <button
           onClick={() => setShowLaunchModal(true)}
@@ -77,13 +77,13 @@ export default function WorkflowExecutions() {
       </div>
 
       {/* Workflow Definitions Section */}
-      <div className="bg-white rounded-lg shadow-md p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
         <h2 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
           <Layers className="w-5 h-5 text-purple-600" />
           Loaded Workflow Definitions ({definitions.length})
         </h2>
         {definitions.length === 0 ? (
-          <p className="text-gray-500 text-sm">No workflow definitions loaded</p>
+          <p className="text-gray-500 dark:text-gray-400 text-sm">No workflow definitions loaded</p>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {definitions.map((def) => (
@@ -92,8 +92,8 @@ export default function WorkflowExecutions() {
                 onClick={() => { setLaunchDefinitionId(def.id); setShowLaunchModal(true); }}
                 className="bg-purple-50 border border-purple-200 rounded-lg p-3 cursor-pointer hover:shadow-md hover:border-purple-400 transition-all"
               >
-                <div className="font-medium text-gray-800">{def.name}</div>
-                <div className="text-sm text-gray-600 line-clamp-2">{def.description}</div>
+                <div className="font-medium text-gray-800 dark:text-gray-200">{def.name}</div>
+                <div className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">{def.description}</div>
                 <div className="text-xs text-purple-600 mt-1">
                   {def.phases_count} phases • Click to launch →
                 </div>
@@ -110,7 +110,7 @@ export default function WorkflowExecutions() {
           className={`px-4 py-2 rounded-lg transition-colors ${
             filter === 'active'
               ? 'bg-blue-600 text-white'
-              : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
+              : 'bg-white text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700'
           }`}
         >
           Active ({activeExecutions.length})
@@ -120,7 +120,7 @@ export default function WorkflowExecutions() {
           className={`px-4 py-2 rounded-lg transition-colors ${
             filter === 'all'
               ? 'bg-blue-600 text-white'
-              : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
+              : 'bg-white text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700'
           }`}
         >
           All ({executions.length})
@@ -150,17 +150,17 @@ export default function WorkflowExecutions() {
               <button
                 onClick={() => setPage(p => Math.max(1, p - 1))}
                 disabled={page === 1}
-                className="px-3 py-1 rounded border border-gray-300 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 ← Prev
               </button>
-              <span className="text-sm text-gray-600">
+              <span className="text-sm text-gray-600 dark:text-gray-400 dark:text-gray-500">
                 Page {page} of {totalPages}
               </span>
               <button
                 onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                 disabled={page === totalPages}
-                className="px-3 py-1 rounded border border-gray-300 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Next →
               </button>
@@ -175,9 +175,9 @@ export default function WorkflowExecutions() {
 
       {/* Empty state */}
       {executions.length === 0 && (
-        <div className="bg-white rounded-lg shadow-md p-12 text-center">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-12 text-center">
           <Workflow className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-          <div className="text-gray-500 mb-4">No workflow executions yet</div>
+          <div className="text-gray-500 dark:text-gray-400 mb-4">No workflow executions yet</div>
           <button
             onClick={() => setShowLaunchModal(true)}
             className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"

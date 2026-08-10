@@ -68,7 +68,7 @@ export default function Overview() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-gray-500">Loading system overview...</div>
+        <div className="text-gray-500 dark:text-gray-400">Loading system overview...</div>
       </div>
     );
   }
@@ -76,7 +76,7 @@ export default function Overview() {
   if (error) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-red-500">Error loading system overview</div>
+        <div className="text-red-500 dark:text-red-400">Error loading system overview</div>
       </div>
     );
   }
@@ -89,11 +89,11 @@ export default function Overview() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 flex items-center">
             <Compass className="w-8 h-8 mr-3 text-blue-600" />
             System Overview
           </h1>
-          <p className="text-gray-600 mt-1">
+          <p className="text-gray-600 dark:text-gray-400 mt-1">
             {selectedExecution ? (
               <>Workflow: {selectedExecution.definition_name || selectedExecution.description?.split('\n')[0]}</>
             ) : (
@@ -113,7 +113,7 @@ export default function Overview() {
               onClick={() => setShowBroadcastDialog(true)}
               variant="outline"
               size="sm"
-              className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+              className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20"
             >
               <MessageSquare className="w-4 h-4 mr-2" />
               Broadcast
@@ -121,10 +121,10 @@ export default function Overview() {
           )}
           <button
             onClick={() => refetch()}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
             title="Refresh"
           >
-            <RefreshCw className="w-4 h-4 text-gray-600" />
+            <RefreshCw className="w-4 h-4 text-gray-600 dark:text-gray-400" />
           </button>
         </div>
       </div>
@@ -187,19 +187,19 @@ export default function Overview() {
                   onClick={() => setSelectedAgentId(agent.agent_id)}
                   className={cn(
                     "border rounded-lg p-4 text-left transition-all hover:shadow-lg hover:scale-105",
-                    agent.needs_steering ? "border-yellow-400 bg-yellow-50 hover:bg-yellow-100" : "border-gray-200 hover:bg-gray-50"
+                    agent.needs_steering ? "border-yellow-400 dark:border-yellow-600 bg-yellow-50 dark:bg-yellow-900/20 hover:bg-yellow-100 dark:hover:bg-yellow-900/30" : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800"
                   )}
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center gap-2 flex-1 min-w-0">
                       <Bot className="w-4 h-4 text-blue-600 flex-shrink-0" />
                       <div className="min-w-0">
-                        <p className="font-mono text-xs text-gray-500">{agent.agent_id.substring(0, 8)}</p>
-                        <p className="text-sm font-medium text-gray-800 truncate">Click to view details</p>
+                        <p className="font-mono text-xs text-gray-500 dark:text-gray-400">{agent.agent_id.substring(0, 8)}</p>
+                        <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">Click to view details</p>
                       </div>
                     </div>
                     {agent.needs_steering && (
-                      <Badge variant="outline" className="bg-yellow-100 text-yellow-800 flex-shrink-0">
+                      <Badge variant="outline" className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300 flex-shrink-0">
                         Needs Steering
                       </Badge>
                     )}
@@ -207,7 +207,7 @@ export default function Overview() {
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-500">Alignment</span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400">Alignment</span>
                       <span className={cn(
                         "text-sm font-semibold",
                         agent.alignment_score > 0.8 ? "text-green-600" :
@@ -226,10 +226,10 @@ export default function Overview() {
                         "[&>div]:bg-red-500"
                       )}
                     />
-                    <div className="text-xs text-gray-500">
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
                       Phase: {agent.current_phase || 'Unknown'}
                     </div>
-                    <div className="text-xs text-gray-400">
+                    <div className="text-xs text-gray-400 dark:text-gray-500">
                       Updated {formatDistanceToNow(new Date(agent.last_update), { addSuffix: true })}
                     </div>
                   </div>

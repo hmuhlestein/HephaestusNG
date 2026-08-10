@@ -258,10 +258,10 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
 
   if (!projectId) {
     return (
-      <div className="bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl p-12 text-center">
-        <ListOrdered className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-        <h3 className="text-lg font-semibold text-gray-600 mb-2">No project selected</h3>
-        <p className="text-sm text-gray-400">Select or create a project to view its design queue</p>
+      <div className="bg-gray-50 dark:bg-gray-800 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-2xl p-12 text-center">
+        <ListOrdered className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+        <h3 className="text-lg font-semibold text-gray-600 dark:text-gray-300 mb-2">No project selected</h3>
+        <p className="text-sm text-gray-400 dark:text-gray-500">Select or create a project to view its design queue</p>
       </div>
     );
   }
@@ -276,7 +276,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
             placeholder="Search designs..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent bg-white"
+            className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500"
           />
         </div>
         <Button 
@@ -362,10 +362,10 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           </SortableContext>
         </DndContext>
       ) : (
-        <div className="bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl p-12 text-center">
-          <ListOrdered className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-lg font-semibold text-gray-600 mb-2">Queue is empty</h3>
-          <p className="text-sm text-gray-400 mb-4">
+        <div className="bg-gray-50 dark:bg-gray-800 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-2xl p-12 text-center">
+          <ListOrdered className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-gray-600 dark:text-gray-300 mb-2">Queue is empty</h3>
+          <p className="text-sm text-gray-400 dark:text-gray-500 mb-4">
             Drop design documents into the queue to start processing
           </p>
           <Button onClick={onLoadDesign} className="bg-violet-600 hover:bg-violet-700 text-white">
@@ -412,11 +412,11 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
 // ── Status Badge ───────────────────────────────────────────────
 
 const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
-  pending: { color: 'bg-gray-100 text-gray-600', icon: <Clock className="w-3 h-3" />, label: 'Pending' },
-  active: { color: 'bg-blue-100 text-blue-700', icon: <Loader2 className="w-3 h-3 animate-spin" />, label: 'Active' },
-  paused: { color: 'bg-yellow-100 text-yellow-700', icon: <Pause className="w-3 h-3" />, label: 'Paused' },
-  completed: { color: 'bg-green-100 text-green-700', icon: <CheckCircle2 className="w-3 h-3" />, label: 'Done' },
-  failed: { color: 'bg-red-100 text-red-700', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
+  pending: { color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400', icon: <Clock className="w-3 h-3" />, label: 'Pending' },
+  active: { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400', icon: <Loader2 className="w-3 h-3 animate-spin" />, label: 'Active' },
+  paused: { color: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400', icon: <Pause className="w-3 h-3" />, label: 'Paused' },
+  completed: { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400', icon: <CheckCircle2 className="w-3 h-3" />, label: 'Done' },
+  failed: { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
 };
 
 const StatusBadge: React.FC<{ status: string; pausedBy?: string | null }> = ({ status, pausedBy }) => {
@@ -486,11 +486,11 @@ const RowActionIcons: React.FC<RowActionIconsProps> = ({
     hoverColor: string;
     title: string;
   }> = [
-    { key: 'pause', enabled: canPause, isPending: pending.pause, onClick: onPause, icon: <Pause className={iconCls} />, hoverColor: 'hover:bg-yellow-50 hover:text-yellow-600', title: 'Pause' },
-    { key: 'stop', enabled: canStop, isPending: pending.stop, onClick: onStop, icon: <Square className={iconCls} />, hoverColor: 'hover:bg-red-50 hover:text-red-600', title: 'Stop' },
-    { key: 'resume', enabled: canResume, isPending: pending.resume, onClick: onResume, icon: <Play className={iconCls} />, hoverColor: 'hover:bg-green-50 hover:text-green-600', title: 'Resume' },
-    { key: 'rerun', enabled: canRerun, isPending: pending.rerun, onClick: onRerun, icon: <RotateCcw className={iconCls} />, hoverColor: 'hover:bg-violet-50 hover:text-violet-600', title: 'Rerun' },
-    { key: 'delete', enabled: canDelete, isPending: pending.delete, onClick: onDelete, icon: <Trash2 className={iconCls} />, hoverColor: 'hover:bg-red-50 hover:text-red-600', title: 'Delete task' },
+    { key: 'pause', enabled: canPause, isPending: pending.pause, onClick: onPause, icon: <Pause className={iconCls} />, hoverColor: 'hover:bg-yellow-50 dark:hover:bg-yellow-900/20 hover:text-yellow-600 dark:hover:text-yellow-400', title: 'Pause' },
+    { key: 'stop', enabled: canStop, isPending: pending.stop, onClick: onStop, icon: <Square className={iconCls} />, hoverColor: 'hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400', title: 'Stop' },
+    { key: 'resume', enabled: canResume, isPending: pending.resume, onClick: onResume, icon: <Play className={iconCls} />, hoverColor: 'hover:bg-green-50 dark:hover:bg-green-900/20 hover:text-green-600 dark:hover:text-green-400', title: 'Resume' },
+    { key: 'rerun', enabled: canRerun, isPending: pending.rerun, onClick: onRerun, icon: <RotateCcw className={iconCls} />, hoverColor: 'hover:bg-violet-50 dark:hover:bg-violet-900/20 hover:text-violet-600 dark:hover:text-violet-400', title: 'Rerun' },
+    { key: 'delete', enabled: canDelete, isPending: pending.delete, onClick: onDelete, icon: <Trash2 className={iconCls} />, hoverColor: 'hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400', title: 'Delete task' },
   ];
 
   return (
@@ -500,8 +500,8 @@ const RowActionIcons: React.FC<RowActionIconsProps> = ({
           key={item.key}
           disabled={!item.enabled || item.isPending}
           onClick={(e) => { e.stopPropagation(); item.onClick?.(); }}
-          className={`${btnCls} transition-colors text-gray-300 ${
-            item.enabled ? `${item.hoverColor} text-gray-400` : 'opacity-30 cursor-not-allowed'
+          className={`${btnCls} transition-colors text-gray-300 dark:text-gray-600 ${
+            item.enabled ? `${item.hoverColor} text-gray-400 dark:text-gray-500` : 'opacity-30 cursor-not-allowed'
           }`}
           title={item.title}
         >
@@ -631,7 +631,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
         className={`rounded-xl border shadow-sm transition-all ${
           isDragging ? 'shadow-lg border-violet-300 ring-2 ring-violet-200' :
           isActive ? 'bg-gradient-to-r from-violet-50 to-purple-50 border-violet-300 shadow-md ring-1 ring-violet-200' :
-          'bg-white border-gray-100 hover:shadow-md'
+          'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:shadow-md'
         }`}
       >
         <div 
@@ -639,7 +639,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
           onClick={handleToggleExpand}
         >
           {/* Expand arrow */}
-          <div className="p-1 text-gray-400">
+          <div className="p-1 text-gray-400 dark:text-gray-500">
             {expanded ? (
               <ChevronDown className="w-5 h-5" />
             ) : (
@@ -650,29 +650,29 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
           {/* Drag handle */}
           <button
             {...listeners}
-            className="flex flex-col items-center gap-1 text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing touch-none"
+            className="flex flex-col items-center gap-1 text-gray-300 dark:text-gray-600 hover:text-gray-500 dark:hover:text-gray-400 cursor-grab active:cursor-grabbing touch-none"
             onClick={(e) => e.stopPropagation()}
           >
             <GripVertical className="w-5 h-5" />
-            <span className="text-xs font-mono text-gray-400">#{item.ordinal ?? index + 1}</span>
+            <span className="text-xs font-mono text-gray-400 dark:text-gray-500">#{item.ordinal ?? index + 1}</span>
           </button>
 
-          <div className={`p-2.5 rounded-lg ${isActive ? 'bg-violet-200' : 'bg-violet-50'}`}>
-            <FileText className={`w-5 h-5 ${isActive ? 'text-violet-700' : 'text-violet-600'}`} />
+          <div className={`p-2.5 rounded-lg ${isActive ? 'bg-violet-200 dark:bg-violet-800' : 'bg-violet-50 dark:bg-violet-900/30'}`}>
+            <FileText className={`w-5 h-5 ${isActive ? 'text-violet-700 dark:text-violet-300' : 'text-violet-600 dark:text-violet-400'}`} />
           </div>
 
           <div className="flex-1 min-w-0">
             <h4
-              className="text-sm font-semibold text-gray-800 truncate hover:text-violet-600 hover:underline w-fit"
+              className="text-sm font-semibold text-gray-800 dark:text-gray-200 truncate hover:text-violet-600 hover:underline w-fit"
               onClick={(e) => { e.stopPropagation(); onDetail(item.filename); }}
             >
               {item.name}
             </h4>
             <div className="flex items-center gap-3 mt-1">
-              <span className="text-xs text-gray-500 font-mono">{item.filename}</span>
-              <span className="text-xs text-gray-400">{formatBytes(item.size_bytes)}</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">{item.filename}</span>
+              <span className="text-xs text-gray-400 dark:text-gray-500">{formatBytes(item.size_bytes)}</span>
               {item.modified_at && (
-                <span className="text-xs text-gray-400 flex items-center gap-1">
+                <span className="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
                   <Clock className="w-3 h-3" />
                   {formatDistanceToNow(new Date(item.modified_at), { addSuffix: true })}
                 </span>
@@ -687,14 +687,14 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
 
           <div className="flex items-center gap-2">
             {costUnavailable ? (
-              <span className="text-xs text-gray-400" title="Cost unavailable — status fetch failed">—</span>
+              <span className="text-xs text-gray-400 dark:text-gray-500" title="Cost unavailable — status fetch failed">—</span>
             ) : (
               costTotal !== undefined && costTotal > 0 && (
                 <CostDisplay currentCost={costTotal} showProgress={false} className="text-xs" />
               )
             )}
             {designElapsedSeconds > 0 && (
-              <span className="text-xs text-gray-400">
+              <span className="text-xs text-gray-400 dark:text-gray-500">
                 {formatElapsed(designElapsedSeconds)}
               </span>
             )}
@@ -717,14 +717,14 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                 e.stopPropagation();
                 onDetail(item.filename);
               }}
-              className="p-2 rounded-lg hover:bg-violet-50 transition-colors text-gray-400 hover:text-violet-600"
+              className="p-2 rounded-lg hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors text-gray-400 dark:text-gray-500 hover:text-violet-600 dark:hover:text-violet-400"
               title="View design details"
             >
               <FileText className="w-4 h-4" />
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); onRemove(item.filename); }}
-              className="p-2 rounded-lg hover:bg-red-50 transition-colors text-gray-400 hover:text-red-600"
+              className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400"
               title="Remove"
             >
               <Trash2 className="w-4 h-4" />
@@ -739,10 +739,10 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="border-t border-gray-100 bg-gray-50 rounded-b-xl"
+            className="border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 rounded-b-xl"
           >
             <div className="px-5 py-3">
-              <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Features</h5>
+              <h5 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Features</h5>
               {features.length > 0 ? (
                 <div className="space-y-2">
                   {features.map((feature) => (
@@ -758,7 +758,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-gray-400 text-center py-4">No features yet</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-4">No features yet</p>
               )}
             </div>
           </motion.div>
@@ -776,12 +776,12 @@ const formatBytes = (bytes: number): string => {
 // ── Feature Row (expandable, shows tasks under it) ──────────────
 
 const FEATURE_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
-  pending: { color: 'bg-gray-100 text-gray-600', icon: <Clock className="w-3 h-3" />, label: 'Pending' },
-  active: { color: 'bg-blue-100 text-blue-700', icon: <Loader2 className="w-3 h-3 animate-spin" />, label: 'Active' },
-  completed: { color: 'bg-green-100 text-green-700', icon: <CheckCircle2 className="w-3 h-3" />, label: 'Done' },
-  failed: { color: 'bg-red-100 text-red-700', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
-  paused: { color: 'bg-yellow-100 text-yellow-700', icon: <Pause className="w-3 h-3" />, label: 'Paused' },
-  skipped: { color: 'bg-gray-100 text-gray-500', icon: <Clock className="w-3 h-3" />, label: 'Skipped' },
+  pending: { color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400', icon: <Clock className="w-3 h-3" />, label: 'Pending' },
+  active: { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400', icon: <Loader2 className="w-3 h-3 animate-spin" />, label: 'Active' },
+  completed: { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400', icon: <CheckCircle2 className="w-3 h-3" />, label: 'Done' },
+  failed: { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
+  paused: { color: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400', icon: <Pause className="w-3 h-3" />, label: 'Paused' },
+  skipped: { color: 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400', icon: <Clock className="w-3 h-3" />, label: 'Skipped' },
 };
 
 export const FeatureStatusBadge: React.FC<{ status: string }> = ({ status }) => {
@@ -883,12 +883,12 @@ const FeatureRow: React.FC<{
   return (
     <div className={`rounded-lg border overflow-hidden transition-colors ${
       reviewPending
-        ? 'bg-amber-50 border-l-4 border-amber-400 border-t-amber-200 border-b-amber-200 border-r-amber-200'
-        : 'bg-white border-gray-100'
+        ? 'bg-amber-50 dark:bg-amber-900/20 border-l-4 border-amber-400 border-t-amber-200 dark:border-t-amber-800 border-b-amber-200 dark:border-b-amber-800 border-r-amber-200 dark:border-r-amber-800'
+        : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700'
     }`}>
       <div className={`flex items-center gap-3 px-3 py-2 ${reviewPending ? 'animate-pulse-subtle' : ''}`}>
         <div
-          className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer hover:bg-gray-50 transition-colors rounded"
+          className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors rounded"
           onClick={() => {
             const newExpanded = !expanded;
             setExpanded(newExpanded);
@@ -908,33 +908,33 @@ const FeatureRow: React.FC<{
             localStorage.setItem('autopilot-expanded-features', JSON.stringify([...expandedSet]));
           }}
         >
-          <div className="p-1 text-gray-400">
+          <div className="p-1 text-gray-400 dark:text-gray-500">
             {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           </div>
-          <div className="p-1.5 rounded bg-violet-50">
-            <Layers className="w-3.5 h-3.5 text-violet-600" />
+          <div className="p-1.5 rounded bg-violet-50 dark:bg-violet-900/30">
+            <Layers className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
           </div>
           <div className="flex-1 min-w-0">
             <p
-              className="text-sm font-medium text-gray-700 truncate hover:text-violet-600 hover:underline w-fit"
+              className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate hover:text-violet-600 hover:underline w-fit"
               onClick={(e) => { e.stopPropagation(); onSelectFeature(feature); }}
             >
               {feature.name}
             </p>
-            <p className="text-xs text-gray-400 truncate">{feature.feature_key}</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 truncate">{feature.feature_key}</p>
             {feature.depends_on?.length > 0 && (
-              <p className="text-xs font-mono text-gray-400 truncate">
+              <p className="text-xs font-mono text-gray-400 dark:text-gray-500 truncate">
                 depends on: {feature.depends_on.join(', ')}
               </p>
             )}
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-400">
+          <span className="text-xs text-gray-400 dark:text-gray-500">
             {doneCount}/{tasks.length} tasks
           </span>
           {elapsedSeconds > 0 && (
-            <span className="text-xs text-gray-400">
+            <span className="text-xs text-gray-400 dark:text-gray-500">
               {formatElapsed(elapsedSeconds)}
             </span>
           )}
@@ -946,7 +946,7 @@ const FeatureRow: React.FC<{
           <FeatureCostBadge cost={feature.cost_total_usd ?? 0} />
           <FeatureStatusBadge status={feature.status} />
           {reviewPending && (feature.status === 'completed' || feature.status === 'paused') && (
-            <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-100 text-amber-700 border border-amber-300 animate-pulse">
+            <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700 animate-pulse">
               Review
             </span>
           )}
@@ -966,7 +966,7 @@ const FeatureRow: React.FC<{
           />
           <button
             onClick={(e) => { e.stopPropagation(); onSelectFeature(feature); }}
-            className="p-1.5 rounded-lg hover:bg-violet-50 transition-colors text-gray-400 hover:text-violet-600"
+            className="p-1.5 rounded-lg hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors text-gray-400 dark:text-gray-500 hover:text-violet-600 dark:hover:text-violet-400"
             title="View feature details"
           >
             <FileText className="w-3.5 h-3.5" />
@@ -997,7 +997,7 @@ const FeatureRow: React.FC<{
       </div>
 
       {expanded && tasks.length > 0 && (
-        <div className="border-t border-gray-100 bg-gray-50 px-3 py-2">
+        <div className="border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-3 py-2">
           <div className="space-y-1">
             {tasks.map((task: any) => (
               <TaskRow key={task.id} task={task} onTaskClick={onTaskClick} onTaskUpdate={onFeatureUpdate} />
@@ -1114,8 +1114,8 @@ const TaskRow: React.FC<{
   return (
     <div className={`flex items-center gap-2 px-2 py-1.5 rounded border transition-colors ${
       task.status === 'done'
-        ? 'bg-gray-100 border-gray-200 hover:bg-gray-200'
-        : 'bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-200'
+        ? 'bg-gray-100 dark:bg-gray-700/50 border-gray-200 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700'
+        : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:border-gray-200 dark:hover:border-gray-600'
     }`}>
       <TaskStatusIcon status={task.status} />
       <div
@@ -1124,29 +1124,29 @@ const TaskRow: React.FC<{
       >
         <div className="flex items-center gap-2 mb-0.5">
           {task.phase_name && (
-            <span className="text-xs font-semibold text-gray-800">{task.phase_name}</span>
+            <span className="text-xs font-semibold text-gray-800 dark:text-gray-200">{task.phase_name}</span>
           )}
           {task.action === 'goto' && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 font-medium">
               ↩ goto{task.action_target_phase ? ` (${task.action_target_phase})` : ''}
             </span>
           )}
           {task.action === 'retry' && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 font-medium">
               ↻ retry
             </span>
           )}
           {task.agent_status && task.agent_status !== 'terminated' && (
             <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-              task.agent_status === 'working' ? 'bg-green-100 text-green-700' :
-              task.agent_status === 'idle' ? 'bg-gray-100 text-gray-600' :
-              'bg-gray-100 text-gray-500'
+              task.agent_status === 'working' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' :
+              task.agent_status === 'idle' ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400' :
+              'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
             }`}>
               {task.agent_status}
             </span>
           )}
           {task.agent_status === 'terminated' && task.status === 'done' && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-medium">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-medium">
               done
             </span>
           )}
@@ -1167,7 +1167,7 @@ const TaskRow: React.FC<{
           )}
         </div>
         <p
-          className="text-xs text-gray-500 truncate leading-relaxed"
+          className="text-xs text-gray-500 dark:text-gray-400 truncate leading-relaxed"
           title={task.description || undefined}
         >
           {whatItsDoing || task.id.substring(0, 8)}
@@ -1176,10 +1176,10 @@ const TaskRow: React.FC<{
       {task.agent_id && (
         <button
           onClick={openTmuxView}
-          className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-violet-100 text-violet-700 rounded hover:bg-violet-200 transition-colors"
+          className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400 rounded hover:bg-violet-200 dark:hover:bg-violet-900/50 transition-colors"
           title="View live tmux output"
         >
-          <span className={task.agent_status === 'working' ? 'w-1 h-1 rounded-full bg-green-500' : 'w-1 h-1 rounded-full bg-gray-400'}></span>
+          <span className={task.agent_status === 'working' ? 'w-1 h-1 rounded-full bg-green-500' : 'w-1 h-1 rounded-full bg-gray-400 dark:bg-gray-500'}></span>
           {task.agent_id.substring(0, 6)}
         </button>
       )}

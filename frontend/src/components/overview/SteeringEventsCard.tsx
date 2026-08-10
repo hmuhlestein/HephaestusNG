@@ -73,7 +73,7 @@ export default function SteeringEventsCard({ events }: SteeringEventsCardProps) 
         </CardHeader>
         <CardContent>
           <div className="text-gray-500 text-center py-8">
-            <Navigation className="w-8 h-8 mx-auto mb-2 text-gray-400" />
+            <Navigation className="w-8 h-8 mx-auto mb-2 text-gray-400 dark:text-gray-500" />
             <p className="text-sm">No steering events recently</p>
             <p className="text-xs text-gray-400 mt-1">Agents are on track</p>
           </div>
@@ -105,13 +105,13 @@ export default function SteeringEventsCard({ events }: SteeringEventsCardProps) 
                   key={event.id}
                   className={cn(
                     "border rounded-lg p-3 transition-colors",
-                    event.was_successful === false ? "border-red-200 bg-red-50" : "border-gray-200"
+                    event.was_successful === false ? "border-red-200 bg-red-50" : "border-gray-200 dark:border-gray-700"
                   )}
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center">
                       <TypeIcon className="w-4 h-4 mr-2 text-blue-600" />
-                      <span className="text-xs text-gray-500">
+                      <span className="text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">
                         {formatDistanceToNow(new Date(event.timestamp), { addSuffix: true })}
                       </span>
                     </div>
