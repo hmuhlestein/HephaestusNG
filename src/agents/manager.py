@@ -739,7 +739,8 @@ class AgentManager:
                 branch_path, task.id, initial_message
             )
             instructions_pointer = self._build_instructions_pointer(
-                task.id, instructions_rel_path
+                task.id, instructions_rel_path,
+                agent_name=f"hephaestus-{phase_name.replace('_', '-')}" if phase_name else None,
             )
 
             launch_result = cli_agent.get_launch_command(
@@ -1356,7 +1357,8 @@ class AgentManager:
 
     @staticmethod
     def _build_instructions_pointer(
-        task_id: str, instructions_rel_path: str, restarted: bool = False
+        task_id: str, instructions_rel_path: str, restarted: bool = False,
+        agent_name: str = None,
     ) -> str:
         """Short, constant-size message pointing an agent at its full
         instructions file. This -- not the file's content -- is what
@@ -1365,12 +1367,17 @@ class AgentManager:
         launch command for a CLI like OpenCode that has no separate
         post-launch "send a message" step (see instructions_pointer kwarg
         on CLIAgentInterface.get_launch_command).
+
+        agent_name (e.g. "hephaestus-qa-validation") is included so the
+        execute message self-identifies which agent was invoked -- useful
+        for verifying from tmux output that the correct pi agent ran.
         """
         detail = " (including the restart note)" if restarted else ""
         verb = "continue" if restarted else "begin"
+        agent_tag = f"[{agent_name}] " if agent_name else ""
         return (
             f"Task ID: {task_id}\n\n"
-            f"Your full task instructions{detail} are in {instructions_rel_path} "
+            f"{agent_tag}Your full task instructions{detail} are in {instructions_rel_path} "
             f"-- read that file now, then {verb}."
         )
 
@@ -2362,7 +2369,8 @@ class AgentManager:
                     restart_wd, task.id, restart_message
                 )
                 instructions_pointer = self._build_instructions_pointer(
-                    task.id, instructions_rel_path, restarted=True
+                    task.id, instructions_rel_path, restarted=True,
+                    agent_name=f"hephaestus-{restart_phase_name.replace('_', '-')}" if restart_phase_name else None,
                 )
 
             launch_result = cli_agent.get_launch_command(
