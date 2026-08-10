@@ -90,7 +90,7 @@ def test_info_exclude_managed(manager, temp_repo):
 def test_context_dir_populated(manager, test_db):
     agent_id = str(uuid.uuid4())
     _make_agent(test_db, agent_id)
-    result = manager.create_agent_branch(
+    result = manager.create_agent_worktree(
         agent_id, context_files={"design.md": "# Design", "qa_spec.json": "{}"}
     )
     ctx = Path(result["context_dir"])
@@ -103,7 +103,7 @@ def test_context_dir_is_git_excluded(manager, test_db):
     """The .hephaestus/ context must never be staged/committed/merged."""
     agent_id = str(uuid.uuid4())
     _make_agent(test_db, agent_id)
-    result = manager.create_agent_branch(agent_id, context_files={"secret.md": "x"})
+    result = manager.create_agent_worktree(agent_id, context_files={"secret.md": "x"})
     wt = Repo(result["working_directory"])
     wt.git.add("-A")
     # Nothing under .hephaestus should be staged
@@ -114,7 +114,7 @@ def test_context_dir_is_git_excluded(manager, test_db):
 def test_merge_on_success_brings_work_to_main(manager, test_db, temp_repo):
     agent_id = str(uuid.uuid4())
     _make_agent(test_db, agent_id)
-    result = manager.create_agent_branch(agent_id)
+    result = manager.create_agent_worktree(agent_id)
     wt_path = Path(result["working_directory"])
 
     (wt_path / "feature.py").write_text("print('hi')\n")
@@ -131,7 +131,7 @@ def test_merge_on_success_brings_work_to_main(manager, test_db, temp_repo):
 def test_discard_on_failure_leaves_main_clean(manager, test_db, temp_repo):
     agent_id = str(uuid.uuid4())
     _make_agent(test_db, agent_id)
-    result = manager.create_agent_branch(agent_id)
+    result = manager.create_agent_worktree(agent_id)
     wt_path = Path(result["working_directory"])
     branch = result["branch_name"]
 
@@ -150,8 +150,8 @@ def test_parallel_agents_do_not_collide(manager, test_db):
     a1, a2 = str(uuid.uuid4()), str(uuid.uuid4())
     _make_agent(test_db, a1)
     _make_agent(test_db, a2)
-    r1 = manager.create_agent_branch(a1)
-    r2 = manager.create_agent_branch(a2)
+    r1 = manager.create_agent_worktree(a1)
+    r2 = manager.create_agent_worktree(a2)
     p1, p2 = Path(r1["working_directory"]), Path(r2["working_directory"])
     (p1 / "a1.txt").write_text("1")
     (p2 / "a2.txt").write_text("2")
