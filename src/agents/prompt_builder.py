@@ -97,18 +97,23 @@ class AgentPromptBuilder:
                     # be located), so inject it here for every phase agent --
                     # cheap and harmless for phases that don't reference it.
                     project_root = None
+                    review_mode = False
                     if workflow.project_id:
                         session = self.phase_manager.db_manager.get_session()
                         try:
                             proj = session.query(AutopilotProject).filter_by(id=workflow.project_id).first()
-                            if proj and proj.base_dir:
-                                project_root = proj.base_dir
+                            if proj:
+                                if proj.base_dir:
+                                    project_root = proj.base_dir
+                                review_mode = bool(getattr(proj, 'review_mode', False))
                         finally:
                             session.close()
                     if not project_root and workflow.launch_params:
                         project_root = workflow.launch_params.get("project_path")
                     if project_root:
                         cwd_info += f"\nProject Root (absolute): {project_root}"
+                    if review_mode:
+                        cwd_info += "\nREVIEW_MODE: true"
             except Exception as e:
                 logger.warning(f"Could not get workflow description: {e}")
 

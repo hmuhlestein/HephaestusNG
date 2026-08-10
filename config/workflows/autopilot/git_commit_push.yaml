@@ -16,7 +16,7 @@ done_definitions:
   - "All eligible changes staged (git add -A or explicit file list)"
   - "Descriptive commit message created (or nothing to commit confirmed)"
   - "Commit created on feature branch (or confirmed already committed)"
-  - "Feature merged into main (via PR if remote available, or local merge)"
+  - "Feature merged into main (via PR if remote available, or local merge) OR PR created in review mode"
   - "Commit hash recorded in task summary"
   - "Task marked as done"
 outputs:
@@ -127,11 +127,27 @@ additional_notes: |
   ```
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: MERGE TO MAIN
+  STEP 4: MERGE TO MAIN (or CREATE PR if in review mode)
   ═══════════════════════════════════════════════════════════════════════
 
-  ALWAYS merge locally into main. This is the primary path — do not skip
-  it in favor of a PR-only merge.
+  Check your task description for "REVIEW_MODE: true". If present, the
+  project is in review mode — create a PR but do NOT merge to main.
+  The pipeline will pause for human review and merge after approval.
+
+  If REVIEW_MODE is set:
+    ```bash
+    PR_URL=$(gh pr create --title "feat: <feature name>" --body "Autopilot-validated feature.\n\nAwaiting review before merge." 2>/dev/null || echo "")
+    if [ -n "$PR_URL" ]; then
+      echo "PR created (review mode): $PR_URL"
+    else
+      PR_URL=$(gh pr view --json url --jq '.url' 2>/dev/null || echo "")
+      echo "PR already exists: $PR_URL"
+    fi
+    ```
+    Skip to STEP 5 — do NOT merge locally.
+
+  If REVIEW_MODE is NOT set:
+    Merge locally into main (the primary path):
 
   ```bash
   # Navigate to the main repo root (not the worktree)
