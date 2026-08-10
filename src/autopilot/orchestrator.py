@@ -7184,9 +7184,25 @@ def run_single_workflow(
             # This replaces the monitor's phase progression logic.
             _advance_phases(exec_id, logger)
 
-            # Refresh task counts after potential phase advancement
+            # Refresh ALL counts after potential phase advancement.
+            # Only pending/in_progress were refreshed before, leaving
+            # active_agents/done/failed/non_terminal stale. If
+            # _advance_phases just dispatched a new agent, the stale
+            # active_agents=[] could trick the completion check into
+            # seeing "no agents, no work" before the new task appears.
+            agents = get_agents(workflow_id=exec_id)
+            active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
             pending = get_tasks(status="pending", workflow_id=exec_id)
             in_progress = get_tasks(status="in_progress", workflow_id=exec_id)
+            done = get_tasks(status="done", workflow_id=exec_id)
+            failed = get_tasks(status="failed", workflow_id=exec_id)
+            assigned = get_tasks(status="assigned", workflow_id=exec_id)
+            queued = get_tasks(status="queued", workflow_id=exec_id)
+            under_review = get_tasks(status="under_review", workflow_id=exec_id)
+            validation = get_tasks(status="validation_in_progress", workflow_id=exec_id)
+            needs_work = get_tasks(status="needs_work", workflow_id=exec_id)
+            blocked = get_tasks(status="blocked", workflow_id=exec_id)
+            non_terminal = assigned + queued + under_review + validation + needs_work + blocked
 
             # Agent scheduling is handled by the server's background_queue_processor.
             # Stuck-agent detection is handled by Guardian/Conductor.
