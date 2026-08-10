@@ -61,7 +61,27 @@ additional_notes: |
 
   ═══ STEP 4: WRITE HTML FEATURE REPORT (feature_report.html) ═══
 
-  Self-contained HTML (inline styles, no external deps). Include these sections:
+  Self-contained HTML (inline styles, no external deps).
+
+  Title tag and top-of-page heading must both start with the actual project
+  name, not just the feature/design name -- this report gets read out of
+  context (downloaded, archived, opened weeks later), and "Feature Report:
+  <name>" alone doesn't say which project it's even for. Get the real
+  project name with this exact command (works whether you're in the main
+  repo or a feature worktree -- do NOT use `git rev-parse --show-toplevel`
+  alone for this, it returns the worktree's own path when run from inside
+  one, not the project's):
+
+  ```
+  basename "$(dirname "$(realpath "$(git rev-parse --git-common-dir)")")"
+  ```
+
+  Format: `<title>{Project Name}: Feature Report — {Feature/Design Name}</title>`
+  and `<h1>{Project Name}: {Feature/Design Name}</h1>` (or equivalent —
+  project name must be visually present in both, not just implied by
+  context).
+
+  Include these sections:
 
   1. Executive Summary — what it does, the problem it solves, status
   2. Architecture — module structure, data flow, dependencies, config
