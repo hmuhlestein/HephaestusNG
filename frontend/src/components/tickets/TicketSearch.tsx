@@ -126,7 +126,7 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
     <>
       <div className="space-y-6">
         {/* Search Bar */}
-        <div className="bg-white rounded-lg border shadow-sm p-6">
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm p-6">
           <div className="flex items-center space-x-4 mb-4">
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -135,21 +135,21 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search tickets by title, description, tags..."
-                className="w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="w-full pl-10 pr-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
             <button
               onClick={() => setShowFilters(!showFilters)}
               className={`px-4 py-3 border rounded-lg flex items-center space-x-2 transition-colors ${
                 showFilters || hasActiveFilters
-                  ? 'bg-blue-50 border-blue-500 text-blue-700'
-                  : 'bg-white hover:bg-gray-50'
+                  ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-500 dark:border-blue-400 text-blue-700 dark:text-blue-300'
+                  : 'bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600'
               }`}
             >
               <Filter className="w-5 h-5" />
               <span>Filters</span>
               {hasActiveFilters && (
-                <span className="ml-1 px-2 py-0.5 bg-blue-600 text-white text-xs rounded-full">
+                <span className="ml-1 px-2 py-0.5 bg-blue-600 dark:bg-blue-700 text-white text-xs rounded-full">
                   {filters.status.length +
                     filters.ticket_type.length +
                     filters.priority.length +
@@ -163,7 +163,7 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
 
           {/* Search Type Selector */}
           <div className="flex items-center space-x-4">
-            <span className="text-sm text-gray-600">Search Type:</span>
+            <span className="text-sm text-gray-600 dark:text-gray-400">Search Type:</span>
             <div className="flex space-x-2">
               {(['hybrid', 'semantic', 'keyword'] as const).map((type) => (
                 <button
@@ -171,8 +171,8 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
                   onClick={() => setSearchType(type)}
                   className={`px-3 py-1 text-sm rounded-lg transition-colors ${
                     searchType === type
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      ? 'bg-blue-600 dark:bg-blue-700 text-white'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
                   }`}
                 >
                   {type.charAt(0).toUpperCase() + type.slice(1)}
@@ -185,11 +185,11 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
           {showFilters && (
             <div className="mt-6 pt-6 border-t space-y-4">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-gray-900">Advanced Filters</h3>
+                <h3 className="font-semibold text-gray-900 dark:text-gray-100">Advanced Filters</h3>
                 {hasActiveFilters && (
                   <button
                     onClick={clearFilters}
-                    className="text-sm text-blue-600 hover:text-blue-700 flex items-center"
+                    className="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center"
                   >
                     <X className="w-4 h-4 mr-1" />
                     Clear All
@@ -200,7 +200,7 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
               <div className="grid grid-cols-3 gap-4">
                 {/* Status Filter */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Status
                   </label>
                   <div className="space-y-2">
@@ -210,9 +210,9 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
                           type="checkbox"
                           checked={filters.status.includes(status)}
                           onChange={() => toggleFilterValue('status', status)}
-                          className="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          className="mr-2 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
                         />
-                        <span className="text-sm capitalize">{status.replace('_', ' ')}</span>
+                        <span className="text-sm capitalize text-gray-700 dark:text-gray-300">{status.replace('_', ' ')}</span>
                       </label>
                     ))}
                   </div>
@@ -220,7 +220,7 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
 
                 {/* Type Filter */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Type
                   </label>
                   <div className="space-y-2">
@@ -230,9 +230,9 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
                           type="checkbox"
                           checked={filters.ticket_type.includes(type)}
                           onChange={() => toggleFilterValue('ticket_type', type)}
-                          className="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          className="mr-2 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
                         />
-                        <span className="text-sm capitalize">{type}</span>
+                        <span className="text-sm capitalize text-gray-700 dark:text-gray-300">{type}</span>
                       </label>
                     ))}
                   </div>
@@ -240,7 +240,7 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
 
                 {/* Priority Filter */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Priority
                   </label>
                   <div className="space-y-2">
@@ -250,9 +250,9 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
                           type="checkbox"
                           checked={filters.priority.includes(priority)}
                           onChange={() => toggleFilterValue('priority', priority)}
-                          className="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          className="mr-2 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
                         />
-                        <span className="text-sm capitalize">{priority}</span>
+                        <span className="text-sm capitalize text-gray-700 dark:text-gray-300">{priority}</span>
                       </label>
                     ))}
                   </div>
@@ -262,19 +262,19 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
               {/* Tags Filter */}
               {filters.tags.length > 0 && (
                 <div className="pt-4 border-t">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Active Tag Filters
                   </label>
                   <div className="flex flex-wrap gap-2">
                     {filters.tags.map((tag) => (
                       <span
                         key={tag}
-                        className="inline-flex items-center px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded-full"
+                        className="inline-flex items-center px-3 py-1 text-sm bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full"
                       >
                         {tag}
                         <button
                           onClick={() => toggleFilterValue('tags', tag)}
-                          className="ml-2 hover:text-blue-900 transition-colors"
+                          className="ml-2 hover:text-blue-900 dark:hover:text-blue-200 transition-colors"
                           title="Remove tag filter"
                         >
                           <X className="w-3 h-3" />
@@ -294,9 +294,9 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
                     onChange={(e) =>
                       handleFilterChange('is_blocked', e.target.checked ? true : undefined)
                     }
-                    className="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    className="mr-2 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
                   />
-                  <span className="text-sm">Only Blocked</span>
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Only Blocked</span>
                 </label>
                 <label className="flex items-center">
                   <input
@@ -305,9 +305,9 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
                     onChange={(e) =>
                       handleFilterChange('is_resolved', e.target.checked ? true : undefined)
                     }
-                    className="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    className="mr-2 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
                   />
-                  <span className="text-sm">Only Resolved</span>
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Only Resolved</span>
                 </label>
               </div>
             </div>
@@ -315,15 +315,15 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
         </div>
 
         {/* Results */}
-        <div className="bg-white rounded-lg border shadow-sm p-6">
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm p-6">
           {searchMutation.isPending ? (
             <div className="flex items-center justify-center h-64">
-              <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+              <Loader2 className="w-8 h-8 text-blue-600 dark:text-blue-400 animate-spin" />
             </div>
           ) : results.length > 0 ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-gray-900">
+                <h3 className="font-semibold text-gray-900 dark:text-gray-100">
                   {results.length} {results.length === 1 ? 'result' : 'results'} found
                 </h3>
               </div>
@@ -331,7 +331,7 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
                 {results.map((result) => (
                   <div key={result.ticket_id} className="relative">
                     {result.relevance_score > 0 && (
-                      <div className="absolute -top-2 -right-2 z-10 px-2 py-1 bg-purple-100 text-purple-700 text-xs rounded-full flex items-center">
+                      <div className="absolute -top-2 -right-2 z-10 px-2 py-1 bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 text-xs rounded-full flex items-center">
                         <TrendingUp className="w-3 h-3 mr-1" />
                         {(result.relevance_score * 100).toFixed(0)}%
                       </div>
@@ -377,13 +377,13 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
               </div>
             </div>
           ) : query.trim() ? (
-            <div className="flex flex-col items-center justify-center h-64 text-gray-500">
+            <div className="flex flex-col items-center justify-center h-64 text-gray-500 dark:text-gray-400">
               <Search className="w-12 h-12 mb-4" />
               <p className="text-lg">No tickets found</p>
               <p className="text-sm">Try adjusting your search or filters</p>
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center h-64 text-gray-500">
+            <div className="flex flex-col items-center justify-center h-64 text-gray-500 dark:text-gray-400">
               <Search className="w-12 h-12 mb-4" />
               <p className="text-lg">Start typing to search tickets</p>
               <p className="text-sm">Search by title, description, tags, or content</p>

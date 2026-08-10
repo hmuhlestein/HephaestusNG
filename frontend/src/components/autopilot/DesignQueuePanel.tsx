@@ -283,7 +283,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           onClick={() => reloadMutation.mutate()}
           disabled={reloadMutation.isPending}
           variant="outline"
-          className="text-gray-600"
+          className="text-gray-600 dark:text-gray-400"
         >
           <RefreshCw className={`w-4 h-4 mr-1 ${reloadMutation.isPending ? 'animate-spin' : ''}`} />
           Reload
@@ -292,7 +292,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <Upload className="w-4 h-4 mr-1" />
           Load Design
         </Button>
-        <Button onClick={onAddDesign} variant="outline" className="text-violet-600 border-violet-200 hover:bg-violet-50">
+        <Button onClick={onAddDesign} variant="outline" className="text-violet-600 dark:text-violet-400 border-violet-200 dark:border-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/30">
           <Plus className="w-4 h-4 mr-1" />
           Add Design
         </Button>
@@ -372,7 +372,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
             <Upload className="w-4 h-4 mr-1" />
             Load Design
           </Button>
-          <Button onClick={onAddDesign} variant="outline" className="text-violet-600 border-violet-200 hover:bg-violet-50">
+          <Button onClick={onAddDesign} variant="outline" className="text-violet-600 dark:text-violet-400 border-violet-200 dark:border-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/30">
             <Plus className="w-4 h-4 mr-1" />
             Add Design
           </Button>
@@ -629,8 +629,8 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
         animate={{ opacity: 1, x: 0 }}
         transition={{ delay: index * 0.03 }}
         className={`rounded-xl border shadow-sm transition-all ${
-          isDragging ? 'shadow-lg border-violet-300 ring-2 ring-violet-200' :
-          isActive ? 'bg-gradient-to-r from-violet-50 to-purple-50 border-violet-300 shadow-md ring-1 ring-violet-200' :
+          isDragging ? 'shadow-lg border-violet-300 dark:border-violet-500 ring-2 ring-violet-200 dark:ring-violet-500' :
+          isActive ? 'bg-gradient-to-r from-violet-50 to-purple-50 dark:from-violet-900/30 dark:to-purple-900/30 border-violet-300 dark:border-violet-500 shadow-md ring-1 ring-violet-200 dark:ring-violet-500' :
           'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:shadow-md'
         }`}
       >

@@ -20,11 +20,11 @@ interface DesignDetailModalProps {
 }
 
 const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
-  pending: { color: 'bg-gray-100 text-gray-700', icon: <Clock className="w-3.5 h-3.5" />, label: 'Pending' },
-  active: { color: 'bg-blue-100 text-blue-700', icon: <Loader2 className="w-3.5 h-3.5 animate-spin" />, label: 'Active' },
-  completed: { color: 'bg-green-100 text-green-700', icon: <CheckCircle2 className="w-3.5 h-3.5" />, label: 'Completed' },
-  failed: { color: 'bg-red-100 text-red-700', icon: <XCircle className="w-3.5 h-3.5" />, label: 'Failed' },
-  paused: { color: 'bg-yellow-100 text-yellow-700', icon: <AlertTriangle className="w-3.5 h-3.5" />, label: 'Paused' },
+  pending: { color: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300', icon: <Clock className="w-3.5 h-3.5" />, label: 'Pending' },
+  active: { color: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300', icon: <Loader2 className="w-3.5 h-3.5 animate-spin" />, label: 'Active' },
+  completed: { color: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300', icon: <CheckCircle2 className="w-3.5 h-3.5" />, label: 'Completed' },
+  failed: { color: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300', icon: <XCircle className="w-3.5 h-3.5" />, label: 'Failed' },
+  paused: { color: 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300', icon: <AlertTriangle className="w-3.5 h-3.5" />, label: 'Paused' },
 };
 
 type DetailTab = 'overview' | 'docs';
@@ -133,18 +133,18 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
           initial={{ opacity: 0, scale: 0.95, y: 20 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 20 }}
-          className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden"
+          className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden"
           onClick={e => e.stopPropagation()}
         >
           {/* Header */}
-          <div className="px-6 py-4 border-b bg-gradient-to-r from-violet-50 to-purple-50">
+          <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-gradient-to-r from-violet-50 to-purple-50 dark:from-violet-900/30 dark:to-purple-900/30">
             <div className="flex items-start justify-between">
               <div className="flex items-start gap-3">
-                <div className="p-2 bg-violet-100 rounded-lg">
-                  <FileText className="w-5 h-5 text-violet-600" />
+                <div className="p-2 bg-violet-100 dark:bg-violet-800/50 rounded-lg">
+                  <FileText className="w-5 h-5 text-violet-600 dark:text-violet-400" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-gray-800">
+                  <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">
                     {status?.name || filename.replace(/\.md$/, '').replace(/_/g, ' ')}
                   </h2>
                   <p className="text-xs text-gray-500 font-mono mt-0.5">{filename}</p>
@@ -173,8 +173,8 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                 onClick={() => setActiveTab(id)}
                 className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
                   activeTab === id
-                    ? 'border-violet-500 text-violet-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                    ? 'border-violet-500 text-violet-600 dark:text-violet-400'
+                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
                 }`}
               >
                 {label}
@@ -224,13 +224,13 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                 {/* Branches */}
                 {status?.branches?.length > 0 && (
                   <div>
-                    <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
                       <GitBranch className="w-4 h-4" />
                       Branches
                     </h3>
                     <div className="flex flex-wrap gap-2">
                       {status.branches.map((branch: string) => (
-                        <span key={branch} className="px-3 py-1 bg-gray-100 text-gray-700 text-xs font-mono rounded-lg">
+                        <span key={branch} className="px-3 py-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs font-mono rounded-lg">
                           {branch}
                         </span>
                       ))}
@@ -241,7 +241,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                 {/* Workflows */}
                 {status?.workflows?.length > 0 && (
                   <div>
-                    <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
                       <RotateCcw className="w-4 h-4" />
                       Workflow Runs ({status.workflows.length})
                     </h3>
@@ -249,12 +249,12 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                       {status.workflows.map((wf: any) => {
                         const wfStatus = STATUS_CONFIG[wf.status] || STATUS_CONFIG.pending;
                         return (
-                          <div key={wf.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                          <div key={wf.id} className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                             <span className={`px-2 py-1 text-xs font-semibold rounded-full flex items-center gap-1 ${wfStatus.color}`}>
                               {wfStatus.icon}
                               {wfStatus.label}
                             </span>
-                            <span className="text-xs font-mono text-gray-500">{wf.id.substring(0, 8)}</span>
+                            <span className="text-xs font-mono text-gray-500 dark:text-gray-400">{wf.id.substring(0, 8)}</span>
                             {wf.error && (
                               <span className="text-xs text-red-600 truncate max-w-[200px]" title={wf.error}>
                                 {wf.error}
@@ -275,10 +275,10 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                 {/* Feature Folder */}
                 {status?.feature_folder && (
                   <div>
-                    <h3 className="text-sm font-semibold text-gray-700 mb-2">Feature Folder</h3>
-                    <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
+                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Feature Folder</h3>
+                    <div className="flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                       <ExternalLink className="w-4 h-4 text-gray-400" />
-                      <span className="text-xs font-mono text-gray-600 break-all">{status.feature_folder}</span>
+                      <span className="text-xs font-mono text-gray-600 dark:text-gray-400 break-all">{status.feature_folder}</span>
                     </div>
                   </div>
                 )}
@@ -286,7 +286,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
             ) : (
               <div className="p-6">
                 {status?.content ? (
-                  <div className="prose prose-sm prose-violet max-w-none bg-gray-50 rounded-xl p-4 border">
+                  <div className="prose prose-sm prose-violet dark:prose-invert max-w-none bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4 border border-gray-200 dark:border-gray-600">
                     <MarkdownRenderer content={status.content} />
                   </div>
                 ) : (
@@ -299,7 +299,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
           </div>
 
           {/* Footer */}
-          <div className="px-6 py-4 border-t bg-gray-50 flex items-center justify-between">
+          <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex items-center justify-between">
             <span className="text-xs text-gray-400">
               {status?.workflows?.length || 0} runs
             </span>
@@ -310,7 +310,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                     onClick={() => pauseMutation.mutate()}
                     disabled={pauseMutation.isPending}
                     variant="outline"
-                    className="text-yellow-600 border-yellow-200 hover:bg-yellow-50"
+                    className="text-yellow-600 dark:text-yellow-400 border-yellow-200 dark:border-yellow-600 hover:bg-yellow-50 dark:hover:bg-yellow-900/30"
                     title="Pause this run — agents stop (work is committed), Resume later"
                   >
                     {pauseMutation.isPending ? (
@@ -324,7 +324,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                     onClick={() => stopMutation.mutate()}
                     disabled={stopMutation.isPending}
                     variant="outline"
-                    className="text-red-600 border-red-200 hover:bg-red-50"
+                    className="text-red-600 dark:text-red-400 border-red-200 dark:border-red-600 hover:bg-red-50 dark:hover:bg-red-900/30"
                     title="Stop this run and terminate its agents"
                   >
                     {stopMutation.isPending ? (
@@ -338,7 +338,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                     onClick={() => recoverMutation.mutate()}
                     disabled={recoverMutation.isPending}
                     variant="outline"
-                    className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                    className="text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
                     title="Continue this run from the last committed phase (non-destructive)"
                   >
                     {recoverMutation.isPending ? (
@@ -356,7 +356,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                     }}
                     disabled={rerunMutation.isPending}
                     variant="outline"
-                    className="text-violet-600 border-violet-200 hover:bg-violet-50"
+                    className="text-violet-600 dark:text-violet-400 border-violet-200 dark:border-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/30"
                     title="Restart this design's pipeline from scratch (deletes its worktree, discarding uncommitted work) and pause every other running pipeline"
                   >
                     {rerunMutation.isPending ? (
