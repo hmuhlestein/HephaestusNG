@@ -1827,6 +1827,104 @@ class TestProjectDesigns:
         body = resp.json()
         assert body["status"] != "active"
 
+    def test_design_status_finds_report_after_worktree_cleanup(self, project_client):
+        """Regression, observed live: has_report only ever checked
+        Workflow.working_directory for feature_report.html. _cleanup_worktree
+        nulls out working_directory once a feature's worktree is removed on
+        full completion -- which is exactly when a report is most likely to
+        exist. PhaseManager._populate_feature_folder already archives a
+        durable copy to <project>/.hephaestus/features/<timestamp>_<design>/
+        before that happens, keyed to the workflow via that folder's own
+        pipeline_metrics.json (folder names are timestamp+design-name only,
+        not feature-specific -- can't be matched by name alone when a design
+        has more than one feature). Without checking that archive, the
+        report button permanently disappears the moment a feature finishes."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, Feature, Phase, Task, Workflow, get_db
+
+        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        (design_dir / "report-design.md").write_text("# Design")
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-test-report",
+                    project_id=pid,
+                    filename="report-design.md",
+                    name="Report Design",
+                    ordinal=15,
+                    size_bytes=10,
+                    extension=".md",
+                    status="active",
+                )
+            )
+            db.add(
+                Workflow(
+                    id="wf-report-done",
+                    name="autopilot",
+                    definition_id="autopilot",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    working_directory=None,  # worktree already cleaned up
+                    launch_params={
+                        "design_document": str(design_dir / "report-design.md"),
+                        "project_path": str(dirs["project_dir"]),
+                    },
+                )
+            )
+
+        with get_db() as db:
+            db.add(
+                Feature(
+                    id="feat-report-1",
+                    design_id="des-test-report",
+                    feature_key="core",
+                    name="Core",
+                    scope="s",
+                    status="completed",
+                    workflow_id="wf-report-done",
+                )
+            )
+            db.add(
+                Phase(
+                    id="phase-report-doc-review",
+                    workflow_id="wf-report-done",
+                    order=10,
+                    name="doc_review",
+                    description="Review documentation.",
+                    done_definitions=["x"],
+                )
+            )
+            db.add(
+                Task(
+                    id="task-report-doc-review",
+                    raw_description="Execute doc_review",
+                    enriched_description="Execute doc_review",
+                    done_definition="d",
+                    status="done",
+                    phase_id="phase-report-doc-review",
+                    workflow_id="wf-report-done",
+                )
+            )
+
+        # The archived feature-folder copy _populate_feature_folder leaves
+        # behind, matched to the workflow via pipeline_metrics.json.
+        gallery_dir = dirs["project_dir"] / ".hephaestus" / "features" / "20260101_000000_Report_Design"
+        (gallery_dir / "docs").mkdir(parents=True)
+        (gallery_dir / "docs" / "pipeline_metrics.json").write_text(
+            json.dumps({"workflow_id": "wf-report-done"})
+        )
+        (gallery_dir / "docs" / "feature_report.html").write_text("<html>report</html>")
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/report-design.md/status")
+        assert resp.status_code == 200, resp.text
+        features = resp.json()["features"]
+        feat = next(f for f in features if f["id"] == "feat-report-1")
+        assert feat["has_report"] is True
+
     def test_design_status_surfaces_budget_pause_reason(self, project_client):
         """A budget-triggered pause must be distinguishable from a plain
         user pause: the design-status endpoint (polled by DesignQueuePanel)
@@ -2027,6 +2125,107 @@ class TestProjectDesigns:
         assert task["goto_reason"] == "6 BLOCKER findings in adversarial review"
         assert task["action"] == "goto"
         assert task["action_target_phase"] == "development"
+
+
+class TestWorkflowFeatureReport:
+    """GET /workflows/{workflow_id}/feature_report -- serves the same
+    report get_project_design_status's has_report flag advertises."""
+
+    def _create_project(self, client, dirs):
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={"name": "Test", "base_dir": str(dirs["project_dir"])},
+        )
+        return resp.json()["id"]
+
+    def test_serves_from_live_worktree(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import Workflow, get_db
+
+        worktree_dir = dirs["project_dir"] / "worktree"
+        (worktree_dir / ".hephaestus").mkdir(parents=True)
+        (worktree_dir / ".hephaestus" / "feature_report.html").write_text("<html>live</html>")
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-live-report",
+                    name="autopilot",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    project_id=pid,
+                    working_directory=str(worktree_dir),
+                )
+            )
+
+        resp = client.get("/api/autopilot/workflows/wf-live-report/feature_report")
+        assert resp.status_code == 200
+        assert "live" in resp.text
+
+    def test_falls_back_to_archived_report_after_worktree_cleanup(self, project_client):
+        """Regression, observed live: once a feature fully completes,
+        _cleanup_worktree removes the worktree and nulls
+        Workflow.working_directory -- this endpoint used to 404 forever
+        from that point on ("Workflow not found or has no working
+        directory"), even though PhaseManager._populate_feature_folder had
+        already archived a durable copy before the worktree was removed."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-archived-report",
+                    name="autopilot",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    project_id=pid,
+                    working_directory=None,  # worktree already cleaned up
+                )
+            )
+
+        gallery_dir = dirs["project_dir"] / ".hephaestus" / "features" / "20260101_000000_Some_Design"
+        (gallery_dir / "docs").mkdir(parents=True)
+        (gallery_dir / "docs" / "pipeline_metrics.json").write_text(
+            json.dumps({"workflow_id": "wf-archived-report"})
+        )
+        (gallery_dir / "docs" / "feature_report.html").write_text("<html>archived</html>")
+
+        resp = client.get("/api/autopilot/workflows/wf-archived-report/feature_report")
+        assert resp.status_code == 200
+        assert "archived" in resp.text
+
+    def test_404_when_no_report_anywhere(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-no-report",
+                    name="autopilot",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    project_id=pid,
+                    working_directory=None,
+                )
+            )
+
+        resp = client.get("/api/autopilot/workflows/wf-no-report/feature_report")
+        assert resp.status_code == 404
+
+    def test_404_when_workflow_does_not_exist(self, project_client):
+        client, dirs = project_client
+        self._create_project(client, dirs)
+
+        resp = client.get("/api/autopilot/workflows/nonexistent/feature_report")
+        assert resp.status_code == 404
 
 
 class TestProjectPathTraversal:
