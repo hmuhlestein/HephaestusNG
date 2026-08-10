@@ -145,6 +145,13 @@ CLAIM_STALE_TIMEOUT_SECONDS = 480  # 8 minutes -- must stay shorter than
 # Module-level orchestrator agent ID (set during registration)
 _orchestrator_agent_id: Optional[str] = None
 
+# Workflow IDs currently being polled by run_single_workflow.
+# The background _advance_phases sweep skips these — the inline
+# call in run_single_workflow is the main path for phase advancement;
+# the sweep is a fallback for workflows that lost their poll loop
+# (e.g. backend restart).
+_actively_monitored_workflows: set = set()
+
 
 def get_litellm_config() -> Dict[str, str]:
     """Read LiteLLM proxy config from environment variables."""
@@ -7131,6 +7138,7 @@ def run_single_workflow(
         except Exception as _e:
             logger.warning(f"Phase transition check failed: {_e}")
 
+    _actively_monitored_workflows.add(exec_id)
     try:
         while True:
             time.sleep(POLL_INTERVAL)
@@ -7184,12 +7192,11 @@ def run_single_workflow(
             # This replaces the monitor's phase progression logic.
             _advance_phases(exec_id, logger)
 
-            # Refresh ALL counts after potential phase advancement.
-            # Only pending/in_progress were refreshed before, leaving
-            # active_agents/done/failed/non_terminal stale. If
-            # _advance_phases just dispatched a new agent, the stale
-            # active_agents=[] could trick the completion check into
-            # seeing "no agents, no work" before the new task appears.
+            # Refresh ALL counts after phase advancement. _advance_phases
+            # may have created a new task + agent — active_agents/done/failed/
+            # non_terminal were stale from the pre-advance snapshot, which
+            # could trick the completion check into seeing "no agents, no
+            # work" before the new task appeared.
             agents = get_agents(workflow_id=exec_id)
             active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
             pending = get_tasks(status="pending", workflow_id=exec_id)
@@ -7388,6 +7395,7 @@ def run_single_workflow(
         logger.info("Interrupted by user")
         return "interrupted"
     finally:
+        _actively_monitored_workflows.discard(exec_id)
         # Clean up: terminate all agents for this workflow and mark as paused
         if exec_id:
             try:

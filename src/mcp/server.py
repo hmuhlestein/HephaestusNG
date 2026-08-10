@@ -1836,7 +1836,12 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
                 logger.error(f"[PHASE-SWEEP] Arbitration resolve error for {wf_id[:8]}: {e}")
 
         try:
-            _advance_phases(wf_id, sweep_logger)
+            # Skip workflows actively monitored by run_single_workflow —
+            # its inline _advance_phases is the main path; the sweep is a
+            # fallback for workflows that lost their poll loop.
+            from src.autopilot.orchestrator import _actively_monitored_workflows
+            if wf_id not in _actively_monitored_workflows:
+                _advance_phases(wf_id, sweep_logger)
         except Exception as e:
             logger.error(f"[PHASE-SWEEP] Error advancing workflow {wf_id[:8]}: {e}")
 
