@@ -812,3 +812,193 @@ class TestRunPhase0ReviewMode:
         assert wf.status == "completed"
         assert session.query(Feature).filter_by(design_id=design).count() == 1
         session.close()
+
+
+class TestFinalizePhase0Workflow:
+    """finalize_phase0_workflow: the generic, independent path to recover a
+    Phase 0 workflow that reached "completed" without run_phase0's own
+    synchronous tail ever observing it (e.g. a backend restart mid-wait) --
+    root cause of the FRONTEND_DESIGN.md incident, where a genuinely
+    completed Phase 0 workflow was left with zero Feature rows and no
+    recovery short of "Rerun"."""
+
+    def test_idempotent_when_features_already_exist(self, db_manager, design, tmp_path):
+        from src.autopilot.orchestrator import finalize_phase0_workflow
+
+        workflow_id = _seed_phase0_workflow(db_manager, design, phase_execution_status="completed")
+        session = db_manager.get_session()
+        session.add(
+            Feature(
+                id=f"feat-{uuid.uuid4().hex[:8]}",
+                design_id=design,
+                feature_key="auth",
+                name="Auth",
+                scope="s",
+                status="pending",
+            )
+        )
+        session.commit()
+        session.close()
+
+        result = finalize_phase0_workflow(workflow_id, logger=MagicMock())
+
+        assert result is True
+
+    def test_returns_false_when_no_designs_folder(self, db_manager, design, tmp_path):
+        from src.autopilot.orchestrator import finalize_phase0_workflow
+
+        workflow_id = _seed_phase0_workflow(db_manager, design, phase_execution_status="completed")
+        # designs_folder deliberately left unset
+
+        result = finalize_phase0_workflow(workflow_id, logger=MagicMock())
+
+        assert result is False
+        session = db_manager.get_session()
+        assert session.query(Feature).filter_by(design_id=design).count() == 0
+        session.close()
+
+    def test_recovers_features_json_from_designs_folder_when_worktree_gone(
+        self, db_manager, design, tmp_path
+    ):
+        """The worktree is long cleaned up by the time an out-of-band
+        completion is noticed -- features.json must still be recoverable
+        from the permanent designs_folder alone."""
+        from src.autopilot.orchestrator import finalize_phase0_workflow
+
+        workflow_id = _seed_phase0_workflow(db_manager, design, phase_execution_status="completed")
+        designs_folder = tmp_path / "designs" / "prior_run"
+        designs_folder.mkdir(parents=True)
+        features_json_content = {
+            "design_name": "Test Design",
+            "features": [
+                {
+                    "id": "auth",
+                    "name": "Auth",
+                    "scope": "s",
+                    "files": ["src/auth.py"],
+                    "depends_on": [],
+                    "execution": "parallel",
+                }
+            ],
+        }
+        (designs_folder / "features.json").write_text(json.dumps(features_json_content))
+
+        session = db_manager.get_session()
+        d = session.query(AutopilotDesign).filter_by(id=design).first()
+        d.designs_folder = str(designs_folder)
+        session.commit()
+        session.close()
+
+        result = finalize_phase0_workflow(workflow_id, logger=MagicMock())
+
+        assert result is True
+        session = db_manager.get_session()
+        features = session.query(Feature).filter_by(design_id=design).all()
+        assert len(features) == 1
+        assert features[0].feature_key == "auth"
+        session.close()
+
+    def test_returns_false_when_features_json_unrecoverable(self, db_manager, design, tmp_path):
+        """No features.json in the worktree or designs_folder -- e.g.
+        FRONTEND_DESIGN.md's actual state -- must not crash, just report
+        failure so the caller (or a human) knows Rerun is needed."""
+        from src.autopilot.orchestrator import finalize_phase0_workflow
+
+        workflow_id = _seed_phase0_workflow(db_manager, design, phase_execution_status="completed")
+        designs_folder = tmp_path / "designs" / "prior_run"
+        designs_folder.mkdir(parents=True)
+        session = db_manager.get_session()
+        d = session.query(AutopilotDesign).filter_by(id=design).first()
+        d.designs_folder = str(designs_folder)
+        session.commit()
+        session.close()
+
+        result = finalize_phase0_workflow(workflow_id, logger=MagicMock())
+
+        assert result is False
+        session = db_manager.get_session()
+        assert session.query(Feature).filter_by(design_id=design).count() == 0
+        session.close()
+
+    def test_review_mode_pauses_and_returns_false_without_creating_features(
+        self, db_manager, design, tmp_path
+    ):
+        """Unlike run_phase0's own blocking wait, this is called from
+        inline phase-advancement code -- it must pause and return
+        immediately (non-blocking), not hang waiting for a human."""
+        from src.autopilot.orchestrator import finalize_phase0_workflow
+
+        session = db_manager.get_session()
+        d = session.query(AutopilotDesign).filter_by(id=design).first()
+        proj = session.query(AutopilotProject).filter_by(id=d.project_id).first()
+        proj.review_mode = True
+        project_id = proj.id
+        session.commit()
+        session.close()
+
+        workflow_id = _seed_phase0_workflow(db_manager, design, phase_execution_status="completed")
+        designs_folder = tmp_path / "designs" / "prior_run"
+        designs_folder.mkdir(parents=True)
+        features_json_content = {
+            "design_name": "Test Design",
+            "features": [
+                {"id": "auth", "name": "Auth", "scope": "s", "files": [], "depends_on": [], "execution": "parallel"}
+            ],
+        }
+        (designs_folder / "features.json").write_text(json.dumps(features_json_content))
+        session = db_manager.get_session()
+        d = session.query(AutopilotDesign).filter_by(id=design).first()
+        d.designs_folder = str(designs_folder)
+        session.commit()
+        session.close()
+
+        result = finalize_phase0_workflow(workflow_id, logger=MagicMock(), project_id=project_id)
+
+        assert result is False
+        session = db_manager.get_session()
+        wf = session.query(Workflow).filter_by(id=workflow_id).first()
+        assert wf.status == "paused"
+        assert wf.paused_by == "review"
+        assert session.query(Feature).filter_by(design_id=design).count() == 0
+        session.close()
+
+    def test_skip_review_gate_creates_features_despite_review_mode(
+        self, db_manager, design, tmp_path
+    ):
+        """The review-approve endpoint calls back in with
+        skip_review_gate=True after a human has already cleared the
+        pause -- must finish the job rather than re-pausing."""
+        from src.autopilot.orchestrator import finalize_phase0_workflow
+
+        session = db_manager.get_session()
+        d = session.query(AutopilotDesign).filter_by(id=design).first()
+        proj = session.query(AutopilotProject).filter_by(id=d.project_id).first()
+        proj.review_mode = True
+        project_id = proj.id
+        session.commit()
+        session.close()
+
+        workflow_id = _seed_phase0_workflow(db_manager, design, phase_execution_status="completed")
+        designs_folder = tmp_path / "designs" / "prior_run"
+        designs_folder.mkdir(parents=True)
+        features_json_content = {
+            "design_name": "Test Design",
+            "features": [
+                {"id": "auth", "name": "Auth", "scope": "s", "files": [], "depends_on": [], "execution": "parallel"}
+            ],
+        }
+        (designs_folder / "features.json").write_text(json.dumps(features_json_content))
+        session = db_manager.get_session()
+        d = session.query(AutopilotDesign).filter_by(id=design).first()
+        d.designs_folder = str(designs_folder)
+        session.commit()
+        session.close()
+
+        result = finalize_phase0_workflow(
+            workflow_id, logger=MagicMock(), project_id=project_id, skip_review_gate=True
+        )
+
+        assert result is True
+        session = db_manager.get_session()
+        assert session.query(Feature).filter_by(design_id=design).count() == 1
+        session.close()

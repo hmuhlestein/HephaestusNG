@@ -3133,6 +3133,32 @@ def _create_feature_records(
     feature_records = []
 
     with get_db() as db:
+        # Idempotency guard: finalize_phase0_workflow can now call this from
+        # two independent sites for the same design (run_phase0's own
+        # synchronous tail, and the generic phase0-completion hook in
+        # PhaseManager._complete_workflow / the review-approve endpoint) --
+        # both check design_id's Feature rows before calling in, but that
+        # check-then-insert is TOCTOU-racy across two separate calls. Guard
+        # here too, inside the same transaction as the insert, so a race
+        # can't create duplicate Feature rows for one design.
+        existing = db.query(Feature).filter_by(design_id=design_id).all()
+        if existing:
+            logger.info(f"_create_feature_records: {len(existing)} feature(s) already exist for design {design_id} -- skipping")
+            return [
+                {
+                    "id": f.id,
+                    "feature_key": f.feature_key,
+                    "name": f.name,
+                    "scope": f.scope,
+                    "files": f.files,
+                    "depends_on": f.depends_on,
+                    "execution": f.execution,
+                    "scope_doc_path": f.scope_doc_path,
+                    "feature_record_path": f.feature_record_path,
+                }
+                for f in existing
+            ]
+
         for feat in features_json.get("features", []):
             feature_id = f"feat-{uuid.uuid4().hex[:8]}"
             feature_key = feat.get("id", "")
@@ -7973,7 +7999,16 @@ def _pause_phase0_for_review(workflow_id: str, logger: "OrchestratorLogger") -> 
         from src.core.database import Workflow, get_db
         with get_db() as db:
             wf = db.query(Workflow).filter_by(id=workflow_id).first()
-            if wf and wf.paused_by != "review" and wf.status not in ("failed", "completed"):
+            # "completed" is a valid source state, not just "active" --
+            # finalize_phase0_workflow calls this AFTER _complete_workflow
+            # has already set wf.status="completed" (the out-of-band
+            # completion path, as opposed to run_phase0's own call, which
+            # pauses before that status is set). "Paused for review" is an
+            # additional gate layered on top of an already-finished
+            # decomposition either way -- see _restore_phase0_completed_
+            # status's identical reasoning. Only "failed" is excluded: a
+            # workflow that didn't actually finish has nothing to review.
+            if wf and wf.paused_by != "review" and wf.status != "failed":
                 wf.status = "paused"
                 wf.paused_by = "review"
                 db.commit()
@@ -8021,6 +8056,102 @@ def _wait_for_phase0_review_clearance(
         except Exception as e:
             logger.error(f"[REVIEW] Error checking Phase 0 review status: {e}")
         time.sleep(poll_interval)
+
+
+def finalize_phase0_workflow(
+    workflow_id: str,
+    logger: "OrchestratorLogger",
+    project_id: Optional[str] = None,
+    skip_review_gate: bool = False,
+) -> bool:
+    """Copy a completed Phase 0 workflow's outputs to permanent storage and
+    create its Feature DB records.
+
+    run_phase0's own tail does this synchronously while it still holds the
+    live worktree, but that path only runs if run_phase0's own call to
+    run_single_workflow is the thing that observes the workflow reach
+    "completed" -- e.g. a backend restart mid-wait leaves the workflow
+    genuinely completed in the DB with no Feature rows and no one left to
+    finish the bookkeeping (root cause of the FRONTEND_DESIGN.md incident:
+    zero Feature rows despite a fully completed Phase 0 workflow, with no
+    recovery short of "Rerun"). This is a second, independent path to the
+    same result, callable from anywhere a phase0-type Workflow is observed
+    transitioning to "completed" -- not just run_phase0's synchronous wait.
+
+    Idempotent: returns True immediately if Feature rows already exist for
+    the design, so it's safe to call even when run_phase0's own path also
+    eventually completes the same workflow.
+    """
+    from src.core.database import AutopilotDesign, Feature, Workflow, get_db
+
+    with get_db() as db:
+        wf = db.query(Workflow).filter_by(id=workflow_id).first()
+        if not wf or not wf.design_id:
+            return False
+        design_id = wf.design_id
+        if db.query(Feature).filter_by(design_id=design_id).first():
+            return True
+        design = db.query(AutopilotDesign).filter_by(id=design_id).first()
+        if not design:
+            return False
+        designs_folder = Path(design.designs_folder) if design.designs_folder else None
+        working_directory = Path(wf.working_directory) if wf.working_directory else None
+
+    if not designs_folder:
+        logger.warning(f"[PHASE0-FINALIZE] Workflow {workflow_id[:8]}: no designs_folder recorded, cannot finalize")
+        return False
+    designs_folder.mkdir(parents=True, exist_ok=True)
+
+    features_json_path = None
+    for candidate_base in filter(None, [working_directory and working_directory / CONTEXT_DIR_NAME, designs_folder]):
+        candidate = candidate_base / "features.json"
+        if candidate.is_file():
+            features_json_path = candidate
+            break
+    if not features_json_path:
+        logger.warning(f"[PHASE0-FINALIZE] Workflow {workflow_id[:8]}: features.json not found in worktree or designs_folder -- nothing to recover")
+        return False
+
+    try:
+        features_json = json.loads(features_json_path.read_text())
+        _validate_features_json(features_json)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error(f"[PHASE0-FINALIZE] Workflow {workflow_id[:8]}: invalid features.json ({e})")
+        return False
+
+    if features_json_path != designs_folder / "features.json":
+        shutil.copy2(features_json_path, designs_folder / "features.json")
+    features_dir = features_json_path.parent / "features"
+    if features_dir.exists():
+        for feat in features_json.get("features", []):
+            feat_id = feat.get("id", "")
+            scope_src = features_dir / feat_id / "scope.md"
+            scope_dest = designs_folder / "features" / feat_id / "scope.md"
+            scope_dest.parent.mkdir(parents=True, exist_ok=True)
+            if scope_src.exists() and scope_src != scope_dest:
+                shutil.copy2(scope_src, scope_dest)
+    review_src = features_json_path.parent / "review.md"
+    if review_src.exists() and review_src != designs_folder / review_src.name:
+        shutil.copy2(review_src, designs_folder / review_src.name)
+    synopsis_src = features_json_path.parent / "feature_report.html"
+    if synopsis_src.exists() and synopsis_src != designs_folder / synopsis_src.name:
+        shutil.copy2(synopsis_src, designs_folder / synopsis_src.name)
+
+    _set_workflow_type(workflow_id, "design")
+    _update_design_status(design_id, "active", designs_folder=str(designs_folder), error=None, logger=logger)
+
+    if not skip_review_gate and _should_pause_for_review(project_id):
+        _pause_phase0_for_review(workflow_id, logger)
+        # Non-blocking: unlike run_phase0's own path, this is called from
+        # inline phase-advancement code (PhaseManager._complete_workflow),
+        # not a dedicated background wait loop. The workflow stays paused
+        # for review; the human's eventual Approve action re-invokes this
+        # function with skip_review_gate=True to finish the job.
+        return False
+
+    feature_records = _create_feature_records(design_id, features_json, designs_folder, logger)
+    logger.info(f"[PHASE0-FINALIZE] Workflow {workflow_id[:8]}: {len(feature_records)} feature(s) created")
+    return True
 
 
 def _wait_for_pending_reviews(
