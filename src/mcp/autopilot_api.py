@@ -4544,14 +4544,35 @@ async def get_feature_record_report(feature_id: str):
             raise HTTPException(404, f"Feature '{feature_id}' not found")
         wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
         base_dir = _resolve_feature_docs_base(wf) if wf else None
-        if not base_dir:
-            raise HTTPException(404, "Feature's workflow has no known working directory")
 
-    report_path = Path(base_dir) / CONTEXT_DIR_NAME / "feature_report.html"
-    if not report_path.is_file():
-        # Also check docs/ directory
-        report_path = Path(base_dir) / "docs" / "feature_report.html"
-    if not report_path.is_file():
+    report_path = None
+    if base_dir:
+        candidate = Path(base_dir) / CONTEXT_DIR_NAME / "feature_report.html"
+        if candidate.is_file():
+            report_path = candidate
+        else:
+            candidate = Path(base_dir) / "docs" / "feature_report.html"
+            if candidate.is_file():
+                report_path = candidate
+    if report_path is None:
+        # Worktree may have been cleaned up after completion — check the
+        # archived features gallery (copied there by PhaseManager before
+        # _cleanup_worktree runs).
+        project_base = None
+        if wf and wf.project_id:
+            from src.core.database import AutopilotProject
+            with get_db() as _db2:
+                proj = _db2.query(AutopilotProject).filter_by(id=wf.project_id).first()
+                project_base = proj.base_dir if proj else None
+        if not project_base and wf:
+            lp = wf.launch_params or {}
+            if isinstance(lp, dict):
+                project_base = lp.get("project_path")
+        if project_base:
+            archived = _find_archived_feature_report(project_base, feat.workflow_id)
+            if archived:
+                report_path = archived
+    if report_path is None or not report_path.is_file():
         raise HTTPException(404, "Report not found")
     return HTMLResponse(content=report_path.read_text(errors="replace"))
 
