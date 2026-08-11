@@ -92,8 +92,8 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
 
   ```bash
-  # Check if this is a tech-debt feature
-  ls ./.hephaestus/tech_debt_requirements/ 2>/dev/null && echo "TECH_DEBT_FLOW"
+  # Check if this is a tech-debt flow (product_requirements auto-detects)
+  grep -l "tech.debt\|prioritized.fix.plan" ./.hephaestus/requirements.md 2>/dev/null && echo "TECH_DEBT_FLOW"
   ```
 
   If this is a TECH DEBT flow:

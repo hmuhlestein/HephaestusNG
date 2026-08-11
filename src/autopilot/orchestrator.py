@@ -2942,8 +2942,8 @@ def heal_orphaned_agent_branches(logger: OrchestratorLogger) -> int:
     does a real `git merge --ff-only` there instead, and only when that
     checkout is clean. Anything that isn't a clean fast-forward (base
     branch moved on since the orphaned branch diverged) is left alone and
-    logged with "FAILED" so it surfaces via tech_debt_requirements.yaml's
-    existing `grep -r "EXHAUSTED|STUCK|FAILED" ~/.hephaestus/logs/` step
+    logged with "FAILED" so it surfaces via product_requirements.yaml's
+    tech debt mode `grep -r "EXHAUSTED|STUCK|FAILED" ~/.hephaestus/logs/` step
     for manual review -- resolving real conflicts unattended is a materially
     different risk than fast-forwarding a branch nothing else was touching.
 
