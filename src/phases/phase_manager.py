@@ -1306,12 +1306,33 @@ class PhaseManager:
     def _get_orchestrator(
         self, session, workflow_id: str
     ) -> Optional[WorkflowOrchestrator]:
-        """Get orchestrator for a workflow (cached to persist state)."""
-        try:
-            # Return cached orchestrator if exists
-            if workflow_id in self._orchestrators:
-                return self._orchestrators[workflow_id]
+        """Get orchestrator for a workflow (cached to persist runtime state --
+        total_gotos and per-phase retry counters -- across calls).
 
+        The STATIC config (max_total_gotos, evaluation_points, etc.) is
+        re-read from the DB's WorkflowDefinition.orchestrator_config on
+        every call and applied to the cached instance, even on a cache hit,
+        so a later correction to that row (e.g. server.py's startup
+        re-syncing it from source) actually takes effect instead of a
+        stale, once-built config sticking around for the rest of the
+        process's life.
+
+        max_total_gotos is then further overridden per THIS workflow
+        instance from Workflow.launch_params["max_iterations"] (set at
+        launch by run_single_workflow), if present. This used to be a
+        single GLOBAL mutation of the shared WorkflowDefinition row itself
+        (_update_orchestrator_max_gotos, since removed) -- every workflow
+        of the same definition_id shares that one row, so launching ANY
+        workflow with a different max_iterations silently changed the goto
+        budget for every OTHER concurrently-active workflow of that type.
+        run_phase0 hardcodes max_iterations=3 for every Phase 0 launch, so
+        each Phase 0 run reset every in-flight feature pipeline's real
+        budget (30, from workflow.yaml) down to 3. Observed live: a
+        workflow stuck re-arbitrating scope_review forever, total_gotos
+        climbing into the hundreds, its budget reset out from under it by
+        unrelated Phase 0 runs every time one launched.
+        """
+        try:
             workflow = session.query(Workflow).filter_by(id=workflow_id).first()
             if not workflow or not workflow.definition_id:
                 return None
@@ -1327,6 +1348,16 @@ class PhaseManager:
             config = OrchestratorConfig.from_dict(definition.orchestrator_config)
             if config.type == "sequential":
                 return None
+
+            launch_params = workflow.launch_params if isinstance(workflow.launch_params, dict) else {}
+            max_iterations_override = launch_params.get("max_iterations")
+            if max_iterations_override is not None:
+                config.max_total_gotos = max_iterations_override
+
+            if workflow_id in self._orchestrators:
+                cached = self._orchestrators[workflow_id]
+                cached.config = config
+                return cached
 
             # Real Phase.name -> Phase.order for this workflow, not a
             # hand-maintained vocabulary baked into the engine (SOLID review

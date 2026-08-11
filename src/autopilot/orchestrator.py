@@ -4347,27 +4347,6 @@ def collect_files_created(project_path: Path, feature_folder: Path = None) -> Li
                 files.append(str(rel))
     return sorted(set(files))
 
-def _update_orchestrator_max_gotos(max_gotos: int, logger: OrchestratorLogger) -> None:
-    """Update the autopilot workflow definition's max_total_gotos in the DB.
-
-    This makes --max-iterations control the engine's iteration budget.
-    """
-    try:
-        from src.core.database import WorkflowDefinition, get_db
-
-        with get_db() as db:
-            defn = db.query(WorkflowDefinition).filter_by(id="autopilot").first()
-            if defn and defn.orchestrator_config:
-                config = dict(defn.orchestrator_config)
-                old_val = config.get("max_total_gotos", 10)
-                if old_val != max_gotos:
-                    config["max_total_gotos"] = max_gotos
-                    defn.orchestrator_config = config
-                    db.commit()
-                    logger.info(f"Updated max_total_gotos: {old_val} -> {max_gotos}")
-    except Exception as e:
-        logger.warning(f"Failed to update max_total_gotos: {e}")
-
 
 def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
     """Check for completed phases and advance to the next one.
@@ -6875,9 +6854,23 @@ def run_single_workflow(
     # FIX: Get timeout from config if not specified
     if timeout_seconds is None:
         timeout_seconds = _get_workflow_timeout()
-    # Update the workflow definition's orchestrator_config with the requested max_iterations.
-    # This makes --max-iterations control the engine's max_total_gotos.
-    _update_orchestrator_max_gotos(max_iterations, logger)
+    # max_iterations maps to the engine's max_total_gotos, but PER THIS
+    # WORKFLOW INSTANCE (via launch_params, read by
+    # PhaseManager._get_orchestrator) -- NOT written into the shared
+    # WorkflowDefinition.orchestrator_config row every "autopilot"-type
+    # workflow reads from. That used to be a single global mutation
+    # (_update_orchestrator_max_gotos), which corrupted every OTHER
+    # concurrently-active workflow of the same definition every time ANY
+    # workflow launched with a different max_iterations -- e.g. run_phase0
+    # hardcodes max_iterations=3 for every Phase 0 launch, which slammed
+    # every in-flight feature pipeline's real max_total_gotos (30, from
+    # workflow.yaml) down to 3 each time Phase 0 ran, regardless of which
+    # feature was actually being launched. Observed live: a workflow stuck
+    # re-arbitrating scope_review forever, total_gotos climbing into the
+    # hundreds, because its budget kept getting reset out from under it by
+    # unrelated Phase 0 runs.
+    launch_params = dict(launch_params or {})
+    launch_params["max_iterations"] = max_iterations
 
     # Check for existing active workflows and stop them -- but never the
     # workflow we're about to resume ourselves. Without this exclusion, an
