@@ -62,6 +62,20 @@ additional_notes: |
   Read .hephaestus/architectural_review/review.md first — skip anything already fixed there.
 
   ═══════════════════════════════════════════════════════════════════════
+  STEP 0: CHECK FOR PRIOR ADVERSARIAL REVIEW (RETRY AWARENESS)
+  ═══════════════════════════════════════════════════════════════════════
+
+  ```bash
+  cat ./.hephaestus/adversarial_review/adversarial.md 2>/dev/null | head -30 || echo "NO_PRIOR_ADVERSARIAL"
+  ```
+
+  If adversarial.md exists from a prior run:
+  - Read it fully to understand what was already found.
+  - Verify whether each prior BLOCKER/WARNING has been fixed.
+  - Focus on finding NEW issues — don't repeat already-fixed findings.
+  - If all prior findings are fixed, note that in your summary.
+
+  ═══════════════════════════════════════════════════════════════════════
   STEP 1: ORIENT
   ═══════════════════════════════════════════════════════════════════════
 
