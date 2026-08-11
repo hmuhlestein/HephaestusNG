@@ -427,6 +427,28 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
                 db.commit()
             return derived
 
+        # A genuinely incomplete phase AND the workflow is already marked
+        # "failed": respect it, don't fall through to the task-status
+        # heuristics below. Those exist to rescue a workflow from stale
+        # TASK-level failure history (a single old, superseded "failed"
+        # task among otherwise-successful ones) -- a real problem, but a
+        # different one from a deliberate, workflow-level "failed" decision
+        # that has NO corresponding task-level trace at all, like
+        # _trigger_arbitration's exhausted-retries cap. That cap sets
+        # wf.status="failed" without ever creating a new task, so every
+        # EXISTING task can still legitimately be "done" -- task_statuses
+        # == {DONE} below would otherwise derive "active" and silently
+        # resurrect an intentionally-terminated workflow. Observed live:
+        # a workflow whose scope_review exhausted all 3 arbitration
+        # attempts got marked failed, then healed back to "active" within
+        # ~1-2 seconds every single cycle, forever -- re-triggering the
+        # same doomed evaluation, incrementing total_gotos into the
+        # hundreds with no possibility of ever actually progressing, since
+        # the cap check only prevents a NEW arbitration task, not another
+        # trip through this exact loop.
+        if workflow.status == WorkflowStatus.FAILED:
+            return WorkflowStatus.FAILED
+
     # Derive from task statuses. Reaching this point with has_phases True
     # means the block above already found a genuinely incomplete phase --
     # task_statuses == {DONE} here must NOT translate to "completed" (that's

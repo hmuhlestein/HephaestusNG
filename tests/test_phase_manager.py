@@ -1182,6 +1182,100 @@ class TestGetOrchestratorPhaseOrderMap:
 
         assert first is second
 
+    def test_config_refreshes_from_db_on_cache_hit_while_state_persists(self, real_db):
+        """Regression: the orchestrator instance was cached forever after
+        its first build, freezing its STATIC config (max_total_gotos,
+        evaluation_points) at whatever the DB happened to say at that one
+        moment -- even after a later server.py startup correctly re-synced
+        WorkflowDefinition.orchestrator_config from source. Observed live:
+        a long-running workflow's cached orchestrator kept using a stale
+        max_total_gotos long after the DB was fixed, permanently stuck
+        re-arbitrating the same phase and never advancing. The cached
+        instance must still be reused (so RUNTIME state -- total_gotos,
+        retry counters -- persists across calls), but its config must be
+        refreshed from the DB on every call, not just the first."""
+        from src.core.database import WorkflowDefinition as DBWorkflowDefinition
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(real_db)
+        pm = PhaseManager(db_manager=real_db)
+
+        with real_db.session_scope() as session:
+            first = pm._get_orchestrator(session, "wf-1")
+        first.total_gotos = 7  # simulate accumulated runtime state
+
+        # A later "register workflow definitions from source" pass (what
+        # server.py's startup does on every restart) corrects the DB.
+        with real_db.session_scope() as session:
+            session.query(DBWorkflowDefinition).filter_by(id="def-1").update(
+                {"orchestrator_config": {"type": "evaluating", "max_total_gotos": 30}}
+            )
+
+        with real_db.session_scope() as session:
+            second = pm._get_orchestrator(session, "wf-1")
+
+        assert second is first, "must reuse the same instance so runtime state persists"
+        assert second.total_gotos == 7
+        assert second.config.max_total_gotos == 30
+
+    def test_max_iterations_is_scoped_per_workflow_not_shared_globally(self, real_db):
+        """Regression: run_single_workflow used to apply --max-iterations by
+        mutating the shared WorkflowDefinition.orchestrator_config row
+        itself (_update_orchestrator_max_gotos, since removed) -- every
+        workflow sharing that definition_id reads the SAME row, so
+        launching one workflow with a different max_iterations silently
+        changed the goto budget for every OTHER concurrently-active
+        workflow of that type. run_phase0 hardcodes max_iterations=3 for
+        every Phase 0 launch, so each Phase 0 run reset every in-flight
+        feature pipeline's real budget (e.g. 30, from workflow.yaml) down
+        to 3, regardless of which workflow was actually being launched.
+        max_iterations must now be scoped per-workflow via
+        Workflow.launch_params, not leak between sibling workflows of the
+        same definition."""
+        from src.core.database import Phase, Workflow
+        from src.core.database import WorkflowDefinition as DBWorkflowDefinition
+        from src.phases.phase_manager import PhaseManager
+
+        with real_db.session_scope() as session:
+            session.add(DBWorkflowDefinition(
+                id="def-1", name="Test Definition",
+                orchestrator_config={"type": "evaluating", "max_total_gotos": 30},
+            ))
+            # Feature pipeline workflow, launched with the real per-project
+            # default (no override) -- must keep the definition's own 30.
+            session.add(Workflow(
+                id="wf-feature", name="feature", phases_folder_path="/tmp",
+                status="active", definition_id="def-1",
+            ))
+            session.add(Phase(
+                id="phase-feature", workflow_id="wf-feature", order=1,
+                name="scope_review", description="d", done_definitions=["x"],
+            ))
+            # Phase 0 workflow, launched with max_iterations=3 hardcoded --
+            # must NOT drag wf-feature's budget down with it.
+            session.add(Workflow(
+                id="wf-phase0", name="phase0", phases_folder_path="/tmp",
+                status="active", definition_id="def-1",
+                launch_params={"max_iterations": 3},
+            ))
+            session.add(Phase(
+                id="phase-phase0", workflow_id="wf-phase0", order=1,
+                name="feature_architect", description="d", done_definitions=["x"],
+            ))
+
+        pm = PhaseManager(db_manager=real_db)
+        with real_db.session_scope() as session:
+            feature_orch = pm._get_orchestrator(session, "wf-feature")
+            phase0_orch = pm._get_orchestrator(session, "wf-phase0")
+            # Re-fetch wf-feature AFTER wf-phase0 was built -- proves the
+            # earlier lookup wasn't just returning a not-yet-corrupted
+            # snapshot.
+            feature_orch_again = pm._get_orchestrator(session, "wf-feature")
+
+        assert feature_orch.config.max_total_gotos == 30
+        assert phase0_orch.config.max_total_gotos == 3
+        assert feature_orch_again.config.max_total_gotos == 30
+
 
 class TestPhaseNameToOrderLegacyFallback:
     """_phase_name_to_order falls back to _LEGACY_NAME_TO_ORDER only when

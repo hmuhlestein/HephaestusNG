@@ -3107,53 +3107,6 @@ class TestAttemptRecovery:
         assert "terminated" in msg.lower()
 
 
-class TestUpdateOrchestratorMaxGotos:
-    @patch("src.core.database.get_db")
-    def test_updates_config(self, mock_get_db):
-        from src.autopilot.orchestrator import (
-            OrchestratorLogger,
-            _update_orchestrator_max_gotos,
-        )
-
-        logger = OrchestratorLogger(Path("/tmp/logs"))
-        mock_defn = Mock(orchestrator_config={"max_total_gotos": 5})
-        mock_db = Mock()
-        mock_db.query.return_value.filter_by.return_value.first.return_value = mock_defn
-        mock_get_db.return_value.__enter__ = Mock(return_value=mock_db)
-        mock_get_db.return_value.__exit__ = Mock(return_value=False)
-        _update_orchestrator_max_gotos(15, logger)
-        assert mock_defn.orchestrator_config["max_total_gotos"] == 15
-        mock_db.commit.assert_called()
-
-    @patch("src.core.database.get_db")
-    def test_handles_no_defn(self, mock_get_db):
-        from src.autopilot.orchestrator import (
-            OrchestratorLogger,
-            _update_orchestrator_max_gotos,
-        )
-
-        logger = OrchestratorLogger(Path("/tmp/logs"))
-        mock_db = Mock()
-        mock_db.query.return_value.filter_by.return_value.first.return_value = None
-        mock_get_db.return_value.__enter__ = Mock(return_value=mock_db)
-        mock_get_db.return_value.__exit__ = Mock(return_value=False)
-        _update_orchestrator_max_gotos(10, logger)
-        # Should not raise
-
-    @patch("src.core.database.get_db")
-    def test_handles_exception(self, mock_get_db):
-        from src.autopilot.orchestrator import (
-            OrchestratorLogger,
-            _update_orchestrator_max_gotos,
-        )
-
-        logger = OrchestratorLogger(Path("/tmp/logs"))
-        mock_get_db.return_value.__enter__ = Mock(side_effect=Exception("DB error"))
-        mock_get_db.return_value.__exit__ = Mock(return_value=False)
-        _update_orchestrator_max_gotos(10, logger)
-        # Should not raise
-
-
 class TestGetLitellmConfig:
     def test_reads_env(self):
         import os

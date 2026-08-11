@@ -596,6 +596,54 @@ class TestDeriveWorkflowStatus:
             result = derive_workflow_status(session, "wf-1")
         assert result == "completed"
 
+    def test_respects_deliberate_failed_status_with_an_incomplete_phase(self, db_manager):
+        """Regression, observed live: _trigger_arbitration marks a workflow
+        "failed" (with status_reason) once a phase has exhausted its
+        arbitration-attempts cap -- a deliberate, workflow-level terminal
+        decision with NO corresponding task-level trace (it never creates a
+        new task). Every EXISTING task can still legitimately be "done", so
+        without this fix task_statuses == {DONE} derived "active" and
+        silently resurrected the workflow within ~1-2 seconds, every single
+        self-heal cycle, forever -- re-triggering the same doomed
+        evaluation and climbing total_gotos into the hundreds with no way
+        to actually progress, since the arbitration cap only blocks a NEW
+        arbitration task, not another trip through this exact loop."""
+        from src.core.database import Phase, PhaseExecution
+
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(
+                id="wf-1", name="Test", status="failed",
+                status_reason="scope_review: arbitrated 3 times without converging",
+                phases_folder_path="/tmp/phases",
+            )
+            session.add(wf)
+            # scope_review stuck "in_progress" (arbitration never resolved
+            # it) -- an incomplete phase, same as the live incident.
+            session.add(Phase(
+                id="phase-scope", workflow_id="wf-1", order=2,
+                name="scope_review", description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-scope", phase_id="phase-scope",
+                workflow_execution_id="wf-1", status="in_progress",
+            ))
+            # Every task that actually exists is "done" -- no task-level
+            # signal that anything is wrong.
+            session.add(Task(
+                id="task-scope", workflow_id="wf-1", phase_id="phase-scope",
+                raw_description="scope review", done_definition="Done",
+                status="done",
+            ))
+
+        with db_manager.session_scope() as session:
+            result = derive_workflow_status(session, "wf-1")
+        assert result == "failed"
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "failed", "must not have been written back to active"
+
     def test_completes_despite_an_old_superseded_failed_task(self, db_manager):
         """Regression, observed live: a long goto/retry history leaves old
         "failed" Task rows behind as real history even after a later retry
