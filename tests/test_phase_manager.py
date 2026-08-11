@@ -852,14 +852,12 @@ class TestPopulateFeatureFolder:
         return db
 
     def test_sweeps_hephaestus_not_docs(self, real_db, tmp_path):
-        from src.core.database import Workflow
+        import json
+
+        from src.core.database import Phase, Workflow
         from src.phases.phase_manager import PhaseManager
 
         wt = tmp_path / "project"
-        (wt / ".hephaestus" / "qa_validation").mkdir(parents=True)
-        (wt / ".hephaestus" / "architecture.md").write_text("# Architecture")
-        (wt / ".hephaestus" / "qa_validation" / "qa.md").write_text("# QA")
-        (wt / ".hephaestus" / "feature_report.html").write_text("<html></html>")
 
         with real_db.session_scope() as session:
             session.add(
@@ -868,6 +866,35 @@ class TestPopulateFeatureFolder:
                     status="active", working_directory=str(wt),
                 )
             )
+            # Declares the files below as this workflow's own known outputs
+            # -- _known_output_basenames reads Phase.outputs, not a
+            # hardcoded list, so the sweep needs a real Phase row per file.
+            # Phase.outputs is a Text column, not JSON -- must be a
+            # JSON-encoded string, same as PhaseManager.initialize_workflow
+            # writes it, not a raw Python list.
+            session.add(Phase(
+                id="phase-1", workflow_id="wf-1", order=1, name="architecture_design",
+                description="d", done_definitions=["x"],
+                outputs=json.dumps(["architecture.md"]),
+            ))
+            session.add(Phase(
+                id="phase-2", workflow_id="wf-1", order=2, name="qa_validation",
+                description="d", done_definitions=["x"],
+                outputs=json.dumps(["qa.md"]),
+            ))
+            session.add(Phase(
+                id="phase-3", workflow_id="wf-1", order=3, name="doc_review",
+                description="d", done_definitions=["x"],
+                outputs=json.dumps(["feature_report.html"]),
+            ))
+
+        # Written after the Workflow row exists -- matches real ordering
+        # (agents write into the worktree once their task/workflow is live)
+        # and satisfies the freshness guard (file mtime >= workflow.created_at).
+        (wt / ".hephaestus" / "qa_validation").mkdir(parents=True)
+        (wt / ".hephaestus" / "architecture.md").write_text("# Architecture")
+        (wt / ".hephaestus" / "qa_validation" / "qa.md").write_text("# QA")
+        (wt / ".hephaestus" / "feature_report.html").write_text("<html></html>")
 
         pm = PhaseManager(db_manager=real_db)
         pm.workflow_id = "wf-1"
@@ -887,17 +914,12 @@ class TestPopulateFeatureFolder:
         assert (feature_dir / "feature_report.html").exists()
 
     def test_excludes_tmux_features_and_scratch_directories(self, real_db, tmp_path):
-        from src.core.database import Workflow
+        import json
+
+        from src.core.database import Phase, Workflow
         from src.phases.phase_manager import PhaseManager
 
         wt = tmp_path / "project"
-        (wt / ".hephaestus" / "tmux").mkdir(parents=True)
-        (wt / ".hephaestus" / "tmux" / "agent.transcript.log").write_text("log")
-        (wt / ".hephaestus" / "features" / "some-feature").mkdir(parents=True)
-        (wt / ".hephaestus" / "features" / "some-feature" / "scope.md").write_text("# Scope")
-        (wt / ".hephaestus" / "scratch").mkdir(parents=True)
-        (wt / ".hephaestus" / "scratch" / "notes.md").write_text("# Notes")
-        (wt / ".hephaestus" / "requirements.md").write_text("# Requirements")
 
         with real_db.session_scope() as session:
             session.add(
@@ -906,6 +928,21 @@ class TestPopulateFeatureFolder:
                     status="active", working_directory=str(wt),
                 )
             )
+            session.add(Phase(
+                id="phase-1", workflow_id="wf-1", order=1, name="product_requirements",
+                description="d", done_definitions=["x"],
+                outputs=json.dumps(["requirements.md"]),
+            ))
+
+        # Written after the Workflow row exists -- see matching comment in
+        # test_sweeps_hephaestus_not_docs above.
+        (wt / ".hephaestus" / "tmux").mkdir(parents=True)
+        (wt / ".hephaestus" / "tmux" / "agent.transcript.log").write_text("log")
+        (wt / ".hephaestus" / "features" / "some-feature").mkdir(parents=True)
+        (wt / ".hephaestus" / "features" / "some-feature" / "scope.md").write_text("# Scope")
+        (wt / ".hephaestus" / "scratch").mkdir(parents=True)
+        (wt / ".hephaestus" / "scratch" / "notes.md").write_text("# Notes")
+        (wt / ".hephaestus" / "requirements.md").write_text("# Requirements")
 
         pm = PhaseManager(db_manager=real_db)
         pm.workflow_id = "wf-1"
@@ -926,6 +963,125 @@ class TestPopulateFeatureFolder:
         # pipeline_metrics.json is always written by _populate_feature_folder
         # itself (step 5), independent of the .hephaestus/ sweep under test.
         assert copied_names == {"requirements.md", "pipeline_metrics.json"}
+
+    def test_ignores_stale_and_unknown_files(self, real_db, tmp_path):
+        """Regression: a shared worktree can carry leftover files from an
+        unrelated prior run -- observed live, a three-day-old
+        architecture.md/docs.md/summary.md/feature_report.html from a
+        completely different feature got archived as this workflow's own
+        output, because the sweep trusted any doc-extension file it found
+        regardless of what wrote it or when. Two independent guards now
+        apply: the filename must be one of this pipeline's well-known
+        outputs, AND its mtime must be no older than the workflow itself."""
+        import json
+        import os
+        import time
+
+        from src.core.database import Phase, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        wt = tmp_path / "project"
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1", name="my_feature", phases_folder_path="/tmp",
+                    status="active", working_directory=str(wt),
+                )
+            )
+            # Both filenames below are declared as known outputs -- the test
+            # is specifically about the mtime guard rejecting a stale
+            # architecture.md despite its name being well-known, so the name
+            # guard alone must not be what rejects it.
+            session.add(Phase(
+                id="phase-1", workflow_id="wf-1", order=1, name="product_requirements",
+                description="d", done_definitions=["x"],
+                outputs=json.dumps(["requirements.md"]),
+            ))
+            session.add(Phase(
+                id="phase-2", workflow_id="wf-1", order=2, name="architecture_design",
+                description="d", done_definitions=["x"],
+                outputs=json.dumps(["architecture.md"]),
+            ))
+
+        (wt / ".hephaestus").mkdir(parents=True)
+        # Genuinely fresh, well-known output -- must be archived.
+        (wt / ".hephaestus" / "requirements.md").write_text("# Requirements")
+        # Well-known filename, but its mtime predates the workflow -- a
+        # leftover from whatever ran in this worktree/path before. Must be
+        # rejected even though the name alone would otherwise pass.
+        stale = wt / ".hephaestus" / "architecture.md"
+        stale.write_text("# Stale architecture from an unrelated feature")
+        old_time = time.time() - 86400  # 1 day before "now"
+        os.utime(stale, (old_time, old_time))
+        # Fresh mtime, but not a known output filename -- must be rejected
+        # too (e.g. a scratch/debug file an agent happened to leave behind).
+        (wt / ".hephaestus" / "random_notes.md").write_text("# Random")
+
+        pm = PhaseManager(db_manager=real_db)
+        pm.workflow_id = "wf-1"
+
+        session = real_db.get_session()
+        try:
+            workflow = session.query(Workflow).filter_by(id="wf-1").first()
+            pm._populate_feature_folder(session, workflow)
+        finally:
+            session.close()
+
+        feature_dir = next(
+            d for d in (wt / ".hephaestus" / "features").iterdir()
+            if "my_feature" in d.name
+        )
+        copied_names = {f.name for f in (feature_dir / "docs").rglob("*") if f.is_file()}
+        assert copied_names == {"requirements.md", "pipeline_metrics.json"}
+
+    def test_pipeline_metrics_records_the_workflow_passed_in_not_self_workflow_id(
+        self, real_db, tmp_path
+    ):
+        """Regression: pipeline_metrics.json's workflow_id used to come from
+        self.workflow_id -- PhaseManager's legacy single-workflow instance
+        attribute -- instead of the `workflow` object this method was
+        actually called with. PhaseManager also tracks multiple concurrent
+        workflows (self.active_executions), so a stale/mismatched
+        self.workflow_id would record the WRONG workflow_id here --
+        precisely the field _find_archived_feature_report matches archived
+        reports by, so this is exactly the kind of bug that could
+        misattribute one workflow's report to another's gallery entry."""
+        import json
+
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        wt = tmp_path / "project"
+        wt.mkdir(parents=True)
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-real", name="my_feature", phases_folder_path="/tmp",
+                    status="active", working_directory=str(wt),
+                )
+            )
+
+        pm = PhaseManager(db_manager=real_db)
+        # Deliberately mismatched -- simulates this instance last tracking a
+        # DIFFERENT workflow (e.g. a shared/reused PhaseManager) at the
+        # moment _populate_feature_folder runs for "wf-real".
+        pm.workflow_id = "wf-stale-unrelated"
+
+        session = real_db.get_session()
+        try:
+            workflow = session.query(Workflow).filter_by(id="wf-real").first()
+            pm._populate_feature_folder(session, workflow)
+        finally:
+            session.close()
+
+        feature_dir = next(
+            d for d in (wt / ".hephaestus" / "features").iterdir()
+            if "my_feature" in d.name
+        )
+        metrics = json.loads((feature_dir / "docs" / "pipeline_metrics.json").read_text())
+        assert metrics["workflow_id"] == "wf-real"
 
 
 class TestGetOrchestratorPhaseOrderMap:

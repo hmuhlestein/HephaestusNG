@@ -180,7 +180,7 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
                   /* Requirements / Review Findings tab */
                   <div className="h-full overflow-y-auto p-6">
                     {requirementsDoc ? (
-                      <MarkdownRenderer content={requirementsDoc} className="text-sm prose prose-sm prose-invert max-w-none" />
+                      <MarkdownRenderer content={requirementsDoc} className="text-sm prose prose-sm prose-invert max-w-none text-gray-300" />
                     ) : (
                       <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-3">
                         <FileText className="w-10 h-10 text-gray-600" />

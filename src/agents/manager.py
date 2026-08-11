@@ -270,6 +270,7 @@ class AgentManager:
         phase_cli_model: Optional[str] = None,
         phase_glm_token_env: Optional[str] = None,
         phase_thinking_level: Optional[str] = None,
+        assign_to_task: bool = False,
     ) -> Agent:
         """Create an agent for a specific task.
 
@@ -286,6 +287,19 @@ class AgentManager:
             phase_cli_tool: Per-phase CLI tool override (falls back to cli_type or global default)
             phase_cli_model: Per-phase CLI model override (falls back to global default)
             phase_glm_token_env: Per-phase GLM token env variable override (falls back to global default)
+            assign_to_task: If True, set task.assigned_agent_id/status="in_progress"/
+                started_at in the SAME commit as the stub Agent row below, instead of
+                leaving it to the caller to do afterward. Closes a real race: the stub
+                Agent row (with current_task_id set) is committed here, before the slow
+                worktree/tmux/prompt work below -- a caller that only assigns the task
+                AFTER this method returns can lose that write entirely if the process
+                dies in between (e.g. a `heph restart` landing mid-dispatch), leaving
+                Agent.current_task_id correctly set but Task.assigned_agent_id
+                permanently null even after the task later completes successfully.
+                Observed live: exactly this sequence orphaned a task's assigned_agent_id
+                forever, hiding its "view tmux output" button. Defaults to False since
+                not every caller wants this task flipped to "in_progress" immediately
+                (e.g. validator agents, which don't take over the reviewed task).
 
         Returns:
             Created agent
@@ -386,6 +400,12 @@ class AgentManager:
             health_check_failures=0,
         )
         session.add(agent)
+        if assign_to_task:
+            claimed_task = session.query(Task).filter_by(id=task.id).first()
+            if claimed_task:
+                claimed_task.assigned_agent_id = agent_id
+                claimed_task.status = "in_progress"
+                claimed_task.started_at = datetime.utcnow()
         session.commit()
         session.close()
 

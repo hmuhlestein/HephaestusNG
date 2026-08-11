@@ -351,6 +351,94 @@ class TestVerifyOutputArtifact:
         assert result is None
 
 
+class TestVerifyOutputArtifactWorktreeRecovery:
+    """Regression: when wf.working_directory is empty and recovery falls
+    back to a worktree record, it must prefer the CURRENTLY completing
+    task's own agent's worktree over the workflow's earliest one.
+
+    "Earliest" was the right heuristic for the original transient-tracking-
+    gap case (one shared worktree, briefly untracked), but breaks once a
+    workflow has accumulated several genuinely DISCONNECTED isolated
+    worktrees over multiple manual redo rounds (review-mode
+    request_changes, a manual phase rerun) after its original worktree was
+    already cleaned up post-merge -- each redo spawns its own fresh
+    isolated worktree, and "earliest" then points at some unrelated one
+    from a past round. Observed live: an architectural_review re-run after
+    a development redo had its own genuinely-written review.md rejected as
+    "missing" because verification checked a stale, disconnected worktree.
+    """
+
+    @pytest.fixture
+    def real_db(self, tmp_path):
+        from src.core.database import DatabaseManager as _DBM
+
+        db = _DBM(str(tmp_path / "test.db"))
+        db.create_tables()
+        return db
+
+    def test_prefers_completing_agents_own_worktree_over_earliest(self, real_db, tmp_path):
+        from src.core.database import Agent, AgentWorktree, Task, Workflow
+
+        # An earlier redo round's agent -- old, stale, and has nothing to
+        # do with what THIS task's agent just wrote.
+        stale_wt = tmp_path / "stale-worktree"
+        stale_wt.mkdir()
+
+        # This run's completing agent -- fresh worktree with the real output.
+        fresh_wt = tmp_path / "fresh-worktree"
+        (fresh_wt / ".hephaestus" / "architectural_review").mkdir(parents=True)
+        (fresh_wt / ".hephaestus" / "architectural_review" / "review.md").write_text(
+            "---\ntype: architectural_review_result\n---\n\n# Review"
+        )
+
+        with real_db.session_scope() as session:
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="active", working_directory=None,
+            ))
+            session.add(Agent(id="agent-old", system_prompt="p", status="terminated", cli_type="claude"))
+            session.add(Task(
+                id="task-old", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="d", done_definition="d", status="done",
+                assigned_agent_id="agent-old",
+            ))
+            session.add(AgentWorktree(
+                agent_id="agent-old", worktree_path=str(stale_wt), branch_name="b-old",
+                parent_commit_sha="x", base_commit_sha="x",
+            ))
+
+            session.add(Agent(id="agent-new", system_prompt="p", status="working", cli_type="claude"))
+            session.add(Task(
+                id="task-new", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="d", done_definition="d", status="in_progress",
+                assigned_agent_id="agent-new",
+            ))
+            session.add(AgentWorktree(
+                agent_id="agent-new", worktree_path=str(fresh_wt), branch_name="b-new",
+                parent_commit_sha="x", base_commit_sha="x",
+            ))
+
+        phase = Mock(name="architectural_review", id="phase-1")
+        phase.name = "architectural_review"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-new", assigned_agent_id="agent-new")
+
+        session = real_db.get_session()
+        try:
+            with patch(
+                "src.autopilot.spec.get_phase_required_files", return_value=["review.md"]
+            ), patch("src.autopilot.spec.load_optional_phases", return_value=[]):
+                result = TaskCompletionService.verify_output_artifact(
+                    session=session, task=task, phase=phase
+                )
+            assert result is None, f"expected pass via task-new's own fresh worktree, got: {result}"
+
+            from src.core.database import Workflow as _Workflow
+            wf = session.query(_Workflow).filter_by(id="wf-1").first()
+            assert wf.working_directory == str(fresh_wt)
+        finally:
+            session.close()
+
+
 class TestVerifyOutputSurvivedCommit:
     """Regression: verify_output_artifact found the declared output in the
     worktree BEFORE 'done' was accepted -- but a real incident showed the
