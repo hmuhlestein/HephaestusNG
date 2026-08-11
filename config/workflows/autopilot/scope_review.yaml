@@ -56,7 +56,44 @@ additional_notes: |
   with plenty of both already present. You only read, compare, and write JSON.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 1: READ BOTH DOCUMENTS
+  STEP 1: CHECK FEATURE TYPE AND REVIEW HISTORY
+  ═══════════════════════════════════════════════════════════════════════
+
+  ```bash
+  # Check if this is a tech-debt feature (uses tech_debt_requirements phase)
+  ls ./.hephaestus/tech_debt_requirements/ 2>/dev/null && echo "TECH_DEBT_FLOW"
+
+  # Check if this feature has been through the full pipeline before
+  # by looking for outputs from later phases
+  ls -d ./.hephaestus/development/ ./.hephaestus/qa_validation/ ./.hephaestus/adversarial_review/ ./.hephaestus/security_review/ 2>/dev/null | head -5
+  ls ./.hephaestus/scope_review/ 2>/dev/null  # previous scope review output
+  ```
+
+  If `.hephaestus/tech_debt_requirements/` exists, this is a TECH DEBT
+  flow. Tech debt features fix existing issues — scope naturally expands
+  as more issues are discovered. For tech debt:
+  - Almost always PASS. New bug fixes, refactors, and improvements found
+    during development/review are legitimate scope additions.
+  - Only FAIL if the scope adds an entirely unrelated NEW feature (not a
+    fix or improvement to existing code).
+  - List items in out_of_scope for visibility, but don't fail over them.
+
+  If outputs from later phases exist (development, qa_validation, etc.),
+  this is a RE-REVIEW — the feature has been through the pipeline before
+  and was sent back due to gaps discovered during development or review.
+
+  For RE-REVIEWS (any feature type):
+  - Scope increases that address gaps discovered during development/QA/review
+    are LEGITIMATE and should PASS (not FAIL).
+  - Common legitimate additions: error handling, edge cases, security
+    hardening, test coverage, documentation gaps found during QA.
+  - Only FAIL if the scope increase adds an entirely NEW capability or
+    feature not related to the original design goals.
+  - When in doubt, PASS with the item listed in out_of_scope — the
+    holistic judgment bar is lower on re-reviews.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 2: READ BOTH DOCUMENTS
   ═══════════════════════════════════════════════════════════════════════
 
   ```bash
@@ -141,6 +178,10 @@ additional_notes: |
     something design.md itself implies inconsistently (e.g. its own code
     example uses a value its schema comment omits). List every item you
     notice either way — non-empty lists do NOT force FAIL by themselves.
+    TECH DEBT flows: almost always PASS — scope naturally expands as more
+    issues are found. Only fail for unrelated new features.
+    RE-REVIEWS: lower the bar — scope increases from discovered gaps are
+    legitimate. Only fail for entirely new capabilities.
   - out_of_scope: list of requirement strings present in requirements.md
     but NOT in design.md (verbatim text from requirements.md), each
     still listed even when benign enough not to affect verdict.
