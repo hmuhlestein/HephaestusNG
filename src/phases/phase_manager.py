@@ -1655,6 +1655,40 @@ class PhaseManager:
             logger.info(f"Workflow {self.workflow_id} completed (all phases done)")
             self._populate_feature_folder(session, workflow)
 
+    # Orchestrator-provided context files copied into every worktree at
+    # creation time (see WorktreeManager's context-file writing, logged as
+    # "Wrote N context file(s) to .../.hephaestus") -- never a phase's own
+    # declared output, so _known_output_basenames below can't discover them
+    # by iterating Phase.outputs.
+    _CONTEXT_FILE_BASENAMES = {"design.md", "context.md"}
+
+    def _known_output_basenames(self, session, workflow_id: str) -> set:
+        """Basenames of every file this workflow's own phases are actually
+        documented to produce, read from Phase.outputs -- populated from
+        each phase's own YAML "outputs:" list at workflow-definition load
+        time (see initialize_workflow). Scoped to THIS workflow's real
+        phases rather than a hardcoded global list, so it stays correct as
+        phases/outputs change without needing a matching edit here.
+
+        Reuses spec.py's _extract_declared_files, the same normalizer
+        get_phase_required_files uses for this exact field, since
+        Phase.outputs is a Text column holding either a real list or a
+        JSON-ish/repr-ish string of one depending on how it was written --
+        and since phases also declare non-file outputs under the same
+        "outputs:" list (e.g. "source code in project path", "pull request
+        created and merged"), which that normalizer already filters out via
+        its filename-shaped regex.
+        """
+        from pathlib import Path
+
+        from src.autopilot.spec import _extract_declared_files
+
+        basenames = set(self._CONTEXT_FILE_BASENAMES)
+        for phase in session.query(Phase).filter_by(workflow_id=workflow_id).all():
+            for entry in _extract_declared_files(phase.outputs):
+                basenames.add(Path(entry).name)
+        return basenames
+
     def _populate_feature_folder(self, session, workflow) -> None:
         """Create .hephaestus/features/<dir>/ and copy all run artifacts into it.
 
@@ -1715,7 +1749,39 @@ class PhaseManager:
             docs_dir = feature_dir / "docs"
             docs_dir.mkdir(parents=True, exist_ok=True)
 
-            _doc_extensions = {".md", ".json", ".txt", ".log", ".csv", ".html"}
+            # Only ever archive the filenames this workflow's own phases are
+            # actually documented to produce (Phase.outputs, read via
+            # _known_output_basenames) -- NOT every doc-extension file the
+            # sweep happens to find. A shared worktree can carry leftover
+            # files from an unrelated prior run (observed live: a three-day-
+            # old architecture.md/docs.md/summary.md/feature_report.html from
+            # a completely different feature got archived as this workflow's
+            # own output, since the old sweep trusted any *.md/*.json/*.html/
+            # etc. it found regardless of what wrote it or when).
+            _known_doc_basenames = self._known_output_basenames(session, workflow.id)
+            # Second, independent guard: even a well-known filename must have
+            # been touched no earlier than this workflow itself started --
+            # closes the same hole for a stale file that happens to share a
+            # real output's name (e.g. a leftover architecture.md from
+            # whatever ran in this worktree/path before). st_mtime is a POSIX
+            # timestamp (UTC-based); workflow.created_at is naive but stored
+            # as UTC throughout this codebase (see CLAUDE.md's utc-only
+            # invariant), so it must be tagged UTC explicitly here rather
+            # than passed to .timestamp() bare, which assumes local tz for
+            # naive datetimes and would silently misfire depending on the
+            # server's timezone.
+            from datetime import timezone as _timezone
+            workflow_start_ts = (
+                workflow.created_at.replace(tzinfo=_timezone.utc).timestamp()
+                if workflow.created_at else 0
+            )
+
+            def _is_fresh_known_output(f: Path) -> bool:
+                return (
+                    f.is_file()
+                    and f.name in _known_doc_basenames
+                    and f.stat().st_mtime >= workflow_start_ts
+                )
 
             # 1. Production artifacts from worktree's .hephaestus/ (git-excluded,
             #    the worktree copy is canonical and complete here). tmux/,
@@ -1725,7 +1791,7 @@ class PhaseManager:
             _sweep_excluded_dirs = {"tmux", "features", "scratch"}
             if wt_hephaestus.is_dir():
                 for f in wt_hephaestus.rglob("*"):
-                    if not (f.is_file() and f.suffix in _doc_extensions):
+                    if not _is_fresh_known_output(f):
                         continue
                     rel = f.relative_to(wt_hephaestus)
                     if rel.parts[0] in _sweep_excluded_dirs:
@@ -1735,12 +1801,14 @@ class PhaseManager:
                     if not dest.exists():
                         _shutil.copy2(str(f), str(dest))
 
-            # 2. feature_report.html → feature dir root (where UI expects it)
+            # 2. feature_report.html → feature dir root (where UI expects it).
+            #    Same freshness/known-name guard as step 1 -- this reads
+            #    directly from the worktree as a fallback, bypassing that sweep.
             for candidate in [
                 docs_dir / "feature_report.html",
                 wt_hephaestus / "feature_report.html",
             ]:
-                if candidate.is_file():
+                if candidate.is_file() and _is_fresh_known_output(candidate):
                     dest = feature_dir / "feature_report.html"
                     if not dest.exists():
                         _shutil.copy2(str(candidate), str(dest))
@@ -1801,7 +1869,16 @@ class PhaseManager:
                 try:
                     _metrics = {
                         "design_name": _design_name_for_metrics,
-                        "workflow_id": self.workflow_id,
+                        # The workflow this call was actually invoked for --
+                        # NOT self.workflow_id, PhaseManager's legacy
+                        # single-workflow instance attribute (this class also
+                        # tracks multiple concurrent workflows via
+                        # self.active_executions). Using self.workflow_id
+                        # here risked recording the WRONG workflow_id in
+                        # pipeline_metrics.json under concurrent workflows --
+                        # exactly the field _find_archived_feature_report
+                        # matches archived reports by.
+                        "workflow_id": workflow.id,
                         "project_path": str(project_path),
                         "docs_dir": str(docs_dir),
                         "feature_folder": str(feature_dir),
@@ -1825,7 +1902,15 @@ class PhaseManager:
 
             logger.info(f"[FEATURE-FOLDER] Created {feature_dir}")
         except Exception as e:
-            logger.warning(f"[FEATURE-FOLDER] Failed to populate feature folder: {e}")
+            # exc_info=True so a bug in this function (e.g. a NameError from
+            # a missing import) surfaces its actual traceback in the logs
+            # instead of an opaque one-line message -- a silent failure here
+            # means the whole features gallery archive is quietly skipped
+            # for that run, with no other signal anything went wrong.
+            logger.warning(
+                f"[FEATURE-FOLDER] Failed to populate feature folder: {e}",
+                exc_info=True,
+            )
 
     def get_workflow_status(self) -> Dict[str, Any]:
         """Get current workflow status.

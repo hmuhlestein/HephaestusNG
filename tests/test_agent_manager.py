@@ -158,6 +158,55 @@ class TestCreateAgentForTask:
             assert saved_agent.current_task_id == "task-1"
 
     @pytest.mark.asyncio
+    async def test_assign_to_task_persists_claim_before_slow_setup(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Regression: the stub Agent row (with current_task_id set) is
+        committed immediately, before the slow worktree/tmux/prompt work
+        below -- but without assign_to_task, Task.assigned_agent_id/status
+        is only set by the CALLER after this method returns. A crash in
+        that window (e.g. a `heph restart` landing mid-dispatch) loses that
+        second write entirely: Agent.current_task_id ends up correctly
+        persisted, but Task.assigned_agent_id stays permanently null even
+        after the task later completes successfully -- observed live, and
+        it hid the task's "view tmux output" button forever with no way to
+        tell which agent had done the work.
+
+        assign_to_task=True closes the gap by claiming the task in the SAME
+        commit as the stub Agent row, before any of the slow work runs -- so
+        even a process that dies partway through the worktree/tmux/prompt
+        setup (simulated here with SystemExit, which -- unlike a plain
+        Exception -- isn't caught by create_agent_for_task's own internal
+        `except Exception` cleanup, so it accurately models an abrupt
+        process kill rather than a handled in-process failure) already has
+        the claim durably committed.
+        """
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
+            side_effect=SystemExit("simulated process kill mid-dispatch")
+        )
+
+        with pytest.raises(SystemExit, match="simulated process kill mid-dispatch"):
+            await mock_agent_manager.create_agent_for_task(
+                task=sample_task,
+                enriched_data={},
+                memories=[],
+                project_context="",
+                cli_type="pi",
+                working_directory="/tmp/test-project",
+                assign_to_task=True,
+            )
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "in_progress"
+            assert task.assigned_agent_id is not None
+            assert task.started_at is not None
+
+            agent = session.query(Agent).filter_by(id=task.assigned_agent_id).first()
+            assert agent is not None
+            assert agent.current_task_id == "task-1"
+
+    @pytest.mark.asyncio
     async def test_pipe_pane_transcript_command_autoflushes(
         self, mock_agent_manager, sample_task, db_manager
     ):

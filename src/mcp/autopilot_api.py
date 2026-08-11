@@ -4267,12 +4267,16 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 _Task.workflow_id == wf.id,
                 ~_Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%")
             ).all()
-            # Check all tasks are done AND all phases are completed
+            # Check all tasks are done AND all phases are completed (or
+            # legitimately skipped -- see derive_feature_status's matching
+            # fix for why excluding "skipped" here disagreed with the
+            # workflow-level derivation and caused this same feature to
+            # flap back to "active" on the next self-heal poll).
             all_phases_done = db.query(_PhaseExecution).join(
                 _Phase, _PhaseExecution.phase_id == _Phase.id
             ).filter(
                 _Phase.workflow_id == wf.id,
-                _PhaseExecution.status != "completed"
+                _PhaseExecution.status.notin_(["completed", "skipped"])
             ).count() == 0
             if all_tasks and all(t.status == "done" for t in all_tasks) and all_phases_done:
                 wf.status = "completed"
@@ -4549,12 +4553,13 @@ async def _spawn_agent_for_task(task_id: str, phase_id: Optional[str]) -> None:
             project_context="",
             agent_type="phase",
             use_existing_worktree=True,
+            # Assign the task in the same commit as the Agent row itself,
+            # before the slow worktree/tmux/prompt work -- otherwise a crash
+            # in that window (e.g. a backend restart) leaves Agent.current_task_id
+            # set but Task.assigned_agent_id permanently null. See
+            # create_agent_for_task's assign_to_task docstring for the incident.
+            assign_to_task=True,
         )
-
-        task.assigned_agent_id = agent.id
-        task.status = "in_progress"
-        task.started_at = datetime.utcnow()
-        session.commit()
         logger.info(f"[RESUME] Restarted task {task_id[:8]} with agent {agent.id[:8]}")
     except Exception as e:
         logger.error(f"[RESUME] Failed to restart task {task_id[:8]}: {e}", exc_info=True)

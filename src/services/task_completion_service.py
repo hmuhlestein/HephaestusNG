@@ -114,29 +114,55 @@ class TaskCompletionService:
             # that fell back to an ISOLATED worktree (create_agent_for_task's
             # shared_worktree branch reuses wf.working_directory directly and
             # never creates one) -- which only happens when wf.working_directory
-            # was already empty at THAT agent's own dispatch time. Recovering
-            # from the CURRENTLY completing task's own agent is unstable: each
-            # recovery just adopts whoever happens to finish next, drifting the
-            # "shared" worktree to a different disconnected path every time
-            # working_directory goes empty. The workflow's EARLIEST isolated
-            # worktree is far more likely to be the one every other phase has
-            # actually been committing to and reading from -- recover that one
-            # instead, scoped to this workflow (not just this task's agent).
+            # was already empty at THAT agent's own dispatch time.
+            #
+            # Prefer the CURRENTLY completing task's own agent's worktree
+            # first -- it's the one this agent actually wrote its output to,
+            # right now. Only fall back to the workflow's EARLIEST isolated
+            # worktree when the current agent has none of its own record
+            # (the original transient-tracking-gap case this recovery was
+            # built for, where every phase still shares one worktree).
+            #
+            # The "always prefer earliest" version broke down once a
+            # workflow could legitimately gain several DISCONNECTED isolated
+            # worktrees over its life, not just one incidental gap -- e.g. a
+            # completed workflow re-entered later via review-mode
+            # request_changes or a manual phase rerun, each spawning its own
+            # fresh isolated worktree since wf.working_directory is null by
+            # then (the original worktree was already cleaned up after
+            # merge). "Earliest" in that case picks some unrelated worktree
+            # from an earlier redo round, not the one the agent that's
+            # completing RIGHT NOW actually used -- observed live: an
+            # architectural_review re-run after a development redo got its
+            # own genuinely-written review.md rejected as "missing" because
+            # verification checked a completely different, stale worktree.
             recovered = False
             from src.core.database import AgentWorktree, Task as _Task
 
-            wt_record = (
+            wt_candidates = []
+            if task.assigned_agent_id:
+                own_wt_record = (
+                    session.query(AgentWorktree)
+                    .filter_by(agent_id=task.assigned_agent_id)
+                    .first()
+                )
+                if own_wt_record:
+                    wt_candidates.append(own_wt_record)
+            wt_candidates.append(
                 session.query(AgentWorktree)
                 .join(_Task, _Task.assigned_agent_id == AgentWorktree.agent_id)
                 .filter(_Task.workflow_id == task.workflow_id)
                 .order_by(AgentWorktree.created_at.asc())
                 .first()
             )
-            if wt_record and wt_record.worktree_path and _Path(wt_record.worktree_path).is_dir():
-                if wf:
-                    wf.working_directory = wt_record.worktree_path
-                    logger.info(f"[TASK-COMPLETE] Recovered working_directory for workflow {task.workflow_id[:8]} from earliest agent worktree: {wt_record.worktree_path}")
-                    recovered = True
+
+            for wt_record in wt_candidates:
+                if wt_record and wt_record.worktree_path and _Path(wt_record.worktree_path).is_dir():
+                    if wf:
+                        wf.working_directory = wt_record.worktree_path
+                        logger.info(f"[TASK-COMPLETE] Recovered working_directory for workflow {task.workflow_id[:8]} from agent worktree: {wt_record.worktree_path}")
+                        recovered = True
+                    break
             if not recovered:
                 logger.error(
                     f"Task {task.id} (phase {phase.name}): workflow {task.workflow_id} "

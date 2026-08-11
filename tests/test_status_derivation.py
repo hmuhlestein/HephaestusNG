@@ -110,6 +110,53 @@ class TestDeriveFeatureStatus:
             result = derive_feature_status(session, "feat-1")
         assert result == "completed"
 
+    def test_returns_completed_despite_a_skipped_phase(self, db_manager):
+        """A conditionally-skipped phase (e.g. architectural_review/
+        adversarial_review/security_review) must count as done, the same
+        way derive_workflow_status already treats "skipped" as terminal
+        (its own PhaseExecution.status.notin_(["completed", "skipped"])
+        check). Excluding "skipped" here disagreed with that and flapped a
+        feature back to "active" on every self-heal poll right after
+        review_feature's approve handler had just set it "completed" --
+        observed live, the feature never settled on Done."""
+        from src.core.database import Phase, PhaseExecution
+
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(id="wf-1", name="Test", status="completed", phases_folder_path="/tmp/phases")
+            session.add(wf)
+
+            feature = Feature(
+                id="feat-1",
+                design_id="design-1",
+                feature_key="test-feature",
+                name="Test Feature",
+                scope="Test scope",
+                workflow_id="wf-1",
+                status="active",
+            )
+            session.add(feature)
+
+            phase_a = Phase(id="phase-a", workflow_id="wf-1", name="development", order=1, description="d", done_definitions=["x"])
+            phase_b = Phase(id="phase-b", workflow_id="wf-1", name="security_review", order=2, description="d", done_definitions=["x"])
+            session.add(phase_a)
+            session.add(phase_b)
+            session.add(PhaseExecution(id="pe-a", phase_id="phase-a", workflow_execution_id="wf-1", status="completed"))
+            session.add(PhaseExecution(id="pe-b", phase_id="phase-b", workflow_execution_id="wf-1", status="skipped"))
+
+            task = Task(
+                id="task-1",
+                workflow_id="wf-1",
+                raw_description="Task 1",
+                done_definition="Done",
+                status="done",
+            )
+            session.add(task)
+
+        with db_manager.session_scope() as session:
+            result = derive_feature_status(session, "feat-1")
+        assert result == "completed"
+
     def test_returns_active_when_tasks_in_progress(self, db_manager):
         """Should return 'active' when some tasks are in progress."""
         with db_manager.session_scope() as session:

@@ -314,7 +314,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                 <FileText className="w-6 h-6 text-blue-600 dark:text-blue-400" />
                 <div>
                   <h3 className="text-xl font-semibold text-gray-800 dark:text-white">
-                    Task Details
+                    {taskDetails?.phase_info?.name || 'Task Details'}
                   </h3>
                   <p className="text-sm text-gray-600 dark:text-gray-400 font-mono">
                     {taskDetails?.user_prompt?.slice(0, 50) || taskDetails?.id || taskId}
@@ -694,8 +694,8 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                               <Copy className="w-3 h-3" />
                             </button>
                           </div>
-                          <div className="h-32 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border overflow-y-auto">
-                            <MarkdownRenderer content={taskDetails.user_prompt || ''} className="text-sm prose prose-sm prose-violet max-w-none" />
+                          <div className="h-32 p-3 bg-gray-50 dark:bg-gray-800/60 rounded-lg border border-gray-200 dark:border-gray-700 overflow-y-auto">
+                            <MarkdownRenderer content={taskDetails.user_prompt || ''} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none" />
                           </div>
                         </div>
 
@@ -712,8 +712,8 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                               <Copy className="w-3 h-3" />
                             </button>
                           </div>
-                          <div className="h-32 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border overflow-y-auto">
-                            <MarkdownRenderer content={taskDetails.system_prompt || 'No system prompt available'} className="text-sm prose prose-sm prose-violet max-w-none" />
+                          <div className="h-32 p-3 bg-gray-50 dark:bg-gray-800/60 rounded-lg border border-gray-200 dark:border-gray-700 overflow-y-auto">
+                            <MarkdownRenderer content={taskDetails.system_prompt || 'No system prompt available'} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none" />
                           </div>
                         </div>
 
@@ -731,7 +731,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                             </button>
                           </div>
                           <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-700">
-                            <MarkdownRenderer content={taskDetails.done_definition || ''} className="text-sm prose prose-sm prose-violet max-w-none" />
+                            <MarkdownRenderer content={taskDetails.done_definition || ''} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none" />
                           </div>
                         </div>
                       </motion.div>
@@ -1326,7 +1326,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                         ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700'
                         : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700'
                     }`}>
-                      <MarkdownRenderer content={taskDetails.completion_notes || taskDetails.failure_reason || ''} className="text-sm prose prose-sm prose-violet max-w-none break-words" />
+                      <MarkdownRenderer content={taskDetails.completion_notes || taskDetails.failure_reason || ''} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none break-words" />
                     </div>
                   </div>
                 )}
