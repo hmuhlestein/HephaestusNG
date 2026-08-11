@@ -13,6 +13,7 @@ Usage:
 
 import json
 import logging
+import os
 import re
 import subprocess
 import uuid
@@ -514,11 +515,12 @@ class OpenCodeCollector(CostCollector):
         return entries, 1
 
 
-class CodexStubCollector(CostCollector):
-    """Stub collector for Codex CLI.
+class CodexUsageCollector(CostCollector):
+    """Collect token deltas from Codex's cumulative usage events.
 
-    Codex is not yet installed/available for inspection.
-    Logs a warning and returns empty.
+    Codex transcripts report cumulative token totals for the session. Cost is
+    only estimated when all four Codex per-million-token environment rates are
+    explicitly configured; transcripts do not contain billable account pricing.
     """
 
     def collect(
@@ -530,9 +532,120 @@ class CodexStubCollector(CostCollector):
         session_file: Path,
         checkpoint: int,
     ) -> Tuple[List[dict], int]:
-        """Stub: Codex collection not supported."""
-        logger.warning(f"Codex cost collection not supported for task {task_id[:8]} (session {session_id[:8]})")
-        return [], checkpoint
+        entries = []
+        lines_processed = checkpoint
+        model = None
+        previous_usage = None
+
+        try:
+            with open(session_file) as f:
+                for line_num, line in enumerate(f, 1):
+                    lines_processed = line_num
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    payload = data.get("payload", {})
+                    if data.get("type") == "turn_context":
+                        model = payload.get("model") or model
+                        continue
+                    if (
+                        data.get("type") != "event_msg"
+                        or payload.get("type") != "token_count"
+                    ):
+                        continue
+
+                    info = payload.get("info", {}).get("total_token_usage")
+                    if not isinstance(info, dict):
+                        continue
+                    current_usage = {
+                        "input_tokens": _nonnegative_int(info.get("input_tokens")),
+                        "cached_input_tokens": _nonnegative_int(info.get("cached_input_tokens")),
+                        "output_tokens": _nonnegative_int(info.get("output_tokens")),
+                        "reasoning_output_tokens": _nonnegative_int(
+                            info.get("reasoning_output_tokens")
+                        ),
+                    }
+                    if previous_usage is None:
+                        deltas = current_usage
+                    else:
+                        deltas = {
+                            key: max(0, value - previous_usage[key])
+                            for key, value in current_usage.items()
+                        }
+                    previous_usage = current_usage
+
+                    if line_num <= checkpoint or not any(deltas.values()):
+                        continue
+
+                    rates = _codex_token_rates()
+                    if rates:
+                        cost_usd = sum(
+                            deltas[field] * rates[field] / 1_000_000
+                            for field in rates
+                        )
+                        cost_status = "estimated"
+                    else:
+                        cost_usd = 0.0
+                        cost_status = "unavailable"
+
+                    entries.append(
+                        {
+                            "id": f"cost-{uuid.uuid4().hex[:8]}",
+                            "task_id": task_id,
+                            "agent_id": agent_id,
+                            "workflow_id": workflow_id,
+                            "source": "codex",
+                            "model": model,
+                            "input_tokens": deltas["input_tokens"],
+                            "output_tokens": deltas["output_tokens"],
+                            "cache_read_tokens": deltas["cached_input_tokens"],
+                            "cache_write_tokens": 0,
+                            "reasoning_tokens": deltas["reasoning_output_tokens"],
+                            "cost_usd": cost_usd,
+                            "recorded_at": datetime.utcnow(),
+                            "raw_usage": {
+                                "token_usage": info,
+                                "cost_status": cost_status,
+                            },
+                        }
+                    )
+        except FileNotFoundError:
+            logger.warning(f"Session file not found: {session_file}")
+        except OSError as exc:
+            logger.error(f"Error collecting Codex usage from {session_file}: {exc}")
+
+        return entries, lines_processed
+
+
+def _nonnegative_int(value: Any) -> int:
+    """Convert a transcript token field to a non-negative integer."""
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _codex_token_rates() -> Optional[dict[str, float]]:
+    """Read explicitly configured Codex USD-per-million-token estimates.
+
+    Codex subscription usage cannot be inferred from a transcript. Set all
+    four variables only when the account's billing rates are known:
+    CODEX_INPUT_COST_PER_MILLION, CODEX_CACHED_INPUT_COST_PER_MILLION,
+    CODEX_OUTPUT_COST_PER_MILLION, and CODEX_REASONING_COST_PER_MILLION.
+    """
+    variables = {
+        "input_tokens": "CODEX_INPUT_COST_PER_MILLION",
+        "cached_input_tokens": "CODEX_CACHED_INPUT_COST_PER_MILLION",
+        "output_tokens": "CODEX_OUTPUT_COST_PER_MILLION",
+        "reasoning_output_tokens": "CODEX_REASONING_COST_PER_MILLION",
+    }
+    try:
+        rates = {field: float(os.environ[name]) for field, name in variables.items()}
+    except (KeyError, ValueError):
+        return None
+    return rates if all(rate >= 0 for rate in rates.values()) else None
 
 
 def _discover_session_file(session_id: str, cwd: str) -> Optional[Path]:
@@ -588,6 +701,47 @@ def _discover_session_file(session_id: str, cwd: str) -> Optional[Path]:
                 return matches[0]
     except Exception:
         pass
+
+    return None
+
+
+def _discover_codex_session_file(session_id: str, cwd: str) -> Optional[Path]:
+    """Find the Codex transcript recorded for a Hephaestus session.
+
+    Codex assigns a UUID itself.  ``CodexAgent.record_session`` persists that
+    UUID in the worktree so it can be associated with Hephaestus's stable
+    session ID here.
+    """
+    if ".." in cwd or "~" in cwd:
+        logger.warning(f"Rejected Codex session discovery with suspicious cwd: {cwd}")
+        return None
+
+    try:
+        session_map = json.loads(
+            (Path(cwd) / ".hephaestus" / "codex_sessions.json").read_text()
+        )
+        codex_session_id = str(uuid.UUID(session_map.get(session_id)))
+    except (OSError, ValueError, json.JSONDecodeError, TypeError, AttributeError):
+        return None
+
+    sessions_dir = Path.home() / ".codex" / "sessions"
+    try:
+        base = sessions_dir.resolve()
+        if not sessions_dir.exists():
+            return None
+        for transcript in sorted(sessions_dir.glob("**/*.jsonl"), reverse=True):
+            if not transcript.is_file() or not transcript.resolve().is_relative_to(base):
+                continue
+            with transcript.open() as f:
+                metadata = json.loads(f.readline())
+            payload = metadata.get("payload", {})
+            if (
+                metadata.get("type") == "session_meta"
+                and payload.get("session_id") == codex_session_id
+            ):
+                return transcript
+    except (OSError, ValueError, json.JSONDecodeError, TypeError):
+        return None
 
     return None
 
@@ -716,7 +870,9 @@ def collect_task_cost(task_id: str) -> None:
             # This path would need stdout capture file
             pass
         elif cli_type == "codex":
-            pass  # Stub
+            cwd = _get_agent_cwd(db, agent, task)
+            if cwd:
+                session_file = _discover_codex_session_file(session_id, cwd)
 
         if not session_file:
             logger.debug(f"[COST-COLLECT] No session file found for {cli_type} session {session_id[:8]} — skipping")
@@ -728,7 +884,7 @@ def collect_task_cost(task_id: str) -> None:
             "claude_code": ClaudeCodeCollector(),
             "claude": ClaudeCodeCollector(),
             "opencode": OpenCodeCollector(),
-            "codex": CodexStubCollector(),
+            "codex": CodexUsageCollector(),
         }
         collector = collectors.get(cli_type)
         if not collector:

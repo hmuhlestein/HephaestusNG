@@ -762,6 +762,8 @@ class AgentManager:
                 task.id, instructions_rel_path,
                 agent_name=f"hephaestus-{phase_name.replace('_', '-')}" if phase_name else None,
             )
+            if cli_type == "codex" and session_id:
+                instructions_pointer += f"\nHephaestus Session ID: {session_id}"
 
             launch_result = cli_agent.get_launch_command(
                 system_prompt=system_prompt,
@@ -802,6 +804,7 @@ class AgentManager:
             await asyncio.sleep(0.3)
 
             # Now send the claude launch command
+            cli_launch_started_at = datetime.utcnow().timestamp()
             pane.send_keys(
                 launch_command, enter=True
             )  # enter=True sends Enter key after command
@@ -854,7 +857,10 @@ class AgentManager:
             # written above and referenced by instructions_pointer) so the
             # agent still gets safety rules, tool descriptions, memory
             # context, and phase instructions.
-            if launch_result.prompt_delivery == LaunchResult.AGENT_FILE and system_prompt:
+            if launch_result.prompt_delivery in (
+                LaunchResult.AGENT_FILE,
+                LaunchResult.DEFERRED,
+            ) and system_prompt:
                 initial_message = (
                     system_prompt
                     + "\n\n---\n\n"
@@ -952,6 +958,10 @@ class AgentManager:
                 agent_id=agent_id,
                 task_id=task.id,
                 max_retries=3,
+            )
+            await self._record_cli_session(
+                cli_agent,
+                session_id, branch_path, cli_launch_started_at
             )
 
             # Best-effort check that the agent actually engaged with its
@@ -1600,6 +1610,19 @@ class AgentManager:
         output = pane.cmd("capture-pane", "-p", "-S", "-1000").stdout
         output_text = "\n".join(output) if output else ""
         return verification_string in output_text
+
+    async def _record_cli_session(
+        self, cli_agent, session_id: str, working_directory: Optional[str], launched_at: float
+    ) -> None:
+        """Persist a CLI session after its transcript has been flushed."""
+        if not session_id or not working_directory:
+            return
+        for attempt in range(5):
+            if cli_agent.record_session(session_id, working_directory, launched_at):
+                return
+            if attempt < 4:
+                await asyncio.sleep(1)
+        logger.warning("Could not record CLI session %s after prompt delivery", session_id)
 
     async def _send_initial_prompt_with_retry(
         self,
@@ -2392,6 +2415,8 @@ class AgentManager:
                     task.id, instructions_rel_path, restarted=True,
                     agent_name=f"hephaestus-{restart_phase_name.replace('_', '-')}" if restart_phase_name else None,
                 )
+                if agent.cli_type == "codex" and session_id:
+                    instructions_pointer += f"\nHephaestus Session ID: {session_id}"
 
             launch_result = cli_agent.get_launch_command(
                 system_prompt=restart_system_prompt,
@@ -2422,6 +2447,7 @@ class AgentManager:
                 )
 
             # Launch the CLI (pi/claude/etc.) in the fresh session
+            cli_launch_started_at = datetime.utcnow().timestamp()
             pane.send_keys(launch_command, enter=True)
 
             restart_cli_type = agent.cli_type
@@ -2434,7 +2460,10 @@ class AgentManager:
             # agent gets safety rules, tools, and context, then refresh
             # the instructions file already referenced by
             # instructions_pointer above.
-            if launch_result.prompt_delivery == LaunchResult.AGENT_FILE and restart_system_prompt:
+            if launch_result.prompt_delivery in (
+                LaunchResult.AGENT_FILE,
+                LaunchResult.DEFERRED,
+            ) and restart_system_prompt:
                 restart_message = (
                     restart_system_prompt
                     + "\n\n---\n\n"
@@ -2486,6 +2515,10 @@ class AgentManager:
                         agent_id=agent_id,
                         task_id=restart_task_id,
                         max_retries=3,
+                    )
+                    await self._record_cli_session(
+                        cli_agent,
+                        session_id, restart_wd, cli_launch_started_at
                     )
                     if restart_wd:
                         await self._verify_instructions_file_read(

@@ -4,12 +4,17 @@ These tests address the critical test coverage gap identified in ARCHITECTURE_RE
 "create_agent_for_task and restart_agent have no direct test coverage"
 """
 
+import asyncio
+import json
+import shutil
+import time
+import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.interfaces.cli_interface import LaunchResult
+from src.interfaces.cli_interface import CodexAgent, LaunchResult
 
 from src.core.database import (
     Agent,
@@ -1026,6 +1031,145 @@ class TestRestartAgent:
 
         # Verify restart count was incremented (in the new agent)
         # Note: The old agent is terminated, new agent is created
+
+
+class TestCodexTmuxLifecycle:
+    @pytest.mark.asyncio
+    async def test_retries_session_recording_until_transcript_exists(
+        self, mock_agent_manager
+    ):
+        cli_agent = MagicMock()
+        cli_agent.record_session.side_effect = [False, True]
+
+        with patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock) as sleep:
+            await mock_agent_manager._record_cli_session(
+                cli_agent, "heph-session", "/tmp/worktree", 1.0
+            )
+
+        assert cli_agent.record_session.call_count == 2
+        sleep.assert_awaited_once_with(1)
+
+    @pytest.mark.asyncio
+    async def test_launches_delivers_prompt_and_resumes_session(
+        self, mock_agent_manager, tmp_path, monkeypatch
+    ):
+        """Exercise the Codex launch path against a real tmux pane.
+
+        A small fake Codex executable keeps this deterministic while checking
+        the generated command, deferred instruction delivery, and session
+        resume flow through the same tmux boundary used in production.
+        """
+        if not shutil.which("tmux"):
+            pytest.skip("tmux is not installed")
+
+        import libtmux
+
+        fake_bin = tmp_path / "bin"
+        fake_bin.mkdir()
+        fake_codex = fake_bin / "codex"
+        fake_codex.write_text(
+            "#!/bin/sh\n"
+            "printf 'To get started\\n'\n"
+            "while IFS= read -r line; do printf 'received:%s\\n' \"$line\"; done\n"
+        )
+        fake_codex.chmod(0o755)
+
+        cli_agent = CodexAgent()
+        heph_session_id = "heph-codex-lifecycle"
+        instructions = "Codex system prompt\n\n---\n\nImplement the task."
+        instructions_path = mock_agent_manager._write_task_instructions(
+            str(tmp_path), "task-1", instructions
+        )
+        assert (tmp_path / instructions_path).read_text() == instructions
+
+        session_name = f"heph-codex-test-{uuid.uuid4().hex[:8]}"
+        server = libtmux.Server()
+        tmux_session = server.new_session(
+            session_name=session_name,
+            window_name="codex",
+            start_directory=str(tmp_path),
+            attach=False,
+        )
+        pane = tmux_session.attached_window.attached_pane
+        launch = cli_agent.get_launch_command(
+            "Codex system prompt",
+            session_id=heph_session_id,
+            working_directory=str(tmp_path),
+        )
+
+        try:
+            assert launch.prompt_delivery == LaunchResult.DEFERRED
+            pane.send_keys(f'PATH="{fake_bin}:$PATH" {launch.command}', enter=True)
+
+            for _ in range(20):
+                output = "\n".join(pane.cmd("capture-pane", "-p").stdout)
+                if "To get started" in output:
+                    break
+                await asyncio.sleep(0.1)
+            assert "To get started" in output
+
+            real_sleep = asyncio.sleep
+
+            async def short_sleep(_delay):
+                await real_sleep(0.05)
+
+            with patch("src.agents.manager.asyncio.sleep", new=short_sleep):
+                await mock_agent_manager._send_initial_prompt_with_retry(
+                    pane=pane,
+                    cli_agent=cli_agent,
+                    cli_type="codex",
+                    initial_message=f"Read {instructions_path}",
+                    agent_id="agent-1",
+                    task_id="task-1",
+                )
+
+            output = "\n".join(pane.cmd("capture-pane", "-p").stdout)
+            assert f"received:Read {instructions_path}" in output
+
+            codex_session_id = str(uuid.uuid4())
+            transcript = (
+                tmp_path
+                / ".codex"
+                / "sessions"
+                / "2026"
+                / "08"
+                / "11"
+                / "rollout.jsonl"
+            )
+            transcript.parent.mkdir(parents=True)
+            launched_at = time.time()
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {
+                            "session_id": codex_session_id,
+                            "cwd": str(tmp_path),
+                        },
+                    }
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "content": f"Hephaestus Session ID: {heph_session_id}"
+                        },
+                    }
+                )
+                + "\n"
+            )
+            monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+            cli_agent.record_session(heph_session_id, str(tmp_path), launched_at)
+
+            resumed = cli_agent.get_launch_command(
+                "Codex system prompt",
+                session_id=heph_session_id,
+                working_directory=str(tmp_path),
+            )
+            assert f"codex resume {codex_session_id}" in resumed.command
+        finally:
+            tmux_session.kill_session()
 
 
 class TestSendInitialPromptSessionLimitCheck:

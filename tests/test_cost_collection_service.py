@@ -16,9 +16,10 @@ from sqlalchemy.pool import StaticPool
 from src.core.database import Agent, Base, CostEntry, SessionCostCheckpoint, Task, Workflow
 from src.services.cost_collection_service import (
     ClaudeCodeCollector,
-    CodexStubCollector,
+    CodexUsageCollector,
     OpenCodeCollector,
     PiJsonlCollector,
+    _discover_codex_session_file,
     _discover_session_file,
     collect_task_cost,
 )
@@ -66,6 +67,31 @@ def _make_temp_jsonl(lines: list[str]) -> Path:
         for line in lines:
             f.write(line + "\n")
     return Path(path)
+
+
+def _make_codex_token_count(
+    input_tokens: int,
+    cached_input_tokens: int,
+    output_tokens: int,
+    reasoning_output_tokens: int,
+) -> str:
+    """Build a Codex cumulative token-count event."""
+    return json.dumps(
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": input_tokens,
+                        "cached_input_tokens": cached_input_tokens,
+                        "output_tokens": output_tokens,
+                        "reasoning_output_tokens": reasoning_output_tokens,
+                    }
+                },
+            },
+        }
+    )
 
 
 # ── PiJsonlCollector ────────────────────────────────────────────
@@ -212,6 +238,7 @@ class TestPiJsonlCollector:
         entries, _ = collector.collect("s", "t", "w", "a", f, checkpoint=0)
         assert len(entries) == 1
         assert entries[0]["cost_usd"] == 0.0
+        assert entries[0]["raw_usage"]["cost_status"] == "unavailable"
         assert entries[0]["input_tokens"] == 5000
 
     def test_malformed_line_skipped(self):
@@ -372,14 +399,63 @@ class TestClaudeCodeCollector:
         assert len(entries) == 0
 
 
-# ── CodexStubCollector ──────────────────────────────────────────
+# ── CodexUsageCollector ─────────────────────────────────────────
 
 
-class TestCodexStubCollector:
-    def test_returns_empty(self):
-        """Stub collector always returns empty."""
-        collector = CodexStubCollector()
-        entries, checkpoint = collector.collect("s", "t", "w", "a", Path("/fake"), checkpoint=10)
+class TestCodexUsageCollector:
+    def test_collects_cumulative_token_deltas(self):
+        """Codex cumulative token events are converted to per-event deltas."""
+        lines = [
+            json.dumps({"type": "session_meta", "payload": {"session_id": str(uuid.uuid4())}}),
+            json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.6-terra"}}),
+            _make_codex_token_count(100, 10, 20, 5),
+            _make_codex_token_count(180, 30, 50, 12),
+        ]
+        f = _make_temp_jsonl(lines)
+
+        entries, checkpoint = CodexUsageCollector().collect("s", "t", "w", "a", f, 0)
+
+        assert checkpoint == 4
+        assert len(entries) == 2
+        assert entries[0]["source"] == "codex"
+        assert entries[0]["model"] == "gpt-5.6-terra"
+        assert entries[0]["cost_usd"] == 0.0
+        assert entries[1]["input_tokens"] == 80
+        assert entries[1]["cache_read_tokens"] == 20
+        assert entries[1]["output_tokens"] == 30
+        assert entries[1]["reasoning_tokens"] == 7
+
+    def test_checkpoint_uses_prior_cumulative_total(self):
+        """A checkpoint still needs earlier totals as the delta baseline."""
+        lines = [
+            _make_codex_token_count(100, 10, 20, 5),
+            _make_codex_token_count(180, 30, 50, 12),
+        ]
+        f = _make_temp_jsonl(lines)
+
+        entries, checkpoint = CodexUsageCollector().collect("s", "t", "w", "a", f, 1)
+
+        assert checkpoint == 2
+        assert len(entries) == 1
+        assert entries[0]["input_tokens"] == 80
+        assert entries[0]["cache_read_tokens"] == 20
+
+    def test_uses_explicitly_configured_rates(self, monkeypatch):
+        monkeypatch.setenv("CODEX_INPUT_COST_PER_MILLION", "2")
+        monkeypatch.setenv("CODEX_CACHED_INPUT_COST_PER_MILLION", "0.5")
+        monkeypatch.setenv("CODEX_OUTPUT_COST_PER_MILLION", "8")
+        monkeypatch.setenv("CODEX_REASONING_COST_PER_MILLION", "8")
+        f = _make_temp_jsonl([_make_codex_token_count(1_000_000, 0, 1_000_000, 0)])
+
+        entries, _ = CodexUsageCollector().collect("s", "t", "w", "a", f, 0)
+
+        assert entries[0]["cost_usd"] == 10.0
+        assert entries[0]["raw_usage"]["cost_status"] == "estimated"
+
+    def test_missing_file_preserves_checkpoint(self):
+        entries, checkpoint = CodexUsageCollector().collect(
+            "s", "t", "w", "a", Path("/nonexistent/file.jsonl"), 10
+        )
         assert entries == []
         assert checkpoint == 10
 
@@ -456,6 +532,32 @@ class TestDiscoverSessionFile:
         """Returns None when sessions directory doesn't exist."""
         result = _discover_session_file("sess-nonexistent", "/completely/fake/path/xyz123")
         assert result is None
+
+
+class TestDiscoverCodexSessionFile:
+    def test_uses_worktree_session_mapping(self, tmp_path, monkeypatch):
+        """The stable Hephaestus ID resolves to Codex's transcript UUID."""
+        heph_session_id = "hephaestus-project-design-development"
+        codex_session_id = str(uuid.uuid4())
+        working_directory = tmp_path / "worktree"
+        session_map = working_directory / ".hephaestus" / "codex_sessions.json"
+        session_map.parent.mkdir(parents=True)
+        session_map.write_text(json.dumps({heph_session_id: codex_session_id}))
+
+        transcript = tmp_path / ".codex" / "sessions" / "2026" / "08" / "11" / "rollout.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {"session_id": codex_session_id, "cwd": str(working_directory)},
+                }
+            )
+            + "\n"
+        )
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+        assert _discover_codex_session_file(heph_session_id, str(working_directory)) == transcript
 
 
 # ── collect_task_cost (adversarial review B-1 / B-2) ────────────
@@ -630,6 +732,32 @@ class TestCollectTaskCostRealtimeVsFallback:
 
         entries = cost_db_session.query(CostEntry).filter_by(task_id=task.id, agent_id=agent.id).all()
         assert len(entries) == 2, "fallback was suppressed by an unrelated agent's cost entry"
+
+    def test_collects_codex_usage_from_mapped_transcript(self, cost_db_session):
+        """Codex dispatch uses its transcript collector and persists tokens."""
+        task, agent, _ = _make_task_agent_workflow(cost_db_session, cli_type="codex")
+        session_file = _make_temp_jsonl(
+            [
+                json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.6-terra"}}),
+                _make_codex_token_count(100, 10, 20, 5),
+            ]
+        )
+
+        with (
+            patch("src.core.database.get_db") as mock_get_db,
+            patch("src.services.cost_collection_service._extract_session_id", return_value="heph-session"),
+            patch("src.services.cost_collection_service._discover_codex_session_file", return_value=session_file),
+        ):
+            mock_get_db.return_value.__enter__ = lambda self: cost_db_session
+            mock_get_db.return_value.__exit__ = lambda self, *a: False
+
+            collect_task_cost(task.id)
+
+        entry = cost_db_session.query(CostEntry).filter_by(task_id=task.id).one()
+        assert entry.source == "codex"
+        assert entry.cost_usd == 0.0
+        assert entry.input_tokens == 100
+        assert entry.cache_read_tokens == 10
 
 
 class TestCollectTaskCostPartialFailure:

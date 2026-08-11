@@ -7,6 +7,8 @@ effect, independent of the separate WorkflowDefinition.phases_config
 serialization bug fixed in src/mcp/server.py.
 """
 
+from pathlib import Path
+
 from src.workflow_engine.yaml_loader import build_phase
 
 
@@ -62,3 +64,18 @@ def test_build_phase_own_cli_tool_overrides_workflow_default():
     )
 
     assert phase.cli_tool == "claude"
+
+
+def test_autopilot_phases_use_codex_terra_with_pi_fallback():
+    from src.workflow_engine.yaml_loader import load_full_workflow_definition
+
+    workflow = load_full_workflow_definition(
+        Path(__file__).resolve().parents[1] / "config" / "workflows" / "autopilot"
+    )
+
+    assert len(workflow.phases) == 13
+    for phase in workflow.phases:
+        assert phase.cli_tool == "codex"
+        assert phase.cli_model == "gpt-5.6-terra"
+        assert phase.fallback_cli_tool == "pi"
+        assert phase.fallback_cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"

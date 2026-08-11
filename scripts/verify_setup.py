@@ -124,7 +124,7 @@ def main():
         print(
             "  pip uninstall -y anyio pydantic pydantic-core pydantic-settings fastapi mcp"
         )
-        print("  pip install --no-cache-dir -r requirements.txt")
+        print("  uv pip install -e .")
         print("  find . -type d -name __pycache__ -exec rm -rf {} +")
         return 1
 

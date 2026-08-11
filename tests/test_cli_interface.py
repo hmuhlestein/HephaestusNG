@@ -1,9 +1,13 @@
 """Tests for CLI agent interface command construction."""
 
+import json
+import shutil
+import subprocess
+import time
 from pathlib import Path
 from unittest.mock import patch
 
-from src.interfaces.cli_interface import ClaudeCodeAgent
+from src.interfaces.cli_interface import ClaudeCodeAgent, CodexAgent, LaunchResult
 
 
 class TestClaudeSessionExists:
@@ -151,3 +155,112 @@ class TestGetLaunchCommandInstalledAgent:
         assert "--append-system-prompt" in result.command
         assert "--agent " not in result.command
         assert result.prompt_delivery == "flag"
+
+
+class TestCodexAgent:
+    def test_installed_codex_supports_required_launch_options(self):
+        if not shutil.which("codex"):
+            pytest.skip("Codex CLI is not installed")
+
+        result = subprocess.run(["codex", "--help"], capture_output=True, text=True)
+
+        assert result.returncode == 0
+        assert "--dangerously-bypass-approvals-and-sandbox" in result.stdout
+        assert "--no-alt-screen" in result.stdout
+
+    def test_launches_interactively_with_deferred_instructions(self):
+        result = CodexAgent().get_launch_command(
+            system_prompt="system prompt", task_id="task-1", model="gpt-5.6-terra"
+        )
+
+        assert "codex --dangerously-bypass-approvals-and-sandbox" in result.command
+        assert "--no-alt-screen" in result.command
+        assert "--model gpt-5.6-terra" in result.command
+        assert result.prompt_delivery == LaunchResult.DEFERRED
+
+    def test_uses_codex_default_model_when_no_override_is_given(self):
+        result = CodexAgent().get_launch_command(
+            system_prompt="system prompt", task_id="task-1"
+        )
+
+        assert "--model" not in result.command
+
+    def test_formats_task_as_plain_prompt(self):
+        assert CodexAgent().format_message("Implement the change") == "Implement the change"
+
+    def test_resumes_recorded_session(self, tmp_path):
+        working_directory = tmp_path / "worktree"
+        session_map = working_directory / ".hephaestus" / "codex_sessions.json"
+        session_map.parent.mkdir(parents=True)
+        session_map.write_text(
+            json.dumps({"heph-session": "019ff292-2164-74b2-8f9a-01b68469cd99"})
+        )
+
+        result = CodexAgent().get_launch_command(
+            system_prompt="system prompt",
+            task_id="task-1",
+            session_id="heph-session",
+            working_directory=str(working_directory),
+        )
+
+        assert "codex resume 019ff292-2164-74b2-8f9a-01b68469cd99" in result.command
+
+    def test_records_session_created_in_working_directory(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        working_directory = tmp_path / "worktree"
+        working_directory.mkdir()
+        transcript = tmp_path / ".codex" / "sessions" / "2026" / "08" / "session.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "session_id": "019ff292-2164-74b2-8f9a-01b68469cd99",
+                        "cwd": str(working_directory),
+                    },
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "content": "Hephaestus Session ID: heph-session"
+                    },
+                }
+            )
+            + "\n"
+        )
+
+        agent = CodexAgent()
+        agent.record_session("heph-session", str(working_directory), time.time())
+
+        assert CodexAgent._saved_session_id("heph-session", str(working_directory)) == (
+            "019ff292-2164-74b2-8f9a-01b68469cd99"
+        )
+
+    def test_does_not_record_unmarked_session_from_same_directory(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        working_directory = tmp_path / "worktree"
+        working_directory.mkdir()
+        transcript = tmp_path / ".codex" / "sessions" / "2026" / "08" / "session.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "session_id": "019ff292-2164-74b2-8f9a-01b68469cd99",
+                        "cwd": str(working_directory),
+                    },
+                }
+            )
+            + "\n"
+        )
+
+        CodexAgent().record_session("heph-session", str(working_directory), time.time())
+
+        assert CodexAgent._saved_session_id("heph-session", str(working_directory)) is None
