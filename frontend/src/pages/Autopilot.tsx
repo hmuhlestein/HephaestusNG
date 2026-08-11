@@ -78,6 +78,13 @@ const Autopilot: React.FC = () => {
     enabled: !!projectId,
   });
 
+  // Features count for the Completed tab badge
+  const { data: featuresList } = useQuery({
+    queryKey: ['autopilot-features'],
+    queryFn: () => apiService.getAutopilotFeatures(),
+    refetchInterval: 30000,
+  });
+
   const togglePipeline = useMutation({
     mutationFn: async () => {
       if (status?.running) {
@@ -264,7 +271,7 @@ const Autopilot: React.FC = () => {
 
   const tabs: { id: Tab; label: string; icon: React.ElementType; badge?: number; reviewBadge?: boolean }[] = [
     { id: 'queue', label: 'Design Queue', icon: ListOrdered, badge: status?.queue_depth, reviewBadge: (status?.features_awaiting_review ?? 0) > 0 },
-    { id: 'features', label: 'Completed', icon: History },
+    { id: 'features', label: 'Completed', icon: History, badge: featuresList?.length },
     { id: 'messages', label: 'Messages', icon: MessageSquare, badge: messages?.length },
     { id: 'logs', label: 'Logs', icon: Terminal },
   ];
