@@ -377,7 +377,7 @@ const DocsTab: React.FC<{
                 <Copy className="w-3 h-3" /> Copy
               </button>
             </div>
-            <div className="text-sm text-gray-700 prose prose-sm dark:prose-invert prose-violet max-w-none bg-gray-50 dark:bg-gray-800/60 rounded-xl p-4 border">
+            <div className="text-sm text-gray-700 prose prose-sm dark:prose-invert prose-violet max-w-none dark:text-gray-300 bg-gray-50 dark:bg-gray-800/60 rounded-xl p-4 border">
               <MarkdownRenderer content={docContent.content} />
             </div>
           </div>

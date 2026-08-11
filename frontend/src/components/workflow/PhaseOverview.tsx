@@ -40,7 +40,7 @@ export default function PhaseOverview({ details, loading, error }: PhaseOverview
         {/* Description */}
         <div>
           <h4 className="font-semibold text-sm text-gray-700 mb-1">Description</h4>
-          <div className="text-sm text-gray-600 leading-relaxed prose prose-sm dark:prose-invert prose-violet max-w-none">
+          <div className="text-sm text-gray-600 leading-relaxed prose prose-sm dark:prose-invert prose-violet max-w-none dark:text-gray-300">
             <MarkdownRenderer content={details.description || ''} />
           </div>
         </div>
@@ -64,7 +64,7 @@ export default function PhaseOverview({ details, loading, error }: PhaseOverview
         {details.additional_notes && (
           <div>
             <h4 className="font-semibold text-sm text-gray-700 mb-1">Additional Notes</h4>
-            <div className="text-sm text-gray-600 leading-relaxed bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md prose prose-sm dark:prose-invert prose-violet max-w-none">
+            <div className="text-sm text-gray-600 leading-relaxed bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md prose prose-sm dark:prose-invert prose-violet max-w-none dark:text-gray-300">
               <MarkdownRenderer content={details.additional_notes} />
             </div>
           </div>
@@ -74,7 +74,7 @@ export default function PhaseOverview({ details, loading, error }: PhaseOverview
         {details.outputs && (
           <div>
             <h4 className="font-semibold text-sm text-gray-700 mb-1">Expected Outputs</h4>
-            <div className="text-sm text-gray-600 leading-relaxed bg-gray-50 dark:bg-gray-800/60 p-3 rounded-md prose prose-sm dark:prose-invert prose-violet max-w-none">
+            <div className="text-sm text-gray-600 leading-relaxed bg-gray-50 dark:bg-gray-800/60 p-3 rounded-md prose prose-sm dark:prose-invert prose-violet max-w-none dark:text-gray-300">
               <MarkdownRenderer content={details.outputs} />
             </div>
           </div>
@@ -84,7 +84,7 @@ export default function PhaseOverview({ details, loading, error }: PhaseOverview
         {details.next_steps && (
           <div>
             <h4 className="font-semibold text-sm text-gray-700 mb-1">Next Steps</h4>
-            <div className="text-sm text-gray-600 leading-relaxed bg-purple-50 dark:bg-purple-900/20 p-3 rounded-md prose prose-sm dark:prose-invert prose-violet max-w-none">
+            <div className="text-sm text-gray-600 leading-relaxed bg-purple-50 dark:bg-purple-900/20 p-3 rounded-md prose prose-sm dark:prose-invert prose-violet max-w-none dark:text-gray-300">
               <MarkdownRenderer content={details.next_steps} />
             </div>
           </div>
