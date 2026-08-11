@@ -43,9 +43,8 @@ const ReviewModeToggle: React.FC<ReviewModeToggleProps> = ({ projectId, reviewMo
       if (ctx?.prev) queryClient.setQueryData(['autopilot-status', projectId], ctx.prev);
       toast.error('Failed to update review mode');
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['autopilot-status', projectId] });
-    },
+    // No onSettled invalidation — the 3s status poll handles it.
+    // Invalidating here causes a brief flash of old data during refetch.
   });
 
   // Sync from prop only when mutation is NOT pending
