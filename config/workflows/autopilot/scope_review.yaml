@@ -60,8 +60,8 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
 
   ```bash
-  # Check if this is a tech-debt feature (uses tech_debt_requirements phase)
-  ls ./.hephaestus/tech_debt_requirements/ 2>/dev/null && echo "TECH_DEBT_FLOW"
+  # Check if this is a tech-debt flow (product_requirements auto-detects)
+  grep -l "tech.debt\|prioritized.fix.plan" ./.hephaestus/requirements.md 2>/dev/null && echo "TECH_DEBT_FLOW"
 
   # Check if this feature has been through the full pipeline before
   # by looking for outputs from later phases
@@ -69,7 +69,7 @@ additional_notes: |
   ls ./.hephaestus/scope_review/ 2>/dev/null  # previous scope review output
   ```
 
-  If `.hephaestus/tech_debt_requirements/` exists, this is a TECH DEBT
+  If requirements.md contains "tech debt" or "prioritized fix plan", this is a TECH DEBT
   flow. Tech debt features fix existing issues — scope naturally expands
   as more issues are discovered. For tech debt:
   - Almost always PASS. New bug fixes, refactors, and improvements found
