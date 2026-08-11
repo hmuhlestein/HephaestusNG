@@ -131,7 +131,26 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
         else:
             derived = FeatureStatus.ACTIVE
     elif task_statuses == {TaskStatus.DONE}:
-        derived = FeatureStatus.COMPLETED
+        # All existing tasks are done, but that doesn't mean the feature
+        # is done — the workflow may only have completed a few of its
+        # phases. Check that every PhaseExecution is actually "completed"
+        # before declaring the feature done. Observed live: tech-debt
+        # feature with 13 phases, only 2 had tasks (all done), derived
+        # "completed" while stuck at scope_review.
+        from src.core.database import PhaseExecution as _PE, Phase as _Ph
+        incomplete_phases = (
+            db.query(_PE)
+            .join(_Ph, _PE.phase_id == _Ph.id)
+            .filter(
+                _Ph.workflow_id == feature.workflow_id,
+                _PE.status != "completed",
+            )
+            .count()
+        )
+        if incomplete_phases > 0:
+            derived = FeatureStatus.ACTIVE
+        else:
+            derived = FeatureStatus.COMPLETED
     elif wf and wf.status == "completed":
         # The workflow itself is the authoritative "did the whole 12-phase
         # pipeline actually finish" signal -- a phase can genuinely fail on
