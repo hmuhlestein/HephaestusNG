@@ -695,7 +695,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                             </button>
                           </div>
                           <div className="h-32 p-3 bg-gray-50 dark:bg-gray-800/60 rounded-lg border border-gray-200 dark:border-gray-700 overflow-y-auto">
-                            <MarkdownRenderer content={taskDetails.user_prompt || ''} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none" />
+                            <MarkdownRenderer content={taskDetails.user_prompt || ''} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none dark:text-gray-300" />
                           </div>
                         </div>
 
@@ -713,7 +713,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                             </button>
                           </div>
                           <div className="h-32 p-3 bg-gray-50 dark:bg-gray-800/60 rounded-lg border border-gray-200 dark:border-gray-700 overflow-y-auto">
-                            <MarkdownRenderer content={taskDetails.system_prompt || 'No system prompt available'} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none" />
+                            <MarkdownRenderer content={taskDetails.system_prompt || 'No system prompt available'} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none dark:text-gray-300" />
                           </div>
                         </div>
 
@@ -731,7 +731,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                             </button>
                           </div>
                           <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-700">
-                            <MarkdownRenderer content={taskDetails.done_definition || ''} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none" />
+                            <MarkdownRenderer content={taskDetails.done_definition || ''} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none dark:text-gray-300" />
                           </div>
                         </div>
                       </motion.div>
@@ -1326,7 +1326,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                         ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700'
                         : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700'
                     }`}>
-                      <MarkdownRenderer content={taskDetails.completion_notes || taskDetails.failure_reason || ''} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none break-words" />
+                      <MarkdownRenderer content={taskDetails.completion_notes || taskDetails.failure_reason || ''} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none dark:text-gray-300 break-words" />
                     </div>
                   </div>
                 )}
