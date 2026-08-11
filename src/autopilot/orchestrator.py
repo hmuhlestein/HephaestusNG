@@ -5756,6 +5756,40 @@ def _trigger_arbitration(
             )
         prior_arbitrations = prior_arbitrations_query.count()
         if prior_arbitrations >= max_arbitrations_per_phase:
+            # Before giving up: the most recent arbitration may have already
+            # reached a decision that was never acted on -- e.g.
+            # _maybe_resolve_arbitration hasn't gotten to it on this sweep
+            # tick yet, or some other caller reached this cap-check first.
+            # Observed live: 3 consecutive arbitrations all independently
+            # concluded "continue" against the same unchanged, clean
+            # review.md (the 3rd one's own reasoning noted it was being
+            # asked the same already-settled question a third time) -- yet
+            # the workflow was failed anyway because this check only counts
+            # attempts, not whether they converged. A cap meant to stop a
+            # genuinely flip-flopping arbiter from looping forever should
+            # not discard a consistent, already-decided, unprocessed result
+            # in front of it. Resolve the latest one instead of failing if
+            # it's sitting there done with a valid decision.
+            last_task = (
+                prior_arbitrations_query.order_by(Task.created_at.desc()).first()
+            )
+            if last_task and last_task.status == "done":
+                wf_for_result = db.query(Workflow).filter_by(id=workflow_id).first()
+                pending_working_directory = wf_for_result.working_directory if wf_for_result else None
+                pending_decision, pending_target, pending_reason = _read_arbitration_result(
+                    pending_working_directory
+                )
+                if pending_decision:
+                    logger.warning(
+                        f"[ARBITRATE] {phase_name} hit the {max_arbitrations_per_phase}-arbitration cap, "
+                        f"but the last arbitration already decided '{pending_decision}' and was never "
+                        "processed -- resolving it instead of failing the workflow."
+                    )
+                    _resolve_arbitration_outcome(
+                        workflow_id, phase_id, phase_name, pending_decision,
+                        pending_target, pending_reason or reason, logger,
+                    )
+                    return True
             logger.error(f"[ARBITRATE] {phase_name} has already been arbitrated {prior_arbitrations} times without converging -- failing the workflow instead of arbitrating again")
             wf = db.query(Workflow).filter_by(id=workflow_id).first()
             if wf:
