@@ -234,9 +234,9 @@ class SetupChecker:
         except ImportError:
             self.results["dependencies"]["sqlalchemy installed"] = False
 
-        # Check if requirements.txt exists
-        req_exists = (self.project_root / "requirements.txt").exists()
-        self.results["dependencies"]["requirements.txt exists"] = req_exists
+        # Check if the package metadata exists
+        pyproject_exists = (self.project_root / "pyproject.toml").exists()
+        self.results["dependencies"]["pyproject.toml exists"] = pyproject_exists
 
         return all(
             [

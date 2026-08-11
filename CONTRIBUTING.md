@@ -23,9 +23,9 @@ Thank you for your interest in contributing to Hephaestus! We welcome contributi
 
 2. **Set up Python environment**
    ```bash
-   python -m venv venv
+   uv venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
-   pip install -r requirements.txt
+   uv pip install -e .
    ```
 
 3. **Configure environment variables**
@@ -252,7 +252,7 @@ Documentation will be available at `http://localhost:3000/Hephaestus/`
 ### Import Errors
 
 - Activate virtual environment: `source venv/bin/activate`
-- Reinstall dependencies: `pip install -r requirements.txt`
+- Reinstall dependencies: `uv pip install -e .`
 
 ### Frontend Issues
 

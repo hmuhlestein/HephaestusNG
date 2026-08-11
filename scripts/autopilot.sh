@@ -55,7 +55,7 @@ header() { echo -e "\n${BOLD}${CYAN}=== $1 ===${NC}\n"; }
 check_python() {
     if [ ! -f "$PYTHON" ]; then
         err "Python not found at $PYTHON"
-        err "Run: python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+        err "Run: uv venv .venv && uv pip install -e . --python .venv/bin/python"
         exit 1
     fi
 }
@@ -65,7 +65,7 @@ install_deps() {
     cd "$HEPHAESTUS_DIR"
     # Source Rust if available (needed for turbovec source builds)
     [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
-    "$PYTHON" -m pip install -r requirements.txt --quiet 2>&1 | tail -5
+    uv pip install -e "$HEPHAESTUS_DIR" --python "$PYTHON" --quiet 2>&1 | tail -5
     ok "Dependencies installed"
 }
 

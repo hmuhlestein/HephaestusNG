@@ -7,6 +7,7 @@ and the agent manager uses the interface without knowing which tool is running.
 To add a new CLI tool: subclass CLIAgentInterface and register in CLI_AGENTS.
 """
 
+import json
 import logging
 import os
 import re
@@ -46,7 +47,11 @@ class LaunchResult:
     # is already the system prompt.
     MESSAGE = "message"
 
-    # The system prompt is ignored (e.g. Droid, Codex).  The caller's
+    # The system prompt is added to the task-instructions file before the
+    # initial message directs the CLI to read it (e.g. Codex).
+    DEFERRED = "deferred"
+
+    # The system prompt is ignored (e.g. Droid).  The caller's
     # initial message carries all the context.
     NONE = "none"
 
@@ -98,6 +103,17 @@ class CLIAgentInterface(ABC):
             CLI-specific args string (e.g. '--session-id hephaestus-...') or empty.
         """
         return ""
+
+    def record_session(
+        self, session_id: str, working_directory: str, launched_at: float
+    ) -> bool:
+        """Persist CLI-specific session state after an initial launch.
+
+        Most CLIs either accept Hephaestus's deterministic session ID directly
+        or need no persistence. Codex creates its own UUID, so it overrides
+        this method after its transcript has appeared on disk.
+        """
+        return False
 
     def prepare_working_directory(self, working_directory: str) -> None:
         """Do any one-time setup a CLI needs for a directory before first
@@ -758,19 +774,93 @@ class CodexAgent(CLIAgentInterface):
 
     display_name = "Codex"
     needs_chunked_delivery = True
+    default_model = ""
+
+    @staticmethod
+    def _session_map_path(working_directory: str) -> Path:
+        return Path(working_directory) / ".hephaestus" / "codex_sessions.json"
+
+    @classmethod
+    def _saved_session_id(cls, session_id: str, working_directory: str) -> Optional[str]:
+        if not session_id or not working_directory:
+            return None
+        try:
+            sessions = json.loads(cls._session_map_path(working_directory).read_text())
+            codex_session_id = sessions.get(session_id)
+            return str(uuid.UUID(codex_session_id)) if codex_session_id else None
+        except (OSError, ValueError, json.JSONDecodeError, TypeError):
+            return None
+
+    @classmethod
+    def _save_session_id(
+        cls, session_id: str, working_directory: str, codex_session_id: str
+    ) -> None:
+        path = cls._session_map_path(working_directory)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sessions = {}
+        try:
+            sessions = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            pass
+        sessions[session_id] = codex_session_id
+        temp_path = path.with_suffix(".tmp")
+        temp_path.write_text(json.dumps(sessions, indent=2, sort_keys=True) + "\n")
+        os.replace(temp_path, path)
+
+    def record_session(
+        self, session_id: str, working_directory: str, launched_at: float
+    ) -> bool:
+        if self._saved_session_id(session_id, working_directory):
+            return True
+
+        try:
+            canonical_working_directory = os.path.realpath(working_directory)
+            sessions_dir = Path.home() / ".codex" / "sessions"
+            for transcript in sorted(
+                sessions_dir.glob("**/*.jsonl"),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            ):
+                if transcript.stat().st_mtime < launched_at - 5:
+                    break
+                with transcript.open() as transcript_file:
+                    metadata = json.loads(transcript_file.readline())
+                payload = metadata.get("payload", {})
+                codex_session_id = payload.get("session_id") or payload.get("id")
+                if (
+                    metadata.get("type") == "session_meta"
+                    and os.path.realpath(payload.get("cwd", ""))
+                    == canonical_working_directory
+                    and codex_session_id
+                    and f"Hephaestus Session ID: {session_id}" in transcript.read_text()
+                ):
+                    self._save_session_id(
+                        session_id,
+                        working_directory,
+                        str(uuid.UUID(codex_session_id)),
+                    )
+                    return True
+        except (OSError, ValueError, json.JSONDecodeError, TypeError) as exc:
+            logger.debug("Could not record Codex session %s: %s", session_id, exc)
+        return False
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
+        model = self._get_model(kwargs, self.default_model)
+        model_flag = f" --model {model}" if model else ""
+        codex_session_id = self._saved_session_id(
+            kwargs.get("session_id", ""), kwargs.get("working_directory", "")
+        )
+        command = f"codex resume {codex_session_id}" if codex_session_id else "codex"
         return LaunchResult(
-            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" codex --dangerously-bypass-approvals-and-sandbox',
-            LaunchResult.NONE,
+            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" {command} --dangerously-bypass-approvals-and-sandbox'
+            f' --no-alt-screen{model_flag}',
+            LaunchResult.DEFERRED,
         )
 
     def get_health_check_pattern(self) -> str:
-        return r"(>|codex>|Ready)"
+        return r"(›|To get started|context left)"
 
     def format_message(self, message: str) -> str:
-        if not message.startswith("/"):
-            return f"/task {message}"
         return message
 
     def get_stuck_patterns(self) -> List[str]:

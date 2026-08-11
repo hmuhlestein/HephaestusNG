@@ -47,6 +47,21 @@ def _ensure_real_mcp_sdk_importable() -> None:
 _ensure_real_mcp_sdk_importable()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mcp"))
 import mcp_client  # noqa: E402
+from mcp import ClientSession, StdioServerParameters  # noqa: E402
+from mcp.client.stdio import stdio_client  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_stdio_server_initializes_without_non_protocol_output():
+    """The MCP entrypoint must reserve stdout for JSON-RPC traffic."""
+    script = Path(mcp_client.__file__).resolve()
+    params = StdioServerParameters(command=sys.executable, args=[str(script)])
+
+    async with stdio_client(params) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            result = await session.initialize()
+
+    assert result.serverInfo.name == "hephaestus-client"
 
 
 class FakeAsyncClient:

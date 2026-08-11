@@ -243,8 +243,15 @@ PYTHON="$VENV_DIR/bin/python"
 
 header "Dependencies"
 
+if ! "$PYTHON" -c "from fastmcp import FastMCP" 2>/dev/null; then
+    warn "FastMCP import failed — recreating the virtual environment"
+    rm -rf "$VENV_DIR"
+    "$UV_BIN" venv "$VENV_DIR" --python "$PYTHON_CMD" --quiet
+    PYTHON="$VENV_DIR/bin/python"
+fi
+
 # Install package in editable mode (creates heph entry point)
-if "$PYTHON" -c "from src.cli.main import main" 2>/dev/null; then
+if "$PYTHON" -c "from src.cli.main import main; import git; from jose import jwt; from passlib.context import CryptContext; from fastmcp import FastMCP" 2>/dev/null; then
     ok "Package already installed"
 else
     log "Installing package in editable mode..."
@@ -883,6 +890,84 @@ else
     log "To configure later:"
     log "  1. Install pi-mcp-adapter: pi install npm:pi-mcp-adapter"
     log "  2. Create $PI_MCP_CONFIG with your MCP server configuration"
+fi
+
+# ─── Codex CLI MCP Configuration ─────────────────────────────────
+
+header "Codex CLI Configuration"
+
+CODEX_MCP_SCRIPT="$PREFIX/mcp/mcp_client.py"
+CODEX_CONFIG_FILE="${CODEX_HOME:-$HOME/.codex}/config.toml"
+CODEX_MCP_LOCK_DIR="${CODEX_CONFIG_FILE}.heph-install.lock"
+
+if command -v codex >/dev/null 2>&1; then
+    if ! mkdir "$CODEX_MCP_LOCK_DIR" 2>/dev/null; then
+        warn "Another Hephaestus installer is updating Codex MCP configuration"
+    elif [ -f "$CODEX_MCP_SCRIPT" ] && [ -x "$VENV_DIR/bin/python" ]; then
+        CODEX_MCP_CONFIG="$(codex mcp get heph 2>/dev/null || true)"
+        if [ -n "$CODEX_MCP_CONFIG" ] && printf '%s\n' "$CODEX_MCP_CONFIG" | grep -Fq "command: $VENV_DIR/bin/python" && printf '%s\n' "$CODEX_MCP_CONFIG" | grep -Fq "args: $CODEX_MCP_SCRIPT"; then
+            ok "Codex MCP server already configured (heph)"
+        else
+            if [ -n "$CODEX_MCP_CONFIG" ]; then
+                log "Updating Codex MCP server path..."
+                CODEX_MCP_BACKUP=""
+                if [ -f "$CODEX_CONFIG_FILE" ]; then
+                    CODEX_MCP_BACKUP="$(mktemp)"
+                    cp "$CODEX_CONFIG_FILE" "$CODEX_MCP_BACKUP"
+                fi
+                if ! codex mcp remove heph; then
+                    warn "Failed to remove stale Codex MCP server configuration"
+                    rm -f "$CODEX_MCP_BACKUP"
+                elif codex mcp add heph -- "$VENV_DIR/bin/python" "$CODEX_MCP_SCRIPT"; then
+                    ok "Updated Hephaestus MCP server for Codex"
+                    rm -f "$CODEX_MCP_BACKUP"
+                elif [ -n "$CODEX_MCP_BACKUP" ] && cp "$CODEX_MCP_BACKUP" "$CODEX_CONFIG_FILE"; then
+                    rm -f "$CODEX_MCP_BACKUP"
+                    warn "Failed to update Codex MCP server; restored the previous configuration"
+                else
+                    warn "Failed to configure Codex MCP server after removing the stale configuration"
+                fi
+            elif codex mcp add heph -- "$VENV_DIR/bin/python" "$CODEX_MCP_SCRIPT"; then
+                ok "Configured Hephaestus MCP server for Codex"
+            else
+                warn "Failed to configure Codex MCP server"
+            fi
+        fi
+        rmdir "$CODEX_MCP_LOCK_DIR"
+    else
+        warn "Codex MCP script or virtual environment Python not found — skipping"
+        rmdir "$CODEX_MCP_LOCK_DIR"
+    fi
+else
+    log "Codex CLI not detected — skipping MCP configuration"
+    log "Install Codex, then re-run install.sh to add the heph MCP server"
+fi
+
+# ─── Codex Agent Installation ─────────────────────────────────────
+
+header "Codex Agents"
+
+CODEX_AGENTS_DIR="${CODEX_HOME:-$HOME/.codex}/agents"
+
+if command -v codex >/dev/null 2>&1; then
+    log "Codex detected — installing Hephaestus subagents"
+    if [ -f "$PREFIX/scripts/generate_codex_agents.py" ]; then
+        "$PYTHON_PATH" "$PREFIX/scripts/generate_codex_agents.py" 2>/dev/null
+        if [ $? -eq 0 ]; then
+            mkdir -p "$CODEX_AGENTS_DIR"
+            if [ -d "$PREFIX/agents/codex" ]; then
+                cp "$PREFIX/agents/codex"/*.toml "$CODEX_AGENTS_DIR" 2>/dev/null
+                agent_count=$(ls -1 "$PREFIX/agents/codex"/*.toml 2>/dev/null | wc -l)
+                ok "Installed $agent_count Hephaestus Codex agents"
+            fi
+        else
+            warn "Failed to generate Codex agents"
+        fi
+    else
+        warn "generate_codex_agents.py not found — skipping agent generation"
+    fi
+else
+    log "Codex CLI not detected — skipping agent installation"
 fi
 
 # ─── Claude Code Agent Installation ───────────────────────────────
