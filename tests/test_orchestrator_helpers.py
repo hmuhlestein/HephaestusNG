@@ -6532,3 +6532,121 @@ class TestCreatePhaseTaskOrphanedPendingAge:
             original = session.query(Task).filter_by(id="task-maybe-orphan").first()
             assert original.status == "pending"
             assert original.failure_reason is None
+
+
+class TestWaitForPendingReviews:
+    """_wait_for_pending_reviews: the project-wide review-mode gate called
+    before starting each new feature-execution-group, so review mode
+    "gates the entire pipeline, not just individual features" (its own
+    docstring)."""
+
+    def test_returns_immediately_when_nothing_pending(self, orch_db_env):
+        from src.autopilot.orchestrator import _wait_for_pending_reviews
+
+        with patch("src.autopilot.orchestrator.time.sleep") as mock_sleep:
+            _wait_for_pending_reviews("proj-none-pending", MagicMock())
+
+        mock_sleep.assert_not_called()
+
+    def test_blocks_on_real_feature_review_pause(self, orch_db_env):
+        from src.autopilot.orchestrator import _wait_for_pending_reviews
+        from src.core.database import Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-feat-paused",
+                    name="autopilot",
+                    phases_folder_path="/tmp",
+                    definition_id="autopilot",
+                    status="paused",
+                    paused_by="review",
+                    project_id="proj-feat-review",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feat-paused-1",
+                    design_id="des-1",
+                    feature_key="core",
+                    name="Core",
+                    scope="s",
+                    status="paused",
+                    workflow_id="wf-feat-paused",
+                )
+            )
+
+        def _clear(*args, **kwargs):
+            with orch_db_env.session_scope() as session:
+                wf = session.query(Workflow).filter_by(id="wf-feat-paused").first()
+                wf.status = "active"
+                wf.paused_by = None
+
+        with patch(
+            "src.autopilot.orchestrator.time.sleep", side_effect=_clear
+        ) as mock_sleep:
+            _wait_for_pending_reviews("proj-feat-review", MagicMock(), poll_interval=0)
+
+        mock_sleep.assert_called_once()
+
+    def test_blocks_on_phase0_review_pause(self, orch_db_env):
+        """Regression: Phase 0 has no Feature row to join through -- it's
+        what CREATES Feature rows -- so a paused-for-review decomposition
+        (see _pause_phase0_for_review) used to be invisible to this
+        query's Feature-join, letting a different design's next
+        feature-execution-group start while this design's Phase 0 sat
+        paused for review, defeating the "gates the entire pipeline"
+        guarantee."""
+        from src.autopilot.orchestrator import _wait_for_pending_reviews
+        from src.core.database import Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-phase0-paused",
+                    name="Phase 0",
+                    phases_folder_path="/tmp",
+                    definition_id="feature_architect",
+                    status="paused",
+                    paused_by="review",
+                    project_id="proj-phase0-review",
+                )
+            )
+
+        def _clear(*args, **kwargs):
+            with orch_db_env.session_scope() as session:
+                wf = session.query(Workflow).filter_by(id="wf-phase0-paused").first()
+                wf.status = "active"
+                wf.paused_by = None
+
+        with patch(
+            "src.autopilot.orchestrator.time.sleep", side_effect=_clear
+        ) as mock_sleep:
+            _wait_for_pending_reviews("proj-phase0-review", MagicMock(), poll_interval=0)
+
+        mock_sleep.assert_called_once()
+
+    def test_does_not_block_on_a_different_projects_phase0_pause(self, orch_db_env):
+        """Project-scoping must still hold for the new Phase 0 check --
+        review mode in one project must not stall a different project's
+        pipeline."""
+        from src.autopilot.orchestrator import _wait_for_pending_reviews
+        from src.core.database import Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-other-project-phase0",
+                    name="Phase 0",
+                    phases_folder_path="/tmp",
+                    definition_id="feature_architect",
+                    status="paused",
+                    paused_by="review",
+                    project_id="proj-other",
+                )
+            )
+
+        with patch("src.autopilot.orchestrator.time.sleep") as mock_sleep:
+            _wait_for_pending_reviews("proj-mine", MagicMock())
+
+        mock_sleep.assert_not_called()

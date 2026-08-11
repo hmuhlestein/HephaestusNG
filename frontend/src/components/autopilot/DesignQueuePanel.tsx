@@ -1005,6 +1005,10 @@ const FeatureRow: React.FC<{
             </button>
           )}
           {reviewPending && (feature.status === 'completed' || feature.status === 'paused') && onReviewFeature && (
+            // Phase 0 (Feature Architect) isn't a real Feature row, but
+            // review_feature's approve/request-changes endpoint now branches
+            // on the "phase0-" id prefix to support it directly -- same
+            // review modal, same reject-and-redo flow as a real feature.
             <button
               onClick={(e) => { e.stopPropagation(); onReviewFeature(feature.id, feature); }}
               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-sm transition-colors"

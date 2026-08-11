@@ -489,3 +489,326 @@ class TestRunPhase0Tiers:
             "---\ntype: feature_review_result\nblocker_count: 0\nfix_count: 0\ndefer_count: 0\n---\n\n"
             "# Feature Review Report\n\nClean pass."
         )
+
+    def test_feature_report_synopsis_copied_to_designs_folder(
+        self, db_manager, design, tmp_path
+    ):
+        """feature_review's HTML decomposition synopsis needs the same
+        durability copy as review.md -- otherwise it's gone the moment
+        _cleanup_worktree removes the (git-excluded) worktree."""
+        from src.autopilot.orchestrator import run_phase0
+
+        design_entry = self._make_design_entry(design, tmp_path)
+        worktree = tmp_path / "worktree"
+        (worktree / ".hephaestus" / "features").mkdir(parents=True)
+        (worktree / ".hephaestus" / "features.json").write_text(
+            json.dumps(
+                {
+                    "design_name": "Test Design",
+                    "features": [
+                        {
+                            "id": "auth",
+                            "name": "Auth",
+                            "scope": "s",
+                            "files": ["src/auth.py"],
+                            "depends_on": [],
+                            "execution": "parallel",
+                        }
+                    ],
+                }
+            )
+        )
+        (worktree / ".hephaestus" / "feature_report.html").write_text(
+            "<html><title>Test Project: Feature Decomposition</title></html>"
+        )
+
+        def fake_run_single_workflow(*args, **kwargs):
+            session = db_manager.get_session()
+            session.add(
+                Workflow(
+                    id=f"wf-{uuid.uuid4().hex[:8]}",
+                    name="Phase 0",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    definition_id="feature_architect",
+                    design_id=design,
+                )
+            )
+            session.commit()
+            session.close()
+            return "completed"
+
+        with patch(
+            "src.autopilot.orchestrator._create_integration_worktree",
+            return_value=worktree,
+        ), patch(
+            "src.autopilot.orchestrator.run_single_workflow",
+            side_effect=fake_run_single_workflow,
+        ), patch(
+            "src.autopilot.orchestrator._cleanup_worktree"
+        ):
+            _, designs_folder = run_phase0(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                project_path=tmp_path,
+                logger=MagicMock(),
+            )
+
+        assert (designs_folder / "feature_report.html").read_text() == (
+            "<html><title>Test Project: Feature Decomposition</title></html>"
+        )
+
+
+class TestRunPhase0ReviewMode:
+    """Phase 0's own review-mode gate: pause after the decomposition is
+    reviewed (feature_review passes), before any Feature rows -- and
+    therefore any per-feature pipeline -- get created from it."""
+
+    def _make_design_entry(self, design_id, tmp_path):
+        from src.autopilot.orchestrator import DesignEntry
+
+        design_path = tmp_path / "design.md"
+        design_path.write_text("# Design")
+        return DesignEntry(
+            path=design_path,
+            name="Test Design",
+            content_hash="abc123",
+            db_id=design_id,
+        )
+
+    def _enable_review_mode(self, db_manager, design) -> str:
+        session = db_manager.get_session()
+        d = session.query(AutopilotDesign).filter_by(id=design).first()
+        proj = session.query(AutopilotProject).filter_by(id=d.project_id).first()
+        proj.review_mode = True
+        project_id = proj.id
+        session.commit()
+        session.close()
+        return project_id
+
+    def _fake_run_single_workflow(self, db_manager, design, workflow_id):
+        def _fake(*args, **kwargs):
+            session = db_manager.get_session()
+            session.add(
+                Workflow(
+                    id=workflow_id,
+                    name="Phase 0",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    definition_id="feature_architect",
+                    design_id=design,
+                )
+            )
+            session.commit()
+            session.close()
+            return "completed"
+
+        return _fake
+
+    def _worktree_with_features_json(self, tmp_path):
+        worktree = tmp_path / "worktree"
+        (worktree / ".hephaestus" / "features").mkdir(parents=True)
+        features_json_content = {
+            "design_name": "Test Design",
+            "features": [
+                {
+                    "id": "auth",
+                    "name": "Auth",
+                    "scope": "s",
+                    "files": ["src/auth.py"],
+                    "depends_on": [],
+                    "execution": "parallel",
+                }
+            ],
+        }
+        (worktree / ".hephaestus" / "features.json").write_text(
+            json.dumps(features_json_content)
+        )
+        return worktree
+
+    def test_pauses_and_creates_features_only_after_clearance(
+        self, db_manager, design, tmp_path
+    ):
+        from src.autopilot.orchestrator import run_phase0
+
+        project_id = self._enable_review_mode(db_manager, design)
+        design_entry = self._make_design_entry(design, tmp_path)
+        worktree = self._worktree_with_features_json(tmp_path)
+        workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
+
+        with patch(
+            "src.autopilot.orchestrator._create_integration_worktree",
+            return_value=worktree,
+        ), patch(
+            "src.autopilot.orchestrator.run_single_workflow",
+            side_effect=self._fake_run_single_workflow(db_manager, design, workflow_id),
+        ), patch(
+            "src.autopilot.orchestrator._cleanup_worktree"
+        ), patch(
+            "src.autopilot.orchestrator._wait_for_phase0_review_clearance",
+            return_value=True,
+        ) as mock_wait:
+            features_json, _ = run_phase0(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                project_path=tmp_path,
+                logger=MagicMock(),
+                project_id=project_id,
+            )
+
+        mock_wait.assert_called_once()
+        assert mock_wait.call_args[0][0] == workflow_id
+        assert features_json["features"][0]["id"] == "auth"
+
+        session = db_manager.get_session()
+        # Paused, then cleared -- must end up "completed", not stuck on
+        # whatever the generic resume/recover action would have left it as
+        # ("active"), or _get_phase0_completion's Tier-2 recovery check
+        # never recognizes this workflow as done again.
+        wf = session.query(Workflow).filter_by(id=workflow_id).first()
+        assert wf.status == "completed"
+        features = session.query(Feature).filter_by(design_id=design).all()
+        assert len(features) == 1
+        session.close()
+
+    def test_skips_pause_when_review_mode_disabled(self, db_manager, design, tmp_path):
+        """Default behavior, must stay unchanged: no review_mode -> no
+        pause, no wait, features created immediately."""
+        from src.autopilot.orchestrator import run_phase0
+
+        design_entry = self._make_design_entry(design, tmp_path)
+        worktree = self._worktree_with_features_json(tmp_path)
+        workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
+
+        with patch(
+            "src.autopilot.orchestrator._create_integration_worktree",
+            return_value=worktree,
+        ), patch(
+            "src.autopilot.orchestrator.run_single_workflow",
+            side_effect=self._fake_run_single_workflow(db_manager, design, workflow_id),
+        ), patch(
+            "src.autopilot.orchestrator._cleanup_worktree"
+        ), patch(
+            "src.autopilot.orchestrator._wait_for_phase0_review_clearance"
+        ) as mock_wait:
+            features_json, _ = run_phase0(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                project_path=tmp_path,
+                logger=MagicMock(),
+            )
+
+        mock_wait.assert_not_called()
+        assert features_json["features"][0]["id"] == "auth"
+        session = db_manager.get_session()
+        assert session.query(Feature).filter_by(design_id=design).count() == 1
+        session.close()
+
+    def test_stop_signal_during_wait_creates_no_features(
+        self, db_manager, design, tmp_path
+    ):
+        """_wait_for_phase0_review_clearance returning False means the
+        stop signal fired (or the workflow vanished) -- must not create
+        Feature rows from a decomposition nobody approved."""
+        from src.autopilot.orchestrator import run_phase0
+
+        project_id = self._enable_review_mode(db_manager, design)
+        design_entry = self._make_design_entry(design, tmp_path)
+        worktree = self._worktree_with_features_json(tmp_path)
+        workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
+
+        with patch(
+            "src.autopilot.orchestrator._create_integration_worktree",
+            return_value=worktree,
+        ), patch(
+            "src.autopilot.orchestrator.run_single_workflow",
+            side_effect=self._fake_run_single_workflow(db_manager, design, workflow_id),
+        ), patch(
+            "src.autopilot.orchestrator._cleanup_worktree"
+        ), patch(
+            "src.autopilot.orchestrator._wait_for_phase0_review_clearance",
+            return_value=False,
+        ):
+            result = run_phase0(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                project_path=tmp_path,
+                logger=MagicMock(),
+                project_id=project_id,
+            )
+
+        assert result == (None, None)
+        session = db_manager.get_session()
+        assert session.query(Feature).filter_by(design_id=design).count() == 0
+        session.close()
+
+    def test_restart_during_pause_reenters_wait_without_rerunning_agent(
+        self, db_manager, design, tmp_path
+    ):
+        """Regression: a backend restart while Phase 0 sat paused for
+        review used to re-enter run_phase0 with no Feature rows yet and a
+        Workflow.status of "paused" (not "completed") -- Tier 2's
+        wf.status == "completed" check failed, falling through to a full,
+        wasteful re-decomposition of already-finished, already-reviewed
+        work. Must re-enter the wait instead."""
+        from src.autopilot.orchestrator import run_phase0
+
+        self._enable_review_mode(db_manager, design)
+        design_entry = self._make_design_entry(design, tmp_path)
+
+        # _get_phase0_completion (Tier 2) needs a genuinely completed
+        # Phase+PhaseExecution underneath the Workflow row too, not just
+        # the Workflow itself -- use the same helper the Tier-2-specific
+        # tests above use, then flip the resulting row to "paused for
+        # review" to simulate a restart mid-wait.
+        workflow_id = _seed_phase0_workflow(db_manager, design, phase_execution_status="completed")
+        designs_folder = tmp_path / "designs" / "prior_run"
+        designs_folder.mkdir(parents=True)
+        features_json_content = {
+            "design_name": "Test Design",
+            "features": [
+                {
+                    "id": "auth",
+                    "name": "Auth",
+                    "scope": "s",
+                    "files": ["src/auth.py"],
+                    "depends_on": [],
+                    "execution": "parallel",
+                }
+            ],
+        }
+        (designs_folder / "features.json").write_text(json.dumps(features_json_content))
+
+        session = db_manager.get_session()
+        wf = session.query(Workflow).filter_by(id=workflow_id).first()
+        wf.status = "paused"
+        wf.paused_by = "review"
+        d = session.query(AutopilotDesign).filter_by(id=design).first()
+        d.designs_folder = str(designs_folder)
+        session.commit()
+        session.close()
+
+        with patch(
+            "src.autopilot.orchestrator.run_single_workflow"
+        ) as mock_run, patch(
+            "src.autopilot.orchestrator._wait_for_phase0_review_clearance",
+            return_value=True,
+        ) as mock_wait:
+            features_json, returned_folder = run_phase0(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                project_path=tmp_path,
+                logger=MagicMock(),
+            )
+
+        mock_run.assert_not_called()
+        mock_wait.assert_called_once()
+        assert mock_wait.call_args[0][0] == workflow_id
+        assert features_json["features"][0]["id"] == "auth"
+        assert str(returned_folder) == str(designs_folder)
+
+        session = db_manager.get_session()
+        wf = session.query(Workflow).filter_by(id=workflow_id).first()
+        assert wf.status == "completed"
+        assert session.query(Feature).filter_by(design_id=design).count() == 1
+        session.close()

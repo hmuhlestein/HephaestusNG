@@ -39,6 +39,7 @@ from src.core.constants import (
     DESIGN_QUEUE_FALLBACK_DIR,
     DIAGNOSTIC_TASK_PREFIX,
     GOTO_REASON_PREFIX,
+    PHASE0_DEFINITION_IDS,
 )
 from src.core.database import (
     Agent,
@@ -7443,6 +7444,30 @@ def run_phase0(
         _update_design_status(design_entry.db_id, "active", error=None, logger=logger)
         return features_json, designs_folder
 
+    # Tier 1.5: no Feature rows yet (review not approved) AND Phase 0's own
+    # workflow is CURRENTLY paused for review -- a backend restart re-entered
+    # this function mid-wait. Re-enter the wait directly instead of falling
+    # through: Tier 2 below requires wf.status == "completed", which a
+    # "paused" workflow fails, and would otherwise trigger a full,
+    # wasteful re-decomposition of already-finished, already-reviewed work.
+    from src.core.database import Workflow as _Wf0
+
+    with _get_db() as _db:
+        paused_phase0_wf = (
+            _db.query(_Wf0)
+            .filter_by(design_id=design_entry.db_id, definition_id="feature_architect", paused_by="review")
+            .order_by(_Wf0.created_at.desc())
+            .first()
+        )
+        paused_phase0_wf_id = paused_phase0_wf.id if paused_phase0_wf else None
+    if paused_phase0_wf_id:
+        logger.info(f"Phase 0 workflow {paused_phase0_wf_id[:8]} is already paused for review — re-entering wait")
+        cleared = _wait_for_phase0_review_clearance(paused_phase0_wf_id, logger, project_id=project_id)
+        if not cleared:
+            return None, None
+        _restore_phase0_completed_status(paused_phase0_wf_id, logger)
+        # Falls through to Tier 2 below, which now finds wf.status == "completed".
+
     # Tier 2: no Feature rows yet, but Phase 0's workflow already completed (using
     # the same PhaseExecution-status idempotency concept every other phase gets via
     # PhaseManager.mark_phase_complete) — the Feature Architect agent already
@@ -7718,6 +7743,15 @@ def run_phase0(
         if review_src.exists():
             shutil.copy2(review_src, designs_folder / review_src.name)
 
+        # Copy feature_review's HTML decomposition synopsis out too, same
+        # reason and same durability requirement as review.md above -- this
+        # is what get_workflow_feature_report serves for the "Feature
+        # Architect" row's report button, and what a human needs to
+        # actually look at during the review-mode pause below.
+        synopsis_src = features_json_path.parent / "feature_report.html"
+        if synopsis_src.exists():
+            shutil.copy2(synopsis_src, designs_folder / synopsis_src.name)
+
         # Persist designs_folder BEFORE creating feature records so recovery is possible
         # if _create_feature_records raises (e.g. disk full). Also persist
         # phase0_workflow_id here — this is the durable completion marker
@@ -7755,6 +7789,25 @@ def run_phase0(
             logger=logger,
             **update_kwargs,
         )
+
+        # In review mode, pause here for human review of the decomposition
+        # itself, before any per-feature pipeline launches from it -- a bad
+        # decomposition approved sight-unseen propagates into every
+        # downstream feature. Mirrors _run_one_feature's own review gate
+        # (pause after full completion, wait for clearance) but at the
+        # workflow level: Feature rows don't exist yet at this point, Phase
+        # 0 is what creates them. Cleared the same way a feature's pause
+        # is -- the "Feature Architect" row's existing Resume action
+        # (recover-workflow) already clears Workflow.paused_by for any
+        # paused workflow, no new endpoint needed.
+        if phase0_wf_id and _should_pause_for_review(project_id):
+            _pause_phase0_for_review(phase0_wf_id, logger)
+            cleared = _wait_for_phase0_review_clearance(phase0_wf_id, logger, project_id=project_id)
+            if not cleared:
+                # Stop signal fired, or the workflow vanished -- do not
+                # create Feature rows from a decomposition nobody approved.
+                return None, None
+            _restore_phase0_completed_status(phase0_wf_id, logger)
 
         # Create Feature DB records
         feature_records = _create_feature_records(design_entry.db_id, features_json, designs_folder, logger)
@@ -7845,12 +7898,100 @@ def _wait_for_review_clearance(
         time.sleep(poll_interval)
 
 
+def _restore_phase0_completed_status(workflow_id: str, logger: "OrchestratorLogger") -> None:
+    """Restore Workflow.status to "completed" after a review pause clears.
+
+    The generic resume/recover-workflow action that clears
+    Workflow.paused_by (the "Feature Architect" row's Resume button) sets
+    Workflow.status="active", not "completed" -- correct for a workflow
+    that genuinely has more work to do, but Phase 0's decomposition work
+    is already fully done at this point; "paused for review" was an
+    additional gate on top of completion, not a different lifecycle state.
+    Left as "active", _get_phase0_completion's Tier-2 recovery check
+    (`wf.status != "completed"`) would never recognize this workflow as
+    done again, wastefully re-running the whole decomposition from scratch
+    on any later, unrelated backend restart.
+    """
+    try:
+        from src.core.database import Workflow, get_db
+        with get_db() as db:
+            wf = db.query(Workflow).filter_by(id=workflow_id).first()
+            if wf and wf.status != "completed":
+                wf.status = "completed"
+                db.commit()
+                logger.info(f"[REVIEW] Restored Phase 0 workflow {workflow_id[:8]} status to completed after review clearance")
+    except Exception as e:
+        logger.error(f"[REVIEW] Failed to restore Phase 0 workflow {workflow_id[:8]} status after review: {e}")
+
+
+def _pause_phase0_for_review(workflow_id: str, logger: "OrchestratorLogger") -> None:
+    """Pause Phase 0's own workflow with paused_by='review'.
+
+    Mirrors _pause_feature_for_review, but there's no Feature row to flip
+    to "paused" at this point -- Phase 0 is what creates them, so the
+    workflow itself is paused directly instead of through one.
+    """
+    try:
+        from src.core.database import Workflow, get_db
+        with get_db() as db:
+            wf = db.query(Workflow).filter_by(id=workflow_id).first()
+            if wf and wf.paused_by != "review" and wf.status not in ("failed", "completed"):
+                wf.status = "paused"
+                wf.paused_by = "review"
+                db.commit()
+                logger.info(f"[REVIEW] Phase 0 workflow {workflow_id[:8]} paused for review")
+    except Exception as e:
+        logger.error(f"[REVIEW] Failed to pause Phase 0 workflow {workflow_id[:8]} for review: {e}")
+
+
+def _wait_for_phase0_review_clearance(
+    workflow_id: str,
+    logger: "OrchestratorLogger",
+    project_id: Optional[str] = None,
+    poll_interval: int = 30,
+) -> bool:
+    """Block until Phase 0's review pause is cleared (paused_by != 'review').
+
+    Mirrors _wait_for_review_clearance, polling the workflow directly since
+    Phase 0 has no Feature row to key off of at this point.
+
+    Returns True when the user clears the pause (e.g. via the same
+    resume/recover action the "Feature Architect" row's Resume button
+    already sends -- that generic action sets Workflow.status="active",
+    NOT "completed"; the caller must restore "completed" itself, since
+    _get_phase0_completion's own Tier-2 recovery check depends on it and
+    Phase 0's work is genuinely done, not merely resumed). Returns False if
+    the pipeline stop signal fired first or the workflow disappeared, in
+    which case the caller must not proceed to _create_feature_records.
+    Waits indefinitely otherwise -- Review Mode requires explicit human action.
+    """
+    logger.info(f"[REVIEW] Waiting for human review of Phase 0 decomposition (workflow {workflow_id[:8]})")
+    while True:
+        if project_id and _should_stop(project_id):
+            logger.info(f"[REVIEW] Stop signal — exiting Phase 0 review wait for {workflow_id[:8]}")
+            return False
+        try:
+            from src.core.database import Workflow, get_db
+            with get_db() as db:
+                wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                if not wf:
+                    logger.info(f"[REVIEW] Phase 0 workflow {workflow_id[:8]} no longer exists — exiting review wait")
+                    return False
+                if wf.paused_by != "review":
+                    logger.info(f"[REVIEW] Review cleared for Phase 0 workflow {workflow_id[:8]}")
+                    return True
+        except Exception as e:
+            logger.error(f"[REVIEW] Error checking Phase 0 review status: {e}")
+        time.sleep(poll_interval)
+
+
 def _wait_for_pending_reviews(
     project_id: str,
     logger: "OrchestratorLogger",
     poll_interval: int = 30,
 ) -> None:
-    """Block until all features pending review are approved.
+    """Block until all features -- and any Phase 0 decomposition -- pending
+    review are approved.
 
     Called before starting new features to ensure review mode gates
     the entire pipeline, not just individual features.
@@ -7860,7 +8001,7 @@ def _wait_for_pending_reviews(
     while True:
         try:
             with get_db() as db:
-                pending_reviews = (
+                pending_feature_reviews = (
                     db.query(Feature)
                     .join(Workflow, Feature.workflow_id == Workflow.id)
                     .filter(
@@ -7870,9 +8011,28 @@ def _wait_for_pending_reviews(
                     )
                     .count()
                 )
+                # Phase 0 workflows have no Feature row to join through --
+                # they're what CREATES Feature rows -- so a paused-for-
+                # review decomposition (see _pause_phase0_for_review) is
+                # otherwise invisible to the query above. Without this, a
+                # different design's Phase 0 sitting paused for review
+                # wouldn't block this design's next feature-execution-
+                # group from starting, defeating the "gates the entire
+                # pipeline" guarantee this function exists to provide.
+                pending_phase0_reviews = (
+                    db.query(Workflow)
+                    .filter(
+                        Workflow.project_id == project_id,
+                        Workflow.definition_id.in_(PHASE0_DEFINITION_IDS),
+                        Workflow.paused_by == "review",
+                        Workflow.status == "paused",
+                    )
+                    .count()
+                )
+                pending_reviews = pending_feature_reviews + pending_phase0_reviews
                 if pending_reviews == 0:
                     return
-                logger.info(f"[REVIEW] Waiting for {pending_reviews} feature(s) pending review before starting new features")
+                logger.info(f"[REVIEW] Waiting for {pending_reviews} pending review(s) before starting new features")
         except Exception as e:
             logger.error(f"[REVIEW] Error checking pending reviews: {e}")
         time.sleep(poll_interval)

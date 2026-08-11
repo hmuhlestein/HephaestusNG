@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, CheckCircle2, RotateCcw, Clock, DollarSign, Layers, Eye, FileText, ListChecks, GitPullRequest } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { StatusBadge, StatusIcon, formatTime } from '@/pages/Autopilot';
+import { MarkdownRenderer } from '@/utils/markdown';
 import toast from 'react-hot-toast';
 
 interface FeatureReviewModalProps {
@@ -20,21 +21,31 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
   const [feedback, setFeedback] = useState('');
   const [activeTab, setActiveTab] = useState<'report' | 'requirements'>('report');
 
+  // Phase 0 (Feature Architect) pseudo-features have no Feature DB row --
+  // the feature-records docs endpoints below 404 for them, so their report
+  // and review content is fetched by workflow id instead.
+  const isPhase0 = !!featureId?.startsWith('phase0-');
+
   // Only load docs (to detect report presence); metadata comes from `feature` prop.
   const { data: featureDocs } = useQuery({
     queryKey: ['autopilot-feature-docs', featureId],
     queryFn: () => apiService.getFeatureRecordDocs(featureId!),
-    enabled: !!featureId,
+    enabled: !!featureId && !isPhase0,
   });
   const reportDoc = featureDocs?.docs.find((d: any) => d.name === 'feature_report.html');
   // Also accept has_report from the feature prop as a fallback while docs load
   const hasReport = !!reportDoc || !!feature?.has_report;
 
-  // Fetch requirements document
+  // Fetch requirements document (real features) or the decomposition's
+  // adversarial review.md (Phase 0) -- same tab, different source.
   const { data: requirementsDoc } = useQuery({
     queryKey: ['autopilot-feature-requirements', featureId],
     queryFn: async () => {
       try {
+        if (isPhase0) {
+          const result = await apiService.getWorkflowDecompositionReview(feature?.workflow_id ?? featureId!.slice('phase0-'.length));
+          return result.content;
+        }
         const docs = await apiService.getFeatureRecordDocs(featureId!);
         const reqDoc = docs.docs.find((d: any) => d.name === 'requirements.md' || d.name === 'requirements_analysis.md');
         if (reqDoc) {
@@ -144,7 +155,7 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
                   }`}
                 >
                   <ListChecks className="w-4 h-4" />
-                  Requirements
+                  {isPhase0 ? 'Review Findings' : 'Requirements'}
                 </button>
               </div>
 
@@ -153,7 +164,9 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
                 {activeTab === 'report' ? (
                   hasReport ? (
                     <iframe
-                      src={`/api/autopilot/feature-records/${encodeURIComponent(featureId)}/report`}
+                      src={isPhase0
+                        ? `/api/autopilot/workflows/${encodeURIComponent(feature?.workflow_id ?? featureId.slice('phase0-'.length))}/feature_report`
+                        : `/api/autopilot/feature-records/${encodeURIComponent(featureId)}/report`}
                       className="w-full h-full border-0"
                       title="Feature Report"
                     />
@@ -164,16 +177,14 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
                     </div>
                   )
                 ) : (
-                  /* Requirements tab */
+                  /* Requirements / Review Findings tab */
                   <div className="h-full overflow-y-auto p-6">
                     {requirementsDoc ? (
-                      <div className="prose prose-sm prose-invert max-w-none">
-                        <pre className="whitespace-pre-wrap text-sm text-gray-300 leading-relaxed">{requirementsDoc}</pre>
-                      </div>
+                      <MarkdownRenderer content={requirementsDoc} className="text-sm prose prose-sm prose-invert max-w-none" />
                     ) : (
                       <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-3">
                         <FileText className="w-10 h-10 text-gray-600" />
-                        <p className="text-sm">Requirements not yet available</p>
+                        <p className="text-sm">{isPhase0 ? 'Review findings not yet available' : 'Requirements not yet available'}</p>
                       </div>
                     )}
                   </div>

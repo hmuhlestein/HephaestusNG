@@ -2227,6 +2227,442 @@ class TestWorkflowFeatureReport:
         resp = client.get("/api/autopilot/workflows/nonexistent/feature_report")
         assert resp.status_code == 404
 
+    def test_serves_phase0_synopsis_from_designs_folder(self, project_client):
+        """Phase 0 (Feature Architect) has no features-gallery entry --
+        its archived report lives in the design's own designs_folder
+        instead (see run_phase0's synopsis_src copy)."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, Workflow, get_db
+
+        designs_folder = dirs["project_dir"] / ".hephaestus" / "designs" / "run1"
+        designs_folder.mkdir(parents=True)
+        (designs_folder / "feature_report.html").write_text("<html>phase0 synopsis</html>")
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-phase0-report",
+                    project_id=pid,
+                    filename="d.md",
+                    name="D",
+                    designs_folder=str(designs_folder),
+                )
+            )
+            db.add(
+                Workflow(
+                    id="wf-phase0-report",
+                    name="Phase 0",
+                    definition_id="feature_architect",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    project_id=pid,
+                    design_id="des-phase0-report",
+                    working_directory=None,  # worktree still holds it while
+                    # paused for review in practice, but this test exercises
+                    # the fallback specifically
+                )
+            )
+
+        resp = client.get("/api/autopilot/workflows/wf-phase0-report/feature_report")
+        assert resp.status_code == 200
+        assert "phase0 synopsis" in resp.text
+
+
+class TestPhase0PseudoFeatureReviewFields:
+    """The synthetic "Feature Architect" row get_project_design_status
+    inserts for Phase 0 -- must report review_pending/has_report/status
+    the same way a real Feature row does, so the frontend's review-mode
+    amber highlight and Resume-as-approve flow both work for it too."""
+
+    def _create_project(self, client, dirs):
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={"name": "Test", "base_dir": str(dirs["project_dir"])},
+        )
+        return resp.json()["id"]
+
+    def test_paused_for_review_reports_paused_status_and_review_pending(
+        self, project_client
+    ):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, Task, Workflow, get_db
+
+        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        (design_dir / "phase0-design.md").write_text("# Design")
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-phase0-paused",
+                    project_id=pid,
+                    filename="phase0-design.md",
+                    name="Phase0 Design",
+                    ordinal=20,
+                    size_bytes=10,
+                    extension=".md",
+                    status="active",
+                )
+            )
+            db.add(
+                Workflow(
+                    id="wf-phase0-paused",
+                    name="Phase 0",
+                    definition_id="feature_architect",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="review",
+                    launch_params={
+                        "design_document": str(design_dir / "phase0-design.md"),
+                        "project_path": str(dirs["project_dir"]),
+                    },
+                )
+            )
+            db.add(
+                Task(
+                    id="task-phase0-paused",
+                    raw_description="Execute feature_review",
+                    enriched_description="Execute feature_review",
+                    done_definition="d",
+                    status="done",
+                    workflow_id="wf-phase0-paused",
+                )
+            )
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/phase0-design.md/status")
+        assert resp.status_code == 200, resp.text
+        features = resp.json()["features"]
+        phase0 = next(f for f in features if f["id"] == "phase0-wf-phase0-paused")
+
+        # Every task is "done" -- without the paused_by override this would
+        # read "completed", indistinguishable from a design that skipped
+        # review entirely.
+        assert phase0["status"] == "paused"
+        assert phase0["review_pending"] is True
+
+    def test_not_paused_reports_review_pending_false(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, Task, Workflow, get_db
+
+        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        (design_dir / "phase0-active.md").write_text("# Design")
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-phase0-active",
+                    project_id=pid,
+                    filename="phase0-active.md",
+                    name="Phase0 Active",
+                    ordinal=21,
+                    size_bytes=10,
+                    extension=".md",
+                    status="active",
+                )
+            )
+            db.add(
+                Workflow(
+                    id="wf-phase0-active",
+                    name="Phase 0",
+                    definition_id="feature_architect",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    launch_params={
+                        "design_document": str(design_dir / "phase0-active.md"),
+                        "project_path": str(dirs["project_dir"]),
+                    },
+                )
+            )
+            db.add(
+                Task(
+                    id="task-phase0-active",
+                    raw_description="Execute feature_review",
+                    enriched_description="Execute feature_review",
+                    done_definition="d",
+                    status="done",
+                    workflow_id="wf-phase0-active",
+                )
+            )
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/phase0-active.md/status")
+        assert resp.status_code == 200, resp.text
+        features = resp.json()["features"]
+        phase0 = next(f for f in features if f["id"] == "phase0-wf-phase0-active")
+
+        assert phase0["status"] == "completed"
+        assert phase0["review_pending"] is False
+
+
+class TestPhase0ReviewAction:
+    """POST /features/{feature_id}/review for a "phase0-{workflow_id}"
+    pseudo-feature -- approve clears the review pause the same way the
+    Resume action does; request_changes creates a redo task on the
+    feature_architect phase and leaves the workflow paused for a second
+    look, mirroring the real-feature request_changes flow."""
+
+    def _create_project(self, client, dirs):
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={"name": "Test", "base_dir": str(dirs["project_dir"])},
+        )
+        return resp.json()["id"]
+
+    def _seed_paused_phase0(self, pid, dirs, workflow_id):
+        from src.core.database import Phase, Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id=workflow_id,
+                    name="Phase 0",
+                    definition_id="feature_architect",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="review",
+                    project_id=pid,
+                    launch_params={"project_path": str(dirs["project_dir"])},
+                )
+            )
+            db.add(
+                Phase(
+                    id=f"{workflow_id}-arch",
+                    workflow_id=workflow_id,
+                    order=1,
+                    name="feature_architect",
+                    description="Decompose the design.",
+                    done_definitions=["x"],
+                )
+            )
+
+    def test_approve_clears_pause(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+        self._seed_paused_phase0(pid, dirs, "wf-phase0-approve")
+
+        resp = client.post(
+            "/api/autopilot/features/phase0-wf-phase0-approve/review",
+            json={"action": "approve"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        from src.core.database import Workflow, get_db
+
+        with get_db() as db:
+            wf = db.query(Workflow).filter_by(id="wf-phase0-approve").first()
+            assert wf.status == "active"
+            assert wf.paused_by is None
+
+    def test_approve_rejected_while_redo_task_in_flight(self, project_client):
+        """Approving while a request_changes redo agent is still working
+        would let run_phase0 read a half-written features.json and then
+        delete the worktree out from under that agent -- must be blocked
+        until the redo settles."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+        self._seed_paused_phase0(pid, dirs, "wf-phase0-approve-race")
+
+        from src.core.database import Task, get_db
+
+        with get_db() as db:
+            db.add(
+                Task(
+                    id="task-phase0-redo-in-flight",
+                    workflow_id="wf-phase0-approve-race",
+                    phase_id="wf-phase0-approve-race-arch",
+                    raw_description="Execute feature_architect",
+                    enriched_description="Execute feature_architect",
+                    done_definition="d",
+                    status="in_progress",
+                )
+            )
+
+        resp = client.post(
+            "/api/autopilot/features/phase0-wf-phase0-approve-race/review",
+            json={"action": "approve"},
+        )
+        assert resp.status_code == 409, resp.text
+
+        from src.core.database import Workflow
+
+        with get_db() as db:
+            wf = db.query(Workflow).filter_by(id="wf-phase0-approve-race").first()
+            # Still paused -- the blocked approve must not have cleared it.
+            assert wf.paused_by == "review"
+
+    def test_request_changes_requires_feedback(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+        self._seed_paused_phase0(pid, dirs, "wf-phase0-nofeedback")
+
+        resp = client.post(
+            "/api/autopilot/features/phase0-wf-phase0-nofeedback/review",
+            json={"action": "request_changes"},
+        )
+        assert resp.status_code == 400
+
+    def test_request_changes_creates_redo_task_and_keeps_paused(self, project_client, monkeypatch):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+        self._seed_paused_phase0(pid, dirs, "wf-phase0-redo")
+
+        from src.mcp import autopilot_api
+
+        spawn_mock = AsyncMock()
+        monkeypatch.setattr(autopilot_api, "_spawn_agent_for_task", spawn_mock)
+
+        resp = client.post(
+            "/api/autopilot/features/phase0-wf-phase0-redo/review",
+            json={"action": "request_changes", "feedback": "Split the auth feature further"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        from src.core.database import Task, TaskPromptOverride, Workflow, get_db
+
+        with get_db() as db:
+            wf = db.query(Workflow).filter_by(id="wf-phase0-redo").first()
+            # Still awaiting review -- request_changes doesn't clear the
+            # pause, the human must approve again after the redo.
+            assert wf.paused_by == "review"
+
+            tasks = db.query(Task).filter_by(workflow_id="wf-phase0-redo").all()
+            assert len(tasks) == 1
+            new_task = tasks[0]
+            assert new_task.status == "pending"
+            assert new_task.phase_id == "wf-phase0-redo-arch"
+
+            override = db.query(TaskPromptOverride).filter_by(task_id=new_task.id).first()
+            assert override is not None
+            assert "Split the auth feature further" in override.user_prompt
+
+        spawn_mock.assert_called_once()
+
+    def test_request_changes_reuses_still_pending_redo_task(self, project_client, monkeypatch):
+        """A second request_changes call before the first redo agent has
+        even been dispatched (still 'pending') must update that task in
+        place, not create a second one -- otherwise two agents can end up
+        racing on the same worktree's features.json."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+        self._seed_paused_phase0(pid, dirs, "wf-phase0-redo2")
+
+        from src.mcp import autopilot_api
+
+        spawn_mock = AsyncMock()
+        monkeypatch.setattr(autopilot_api, "_spawn_agent_for_task", spawn_mock)
+
+        resp1 = client.post(
+            "/api/autopilot/features/phase0-wf-phase0-redo2/review",
+            json={"action": "request_changes", "feedback": "First round of feedback"},
+        )
+        assert resp1.status_code == 200, resp1.text
+
+        resp2 = client.post(
+            "/api/autopilot/features/phase0-wf-phase0-redo2/review",
+            json={"action": "request_changes", "feedback": "Second round of feedback"},
+        )
+        assert resp2.status_code == 200, resp2.text
+
+        from src.core.database import Task, TaskPromptOverride, get_db
+
+        with get_db() as db:
+            tasks = db.query(Task).filter_by(workflow_id="wf-phase0-redo2").all()
+            assert len(tasks) == 1, "second request_changes must reuse the still-pending task, not add a new one"
+            reused_task = tasks[0]
+            assert reused_task.status == "pending"
+
+            override = db.query(TaskPromptOverride).filter_by(task_id=reused_task.id).first()
+            assert override is not None
+            # Prefixed, not replaced -- mirrors the real-feature restartable
+            # path, so an earlier round's feedback isn't silently dropped.
+            assert "Second round of feedback" in override.user_prompt
+            assert "First round of feedback" in override.user_prompt
+            assert override.user_prompt.index("Second round of feedback") < override.user_prompt.index("First round of feedback")
+
+        assert spawn_mock.call_count == 2
+
+    def test_request_changes_does_not_restart_task_with_live_agent(self, project_client, monkeypatch):
+        """If the prior redo task is 'in_progress' with a still-live
+        (non-terminated) agent, a second request_changes must not touch it
+        -- creating a competing task would race the live agent on the same
+        worktree."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+        self._seed_paused_phase0(pid, dirs, "wf-phase0-live-agent")
+
+        from src.core.database import Agent, Task, get_db
+
+        with get_db() as db:
+            db.add(
+                Agent(
+                    id="agent-phase0-live",
+                    system_prompt="p",
+                    status="working",
+                    cli_type="claude",
+                )
+            )
+            db.add(
+                Task(
+                    id="task-phase0-in-progress",
+                    workflow_id="wf-phase0-live-agent",
+                    phase_id="wf-phase0-live-agent-arch",
+                    raw_description="Execute feature_architect",
+                    enriched_description="Execute feature_architect",
+                    done_definition="d",
+                    status="in_progress",
+                    assigned_agent_id="agent-phase0-live",
+                )
+            )
+
+        from src.mcp import autopilot_api
+
+        spawn_mock = AsyncMock()
+        monkeypatch.setattr(autopilot_api, "_spawn_agent_for_task", spawn_mock)
+
+        resp = client.post(
+            "/api/autopilot/features/phase0-wf-phase0-live-agent/review",
+            json={"action": "request_changes", "feedback": "More feedback"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        with get_db() as db:
+            tasks = db.query(Task).filter_by(workflow_id="wf-phase0-live-agent").all()
+            assert len(tasks) == 2, "a new task must be created rather than restarting the live-agent one"
+            live_task = next(t for t in tasks if t.id == "task-phase0-in-progress")
+            assert live_task.status == "in_progress"
+            assert live_task.assigned_agent_id == "agent-phase0-live"
+
+    def test_approve_on_non_review_pause_is_idempotent(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                Workflow(
+                    id="wf-phase0-not-paused",
+                    name="Phase 0",
+                    definition_id="feature_architect",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    project_id=pid,
+                )
+            )
+
+        resp = client.post(
+            "/api/autopilot/features/phase0-wf-phase0-not-paused/review",
+            json={"action": "approve"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
 
 class TestProjectPathTraversal:
     def test_design_content_rejects_traversal(self, project_client):
