@@ -120,6 +120,33 @@ additional_notes: |
   - MISSING: REQ-XX that should exist but doesn't
 
   ═══════════════════════════════════════════════════════════════════════
+  STEP 2b: CHECK FOR A STATED DISAGREEMENT (RE-REVIEW ONLY)
+  ═══════════════════════════════════════════════════════════════════════
+
+  If requirements.md has a `## Scope Disagreements` section, product_
+  requirements is explicitly telling you it did NOT comply with a prior
+  FAIL's correction_instructions for a specific item, and why. This means
+  a PLAIN repeat of the same FAIL you already gave is not useful -- you
+  must actually engage with the stated reasoning:
+  - If the justification is a real, specific concern (concrete, not "seems
+    reasonable" or "good practice") that design.md's silence doesn't rule
+    out -- e.g. a security/correctness issue the design doc's scope
+    genuinely didn't anticipate -- consider PASS for that item even though
+    it's still not literally in design.md. Note this in summary.
+  - If the justification is vague, generic, or just restates that the item
+    seems useful, it does NOT excuse the drift -- FAIL again, and in
+    correction_instructions explicitly address why the stated reason
+    doesn't hold (not just re-stating "not in design.md" -- product_
+    requirements already knows that; it needs to know why ITS reasoning
+    specifically doesn't hold up).
+  - If requirements.md has NO `## Scope Disagreements` section but the
+    exact same out-of-scope item you flagged last time is still present
+    unchanged, say so plainly in your summary ("product_requirements did
+    not address prior feedback and gave no reason") -- this is a distinct,
+    more useful signal than a generic re-FAIL for whoever/whatever resolves
+    a stuck cycle (a human, or arbitration).
+
+  ═══════════════════════════════════════════════════════════════════════
   STEP 2: COMPARE LINE BY LINE
   ═══════════════════════════════════════════════════════════════════════
 

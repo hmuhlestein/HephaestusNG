@@ -159,6 +159,19 @@ additional_notes: |
   were already rejected. If correction_instructions say to remove an item,
   remove it even if it seems reasonable from the design doc.
 
+  EXCEPTION -- if you genuinely disagree with a specific out-of-scope item
+  (e.g. you believe it's necessary for a reason scope_review's comparison
+  against design.md wouldn't have surfaced, like a security or correctness
+  concern), you may keep it -- but ONLY if you add a `## Scope
+  Disagreements` section to requirements.md explaining, per REQ/NFR ID,
+  EXACTLY why you believe it should stay despite design.md not covering it.
+  Cite the specific reasoning (not "seems reasonable" or "good practice" --
+  a concrete justification scope_review can evaluate and either accept or
+  rebut). Bumping the version number and resubmitting the SAME unchanged
+  content with no stated reason is not an acceptable response to feedback
+  -- if you're not going to comply, scope_review needs your reasoning
+  written down to make an informed call, not a silent repeat.
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 3: READ THE DESIGN DOCUMENT
   ═══════════════════════════════════════════════════════════════════════
