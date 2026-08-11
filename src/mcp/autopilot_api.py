@@ -4083,6 +4083,19 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
             wf.paused_by = None
             db.commit()
             _invalidate("status")
+
+            # Normally run_phase0's own wait loop (still polling in-process)
+            # notices this clearance and finishes the job itself. But if
+            # this pause was set by the out-of-band completion hook
+            # (PhaseManager._complete_workflow -> finalize_phase0_workflow,
+            # e.g. after a backend restart left run_phase0 with no live
+            # waiter), nothing else will ever create the Feature rows.
+            # finalize_phase0_workflow and _create_feature_records are both
+            # idempotent, so calling it here unconditionally is a safe
+            # no-op in the run_phase0-is-still-waiting case.
+            from src.autopilot.orchestrator import finalize_phase0_workflow
+            finalize_phase0_workflow(workflow_id, logger, skip_review_gate=True)
+
             return {"success": True, "message": "Feature decomposition approved"}
 
         # request_changes — re-decompose with the human's feedback.

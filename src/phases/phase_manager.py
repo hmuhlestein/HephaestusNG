@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import joinedload
 
-from src.core.constants import CONTEXT_DIR_NAME, WORKTREES_SUBDIR
+from src.core.constants import CONTEXT_DIR_NAME, PHASE0_DEFINITION_IDS, WORKTREES_SUBDIR
 from src.core.database import DatabaseManager, Phase, PhaseExecution, Task, Workflow
 from src.core.database import WorkflowDefinition as DBWorkflowDefinition
 from src.core.simple_config import get_config
@@ -1685,6 +1685,22 @@ class PhaseManager:
             session.commit()
             logger.info(f"Workflow {self.workflow_id} completed (all phases done)")
             self._populate_feature_folder(session, workflow)
+
+            if workflow.definition_id in PHASE0_DEFINITION_IDS:
+                # Generic completion hook for phase0-type workflows, in
+                # addition to run_phase0's own synchronous tail -- covers
+                # the case where run_phase0's own call never observes this
+                # completion itself (e.g. a backend restart mid-wait), which
+                # left a real completed workflow with zero Feature rows and
+                # no recovery short of "Rerun" (root cause of the
+                # FRONTEND_DESIGN.md incident). finalize_phase0_workflow is
+                # idempotent, so this is a safe no-op if run_phase0's own
+                # path already did the work.
+                from src.autopilot.orchestrator import finalize_phase0_workflow
+                from src.core.database import resolve_project_for_workflow
+
+                project_id, _ = resolve_project_for_workflow(workflow.id)
+                finalize_phase0_workflow(workflow.id, logger, project_id=project_id)
 
     # Orchestrator-provided context files copied into every worktree at
     # creation time (see WorktreeManager's context-file writing, logged as
