@@ -88,7 +88,24 @@ additional_notes: |
   steps below are the complete toolkit; apply the parts the design actually warrants.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: CHECK FOR PRIOR PARTIAL WORK (RETRY AWARENESS)
+  STEP 2: CHECK FEATURE TYPE (TECH DEBT AWARENESS)
+  ═══════════════════════════════════════════════════════════════════════
+
+  ```bash
+  # Check if this is a tech-debt feature
+  ls ./.hephaestus/tech_debt_requirements/ 2>/dev/null && echo "TECH_DEBT_FLOW"
+  ```
+
+  If this is a TECH DEBT flow:
+  - The requirements are a prioritized fix plan, not a feature spec.
+  - Architecture should focus on WHERE to make changes, not new system design.
+  - Tasks should be small, focused fixes — not large architectural changes.
+  - Existing patterns take precedence — match what's already there.
+  - If the code already exists and works, document it as-is; don't redesign.
+  - Group related fixes into logical work units, but keep each task atomic.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 3: CHECK FOR PRIOR PARTIAL WORK (RETRY AWARENESS)
   ═══════════════════════════════════════════════════════════════════════
 
   Before doing any work, check if a previous attempt already produced output:
@@ -103,7 +120,7 @@ additional_notes: |
   If it does NOT exist (or is empty): proceed normally from STEP 3.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: READ REQUIREMENTS AND EXISTING FILES
+  STEP 4: READ REQUIREMENTS AND EXISTING FILES
   ═══════════════════════════════════════════════════════════════════════
 
   First, initialize CodeGraph for fast codebase exploration:
@@ -165,7 +182,7 @@ additional_notes: |
   distinct item so it's tracked instead of silently dropped, then move on.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: DESIGN SYSTEM ARCHITECTURE
+  STEP 5: DESIGN SYSTEM ARCHITECTURE
   ═══════════════════════════════════════════════════════════════════════
   
   For each component, define:
@@ -208,7 +225,7 @@ additional_notes: |
   - Secrets management: ALL credentials, API keys, tokens, and secrets MUST go in a .env file (or secrets manager like Vault/AWS Secrets Manager). NEVER in source code, config YAML, or this document. Document which secrets are needed and their expected format, but not their values.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: VERIFY ARCHITECTURE AGAINST EXISTING CODE (MANDATORY)
+  STEP 6: VERIFY ARCHITECTURE AGAINST EXISTING CODE (MANDATORY)
   ═══════════════════════════════════════════════════════════════════════
 
   ⚠️  THIS STEP CATCHES ARCHITECTURE THAT CONFLICTS WITH EXISTING CODE. ⚠️
@@ -242,7 +259,7 @@ additional_notes: |
   - Flag it as a blocker that must be addressed before implementation
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6: WRITE THE TASK BREAKDOWN INTO architecture.md (documentation only —
+  STEP 7: WRITE THE TASK BREAKDOWN INTO architecture.md (documentation only —
   do not call create_task here, see STEP 12)
   ═══════════════════════════════════════════════════════════════════════
 
@@ -270,7 +287,7 @@ additional_notes: |
   **Estimated Complexity:** simple / moderate / complex
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 7: CREATE TICKETS WITH BLOCKING RELATIONSHIPS
+  STEP 8: CREATE TICKETS WITH BLOCKING RELATIONSHIPS
   ═══════════════════════════════════════════════════════════════════════
   
   Create Kanban tickets for each component:
@@ -286,7 +303,7 @@ additional_notes: |
   - Tags for categorization
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 8: DOCUMENT THE DEVELOPMENT TASK BREAKDOWN IN architecture.md
+  STEP 9: DOCUMENT THE DEVELOPMENT TASK BREAKDOWN IN architecture.md
   ═══════════════════════════════════════════════════════════════════════
 
   Do NOT call create_task for Phase 3 (development) work. The
@@ -376,7 +393,7 @@ additional_notes: |
   ```
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 9: SAVE TO MEMORY
+  STEP 10: SAVE TO MEMORY
   ═══════════════════════════════════════════════════════════════════════
   
   Save architectural decisions to memory:
@@ -386,7 +403,7 @@ additional_notes: |
   - Critical implementation notes
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 10: CREATE ARCHITECTURE DOCUMENT
+  STEP 11: CREATE ARCHITECTURE DOCUMENT
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
@@ -443,7 +460,7 @@ additional_notes: |
   ...
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 11: OBJECT-ORIENTED DESIGN PASS
+  STEP 12: OBJECT-ORIENTED DESIGN PASS
   ═══════════════════════════════════════════════════════════════════════
   
   Before finalizing the architecture, perform an OO design pass:
@@ -479,7 +496,7 @@ additional_notes: |
   Document OO decisions in architecture.md under "Object-Oriented Design".
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 12: IMPLEMENTATION READINESS PASS (MANDATORY — THE ARCHITECT'S
+  STEP 13: IMPLEMENTATION READINESS PASS (MANDATORY — THE ARCHITECT'S
            CONTRACT WITH THE IMPLEMENTER)
   ═══════════════════════════════════════════════════════════════════════
   
@@ -491,7 +508,7 @@ additional_notes: |
   If you cannot write the signature, you have not finished the design.
   
   ──────────────────────────────────────────────────────────────────────
-  STEP 13: CLASS SKELETONS WITH FULL SIGNATURES
+  STEP 14: CLASS SKELETONS WITH FULL SIGNATURES
   ──────────────────────────────────────────────────────────────────────
   
   For every class in the architecture, write a code skeleton in the
@@ -539,7 +556,7 @@ additional_notes: |
   - Return types must be explicit — `-> Result` not `-> Any`.
   
   ──────────────────────────────────────────────────────────────────────
-  STEP 14: CONCURRENCY MODEL
+  STEP 15: CONCURRENCY MODEL
   ──────────────────────────────────────────────────────────────────────
   
   For every component, state the concurrency contract explicitly:
@@ -572,7 +589,7 @@ additional_notes: |
   ```
   
   ──────────────────────────────────────────────────────────────────────
-  STEP 15: ERROR HIERARCHY AND HANDLING CONTRACT
+  STEP 16: ERROR HIERARCHY AND HANDLING CONTRACT
   ──────────────────────────────────────────────────────────────────────
   
   Define the exception/error hierarchy for the system:
@@ -599,7 +616,7 @@ additional_notes: |
   - What error the API/CLI surface returns to the user (status code, message format).
   
   ──────────────────────────────────────────────────────────────────────
-  STEP 16: WIRING AND INITIALIZATION
+  STEP 17: WIRING AND INITIALIZATION
   ──────────────────────────────────────────────────────────────────────
   
   Describe exactly how components are wired together at startup:
@@ -625,7 +642,7 @@ additional_notes: |
   ```
   
   ──────────────────────────────────────────────────────────────────────
-  STEP 17: GOTCHAS AND IMPLEMENTATION TRAPS
+  STEP 18: GOTCHAS AND IMPLEMENTATION TRAPS
   ──────────────────────────────────────────────────────────────────────
   
   List every non-obvious thing that will bite the implementer. Be
@@ -652,7 +669,7 @@ additional_notes: |
   section.
   
   ──────────────────────────────────────────────────────────────────────
-  STEP 18: HOOK-TOGETHER MAP
+  STEP 19: HOOK-TOGETHER MAP
   ──────────────────────────────────────────────────────────────────────
   
   For every interface boundary between two components, document:
@@ -667,7 +684,7 @@ additional_notes: |
   design is not done.
   
   ──────────────────────────────────────────────────────────────────────
-  STEP 19: SELF-CHECK: IS THIS ARCHITECTURE IMPLEMENTATION-READY?
+  STEP 20: SELF-CHECK: IS THIS ARCHITECTURE IMPLEMENTATION-READY?
   ──────────────────────────────────────────────────────────────────────
   
   Before writing architecture.md, verify:
