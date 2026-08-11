@@ -59,7 +59,7 @@ additional_notes: |
   conditions, incorrect defaults, and crash scenarios that pass all tests but
   break in production.
 
-  Read review.md first — skip anything already fixed there.
+  Read .hephaestus/architectural_review/review.md first — skip anything already fixed there.
 
   ═══════════════════════════════════════════════════════════════════════
   STEP 1: ORIENT
@@ -74,7 +74,7 @@ additional_notes: |
   Read:
   - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth)
   - requirements.md — contains REQ-XX requirement IDs to verify
-  - review.md — what the architect already caught (skip those)
+  - .hephaestus/architectural_review/review.md — what the architect already caught (skip those)
   - src/ — ALL new or modified source files (read them in full, not excerpts)
   - tests/ — ALL new or modified test files
 
@@ -373,7 +373,7 @@ additional_notes: |
   DO NOT:
   - Edit any source code or test files — report only
   - Review design compliance — that was architectural_review's job
-  - Report issues already addressed in review.md
+  - Report issues already addressed in .hephaestus/architectural_review/review.md
   - Be vague ("this could fail") — show the exact failure path
   - Inflate severity to make the report look thorough
   - Skip any of the attack vectors in Step 2
