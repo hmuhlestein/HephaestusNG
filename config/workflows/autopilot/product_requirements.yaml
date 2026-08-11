@@ -44,6 +44,38 @@ additional_notes: |
   within the context of the larger project vision.
 
   ═══════════════════════════════════════════════════════════════════════
+  STEP 0: DETECT TECH DEBT FLOW (AUTO-SWITCH)
+  ═══════════════════════════════════════════════════════════════════════
+
+  Before doing anything else, check if this is a tech-debt/refactor flow:
+
+  ```bash
+  # Check design doc for tech debt indicators
+  head -50 ./.hephaestus/design.md 2>/dev/null | grep -i "tech.debt\|refactor\|pipeline.improvement\|open.ticket\|bug.fix" && echo "TECH_DEBT_INDICATORS_FOUND"
+  ```
+
+  Also use MCP tool to check for open tickets:
+  ```python
+  # Check for open bug tickets and tech debt items
+  result = heph_search_tickets(status="open", ticket_type="bug")
+  result2 = heph_search_tickets(status="open", tags=["tech-debt"])
+  ```
+
+  If the design doc is about tech debt/refactoring OR there are significant
+  open tickets (5+ bugs or tech-debt items), switch to TECH DEBT MODE:
+
+  **TECH DEBT MODE:**
+  - Skip the normal design-doc extraction below.
+  - Instead, create a prioritized fix plan from open tickets and code analysis.
+  - Scan for TODO/FIXME/HACK comments: `grep -rn "TODO\|FIXME\|HACK" src/ --include="*.py" | head -20`
+  - Check git log for recent fix patterns: `git log --oneline -20 | grep -i "fix\|bug\|workaround"`
+  - Look for code quality issues: silent errors, dead code, inconsistent patterns.
+  - Output a requirements.md with prioritized fix plan, not feature requirements.
+  - Use the same frontmatter format but note it's a tech debt analysis.
+
+  If no tech debt indicators found, proceed with normal feature extraction.
+
+  ═══════════════════════════════════════════════════════════════════════
   STEP 1: GATHER PROJECT CONTEXT (CRITICAL)
   ═══════════════════════════════════════════════════════════════════════
 
