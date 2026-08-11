@@ -650,6 +650,19 @@ async def _resume_interrupted_workflows(
                 if wf.status in ("paused", "failed"):
                     wf.status = "active"
                     wf.paused_by = None
+                    # A workflow that failed by exhausting max_total_gotos
+                    # (or the arbitration cap that follows it) needs a
+                    # genuinely fresh budget, not just a status flip -- the
+                    # persisted total_gotos counter never decreases on its
+                    # own, so without this a retried workflow re-exceeds the
+                    # SAME exhausted limit on its very next evaluation,
+                    # instantly re-failing with zero real attempt in
+                    # between. gotos_reset_at is the cutoff
+                    # _trigger_arbitration's own per-phase cap now uses to
+                    # stop counting historical (pre-retry) arbitration
+                    # attempts against this fresh run.
+                    wf.total_gotos = 0
+                    wf.gotos_reset_at = datetime.utcnow()
                     # Also update the associated feature status
                     feature = session.query(Feature).filter_by(workflow_id=wf.id).first()
                     if feature and feature.status in ("paused", "failed"):
