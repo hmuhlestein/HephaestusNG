@@ -90,6 +90,20 @@ class EvaluationPoint:
     # set it). See _get_max_review_runs/_create_phase_task's cap-enforcement
     # block in src/autopilot/orchestrator.py.
     max_review_runs: Optional[int] = None
+    # Opt-in: count a "goto" decision toward max_retries too, not just
+    # literal "retry" actions. False (default) preserves the original
+    # behavior for every eval_point that doesn't set it -- most of them
+    # have max_retries as low as 2 with on_budget_exhausted left at its
+    # "continue" default, so folding goto in globally would make them
+    # silently force-continue past a genuinely unresolved qa/security
+    # finding after just 2 cycles instead of properly re-checking it. Only
+    # meaningful for an eval_point whose condition can resolve to the SAME
+    # goto target repeatedly (e.g. scope_review always sending things back
+    # to product_requirements) -- without this, that kind of loop only
+    # ever answers to the workflow-wide max_total_gotos, shared across
+    # every phase pair in the whole pipeline and far too coarse to catch
+    # two specific agents stuck disagreeing with each other quickly.
+    goto_counts_as_retry: bool = False
 
 
 @dataclass
@@ -120,6 +134,7 @@ class OrchestratorConfig:
                     timeout_seconds=ep.get("timeout_seconds", 300),
                     on_budget_exhausted=ep.get("on_budget_exhausted", "continue"),
                     max_review_runs=ep.get("max_review_runs"),
+                    goto_counts_as_retry=ep.get("goto_counts_as_retry", False),
                 )
             )
 
@@ -306,8 +321,16 @@ class WorkflowOrchestrator:
             eval_point.conditions, score, evaluation_metadata, phase_output
         )
 
-        # Track retries
-        if action.action == OrchestrationAction.RETRY:
+        # Track retries. GOTO optionally counts toward the SAME per-phase
+        # budget as RETRY (eval_point.goto_counts_as_retry), not just the
+        # workflow-wide total_gotos safety net below -- opt-in, see that
+        # field's own docstring for why folding it in globally would be
+        # unsafe for eval_points with a low max_retries and no arbitrate
+        # fallback.
+        counts_as_retry = action.action == OrchestrationAction.RETRY or (
+            action.action == OrchestrationAction.GOTO and eval_point.goto_counts_as_retry
+        )
+        if counts_as_retry:
             self.phase_retry_counts[phase_name] = current_retries + 1
             action.metadata["retry_count"] = self.phase_retry_counts[phase_name]
             action.metadata["max_retries"] = eval_point.max_retries
