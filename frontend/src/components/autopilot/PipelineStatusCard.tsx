@@ -17,7 +17,25 @@ interface PipelineStatusCardProps {
 }
 
 const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, pendingAgents, projectName, onToggle, onMetricClick, loading, costTotal, costLimit, onBudgetClick }) => {
-  const running = status?.running ?? false;
+  // Use a stable running state that doesn't flicker during mutations.
+  // When loading (mutation in progress), keep the previous visual state
+  // until the API confirms the change.
+  const [stableRunning, setStableRunning] = React.useState(status?.running ?? false);
+  const prevLoadingRef = React.useRef(loading);
+  
+  React.useEffect(() => {
+    // When loading finishes (mutation settled), update stable state
+    if (prevLoadingRef.current && !loading) {
+      setStableRunning(status?.running ?? false);
+    }
+    // When not loading, sync with status
+    if (!loading) {
+      setStableRunning(status?.running ?? false);
+    }
+    prevLoadingRef.current = loading;
+  }, [loading, status?.running]);
+  
+  const running = loading ? stableRunning : (status?.running ?? false);
   const currentDesign = status?.current_design;
   const designsProcessed = status?.designs_processed ?? 0;
   const queueDepth = status?.queue_depth ?? 0;
