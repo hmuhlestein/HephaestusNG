@@ -711,6 +711,14 @@ export const apiService = {
     return data;
   },
 
+  // Phase 0 (Feature Architect) has no Feature row yet, so its
+  // feature_review adversarial review.md isn't reachable through the
+  // feature-records docs endpoints above -- fetched by workflow id instead.
+  getWorkflowDecompositionReview: async (workflowId: string): Promise<{ name: string; content: string }> => {
+    const { data } = await api.get(`/autopilot/workflows/${encodeURIComponent(workflowId)}/decomposition_review`);
+    return data;
+  },
+
   getAutopilotMessages: async (limit: number = 50): Promise<any[]> => {
     const { data } = await api.get(`/autopilot/messages?limit=${limit}`);
     return data;

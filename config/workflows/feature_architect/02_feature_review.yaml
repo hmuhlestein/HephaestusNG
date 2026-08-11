@@ -24,9 +24,11 @@ done_definitions:
   - "All BLOCKER and FIX findings documented with the exact design section and recommended fix"
   - "DEFER issues documented"
   - "review.md created with a YAML frontmatter block (blocker_count/fix_count/defer_count, gate input) followed by the BLOCKER/FIX/DEFER findings"
+  - "feature_report.html written to Artifacts Path"
   - "Task marked as done"
 outputs:
   - "review.md"
+  - "feature_report.html"
 next_steps:
   - "On any BLOCKER or FIX finding, the engine sends this report back to the Feature Architect for re-decomposition"
   - "On pass, per-feature pipelines are launched from features.json as-is"
@@ -173,6 +175,41 @@ additional_notes: |
   ```
 
   Counts must match the report's own Summary section exactly.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 6: WRITE HTML DECOMPOSITION SYNOPSIS (feature_report.html)
+  ═══════════════════════════════════════════════════════════════════════
+
+  Write this every time you complete this task, pass or fail -- the human
+  reviewing the decomposition (review mode) needs to see the CURRENT state
+  of the plan, including one that's about to be sent back for
+  re-decomposition. Self-contained HTML (inline styles, no external deps),
+  written to ./.hephaestus/feature_report.html (NOT ./docs/).
+
+  Title tag and top-of-page heading must both start with the actual
+  project name (this gets read out of context later, same reasoning as
+  doc_review's own feature_report.html). Get it with:
+
+  ```
+  basename "$(dirname "$(realpath "$(git rev-parse --git-common-dir)")")"
+  ```
+
+  Format: `<title>{Project Name}: Feature Decomposition — {design_name}</title>`
+
+  Include:
+  1. Verdict banner — PASS / NEEDS_WORK / FAIL, blocker/fix/defer counts,
+     visually distinct (e.g. green/amber/red) by verdict
+  2. Feature list — for each feature in features.json: name, one-paragraph
+     scope, files it owns, its depends_on, execution mode (parallel/sequential)
+  3. Coverage — the same design-requirement → owning-feature map from your
+     review.md, so a human can see nothing was dropped without reading the
+     full report
+  4. Findings summary — condensed BLOCKER/FIX/DEFER list from review.md
+     (title + one-line evidence each; full detail stays in review.md, not
+     duplicated in full here)
+
+  Target 100-200 lines — shorter than doc_review's report, since this
+  documents a plan, not a completed implementation.
 
   ═══════════════════════════════════════════════════════════════════════
   CLASSIFICATION CRITERIA

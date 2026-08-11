@@ -3587,15 +3587,39 @@ async def get_project_design_status(project_id: str, filename: str):
             phase0_wf = phase0_workflows[0]  # most recent (matching_workflows is desc-ordered)
             phase0_tasks = [t for t in all_tasks if t["workflow_id"] == phase0_wf.id]
             if phase0_tasks:
-                phase0_status = (
-                    "completed"
-                    if all(t["status"] == "done" for t in phase0_tasks)
-                    else "failed"
-                    if any(t["status"] == "failed" for t in phase0_tasks)
-                    else "active"
-                    if any(t["status"] in ("assigned", "in_progress") for t in phase0_tasks)
-                    else "pending"
-                )
+                # Paused-for-review wins over the task-derived status: every
+                # task is genuinely "done" at this point (decomposition +
+                # review both finished), which would otherwise read as
+                # "completed" -- indistinguishable from a design that
+                # skipped review entirely. Mirrors how a real Feature row's
+                # status is set to "paused" by _pause_feature_for_review.
+                if phase0_wf.paused_by == "review":
+                    phase0_status = "paused"
+                else:
+                    phase0_status = (
+                        "completed"
+                        if all(t["status"] == "done" for t in phase0_tasks)
+                        else "failed"
+                        if any(t["status"] == "failed" for t in phase0_tasks)
+                        else "active"
+                        if any(t["status"] in ("assigned", "in_progress") for t in phase0_tasks)
+                        else "pending"
+                    )
+
+                # has_report: the feature_review phase's HTML decomposition
+                # synopsis. Check the live worktree first (still present
+                # while paused for review -- Phase 0's own worktree isn't
+                # cleaned up until AFTER the review gate clears), then the
+                # design's durably-persisted designs_folder archive (see
+                # run_phase0's synopsis_src copy) once it's gone.
+                phase0_has_report = False
+                if phase0_wf.working_directory:
+                    phase0_has_report = (Path(phase0_wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html").is_file()
+                if not phase0_has_report:
+                    phase0_design = db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
+                    if phase0_design and phase0_design.designs_folder:
+                        phase0_has_report = (Path(phase0_design.designs_folder) / "feature_report.html").is_file()
+
                 features.insert(
                     0,
                     {
@@ -3609,6 +3633,10 @@ async def get_project_design_status(project_id: str, filename: str):
                         "created_at": phase0_wf.created_at.isoformat() if phase0_wf.created_at else None,
                         "completed_at": None,
                         "cost_total_usd": phase0_wf.cost_total_usd or 0.0,
+                        "has_report": phase0_has_report,
+                        "review_pending": phase0_wf.paused_by == "review",
+                        "review_status": None,
+                        "review_feedback": None,
                     },
                 )
 
@@ -3695,8 +3723,14 @@ async def get_workflow_feature_report(workflow_id: str):
     back to it or a fully-completed feature's report 404s forever, same
     bug class as get_project_design_status's has_report flag, which this
     matches via the same _find_archived_feature_report helper.
+
+    A Phase 0 (Feature Architect) workflow's report is the decomposition
+    synopsis feature_review writes -- same filename, same live-worktree
+    check above, but archived to the design's own designs_folder (via
+    run_phase0's synopsis_src copy) instead of the per-feature features
+    gallery, since Phase 0 predates any Feature row existing.
     """
-    from src.core.database import AutopilotProject, Workflow, get_db
+    from src.core.database import AutopilotDesign, AutopilotProject, Workflow, get_db
 
     with get_db() as db:
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
@@ -3707,6 +3741,10 @@ async def get_workflow_feature_report(workflow_id: str):
         if wf.project_id:
             proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
             project_base_dir = proj.base_dir if proj else None
+        phase0_designs_folder = None
+        if wf.definition_id in PHASE0_DEFINITION_IDS and wf.design_id:
+            design = db.query(AutopilotDesign).filter_by(id=wf.design_id).first()
+            phase0_designs_folder = design.designs_folder if design else None
 
     report_path = None
     if working_directory:
@@ -3716,12 +3754,53 @@ async def get_workflow_feature_report(workflow_id: str):
         if candidate.is_file():
             report_path = candidate
 
+    if report_path is None and phase0_designs_folder:
+        candidate = Path(phase0_designs_folder) / "feature_report.html"
+        if candidate.is_file():
+            report_path = candidate
+
     if report_path is None and project_base_dir:
         report_path = _find_archived_feature_report(project_base_dir, workflow_id)
 
     if report_path is None:
         raise HTTPException(404, "Report not found")
     return HTMLResponse(content=report_path.read_text(errors="replace"))
+
+
+@router.get("/workflows/{workflow_id}/decomposition_review")
+async def get_workflow_decomposition_review(workflow_id: str):
+    """Serve feature_review's adversarial review.md for a Phase 0 workflow.
+
+    Same live-worktree-then-designs_folder fallback chain as
+    get_workflow_feature_report, since review.md is copied to
+    designs_folder by run_phase0 alongside feature_report.html.
+    """
+    from src.core.database import AutopilotDesign, Workflow, get_db
+
+    with get_db() as db:
+        wf = db.query(Workflow).filter_by(id=workflow_id).first()
+        if not wf:
+            raise HTTPException(404, "Workflow not found")
+        working_directory = wf.working_directory
+        phase0_designs_folder = None
+        if wf.definition_id in PHASE0_DEFINITION_IDS and wf.design_id:
+            design = db.query(AutopilotDesign).filter_by(id=wf.design_id).first()
+            phase0_designs_folder = design.designs_folder if design else None
+
+    review_path = None
+    if working_directory:
+        candidate = Path(working_directory) / CONTEXT_DIR_NAME / "review.md"
+        if candidate.is_file():
+            review_path = candidate
+
+    if review_path is None and phase0_designs_folder:
+        candidate = Path(phase0_designs_folder) / "review.md"
+        if candidate.is_file():
+            review_path = candidate
+
+    if review_path is None:
+        raise HTTPException(404, "Review not found")
+    return {"name": "review.md", "content": review_path.read_text(errors="replace")}
 
 
 # ── Features Gallery ─────────────────────────────────────────────
@@ -3944,6 +4023,167 @@ async def set_review_mode(project_id: str, req: ReviewModeUpdate):
     return {"review_mode": req.review_mode}
 
 
+async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewRequest):
+    """Approve or request changes for a Phase 0 (Feature Architect) decomposition.
+
+    Mirrors review_feature's real-feature flow but operates on the Phase 0
+    Workflow directly -- there's no Feature row yet at this point, Phase 0
+    is what creates them. Approve clears the review pause the same way the
+    "Feature Architect" row's existing Resume action already does (run_phase0's
+    own wait loop, _wait_for_phase0_review_clearance, just polls paused_by).
+    request_changes creates a new task on the feature_architect phase
+    carrying the human feedback and spawns an agent for it directly, the
+    same one-off-task pattern review_feature uses for a real feature's
+    development phase, leaving the workflow paused for review so the redone
+    decomposition gets a second look before it's approved.
+    """
+    from src.core.database import Phase, Task, TaskPromptOverride, Workflow, get_db
+
+    with get_db() as db:
+        wf = db.query(Workflow).filter_by(id=workflow_id).first()
+        if not wf:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        if wf.paused_by != "review":
+            return {"success": True, "message": "Decomposition was not awaiting review"}
+
+        arch_phase = (
+            db.query(Phase)
+            .filter(Phase.workflow_id == workflow_id, Phase.name == "feature_architect")
+            .first()
+        )
+
+        if req.action == "approve":
+            # A prior request_changes may still have a redo agent working in
+            # this same worktree. Approving now would let run_phase0's wait
+            # loop return immediately, create Feature rows from a
+            # possibly-half-written features.json, and then delete the
+            # worktree out from under the still-running agent (run_phase0's
+            # finally block cleans it up once it considers Phase 0 fully
+            # succeeded). Block until the redo settles instead.
+            if arch_phase:
+                in_flight = (
+                    db.query(Task)
+                    .filter(
+                        Task.workflow_id == workflow_id,
+                        Task.phase_id == arch_phase.id,
+                        Task.status.in_(["pending", "assigned", "in_progress"]),
+                    )
+                    .first()
+                )
+                if in_flight:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="A requested-changes redo is still in progress — wait for it to finish before approving.",
+                    )
+            wf.status = "active"
+            wf.paused_by = None
+            db.commit()
+            _invalidate("status")
+            return {"success": True, "message": "Feature decomposition approved"}
+
+        # request_changes — re-decompose with the human's feedback.
+        if not arch_phase:
+            raise HTTPException(status_code=500, detail="feature_architect phase not found")
+
+        import uuid
+        # This one-off task redoes both feature_architect's decomposition and
+        # feature_review's adversarial pass in a single agent run -- there is
+        # no orchestration engine left running to hand off between the two
+        # phases the normal way (the workflow already reached "completed"
+        # before pausing for review; run_single_workflow's own phase-by-phase
+        # loop, which would otherwise sequence this, already returned).
+        # Skipping the review.md/feature_report.html rewrite would leave the
+        # review modal showing the pre-redo synopsis and findings forever.
+        feedback_prompt = (
+            f"## Human Review Feedback\n\n{req.feedback.strip()}\n\n"
+            "Re-decompose the design taking the above feedback into account. "
+            "Update .hephaestus/features.json and each feature's scope.md accordingly.\n\n"
+            "Then, in this same task, perform the adversarial feature-review pass "
+            "yourself: compare the revised decomposition against the design document "
+            "the same way the feature_review phase does, and rewrite "
+            ".hephaestus/review.md and .hephaestus/feature_report.html so both "
+            "reflect the revised decomposition -- they are what the human reviewer "
+            "sees next, and must not be left describing the old decomposition."
+        )
+
+        # Same restartable-task check as the real-feature request_changes
+        # path below: if a prior redo is still blocked/failed/orphaned,
+        # restart it instead of piling on a second concurrent agent in the
+        # same worktree (which would race on features.json). Scoped to this
+        # phase specifically, since the real-feature version's workflow-wide
+        # scope has no analogous ambiguity (Phase 0 has two phases sharing
+        # one workflow).
+        candidates = (
+            db.query(Task)
+            .filter(
+                Task.workflow_id == workflow_id,
+                Task.phase_id == arch_phase.id,
+                Task.status.in_(["blocked", "failed", "assigned", "in_progress", "pending"]),
+            )
+            .all()
+        )
+        restartable = []
+        for t in candidates:
+            if t.status in ("blocked", "failed", "pending"):
+                restartable.append(t)
+            elif t.assigned_agent_id:
+                from src.core.database import Agent
+                agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
+                if not agent or agent.status == "terminated":
+                    restartable.append(t)
+
+        if restartable:
+            # Mirrors the real-feature restartable-task path below: leave
+            # raw_description alone and prefix the new feedback onto the
+            # existing override rather than replacing it, so an earlier
+            # redo round's feedback isn't silently dropped if it wasn't
+            # fully addressed yet.
+            reuse_task = restartable[0]
+            reuse_task.status = "pending"
+            reuse_task.failure_reason = None
+            reuse_task.assigned_agent_id = None
+            override = db.query(TaskPromptOverride).filter_by(task_id=reuse_task.id).first()
+            if override:
+                override.user_prompt = feedback_prompt + "\n\n---\n\n" + (override.user_prompt or "")
+                override.updated_by = "ui-user"
+            else:
+                db.add(TaskPromptOverride(
+                    task_id=reuse_task.id,
+                    user_prompt=feedback_prompt,
+                    updated_by="ui-user",
+                ))
+            task_id, phase_id = reuse_task.id, reuse_task.phase_id
+        else:
+            new_task = Task(
+                id=str(uuid.uuid4()),
+                workflow_id=workflow_id,
+                phase_id=arch_phase.id,
+                raw_description=feedback_prompt,
+                enriched_description=None,
+                done_definition="Feature decomposition revised per human feedback, review.md and feature_report.html rewritten to match",
+                status="pending",
+                priority="high",
+            )
+            db.add(new_task)
+            db.flush()
+            db.add(TaskPromptOverride(
+                task_id=new_task.id,
+                user_prompt=feedback_prompt,
+                updated_by="ui-user",
+            ))
+            task_id, phase_id = new_task.id, new_task.phase_id
+
+        # Keep the workflow paused for review — the human must approve
+        # again once the redone decomposition is ready.
+        db.commit()
+
+    logger.info(f"[REVIEW] Spawning agent for Phase 0 re-decomposition task {task_id}")
+    asyncio.create_task(_spawn_agent_for_task(task_id, phase_id))
+
+    _invalidate("status")
+    return {"success": True, "message": "Changes requested — re-decomposition queued"}
+
+
 @router.post("/features/{feature_id}/review")
 async def review_feature(feature_id: str, req: FeatureReviewRequest):
     """Approve a feature or request changes.
@@ -3955,6 +4195,9 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'request_changes'")
     if req.action == "request_changes" and not (req.feedback or "").strip():
         raise HTTPException(status_code=400, detail="feedback is required when requesting changes")
+
+    if feature_id.startswith("phase0-"):
+        return await _review_phase0_decomposition(feature_id[len("phase0-"):], req)
 
     from src.core.database import Feature, Task, Workflow, get_db
 
