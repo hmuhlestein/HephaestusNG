@@ -13,7 +13,7 @@
 #
 # Flags:
 #   --prefix DIR        Install location (default: ~/.hephaestus)
-#   --skip-docker       Skip Docker/Qdrant setup
+#   --with-docker       Set up Docker/Qdrant (skipped by default)
 #   --skip-frontend     Skip frontend dashboard
 #   --dev               Install dev dependencies (pytest, black, etc.)
 #   --update            Pull latest and reinstall
@@ -42,7 +42,7 @@ RAW_URL="https://raw.githubusercontent.com/hmuhlestein/HephaestusNG/main"
 # ─── Parse arguments ───────────────────────────────────────────────
 
 PREFIX="${HEPHAESTUS_HOME:-$HOME/.hephaestus}"
-SKIP_DOCKER=false
+SKIP_DOCKER=true
 SKIP_FRONTEND=false
 DEV_MODE=false
 UPDATE=false
@@ -63,6 +63,7 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --prefix) PREFIX="$2"; shift 2 ;;
         --skip-docker) SKIP_DOCKER=true; shift ;;
+        --with-docker) SKIP_DOCKER=false; shift ;;
         --skip-frontend) SKIP_FRONTEND=true; shift ;;
         --dev) DEV_MODE=true; shift ;;
         --update) UPDATE=true; shift ;;
@@ -71,7 +72,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --prefix DIR        Install location (default: ~/.hephaestus)"
-            echo "  --skip-docker       Skip Docker/Qdrant setup"
+            echo "  --with-docker       Set up Docker/Qdrant (skipped by default)"
             echo "  --skip-frontend     Skip frontend dashboard"
             echo "  --dev               Install dev dependencies"
             echo "  --update            Pull latest and reinstall"
@@ -115,9 +116,13 @@ PYTHON_CMD=$(find_python) || {
 }
 ok "Python: $("$PYTHON_CMD" --version 2>&1)"
 
-# uv (optional, faster installs)
+# uv
 if command -v uv >/dev/null 2>&1; then
     ok "uv: $(uv --version 2>&1)"
+else
+    err "uv is required but not found."
+    err "Install it from https://docs.astral.sh/uv/getting-started/installation/ and re-run."
+    MISSING=1
 fi
 
 # Git
@@ -201,18 +206,8 @@ header "Python environment"
 
 VENV_DIR="$PREFIX/.venv"
 
-# Detect package manager: uv (preferred) > poetry > pip
-PKG_MGR=""
-if command -v uv >/dev/null 2>&1; then
-    PKG_MGR="uv"
-    ok "Package manager: uv ($(uv --version 2>&1))"
-elif command -v poetry >/dev/null 2>&1; then
-    PKG_MGR="poetry"
-    ok "Package manager: poetry ($(poetry --version 2>&1))"
-else
-    PKG_MGR="pip"
-    warn "Using pip (install uv for faster installs: https://docs.astral.sh/uv/)"
-fi
+UV_BIN="$(command -v uv)"
+ok "Package manager: uv ($("$UV_BIN" --version 2>&1))"
 
 if [ -d "$VENV_DIR" ] && [ "$UPDATE" = false ]; then
     # Validate existing venv: check Python version matches
@@ -226,33 +221,19 @@ if [ -d "$VENV_DIR" ] && [ "$UPDATE" = false ]; then
             warn "Virtual environment Python mismatch: venv=$VENV_PY_VER, system=$SYSTEM_PY_VER"
             log "Recreating virtual environment..."
             rm -rf "$VENV_DIR"
-            if [ "$PKG_MGR" = "uv" ]; then
-                uv venv "$VENV_DIR" --python "$PYTHON_CMD" --quiet
-            else
-                "$PYTHON_CMD" -m venv "$VENV_DIR"
-            fi
+            "$UV_BIN" venv "$VENV_DIR" --python "$PYTHON_CMD" --quiet
             ok "Recreated with Python $SYSTEM_PY_VER"
         fi
     else
         warn "Virtual environment exists but Python not executable"
         log "Recreating virtual environment..."
         rm -rf "$VENV_DIR"
-        if [ "$PKG_MGR" = "uv" ]; then
-            uv venv "$VENV_DIR" --python "$PYTHON_CMD" --quiet
-        else
-            "$PYTHON_CMD" -m venv "$VENV_DIR"
-        fi
+        "$UV_BIN" venv "$VENV_DIR" --python "$PYTHON_CMD" --quiet
         ok "Recreated virtual environment"
     fi
 else
     log "Creating virtual environment..."
-    if [ "$PKG_MGR" = "uv" ]; then
-        "$UV" venv "$VENV_DIR" --python "$PYTHON_CMD" --quiet
-    elif [ "$PKG_MGR" = "poetry" ]; then
-        poetry env use "$PYTHON_CMD" --directory "$PREFIX" 2>/dev/null || "$PYTHON_CMD" -m venv "$VENV_DIR"
-    else
-        "$PYTHON_CMD" -m venv "$VENV_DIR"
-    fi
+    "$UV_BIN" venv "$VENV_DIR" --python "$PYTHON_CMD" --quiet
     ok "Created $VENV_DIR"
 fi
 
@@ -267,14 +248,7 @@ if "$PYTHON" -c "from src.cli.main import main" 2>/dev/null; then
     ok "Package already installed"
 else
     log "Installing package in editable mode..."
-    if [ "$PKG_MGR" = "uv" ]; then
-        uv pip install -e "$PREFIX" --quiet --python "$PYTHON" 2>&1 | tail -3
-    elif [ "$PKG_MGR" = "poetry" ]; then
-        cd "$PREFIX" && poetry install --no-interaction --quiet 2>&1 | tail -3
-    else
-        "$VENV_DIR/bin/pip" install --upgrade pip --quiet 2>/dev/null
-        "$VENV_DIR/bin/pip" install -e "$PREFIX" --quiet 2>&1 | tail -1
-    fi
+    "$UV_BIN" pip install -e "$PREFIX" --quiet --python "$PYTHON" 2>&1 | tail -3
     ok "Package installed (heph entry point created)"
 fi
 
@@ -283,13 +257,7 @@ if [ "$DEV_MODE" = true ]; then
         ok "Dev dependencies already installed"
     else
         log "Installing dev dependencies..."
-        if [ "$PKG_MGR" = "uv" ]; then
-            uv pip install "pytest,pytest-asyncio,pytest-cov,black,flake8,mypy,ruff,ipython" --quiet --python "$PYTHON"
-        elif [ "$PKG_MGR" = "poetry" ]; then
-            cd "$PREFIX" && poetry install --with dev --no-interaction --quiet 2>&1 | tail -3
-        else
-            "$VENV_DIR/bin/pip" install pytest pytest-asyncio pytest-cov black flake8 mypy ruff ipython --quiet
-        fi
+        "$UV_BIN" pip install pytest pytest-asyncio pytest-cov black flake8 mypy ruff ipython --quiet --python "$PYTHON"
         ok "Dev dependencies installed"
     fi
 fi
@@ -354,9 +322,14 @@ fi
 header "heph CLI"
 
 HEPH_BIN="$VENV_DIR/bin/heph"
+USER_BIN_DIR="$HOME/.local/bin"
+HEPH_LINK="$USER_BIN_DIR/heph"
 
 if [ -x "$HEPH_BIN" ] && "$HEPH_BIN" --version >/dev/null 2>&1; then
     ok "heph already installed: $("$HEPH_BIN" --version 2>&1)"
+    mkdir -p "$USER_BIN_DIR"
+    ln -sf "$HEPH_BIN" "$HEPH_LINK"
+    ok "Command linked: $HEPH_LINK"
 else
     warn "heph CLI not found after install — try: uv pip install -e ."
 fi
@@ -456,6 +429,11 @@ if [ "$SKIP_FRONTEND" = false ]; then
             npm install --silent 2>/dev/null && ok "Frontend ready" || warn "npm install failed"
             cd "$PREFIX"
         fi
+
+        log "Building frontend..."
+        cd "$FRONTEND_DIR"
+        npm run build --silent && ok "Frontend build complete" || warn "Frontend build failed"
+        cd "$PREFIX"
     else
         warn "Frontend package.json not found — skipping"
     fi
@@ -509,12 +487,12 @@ header "Installation complete"
 
 echo ""
 echo -e "${BOLD}Location:${NC}  $PREFIX"
-echo -e "${BOLD}heph:${NC}      $HEPH_BIN"
+echo -e "${BOLD}heph:${NC}      $HEPH_LINK"
 echo ""
 
 # Add to PATH
 case ":$PATH:" in
-    *":$VENV_DIR/bin:"*) ok "heph is on PATH" ;;
+    *":$USER_BIN_DIR:"*) ok "heph is on PATH" ;;
     *)
         # Detect shell profile
         SHELL_NAME="$(basename "$SHELL")"
@@ -524,10 +502,10 @@ case ":$PATH:" in
             *) PROFILE="" ;;
         esac
 
-        PATH_LINE="export PATH=\"$VENV_DIR/bin:\$PATH\""
+        PATH_LINE="export PATH=\"$USER_BIN_DIR:\$PATH\""
 
-        if [ -n "$PROFILE" ] && [ -f "$PROFILE" ]; then
-            if grep -qF "$VENV_DIR/bin" "$PROFILE" 2>/dev/null; then
+        if [ -n "$PROFILE" ]; then
+            if grep -qF "$USER_BIN_DIR" "$PROFILE" 2>/dev/null; then
                 ok "heph already in $PROFILE"
             else
                 echo "" >> "$PROFILE"
@@ -546,7 +524,7 @@ case ":$PATH:" in
         fi
 
         # Export for current session
-        export PATH="$VENV_DIR/bin:$PATH"
+        export PATH="$USER_BIN_DIR:$PATH"
         ;;
 esac
 
@@ -938,6 +916,14 @@ if command -v claude >/dev/null 2>&1; then
     fi
 else
     log "Claude Code not detected — skipping agent installation"
+fi
+
+header "Starting Hephaestus"
+
+if "$HEPH_BIN" start; then
+    ok "Hephaestus services started"
+else
+    warn "Hephaestus services failed to start — run: heph start"
 fi
 
 header "Done"
