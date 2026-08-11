@@ -99,6 +99,38 @@ class TestResumeInterruptedWorkflowsUnblocksTasks:
         assert result["resumed"] == 1
 
 
+class TestResumeInterruptedWorkflowsResetsGotoBudget:
+    """Regression: total_gotos is a persisted counter that never decreases
+    on its own. A workflow that failed by exhausting max_total_gotos (or
+    the arbitration cap that follows it) re-exceeded the SAME exhausted
+    limit on its very next evaluation after a Retry, instantly re-failing
+    with zero real attempt in between -- Retry looked like it did nothing.
+    """
+
+    @pytest.mark.asyncio
+    async def test_reactivate_resets_total_gotos_and_stamps_gotos_reset_at(self, test_db):
+        session = test_db.get_session()
+        session.add(
+            Workflow(
+                id="wf-exhausted", name="t", phases_folder_path="/tmp",
+                status="failed", status_reason="scope_review: arbitrated 3 times without converging",
+                definition_id="autopilot", total_gotos=676,
+            )
+        )
+        session.commit()
+        session.close()
+
+        result = await _run_resume(test_db, "wf-exhausted")
+
+        session = test_db.get_session()
+        wf = session.query(Workflow).filter_by(id="wf-exhausted").first()
+        assert wf.status == "active"
+        assert wf.total_gotos == 0
+        assert wf.gotos_reset_at is not None
+        session.close()
+        assert result["resumed"] == 0  # no tasks to unblock, but the workflow itself was reactivated
+
+
 class TestResumeInterruptedWorkflowsProjectScoping:
     """Regression: the project-level Play button, on hitting the "already
     running" self-conflict 409, used to just show a no-op toast -- the

@@ -5736,14 +5736,25 @@ def _trigger_arbitration(
 
     with get_db() as db:
         max_arbitrations_per_phase = 3
-        prior_arbitrations = (
-            db.query(Task)
-            .filter(
-                Task.phase_id == phase_id,
-                Task.created_by_agent_id == ARBITRATION_CREATED_BY,
-            )
-            .count()
+        # Only count arbitrations since the workflow's last on-demand Retry
+        # (Workflow.gotos_reset_at) -- historical arbitration Task rows are
+        # never deleted, so counting all-time would mean a workflow that
+        # already exhausted this cap once stays permanently unrecoverable
+        # via Retry, even after total_gotos itself was reset to give the
+        # phase a genuinely fresh budget (see _resume_interrupted_workflows'
+        # reactivate branch, which sets gotos_reset_at). NULL (never
+        # retried) preserves the original all-time count.
+        wf_for_cutoff = db.query(Workflow).filter_by(id=workflow_id).first()
+        gotos_reset_at = wf_for_cutoff.gotos_reset_at if wf_for_cutoff else None
+        prior_arbitrations_query = db.query(Task).filter(
+            Task.phase_id == phase_id,
+            Task.created_by_agent_id == ARBITRATION_CREATED_BY,
         )
+        if gotos_reset_at:
+            prior_arbitrations_query = prior_arbitrations_query.filter(
+                Task.created_at > gotos_reset_at
+            )
+        prior_arbitrations = prior_arbitrations_query.count()
         if prior_arbitrations >= max_arbitrations_per_phase:
             logger.error(f"[ARBITRATE] {phase_name} has already been arbitrated {prior_arbitrations} times without converging -- failing the workflow instead of arbitrating again")
             wf = db.query(Workflow).filter_by(id=workflow_id).first()

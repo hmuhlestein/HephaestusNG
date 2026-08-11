@@ -432,6 +432,17 @@ class Workflow(Base):
     # now syncs orchestrator.total_gotos to/from this column around each call.
     total_gotos = Column(Integer, default=0, nullable=False)
 
+    # When total_gotos was last reset to 0 by an on-demand Retry
+    # (_resume_interrupted_workflows(reactivate=True)). _trigger_arbitration's
+    # own per-phase arbitration cap (max 3) counts historical arbitration
+    # Task rows, which never get deleted -- without this cutoff, a workflow
+    # that already exhausted that cap would immediately re-exhaust it on
+    # every future retry too, permanently unrecoverable via Retry even
+    # after total_gotos itself was reset to give the phase a genuinely
+    # fresh goto budget. NULL (rows from before this column existed, or a
+    # workflow never yet retried) -> count all-time, the original behavior.
+    gotos_reset_at = Column(DateTime, nullable=True)
+
     # Who/what paused this workflow, distinguishing a deliberate user pause
     # (via the stop endpoint) from a defensive system pause (e.g. hitting
     # MAX_PHASE_ATTEMPTS). _try_auto_resume_paused_workflow reads this to
@@ -1412,6 +1423,7 @@ class DatabaseManager:
         self._migrate_autopilot_designs_columns()
         self._migrate_feature_model_columns()
         self._migrate_total_gotos_column()
+        self._migrate_workflow_gotos_reset_at_column()
         self._migrate_task_retry_count_column()
         self._migrate_phase_retry_count_column()
         self._migrate_self_review_columns()
@@ -1777,6 +1789,22 @@ class DatabaseManager:
                 logger.info("Migrated workflows.total_gotos column")
         except Exception as e:
             logger.debug(f"workflows.total_gotos migration (may already exist): {e}")
+
+    def _migrate_workflow_gotos_reset_at_column(self):
+        """Add workflows.gotos_reset_at for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE workflows ADD COLUMN gotos_reset_at DATETIME"))
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated workflows.gotos_reset_at column")
+        except Exception as e:
+            logger.debug(f"workflows.gotos_reset_at migration (may already exist): {e}")
 
     def _migrate_task_retry_count_column(self):
         """Add tasks.retry_count for existing databases.

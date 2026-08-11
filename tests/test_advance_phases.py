@@ -2702,6 +2702,57 @@ class TestTriggerArbitration:
             assert "3 times" in wf.status_reason
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_retry_resets_the_arbitration_cap_via_gotos_reset_at(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Regression: historical arbitration Task rows are never deleted,
+        so a workflow that already exhausted the cap once stayed
+        PERMANENTLY unrecoverable via Retry -- every future retry
+        immediately re-hit the same all-time count and re-failed with zero
+        real attempt in between, even after _resume_interrupted_workflows'
+        reactivate branch reset total_gotos to give the phase a genuinely
+        fresh goto budget. gotos_reset_at (set by that same reactivate
+        branch) must exclude prior-to-retry arbitration tasks from the cap
+        count, so a retried workflow actually gets a real shot again."""
+        from datetime import datetime, timedelta
+
+        from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _trigger_arbitration
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        # 3 prior arbitration tasks, all from BEFORE the retry.
+        with db_manager.session_scope() as session:
+            for i in range(3):
+                session.add(
+                    Task(
+                        id=f"prior-arb-{i}",
+                        raw_description="Arbitrate stuck phase: requirements",
+                        done_definition="x",
+                        status="done",
+                        phase_id="phase-1",
+                        workflow_id="wf-1",
+                        created_by_agent_id=ARBITRATION_CREATED_BY,
+                        action="arbitrate",
+                    )
+                )
+            # Simulates the on-demand Retry that just happened: reset
+            # total_gotos and stamp gotos_reset_at AFTER the prior
+            # arbitration tasks above.
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.total_gotos = 0
+            wf.gotos_reset_at = datetime.utcnow() + timedelta(seconds=1)
+
+        result = _trigger_arbitration(
+            "wf-1", "phase-1", "requirements", "still not converging", MagicMock()
+        )
+
+        assert result is True
+        mock_create_agent.assert_called_once()
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status != "failed"
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     def test_already_in_flight_uses_real_orchestrator_logger(
         self, mock_create_agent, db_manager, sample_workflow, tmp_path
     ):
