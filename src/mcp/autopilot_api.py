@@ -3811,57 +3811,61 @@ def _scan_features() -> List[Dict[str, Any]]:
     if cached is not None:
         return cached
 
-    if not FEATURES_DIR or not Path(FEATURES_DIR).exists():
-        return _store("features", [])
-
-    # Enrich with DB cost data (cost_entries ledger) which is more accurate
-    # than pipeline_metrics.json (the old LiteLLM tracker).
-    db_costs = {}
-    try:
-        from src.core.database import Feature as DBFeature, get_db
-        with get_db() as db:
-            for f in db.query(DBFeature).filter(DBFeature.cost_total_usd > 0).all():
-                db_costs[f.feature_key or f.id] = f.cost_total_usd
-    except Exception:
-        pass
+    from src.core.status_derivation import derive_feature_status
+    from src.core.database import DatabaseManager
 
     features = []
-    features_path = Path(FEATURES_DIR)
+    try:
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        try:
+            from src.core.database import Feature, Workflow, AutopilotProject
+            db_features = session.query(Feature).order_by(Feature.created_at.desc()).all()
+            for f in db_features:
+                status = f.status
+                if f.workflow_id:
+                    wf = session.query(Workflow).filter_by(id=f.workflow_id).first()
+                    if wf:
+                        derived = derive_feature_status(session, f.id, write_back=False)
+                        if derived:
+                            status = derived
 
-    for feature_dir in sorted(features_path.iterdir(), reverse=True):
-        if not feature_dir.is_dir():
-            continue
+                has_report = False
+                if f.workflow_id:
+                    wf = session.query(Workflow).filter_by(id=f.workflow_id).first()
+                    if wf and wf.working_directory:
+                        report = Path(wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html"
+                        has_report = report.is_file()
+                    if not has_report:
+                        project_base = None
+                        if wf and wf.project_id:
+                            proj = session.query(AutopilotProject).filter_by(id=wf.project_id).first()
+                            project_base = proj.base_dir if proj else None
+                        if not project_base and wf:
+                            lp = wf.launch_params or {}
+                            if isinstance(lp, dict):
+                                project_base = lp.get("project_path")
+                        if project_base:
+                            has_report = _find_archived_feature_report(project_base, f.workflow_id) is not None
 
-        metrics_path = feature_dir / "docs" / "pipeline_metrics.json"
-        metrics = _read_json(metrics_path) or {}
+                created_at = f.created_at.isoformat() if f.created_at else ""
 
-        report_path = feature_dir / "feature_report.html"
-        created_at = datetime.fromtimestamp(feature_dir.stat().st_mtime, tz=timezone.utc).isoformat()
-
-        dir_name = feature_dir.name
-        if "_" in dir_name:
-            name = dir_name.split("_", 1)[1].replace("_", " ").replace("-", " ").title()
-        else:
-            name = dir_name
-
-        # Prefer DB cost over metrics file cost
-        feature_key = dir_name.split("_", 1)[1] if "_" in dir_name else dir_name
-        cost_total = db_costs.get(feature_key) or db_costs.get(dir_name) or metrics.get("cost_total", 0)
-
-        features.append(
-            {
-                "id": feature_dir.name,
-                "name": name,
-                "status": _feature_status(metrics),
-                "iterations": metrics.get("iterations", 0),
-                "total_time_seconds": metrics.get("total_time_seconds", 0),
-                "stop_reason": metrics.get("stop_reason", "unknown"),
-                "cost_total": cost_total,
-                "cost_currency": metrics.get("cost_currency", "USD"),
-                "created_at": created_at,
-                "has_report": report_path.exists(),
-            }
-        )
+                features.append({
+                    "id": f.id,
+                    "name": f.name or f.feature_key or f.id,
+                    "status": status,
+                    "iterations": 0,
+                    "total_time_seconds": 0,
+                    "stop_reason": "completed" if status == "completed" else "unknown",
+                    "cost_total": f.cost_total_usd or 0,
+                    "cost_currency": "USD",
+                    "created_at": created_at,
+                    "has_report": has_report,
+                })
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Error scanning features from DB: {e}")
 
     return _store("features", features)
 
