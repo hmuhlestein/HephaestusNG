@@ -4059,7 +4059,7 @@ async def list_tools():
     return {
         "tools": [
             {
-                "name": "heph_create_task",
+                "name": "create_task",
                 "description": "Create a new task for an autonomous agent",
                 "input_schema": {
                     "type": "object",
@@ -4115,7 +4115,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "heph_save_memory",
+                "name": "save_memory",
                 "description": "Save a memory to the knowledge base",
                 "input_schema": {
                     "type": "object",
@@ -4128,7 +4128,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "heph_search_memory",
+                "name": "search_memory",
                 "description": "Search the knowledge base for relevant memories using semantic search",
                 "input_schema": {
                     "type": "object",
@@ -4154,7 +4154,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "heph_get_task_status",
+                "name": "get_task_status",
                 "description": "Get status of tasks, optionally filtered by agent_id or workflow_id",
                 "input_schema": {
                     "type": "object",
@@ -4166,7 +4166,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "heph_update_task_status",
+                "name": "update_task_status",
                 "description": "Update the status of a task (done, failed, etc.)",
                 "input_schema": {
                     "type": "object",
@@ -4204,7 +4204,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "heph_complete_my_task",
+                "name": "complete_my_task",
                 "description": (
                     "Mark YOUR OWN currently-assigned task done or failed -- "
                     "no task_id needed, the server already knows which task "
@@ -4249,7 +4249,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "heph_create_ticket",
+                "name": "create_ticket",
                 "description": "Create a new ticket in the Kanban board",
                 "input_schema": {
                     "type": "object",
@@ -4296,7 +4296,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "heph_search_tickets",
+                "name": "search_tickets",
                 "description": "Search for existing tickets by title or tags",
                 "input_schema": {
                     "type": "object",
@@ -4316,7 +4316,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "heph_update_ticket_status",
+                "name": "update_ticket_status",
                 "description": "Update the status of a ticket",
                 "input_schema": {
                     "type": "object",
@@ -4331,7 +4331,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "heph_broadcast_message",
+                "name": "broadcast_message",
                 "description": "Send a message to ALL active agents",
                 "input_schema": {
                     "type": "object",
@@ -4349,7 +4349,7 @@ async def list_tools():
                 },
             },
             {
-                "name": "heph_send_message",
+                "name": "send_message",
                 "description": "Send a direct message to a specific agent",
                 "input_schema": {
                     "type": "object",
@@ -5348,17 +5348,17 @@ async def _tool_complete_my_task(arguments: Dict[str, Any]):
 # _handle_devtools_tool/_DEVTOOLS_TOOLS since they share a different shape:
 # a browser-session precondition and per-tool required-args).
 _MCP_TOOLS: Dict[str, Any] = {
-            "heph_create_task": _tool_create_task,
-    "heph_save_memory": _tool_save_memory,
-    "heph_search_memory": _tool_search_memory,
-    "heph_get_task_status": _tool_get_task_status,
-    "heph_update_task_status": _tool_update_task_status,
-    "heph_complete_my_task": _tool_complete_my_task,
-    "heph_create_ticket": _tool_create_ticket,
-    "heph_search_tickets": _tool_search_tickets,
-    "heph_update_ticket_status": _tool_update_ticket_status,
-    "heph_broadcast_message": _tool_broadcast_message,
-    "heph_send_message": _tool_send_message,
+            "create_task": _tool_create_task,
+    "save_memory": _tool_save_memory,
+    "search_memory": _tool_search_memory,
+    "get_task_status": _tool_get_task_status,
+    "update_task_status": _tool_update_task_status,
+    "complete_my_task": _tool_complete_my_task,
+    "create_ticket": _tool_create_ticket,
+    "search_tickets": _tool_search_tickets,
+    "update_ticket_status": _tool_update_ticket_status,
+    "broadcast_message": _tool_broadcast_message,
+    "send_message": _tool_send_message,
 }
 
 
@@ -5367,6 +5367,11 @@ async def execute_tool(request: Dict[str, Any]):
     """Execute an MCP tool."""
     tool_name = request.get("tool")
     arguments = request.get("arguments", {})
+
+    # Strip heph_ prefix if present — the MCP adapter adds the server
+    # name as a prefix, but our registry uses bare names.
+    if tool_name and tool_name.startswith("heph_"):
+        tool_name = tool_name[5:]
 
     if tool_name in _MCP_TOOLS:
         return await _MCP_TOOLS[tool_name](arguments)
