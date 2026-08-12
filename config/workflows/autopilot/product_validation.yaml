@@ -81,7 +81,6 @@ additional_notes: |
   - AGENTS.md - Repository guidelines, coding conventions, project structure
   - requirements.md (what was extracted — contains REQ-XX requirement IDs)
   - architecture.md (how it was designed — compare against design for scope drift)
-  - docs.md (documentation quality review)
   - qa.md (what was tested)
 
   ═══════════════════════════════════════════════════════════════════════

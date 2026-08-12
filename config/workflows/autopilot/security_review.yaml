@@ -102,7 +102,6 @@ additional_notes: |
   - requirements.md (from Docs Path) - What security requirements exist? (contains NFR-XX IDs)
   - architecture.md (from Docs Path) - How is security designed?
   - adversarial.md (from Docs Path) - Any security concerns from adversarial review?
-  - docs.md (from Docs Path) - Any documentation gaps about security controls?
 
   **REQUIREMENT TRACKING:**
   requirements.md contains NFR-XX numbered non-functional requirements.

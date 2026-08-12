@@ -127,7 +127,6 @@ additional_notes: |
   - requirements.md (from Docs Path) - What must it do? (contains REQ-XX IDs)
   - architecture.md (from Docs Path) - How should it work?
   - adversarial.md (from Docs Path) - What issues were found in adversarial review?
-  - docs.md (from Docs Path) - Were docs updated to match implementation?
   - security.md (from Docs Path) - What security fixes were made?
 
   **REQUIREMENT TRACKING:**
