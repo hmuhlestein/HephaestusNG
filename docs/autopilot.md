@@ -294,14 +294,38 @@ Implements components according to this feature's `architecture.md`:
 
 Produces: Working source code in `<project-path>/`.
 
-### Phase 6: Architectural Review
+### Phase 6: Adversarial Code Review
+
+**Agent:** Adversarial Code Reviewer
+
+Runs immediately after development, before Architectural Review — there is
+no design-compliance pass yet for this phase to defer to. Reviews all code
+produced by this feature with a critical perspective, reasoning backward
+from production failure rather than validating the happy path:
+- Correctness (logic errors, edge cases)
+- Exception propagation, concurrency/shared-state races, resource leaks
+- Silent data corruption, incorrect defaults, cascade/ordering invariants
+- Code composition (high-level classes leaking low-level details, missed
+  polymorphism, complex logic that isn't pushed down)
+- Security (injection, XSS, auth bypass)
+
+Classifies findings as BLOCKER/WARNING/NIT. Reports findings — does **not**
+edit production code directly; the developer fixes based on this report.
+
+Produces: `adversarial.md` — a YAML frontmatter block (OKF format,
+`blocker_count`/`warning_count`/`nit_count`) followed by the narrative
+report.
+
+### Phase 7: Architectural Review
 
 **Agent:** Software Architect (re-invoked)
 
-The architect is re-invoked after development completes, with warm context
-about the design decisions, trade-offs, and invariants from Phase 3. Reviews
-the implementation for architecture compliance, design violations, and
-over-engineering:
+The architect is re-invoked after development (and the adversarial code
+review) completes, with warm context about the design decisions,
+trade-offs, and invariants from Phase 3. Reviews the implementation for
+architecture compliance, design violations, and over-engineering — a
+different lens than Phase 6's failure-mode reasoning, so some overlap in
+findings between the two is expected and fine:
 - Classifies findings as BLOCKER (architecture violated), FIX (design
   deviation), or DEFER (nice to have)
 - Reports findings — does **not** edit production code directly
@@ -311,21 +335,6 @@ format, `blocker_count`/`fix_count`/`defer_count` etc.) followed by the
 narrative report. The developer fixes issues based on this report; capped
 at a max number of review runs (`workflow.yaml`'s `max_review_runs`) before
 the phase reports unresolved findings and moves on.
-
-### Phase 7: Adversarial Code Review
-
-**Agent:** Adversarial Code Reviewer
-
-Reviews all code produced by this feature with a critical perspective:
-- Correctness (logic errors, edge cases)
-- Design quality (code smells, anti-patterns)
-- Error handling (empty catches, resource leaks)
-- Performance (N+1 queries, unnecessary allocations)
-- Security (injection, XSS, auth bypass)
-
-**Fixes** critical and major issues directly in the code.
-
-Produces: `review_report.md` documenting what was found and fixed.
 
 ### Phase 8: Security Review
 
@@ -523,7 +532,7 @@ designs/
         │   └── docs/
         │       ├── requirements_analysis.md
         │       ├── architecture.md
-        │       ├── review_report.md
+        │       ├── adversarial.md
         │       ├── doc_review_report.md
         │       ├── security_report.md
         │       ├── qa_report.md
@@ -814,9 +823,9 @@ The `CostTracker` module (`src/interfaces/cost_tracker.py`) queries:
 | 3  | Feature | scope.md, requirements_analysis.md | architecture.md |
 | 4  | Feature | scope.md, requirements_analysis.md, architecture.md | challenge.md |
 | 5  | Feature | architecture.md, challenge.md, AGENTS.md | Source code, tests |
-| 6  | Feature | architecture.md, requirements_analysis.md | architectural_review_report.md |
-| 7  | Feature | requirements_analysis.md, architecture.md, architectural_review_report.md | review_report.md, code fixes |
-| 8  | Feature | requirements_analysis.md, architecture.md, review_report.md | security_report.md, code fixes |
+| 6  | Feature | requirements_analysis.md, architecture.md, source code | adversarial.md |
+| 7  | Feature | architecture.md, requirements_analysis.md, adversarial.md | architectural_review_report.md |
+| 8  | Feature | requirements_analysis.md, architecture.md, adversarial.md | security_report.md, code fixes |
 | 9  | Feature | requirements_analysis.md, architecture.md, all review reports | qa_report.md |
 | 10 | Feature | scope.md, design.md, requirements_analysis.md, architecture.md, qa_report.md | product_validation.md |
 | 11 | Feature | All reports, source code | doc_review_report.md, doc fixes |

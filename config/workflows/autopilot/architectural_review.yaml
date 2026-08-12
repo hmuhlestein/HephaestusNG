@@ -1,4 +1,4 @@
-id: 6
+id: 7
 name: architectural_review
 # Scored by src/autopilot/spec.py's hybrid completion gate (a dedicated
 # score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
@@ -44,8 +44,7 @@ done_definitions:
 outputs:
   - "review.md"
 next_steps:
-  - "Phase 6 adversarial review reads review.md"
-  - "Phase 7 doc review reads review.md"
+  - "Phase 8 security review runs next"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
   Technical terms exact. No pleasantries (sure/certainly/happy to). 
