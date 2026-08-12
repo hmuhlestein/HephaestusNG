@@ -324,6 +324,81 @@ else
     fi
 fi
 
+# ─── 4.8. GitHub CLI (gh) ──────────────────────────────────────────
+# git_commit_push (config/workflows/autopilot/git_commit_push.yaml) shells
+# out to `gh pr create`/`gh pr view`, and the review-approval path
+# (autopilot_api.py) runs `gh pr merge` -- without a working, authenticated
+# gh, the pipeline silently falls back to local-merge-only with no PR.
+
+header "GitHub CLI (gh)"
+
+# A stray PyPI package literally named "gh" (a "GitHub browser opener",
+# https://pypi.org/project/gh/, unrelated to the real CLI) installs a
+# same-named script into this venv's bin/. Since $VENV_DIR/bin is prepended
+# to PATH whenever the venv is active, it silently shadows the real gh --
+# `gh pr create` then fails with "unrecognized arguments" instead of
+# creating a PR. Its --version output ("gh version: 0.0.4", with a colon)
+# distinguishes it from the real CLI's ("gh version 2.45.0 (...)", no colon).
+if [ -x "$VENV_DIR/bin/gh" ] && "$VENV_DIR/bin/gh" --version 2>&1 | grep -q "^gh version:"; then
+    warn "Removing stray 'gh' PyPI package from venv (shadows the real GitHub CLI on PATH)"
+    "$UV_BIN" pip uninstall gh --python "$PYTHON" --quiet 2>/dev/null || true
+fi
+
+if command -v gh >/dev/null 2>&1 && gh --version 2>&1 | grep -q "^gh version [0-9]"; then
+    ok "GitHub CLI: $(gh --version | head -1)"
+else
+    log "Installing GitHub CLI (gh)..."
+    if command -v brew >/dev/null 2>&1; then
+        brew install gh >/dev/null 2>&1 && ok "gh installed via brew" \
+          || warn "gh install failed — install manually: https://cli.github.com"
+    elif command -v apt-get >/dev/null 2>&1; then
+        (curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+          && sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+          && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null \
+          && sudo apt-get update -qq && sudo apt-get install -y gh) >/dev/null 2>&1 \
+          && ok "gh installed via apt" \
+          || warn "gh install failed — install manually: https://cli.github.com"
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y gh >/dev/null 2>&1 && ok "gh installed via dnf" \
+          || warn "gh install failed — install manually: https://cli.github.com"
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm github-cli >/dev/null 2>&1 && ok "gh installed via pacman" \
+          || warn "gh install failed — install manually: https://cli.github.com"
+    else
+        warn "No supported package manager found — install gh manually: https://cli.github.com"
+    fi
+fi
+
+if command -v gh >/dev/null 2>&1; then
+    if gh auth status >/dev/null 2>&1; then
+        ok "GitHub CLI authenticated ($(gh api user --jq .login 2>/dev/null || echo 'ok'))"
+    elif [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
+        log "Authenticating gh with GH_TOKEN/GITHUB_TOKEN..."
+        echo "${GH_TOKEN:-$GITHUB_TOKEN}" | gh auth login --with-token 2>&1 | tail -3
+        if gh auth status >/dev/null 2>&1; then
+            ok "GitHub CLI authenticated via token"
+        else
+            warn "gh auth login --with-token failed — run 'gh auth login' manually, or PR creation will be skipped"
+        fi
+    elif [ -r /dev/tty ]; then
+        # Deliberately NOT gated on [ -t 0 ] -- this script's primary
+        # documented install path is `curl -sSL ... | bash`, where stdin is
+        # the pipe, not a terminal, so [ -t 0 ] is false even though a real
+        # controlling terminal is available via /dev/tty. Gating on [ -t 0 ]
+        # (as the ash prompt above does) means the prompt would silently
+        # never fire for that install path, only warn.
+        warn "GitHub CLI is not authenticated — required for the pipeline to create pull requests"
+        printf "${BLUE}[heph]${NC} Run 'gh auth login' now? [Y/n] "
+        read -r _gh_reply </dev/tty
+        case "${_gh_reply:-Y}" in
+            [Nn]*) warn "Skipped — run 'gh auth login' later, or PR creation will be skipped" ;;
+            *) gh auth login ;;
+        esac
+    else
+        warn "GitHub CLI is not authenticated — run 'gh auth login' (or set GH_TOKEN) before running the pipeline, or PR creation will be skipped"
+    fi
+fi
+
 # ─── 5. heph CLI ──────────────────────────────────────────────────
 
 header "heph CLI"
