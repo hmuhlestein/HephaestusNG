@@ -1,4 +1,4 @@
-id: 7
+id: 6
 name: adversarial_review
 # Scored by src/autopilot/spec.py's hybrid completion gate (a dedicated
 # score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
@@ -42,7 +42,7 @@ done_definitions:
 outputs:
   - "adversarial.md"
 next_steps:
-  - "Phase 7 doc review reads adversarial.md"
+  - "Phase 7 architectural review runs next"
   - "Phase 8 security review reads adversarial.md for security concerns"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler. Fragments OK. No pleasantries.
@@ -54,12 +54,13 @@ additional_notes: |
 
   YOUR MISSION: Reason backward from failure. Assume bugs exist. Find them.
 
-  The architecture review (previous phase) checked design compliance. That is not
-  your job. Your job is to find runtime failures, silent data corruption, race
-  conditions, incorrect defaults, and crash scenarios that pass all tests but
-  break in production.
-
-  Read .hephaestus/architectural_review/review.md first — skip anything already fixed there.
+  You run immediately after development, before architectural_review --
+  there is no design-compliance pass yet for you to defer to. Your job is
+  to find runtime failures, silent data corruption, race conditions,
+  incorrect defaults, and crash scenarios that pass all tests but break in
+  production, regardless of whether they also happen to violate the
+  architecture (that overlap is fine; architectural_review runs after you
+  and reviews the same code from its own angle).
 
   ═══════════════════════════════════════════════════════════════════════
   STEP 0: CHECK FOR PRIOR ADVERSARIAL REVIEW (RETRY AWARENESS)
@@ -88,7 +89,6 @@ additional_notes: |
   Read:
   - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth)
   - requirements.md — contains REQ-XX requirement IDs to verify
-  - .hephaestus/architectural_review/review.md — what the architect already caught (skip those)
   - src/ — ALL new or modified source files (read them in full, not excerpts)
   - tests/ — ALL new or modified test files
 
@@ -386,8 +386,7 @@ additional_notes: |
 
   DO NOT:
   - Edit any source code or test files — report only
-  - Review design compliance — that was architectural_review's job
-  - Report issues already addressed in .hephaestus/architectural_review/review.md
+  - Review design compliance — that's architectural_review's job, not yours
   - Be vague ("this could fail") — show the exact failure path
   - Inflate severity to make the report look thorough
   - Skip any of the attack vectors in Step 2

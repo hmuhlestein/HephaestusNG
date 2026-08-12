@@ -112,32 +112,14 @@ orchestrator:
           action: continue
           reason: "Development complete, proceeding to review"
 
-    - after_phase: architectural_review
+    - after_phase: adversarial_review
       evaluator: heuristic
       max_retries: 10
-      # After this many runs of architectural_review itself (not
+      # After this many runs of adversarial_review itself (not
       # development's retries -- see max_review_runs in EvaluationPoint),
       # stop looping: mark the phase done with its unresolved findings
       # documented instead of re-reviewing forever. See
       # _create_phase_task's cap-enforcement block.
-      max_review_runs: 4
-      conditions:
-        - if: "score < 0.3"
-          action: goto
-          target: architecture_design
-          reason: "Major architectural violations found, redesign required"
-        - if: "score < 0.6"
-          action: goto
-          target: development
-          reason: "Architectural deviations found, returning to development"
-        - if: "score >= 0.6"
-          action: continue
-          reason: "Architectural review passed, proceeding to adversarial review"
-
-    - after_phase: adversarial_review
-      evaluator: heuristic
-      max_retries: 10
-      # See architectural_review's identical max_review_runs above.
       max_review_runs: 4
       conditions:
         - if: "score < 0.3"
@@ -150,7 +132,25 @@ orchestrator:
           reason: "Runtime failure modes found, returning to development to fix"
         - if: "score >= 0.6"
           action: continue
-          reason: "Adversarial review passed, no critical failure modes found"
+          reason: "Adversarial review passed, proceeding to architectural review"
+
+    - after_phase: architectural_review
+      evaluator: heuristic
+      max_retries: 10
+      # See adversarial_review's identical max_review_runs above.
+      max_review_runs: 4
+      conditions:
+        - if: "score < 0.3"
+          action: goto
+          target: architecture_design
+          reason: "Major architectural violations found, redesign required"
+        - if: "score < 0.6"
+          action: goto
+          target: development
+          reason: "Architectural deviations found, returning to development"
+        - if: "score >= 0.6"
+          action: continue
+          reason: "Architectural review passed, no critical failure modes found"
 
     - after_phase: security_review
       evaluator: heuristic
