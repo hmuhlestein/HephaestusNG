@@ -1,4 +1,4 @@
-id: 9
+id: 10
 name: product_validation
 # Scored by src/autopilot/spec.py's hybrid completion gate (a dedicated
 # score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.

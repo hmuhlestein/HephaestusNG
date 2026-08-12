@@ -19,7 +19,7 @@ def test_generated_codex_agents_are_valid_custom_agent_files():
 
     assert result.returncode == 0, result.stderr
     agents = sorted((PROJECT_ROOT / "agents" / "codex").glob("*.toml"))
-    assert len(agents) == 13
+    assert len(agents) == 14
 
     for agent_path in agents:
         with agent_path.open("rb") as file:

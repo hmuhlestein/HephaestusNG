@@ -13,6 +13,7 @@ from src.autopilot.spec import (
     read_okf_report,
     score_adversarial_review,
     score_architectural_review,
+    score_design_review,
     score_feature_review,
     score_product_validation,
     score_qa,
@@ -588,6 +589,66 @@ class TestScoreAdversarialReview:
 
     def test_blocker_without_report_text_falls_back_to_count(self):
         score, meta = score_adversarial_review(
+            {"blocker_count": 1, "warning_count": 0, "nit_count": 0}
+        )
+        assert score < 0.6
+        assert "1 BLOCKER" in meta["reason"]
+
+
+class TestScoreDesignReview:
+    """design_review (the pre-development adversarial challenge of
+    architecture.md) -- unlike score_adversarial_review/
+    score_architectural_review, a WARNING-only report must ALSO route back
+    to architecture_design, not pass: there's no development phase yet for
+    a WARNING to be deferred to, and looping architecture_design again is
+    far cheaper than finding the same gap after code exists."""
+
+    def test_none_result(self):
+        score, meta = score_design_review(None)
+        assert score == 0.4
+        assert meta["result_missing"] is True
+
+    def test_none_result_with_report_text_still_quotes_report(self):
+        report = "# Architecture Challenge Report\n\n### [BLOCKER] Race condition in cache write"
+        score, meta = score_design_review(None, report_text=report)
+        assert meta["result_missing"] is True
+        assert report in meta["reason"]
+
+    def test_blocker_routes_to_architecture_design(self):
+        score, meta = score_design_review(
+            {"blocker_count": 2, "warning_count": 1, "nit_count": 0}
+        )
+        assert score < 0.6
+        assert meta["band"] == "architecture_design"
+        assert meta["blocker_count"] == 2
+
+    def test_warnings_only_also_routes_back(self):
+        """The key difference from score_adversarial_review: a WARNING-only
+        report does NOT pass here."""
+        score, meta = score_design_review(
+            {"blocker_count": 0, "warning_count": 2, "nit_count": 0}
+        )
+        assert score < 0.6
+        assert meta["band"] == "architecture_design"
+
+    def test_clean(self):
+        score, meta = score_design_review(
+            {"blocker_count": 0, "warning_count": 0, "nit_count": 0}
+        )
+        assert score >= 0.6
+        assert meta["band"] == "pass"
+
+    def test_blocker_with_report_text_quotes_full_report(self):
+        report = "# Architecture Challenge Report\n\n### [BLOCKER] Unhandled REQ-04\n- Section: Components"
+        score, meta = score_design_review(
+            {"blocker_count": 1, "warning_count": 0, "nit_count": 0},
+            report_text=report,
+        )
+        assert score < 0.6
+        assert report in meta["reason"]
+
+    def test_blocker_without_report_text_falls_back_to_count(self):
+        score, meta = score_design_review(
             {"blocker_count": 1, "warning_count": 0, "nit_count": 0}
         )
         assert score < 0.6

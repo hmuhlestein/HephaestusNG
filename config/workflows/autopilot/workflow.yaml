@@ -4,13 +4,14 @@ default_thinking_level: low
 fallback_cli_tool: claude
 fallback_cli_model: sonnet
 
-# Execution order by phase id. Ids match pipeline position (1-13).
-execution_order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+# Execution order by phase id. Ids match pipeline position (1-14).
+execution_order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
 
 session_roles:
   product_requirements: product-requirements
   scope_review: scope-reviewer
   architecture_design: architect
+  design_review: design-challenger   # adversarial challenge of architecture.md, before development starts
   development: developer
   architectural_review: architect       # checks design compliance vs architecture.md
   adversarial_review: adversarial       # reasons backward from failure modes
@@ -28,6 +29,7 @@ session_roles:
 required_output:
   architecture_design: .hephaestus/architecture_design/architecture.md
   scope_review: .hephaestus/scope_review/scope.md
+  design_review: .hephaestus/design_review/challenge.md
   architectural_review: .hephaestus/architectural_review/review.md
   adversarial_review: .hephaestus/adversarial_review/adversarial.md
   qa_validation: .hephaestus/qa_validation/qa.md
@@ -80,6 +82,27 @@ orchestrator:
         - if: "score >= 0.6"
           action: continue
           reason: "Architecture approved"
+
+    - after_phase: design_review
+      evaluator: heuristic
+      # Any real finding here routes back to architecture_design, the only
+      # viable target: development hasn't run yet, so there's no code to
+      # send a fix to. Unlike development-facing gates (adversarial_review,
+      # architectural_review), a WARNING is treated the same as a BLOCKER --
+      # looping architecture_design once more is cheap; discovering the same
+      # gap after development has already built on top of it is not.
+      max_retries: 4
+      goto_counts_as_retry: true
+      on_budget_exhausted: arbitrate
+      max_review_runs: 4
+      conditions:
+        - if: "score < 0.6"
+          action: goto
+          target: architecture_design
+          reason: "Architecture challenge found blocking issues — redesign required"
+        - if: "score >= 0.6"
+          action: continue
+          reason: "Architecture challenge passed — proceeding to development"
 
     - after_phase: development
       evaluator: heuristic

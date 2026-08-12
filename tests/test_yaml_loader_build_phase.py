@@ -73,7 +73,7 @@ def test_autopilot_phases_use_codex_terra_with_pi_fallback():
         Path(__file__).resolve().parents[1] / "config" / "workflows" / "autopilot"
     )
 
-    assert len(workflow.phases) == 13
+    assert len(workflow.phases) == 14
     for phase in workflow.phases:
         assert phase.cli_tool == "codex"
         assert phase.cli_model == "gpt-5.6-terra"

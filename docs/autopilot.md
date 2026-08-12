@@ -1,7 +1,7 @@
 # Autopilot Pipeline
 
 A fully automated multi-agent workflow engine that takes design documents,
-decomposes them into features, and drives each feature through a 12-phase
+decomposes them into features, and drives each feature through a 14-phase
 pipeline to produce validated, committed, shipped software.
 
 ## Overview
@@ -11,7 +11,7 @@ DB queue                   Phase 0 (once)        per-feature pipeline      proje
   ├── auth-system.md  ──► [Feature Architect] ──► auth    (parallel) ──►    ├── src/
   │   (anywhere)            │                 ──► session (parallel) ──►    ├── tests/
   ├── dashboard.md          ▼                ──► admin   (sequential) ──►   └── designs/
-  └── api-v2.md        features.json              (phases 1–12 each)             └── 20260612_auth_system_fb36c8e3/
+  └── api-v2.md        features.json              (phases 1–14 each)             └── 20260612_auth_system_fb36c8e3/
                                                                                      ├── design_report.html
                                                                                      ├── features.json
                                                                                      └── features/
@@ -38,7 +38,7 @@ A Feature is a vertically-scoped, independently shippable slice of a design.
 Each Feature:
 
 - Has a clear name and scope (e.g. "JWT authentication", "user dashboard", "admin API")
-- Runs the full 10-phase pipeline in its own git worktree
+- Runs the full 14-phase pipeline in its own git worktree
 - Produces its own set of phase artifacts (requirements, architecture, code, reports)
 - Has an independent pass/fail status and iteration count
 - Is committed and merged to main independently
@@ -196,9 +196,9 @@ and all `scope.md` files are written and validated by the orchestrator.
 
 ---
 
-### Per-Feature Pipeline (Phases 1–12)
+### Per-Feature Pipeline (Phases 1–14)
 
-Each Feature runs its own independent instance of the following 12 phases (1–12), in its
+Each Feature runs its own independent instance of the following 14 phases (1–14), in its
 own git worktree.
 
 ---
@@ -253,7 +253,35 @@ Primary input is this feature's `scope.md` and `requirements_analysis.md`.
 
 Produces: `architecture.md` — technical design for this feature only.
 
-### Phase 4: Development
+### Phase 4: Design Review
+
+**Agent:** Architecture Challenger
+
+An adversarial, pre-development review of `architecture.md` itself — before
+any code exists to review instead. Assumes the architecture is wrong and
+tries to prove it, while fixing a finding still only costs a rewrite of a
+document, not a rewrite of working code:
+- Requirements coverage (every REQ/NFR traced to an owning component and
+  vice versa)
+- Concurrency/data-consistency gaps designed into the proposed model
+- Interface and error-propagation gaps in the hook-together map
+- Composition and hierarchy: high-level components leaking low-level
+  internals, missed polymorphism/strategy-pattern opportunities, complex
+  logic that isn't pushed down to the right level
+- Over- and under-engineering relative to the feature's actual scope
+- Secrets/security handling in the proposed design
+- Task breakdown sanity (valid dependency order, verifiable acceptance criteria)
+
+Classifies findings as BLOCKER, WARNING, or NIT. Unlike the later
+Architectural Review and Adversarial Code Review (where only a BLOCKER sends
+work back), **any** finding here returns to Phase 3 — development hasn't
+started yet, so there's no cheaper phase to defer a WARNING to.
+
+Produces: `challenge.md` — a YAML frontmatter block (OKF format,
+`blocker_count`/`warning_count`/`nit_count`) followed by the narrative
+report. Reports only — does **not** edit `architecture.md` directly.
+
+### Phase 5: Development
 
 **Agent:** Software Developer
 
@@ -266,7 +294,7 @@ Implements components according to this feature's `architecture.md`:
 
 Produces: Working source code in `<project-path>/`.
 
-### Phase 5: Architectural Review
+### Phase 6: Architectural Review
 
 **Agent:** Software Architect (re-invoked)
 
@@ -284,7 +312,7 @@ narrative report. The developer fixes issues based on this report; capped
 at a max number of review runs (`workflow.yaml`'s `max_review_runs`) before
 the phase reports unresolved findings and moves on.
 
-### Phase 6: Adversarial Code Review
+### Phase 7: Adversarial Code Review
 
 **Agent:** Adversarial Code Reviewer
 
@@ -299,7 +327,7 @@ Reviews all code produced by this feature with a critical perspective:
 
 Produces: `review_report.md` documenting what was found and fixed.
 
-### Phase 7: Security Review
+### Phase 8: Security Review
 
 **Agent:** Security Reviewer
 
@@ -314,7 +342,7 @@ Focused security assessment:
 
 Produces: `security_report.md` with findings and fixes applied.
 
-### Phase 8: QA Validation
+### Phase 9: QA Validation
 
 **Agent:** QA Engineer
 
@@ -327,7 +355,7 @@ Comprehensive testing:
 
 Produces: `qa_report.md` with pass/fail status and recommendation.
 
-### Phase 9: Product Validation
+### Phase 10: Product Validation
 
 **Agent:** Product Validator
 
@@ -342,7 +370,7 @@ merged, and verifies the feature's scope faithfully represents the original desi
 
 Produces: `product_validation.md` with PASS/NEEDS_WORK verdict.
 
-### Phase 10: Documentation Review
+### Phase 11: Documentation Review
 
 **Agent:** Documentation Reviewer
 
@@ -358,7 +386,7 @@ Reviews all documentation against the actual implementation:
 
 Produces: `doc_review_report.md` with findings and fixes applied.
 
-### Phase 11: Forensics Analysis
+### Phase 12: Forensics Analysis
 
 **Agent:** Forensics Analyst
 
@@ -372,7 +400,7 @@ Pipeline self-improvement for this feature run:
 
 Produces: `forensics_report.md` with evidence-based improvement recommendations.
 
-### Phase 12: Git Commit & Push
+### Phase 13: Git Commit & Push
 
 **Agent:** Git Operator
 
@@ -385,6 +413,15 @@ Version control workflow for this feature:
 6. Merges PR (`gh pr merge --merge --delete-branch`)
 7. Checks out main and pulls
 8. Saves commit hash and PR URL to memory
+
+### Phase 14: Deploy
+
+**Agent:** Deployer
+
+Executes this project's configured deployment steps for the feature once it
+has been committed and merged. Optional phase — failure here does not fail
+the feature (see Stop Conditions below); the pipeline reports the failure
+and moves on rather than blocking on infrastructure it doesn't control.
 
 ---
 
@@ -448,7 +485,7 @@ worktrees/
 │           └── admin/
 │               └── scope.md
 │
-├── <design-id>-auth/                  ← auth feature worktree (Phases 1–12)
+├── <design-id>-auth/                  ← auth feature worktree (Phases 1–14)
 │   ├── .hephaestus/
 │   │   ├── features.json              ← copied from Phase 0 worktree at creation
 │   │   └── features/
@@ -459,10 +496,10 @@ worktrees/
 │       ├── architecture.md
 │       └── ...
 │
-├── <design-id>-session/               ← session feature worktree (Phases 1–12)
+├── <design-id>-session/               ← session feature worktree (Phases 1–14)
 │   └── ...
 │
-└── <design-id>-admin/                 ← admin feature worktree (Phases 1–12)
+└── <design-id>-admin/                 ← admin feature worktree (Phases 1–14)
     └── ...
 ```
 
@@ -516,10 +553,10 @@ AutopilotDesign
         id, design_id, name, scope, files, depends_on, execution
         status: pending | active | completed | failed | skipped
         │
-        └── Workflow (one per Feature — runs Phases 1–12)
+        └── Workflow (one per Feature — runs Phases 1–14)
               id, feature_id, status, paused_by, cost_total_usd
               │
-              └── Phase (one per pipeline phase, 1–12)
+              └── Phase (one per pipeline phase, 1–14)
                     │
                     └── Task (one per phase execution)
                           │
@@ -545,7 +582,7 @@ discarded after Phase 0 completes.
 ### Feature worktrees (feature-scoped, shared across all phases)
 
 Each Feature is assigned **one dedicated git worktree** for its entire pipeline
-run. All phases (1–12) of that feature operate in the same worktree. No phase
+run. All phases (1–14) of that feature operate in the same worktree. No phase
 creates its own worktree.
 
 **Naming:** `worktrees/<design-id>-<feature-id>/`
@@ -561,7 +598,7 @@ path `.hephaestus/features/<feature-id>/scope.md`. No agent needs to reach
 outside its own worktree.
 
 **Branch:** Each feature worktree is checked out on its own feature branch
-(`feature/<design-name>-<feature-id>`). Phase 12 (Git Commit & Push) commits
+(`feature/<design-name>-<feature-id>`). Phase 13 (Git Commit & Push) commits
 and merges this branch to main, then the orchestrator removes the worktree.
 
 **Isolation:** Parallel features run in separate worktrees and cannot see each
@@ -616,7 +653,7 @@ outstanding issues across features.
 
 When LiteLLM proxy is configured, LLM calls include a `user` field:
 - Phase 0: `<design-name>/feature-architect`
-- Phases 1–12: `<design-name>/<feature-id>`
+- Phases 1–14: `<design-name>/<feature-id>`
 
 ```bash
 export LITELLM_PROXY_URL=http://deneb-server:4000
@@ -672,7 +709,7 @@ cross-feature and cross-design learning.
 
 ### Writing
 - Phase 0: feature decomposition decisions, execution ordering rationale
-- Phase 1–12 (per feature): requirements, architecture, implementation notes,
+- Phase 1–14 (per feature): requirements, architecture, implementation notes,
   review findings, security findings, QA results, validation outcomes,
   commit references, improvement recommendations
 
@@ -775,12 +812,15 @@ The `CostTracker` module (`src/interfaces/cost_tracker.py`) queries:
 | 1  | Feature | scope.md, AGENTS.md, features/, vector DB | requirements_analysis.md |
 | 2  | Feature | scope.md, design.md, requirements_analysis.md | scope_review_result.md |
 | 3  | Feature | scope.md, requirements_analysis.md | architecture.md |
-| 4  | Feature | architecture.md, AGENTS.md | Source code, tests |
-| 5  | Feature | architecture.md, requirements_analysis.md | review_report.md, code fixes |
-| 6  | Feature | requirements_analysis.md, architecture.md, review_report.md | doc_review_report.md, doc fixes |
-| 7  | Feature | requirements_analysis.md, architecture.md, review_report.md, doc_review_report.md | security_report.md, code fixes |
-| 8  | Feature | requirements_analysis.md, architecture.md, all review reports | qa_report.md |
-| 9  | Feature | scope.md, design.md, requirements_analysis.md, architecture.md, doc_review_report.md, qa_report.md | product_validation.md |
-| 10 | Feature | All reports | Git history |
-| 11 | Feature | All docs, pipeline_metrics.json, phase_prompts/ | forensics_report.md, memory entries |
+| 4  | Feature | scope.md, requirements_analysis.md, architecture.md | challenge.md |
+| 5  | Feature | architecture.md, challenge.md, AGENTS.md | Source code, tests |
+| 6  | Feature | architecture.md, requirements_analysis.md | architectural_review_report.md |
+| 7  | Feature | requirements_analysis.md, architecture.md, architectural_review_report.md | review_report.md, code fixes |
+| 8  | Feature | requirements_analysis.md, architecture.md, review_report.md | security_report.md, code fixes |
+| 9  | Feature | requirements_analysis.md, architecture.md, all review reports | qa_report.md |
+| 10 | Feature | scope.md, design.md, requirements_analysis.md, architecture.md, qa_report.md | product_validation.md |
+| 11 | Feature | All reports, source code | doc_review_report.md, doc fixes |
+| 12 | Feature | All docs, pipeline_metrics.json, phase_prompts/ | forensics_report.md, memory entries |
+| 13 | Feature | Committed source, forensics_report.md | Git commit, PR, merge |
+| 14 | Feature | Merged code, deployment config | Deployment output/logs |
 | —  | Design  | All feature outputs | design_report.html, design_metrics.json |
