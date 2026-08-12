@@ -973,6 +973,70 @@ def score_adversarial_review(
     return 0.9, {"gate": "adversarial_review", "band": "pass", "reason": "clean"}
 
 
+def score_design_review(
+    result: Optional[Dict[str, Any]],
+    report_text: Optional[str] = None,
+) -> Tuple[float, Dict[str, Any]]:
+    """Score a challenge.md by BLOCKER/WARNING/NIT counts.
+
+    design_review.yaml's report classifies findings as BLOCKER
+    (requirement unimplemented, real race condition or data-consistency
+    gap baked into the design, secrets mishandling, unresolved TBD), WARNING
+    (unspecified error propagation, scope mismatch), or NIT (minor). Unlike
+    score_adversarial_review/score_architectural_review (where only a
+    BLOCKER routes back, a WARNING-only report still passes), ANY finding
+    here routes back to architecture_design: development hasn't run yet, so
+    there's no other phase for a WARNING to be deferred to, and looping
+    architecture_design again is far cheaper than discovering the same gap
+    after code has been built on top of it.
+    """
+    if not result:
+        # The agent may have written the markdown report but failed (or
+        # forgot) to also emit the structured JSON -- don't discard real
+        # findings just because the JSON is missing.
+        reason = (
+            f"no challenge.md frontmatter found, but a report was "
+            f"written:\n\n{report_text}"
+            if report_text
+            else "no challenge.md found"
+        )
+        return 0.4, {
+            "gate": "design_review",
+            "reason": reason,
+            "result_missing": True,
+        }
+
+    blockers = int(result.get("blocker_count") or 0)
+    warnings = int(result.get("warning_count") or 0)
+
+    if blockers > 0:
+        reason = (
+            f"{blockers} BLOCKER(s) found in design review:\n\n{report_text}"
+            if report_text
+            else f"{blockers} BLOCKER(s) found — returning to architecture_design"
+        )
+        return 0.4, {
+            "gate": "design_review",
+            "band": "architecture_design",
+            "blocker_count": blockers,
+            "warning_count": warnings,
+            "reason": reason,
+        }
+    if warnings > 0:
+        reason = (
+            f"{warnings} WARNING(s) found in design review:\n\n{report_text}"
+            if report_text
+            else f"{warnings} WARNING(s) found — returning to architecture_design"
+        )
+        return 0.5, {
+            "gate": "design_review",
+            "band": "architecture_design",
+            "warning_count": warnings,
+            "reason": reason,
+        }
+    return 0.9, {"gate": "design_review", "band": "pass", "reason": "clean"}
+
+
 def score_architectural_review(
     result: Optional[Dict[str, Any]],
     report_text: Optional[str] = None,
@@ -1135,6 +1199,7 @@ def read_okf_report(
 # verify_gate_result_schema's output-schema floor.
 GATE_RESULT_ARTIFACTS: Dict[str, Tuple[str, ...]] = {
     "scope_review": ("scope.md",),
+    "design_review": ("challenge.md",),
     "architectural_review": ("review.md",),
     "adversarial_review": ("adversarial.md",),
     "qa_validation": ("qa.md",),
@@ -1189,7 +1254,7 @@ def synthetic_clean_result(phase_name: str, run_count: int) -> Dict[str, Any]:
         return {**base, "verdict": "PASS", "unmet_requirements": []}
     if phase_name == "scope_review":
         return {**base, "verdict": "PASS"}
-    # architectural_review, adversarial_review, feature_review: blocker-count schema.
+    # design_review, architectural_review, adversarial_review, feature_review: blocker-count schema.
     return {**base, "blocker_count": 0}
 
 
@@ -1271,6 +1336,7 @@ def consume_gate_artifacts(phase_name: str, working_directory: Any) -> list:
 # tolerates.
 GATE_RESULT_REQUIRED_KEYS: Dict[str, Tuple[str, ...]] = {
     "scope_review": ("verdict", "scope_review", "analysis_summary"),
+    "design_review": ("blocker_count",),
     "architectural_review": ("blocker_count",),
     "adversarial_review": ("blocker_count",),
     "qa_validation": ("failed_tests", "passed_tests", "critical_issues"),
@@ -1347,6 +1413,11 @@ def build_phase_output(
             working_directory, "scope.md", phase_name=phase_name
         )
         score, meta = score_scope_review(result)
+    elif phase_name == "design_review":
+        result, report_text = read_okf_report(
+            working_directory, "challenge.md", phase_name=phase_name
+        )
+        score, meta = score_design_review(result, report_text=report_text)
     elif phase_name == "architectural_review":
         result, report_text = read_okf_report(
             working_directory, "review.md", phase_name=phase_name

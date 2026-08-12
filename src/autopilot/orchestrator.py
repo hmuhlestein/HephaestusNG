@@ -4236,6 +4236,7 @@ _SWEEP_REPORT_NAMES = {
     "docs.md",
     "adversarial_review.md",
     "adversarial.md",
+    "challenge.md",
     "forensics.md",
     "architecture.md",
     "run_health.json",

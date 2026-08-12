@@ -1297,8 +1297,8 @@ class TestPhaseNameToOrderLegacyFallback:
 
     def test_forensics_analysis_before_git_commit_push(self):
         orch = self._orchestrator()
-        assert orch._phase_name_to_order("forensics_analysis") == 11
-        assert orch._phase_name_to_order("git_commit_push") == 12
+        assert orch._phase_name_to_order("forensics_analysis") == 12
+        assert orch._phase_name_to_order("git_commit_push") == 13
 
     def test_matches_real_phase_ids_in_every_autopilot_yaml(self):
         """Cross-checks the legacy fallback dict against the actual `id:`
