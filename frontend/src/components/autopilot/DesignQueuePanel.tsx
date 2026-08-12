@@ -40,9 +40,10 @@ interface DesignQueuePanelProps {
   onLoadDesign: () => void;
   currentDesign?: string | null;
   onReviewFeature?: (featureId: string, feature: any) => void;
+  onRefreshStatus?: () => void;
 }
 
-const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, onLoadDesign, currentDesign, onReviewFeature }) => {
+const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, onLoadDesign, currentDesign, onReviewFeature, onRefreshStatus }) => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
@@ -131,6 +132,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     onSuccess: (data) => {
       setLocalOrder(data);
       queryClient.setQueryData(['autopilot-project-designs', projectId], data);
+      onRefreshStatus?.();
       toast.success('Designs reloaded from disk');
     },
     onError: () => toast.error('Failed to reload designs'),

@@ -4,11 +4,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Rocket, ListOrdered, History, MessageSquare,
-  Plus, RefreshCw, Clock, CheckCircle2, XCircle, AlertTriangle,
+  Clock, CheckCircle2, XCircle, AlertTriangle,
   Terminal
 } from 'lucide-react';
 import { apiService } from '@/services/api';
-import { Button } from '@/components/ui/button';
 import PipelineStatusCard from '@/components/autopilot/PipelineStatusCard';
 import DesignQueuePanel from '@/components/autopilot/DesignQueuePanel';
 import FeatureGallery from '@/components/autopilot/FeatureGallery';
@@ -289,26 +288,7 @@ const Autopilot: React.FC = () => {
             <p className="text-gray-500 dark:text-gray-400 text-sm">Continuous design-to-deploy pipeline</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => refetchStatus()}
-            className="text-gray-600 dark:text-gray-400"
-          >
-            <RefreshCw className="w-4 h-4 mr-1" />
-            Refresh
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => setShowAddDesign(true)}
-            className="bg-violet-600 hover:bg-violet-700 text-white"
-            disabled={!projectId}
-          >
-            <Plus className="w-4 h-4 mr-1" />
-            New Design
-          </Button>
-        </div>
+
       </div>
 
       {/* Human Input Banner (shows when pipeline needs input) */}
@@ -391,6 +371,7 @@ const Autopilot: React.FC = () => {
               onLoadDesign={() => setShowLoadDesign(true)}
               currentDesign={status?.current_design}
               onReviewFeature={handleReviewFeature}
+              onRefreshStatus={refetchStatus}
             />
           )}
           {activeTab === 'features' && (
