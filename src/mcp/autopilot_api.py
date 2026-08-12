@@ -1928,12 +1928,15 @@ def _find_archived_feature_report(project_base: str, workflow_id: str) -> Option
         if metrics.get("workflow_id") != workflow_id:
             continue
         for candidate in (
+            gallery_dir / "docs" / "doc_review" / "feature_report.html",
             gallery_dir / "docs" / "feature_report.html",
             gallery_dir / "feature_report.html",
         ):
             if candidate.is_file():
                 return candidate
-        return None
+        # Continue checking other directories with the same workflow_id
+        # (e.g. shared-integrations may lack the report while the main
+        # feature gallery folder has it).
     return None
 
 
@@ -3531,7 +3534,9 @@ async def get_project_design_status(project_id: str, filename: str):
                     ).first()
                     if doc_review_done:
                         if feat_wf and feat_wf.working_directory:
-                            has_report = (Path(feat_wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html").is_file() or \
+                            has_report = (Path(feat_wf.working_directory) / CONTEXT_DIR_NAME / "doc_review" / "feature_report.html").is_file() or \
+                                         (Path(feat_wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html").is_file() or \
+                                         (Path(feat_wf.working_directory) / "docs" / "doc_review" / "feature_report.html").is_file() or \
                                          (Path(feat_wf.working_directory) / "docs" / "feature_report.html").is_file()
                         if not has_report:
                             # working_directory is null/gone once the feature's
@@ -3614,7 +3619,8 @@ async def get_project_design_status(project_id: str, filename: str):
                 # run_phase0's synopsis_src copy) once it's gone.
                 phase0_has_report = False
                 if phase0_wf.working_directory:
-                    phase0_has_report = (Path(phase0_wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html").is_file()
+                    phase0_has_report = (Path(phase0_wf.working_directory) / CONTEXT_DIR_NAME / "doc_review" / "feature_report.html").is_file() or \
+                                        (Path(phase0_wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html").is_file()
                 if not phase0_has_report:
                     phase0_design = db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
                     if phase0_design and phase0_design.designs_folder:
@@ -3748,7 +3754,11 @@ async def get_workflow_feature_report(workflow_id: str):
 
     report_path = None
     if working_directory:
-        candidate = Path(working_directory) / CONTEXT_DIR_NAME / "feature_report.html"
+        candidate = Path(working_directory) / CONTEXT_DIR_NAME / "doc_review" / "feature_report.html"
+        if not candidate.is_file():
+            candidate = Path(working_directory) / CONTEXT_DIR_NAME / "feature_report.html"
+        if not candidate.is_file():
+            candidate = Path(working_directory) / "docs" / "doc_review" / "feature_report.html"
         if not candidate.is_file():
             candidate = Path(working_directory) / "docs" / "feature_report.html"
         if candidate.is_file():
