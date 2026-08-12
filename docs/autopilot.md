@@ -427,10 +427,16 @@ Version control workflow for this feature:
 
 **Agent:** Deployer
 
-Executes this project's configured deployment steps for the feature once it
-has been committed and merged. Optional phase — failure here does not fail
-the feature (see Stop Conditions below); the pipeline reports the failure
-and moves on rather than blocking on infrastructure it doesn't control.
+Conditional on `DEPLOY.md` existing in the project root. If it doesn't, the
+orchestrator skips this phase entirely — no agent is launched — and fires a
+synthetic completion straight through to the design aggregate step. If
+`DEPLOY.md` exists, the agent reads it and follows its deployment steps
+exactly (no improvising steps it doesn't specify).
+
+Also in `optional_phases`: even when `DEPLOY.md` exists and the phase does
+run, a failure here does not fail the feature (see Stop Conditions below) —
+the pipeline reports the failure and moves on rather than blocking on
+infrastructure it doesn't control.
 
 ---
 

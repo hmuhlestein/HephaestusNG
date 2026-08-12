@@ -155,7 +155,9 @@ additional_notes: |
   there, and those files are still present:
   - ./.hephaestus/requirements.md
   - ./.hephaestus/architecture.md
-  - ./.hephaestus/review_report.md
+  - ./.hephaestus/challenge.md
+  - ./.hephaestus/adversarial.md
+  - ./.hephaestus/review.md
   - ./.hephaestus/docs.md
   - ./.hephaestus/security.md
   - ./.hephaestus/qa.md
