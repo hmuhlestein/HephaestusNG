@@ -33,10 +33,10 @@ const CostDisplay: React.FC<CostDisplayProps> = ({
 
   const valueClasses = variant === 'large'
     ? 'text-2xl font-bold text-white'
-    : 'font-mono text-sm font-medium';
+    : 'font-mono text-sm font-medium text-gray-900 dark:text-white';
   const limitClasses = variant === 'large'
     ? 'text-sm text-white/60'
-    : 'text-xs text-gray-500';
+    : 'text-xs text-gray-500 dark:text-gray-400';
 
   return (
     <div className={`flex items-center gap-2 ${className}`}>
