@@ -2766,6 +2766,10 @@ async def update_task_status(
                 # memory of what actually needs fixing.
                 task.failure_reason = rejection.get("message", "Output validation failed")
                 session.commit()
+                logger.warning(
+                    f"[{request.task_id[:8]}] 'done' rejected by output-artifact hard floor: "
+                    f"{task.failure_reason}"
+                )
                 return UpdateTaskStatusResponse(
                     success=False,
                     message=rejection.get("message", "Output validation failed"),
@@ -2784,6 +2788,10 @@ async def update_task_status(
             if rejection:
                 task.failure_reason = rejection.get("message", "Gate result schema invalid")
                 session.commit()
+                logger.warning(
+                    f"[{request.task_id[:8]}] 'done' rejected by gate-result-schema hard floor: "
+                    f"{task.failure_reason}"
+                )
                 return UpdateTaskStatusResponse(
                     success=False,
                     message=rejection.get("message", "Gate result schema invalid"),
@@ -2799,6 +2807,10 @@ async def update_task_status(
             if rejection:
                 task.failure_reason = rejection.get("message", "Open tickets remain unresolved")
                 session.commit()
+                logger.warning(
+                    f"[{request.task_id[:8]}] 'done' rejected by open-tickets hard floor: "
+                    f"{task.failure_reason}"
+                )
                 return UpdateTaskStatusResponse(
                     success=False,
                     message=rejection.get("message", "Open tickets remain unresolved"),

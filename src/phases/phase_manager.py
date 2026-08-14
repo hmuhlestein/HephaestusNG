@@ -825,6 +825,10 @@ class PhaseManager:
             .filter(
                 Phase.workflow_id == phase.workflow_id,
                 Phase.order >= target_phase.order,
+                # Excludes the source phase's own execution -- see the
+                # identical exclusion (and its rationale) in
+                # _handle_evaluation_goto.
+                PhaseExecution.id != execution.id,
                 PhaseExecution.status.in_(["in_progress", "completed"]),
             )
             .all()
@@ -949,6 +953,19 @@ class PhaseManager:
                 .filter(
                     Phase.workflow_id == phase.workflow_id,
                     Phase.order >= target_phase.order,
+                    # Excludes the SOURCE phase's own execution (just closed
+                    # "completed" two lines above by _close_execution) --
+                    # design_review's order is >= architecture_design's
+                    # (its own goto target) here, so without this exclusion
+                    # this sweep immediately reset that same "completed"
+                    # mark straight back to "pending", defeating
+                    # mark_phase_complete's idempotency guard (`if
+                    # execution.status == "completed": skip`) on the very
+                    # next evaluation. Observed live: design_review's goto
+                    # decision fired twice, 84s apart, off the same
+                    # unchanged challenge.md, creating a second redundant
+                    # architecture_design task that raced the first.
+                    PhaseExecution.id != execution.id,
                     PhaseExecution.status.in_(["in_progress", "completed"]),
                 )
                 .all()
