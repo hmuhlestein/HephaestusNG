@@ -66,7 +66,7 @@ def test_build_phase_own_cli_tool_overrides_workflow_default():
     assert phase.cli_tool == "claude"
 
 
-def test_autopilot_phases_use_codex_terra_with_pi_fallback():
+def test_autopilot_phases_use_claude_sonnet_with_pi_fallback():
     from src.workflow_engine.yaml_loader import load_full_workflow_definition
 
     workflow = load_full_workflow_definition(
@@ -75,7 +75,7 @@ def test_autopilot_phases_use_codex_terra_with_pi_fallback():
 
     assert len(workflow.phases) == 14
     for phase in workflow.phases:
-        assert phase.cli_tool == "codex"
-        assert phase.cli_model == "gpt-5.6-terra"
+        assert phase.cli_tool == "claude"
+        assert phase.cli_model == "sonnet"
         assert phase.fallback_cli_tool == "pi"
         assert phase.fallback_cli_model == "openrouter/xiaomi/mimo-v2.5-pro"
