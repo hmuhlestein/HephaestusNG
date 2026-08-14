@@ -46,6 +46,13 @@ class ProcessWatchdog:
         self.last_restarts: dict[str, float] = {}
         self._restart_callbacks: dict[str, callable] = {}
         self._backend_health_failures = 0
+        # Grace period (seconds) after a watchdog-initiated restart before
+        # health checks resume -- the backend takes 60-70s to fully
+        # initialize (LLM models, embeddings, autopilot resume). Without
+        # this, the watchdog kills the backend right before it becomes
+        # healthy, creating an infinite restart loop.
+        self._backend_restart_grace = 120
+        self._backend_last_restart = 0.0
 
     def register_service(self, name: str, restart_callback: callable) -> None:
         """Register a service with its restart callback."""
@@ -193,10 +200,22 @@ class ProcessWatchdog:
         if not pid or not is_process_running(pid):
             return  # _check_services' own PID-liveness check already covers this
 
+        # Skip health checks during the grace period after a restart --
+        # the backend needs 60-70s to initialize and we don't want to
+        # count failures during that window.
+        elapsed_since_restart = time.time() - self._backend_last_restart
+        if elapsed_since_restart < self._backend_restart_grace:
+            remaining = int(self._backend_restart_grace - elapsed_since_restart)
+            logger.debug(
+                f"Backend health check skipped -- {remaining}s left in "
+                f"post-restart grace period"
+            )
+            return
+
         try:
             import httpx
 
-            resp = httpx.get(f"http://127.0.0.1:{port}/health", timeout=5)
+            resp = httpx.get(f"http://127.0.0.1:{port}/health", timeout=15)
             healthy = resp.status_code == 200 and resp.json().get("status") == "healthy"
         except Exception:
             healthy = False
@@ -254,6 +273,10 @@ class ProcessWatchdog:
             if success:
                 self.restart_counts[name] = restart_count + 1
                 self.last_restarts[name] = now
+                # Record backend restart time for grace period
+                if name == "backend":
+                    self._backend_last_restart = now
+                    self._backend_health_failures = 0
                 logger.info(f"Successfully restarted {name}")
             else:
                 logger.error(f"Failed to restart {name}")
@@ -321,7 +344,7 @@ def run(args):
             return 1
 
         print(f"Waiting for backend on port {port}...", end="", flush=True)
-        for _ in range(30):
+        for _ in range(90):
             time.sleep(1)
             if check_backend(args):
                 results["backend"] = "healthy"
