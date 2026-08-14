@@ -78,4 +78,4 @@ def test_autopilot_phases_use_codex_terra_with_pi_fallback():
         assert phase.cli_tool == "codex"
         assert phase.cli_model == "gpt-5.6-terra"
         assert phase.fallback_cli_tool == "pi"
-        assert phase.fallback_cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        assert phase.fallback_cli_model == "openrouter/xiaomi/mimo-v2.5-pro"

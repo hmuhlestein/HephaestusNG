@@ -204,6 +204,9 @@ class TestCodexAgent:
         )
 
         assert "codex resume 019ff292-2164-74b2-8f9a-01b68469cd99" in result.command
+        assert result.command.startswith('PATH="/home/kusgan/HephaestusNG/scripts/agent-safe-bin:$PATH"; (')
+        assert "|| codex --dangerously-bypass-approvals-and-sandbox" in result.command
+        subprocess.run(["bash", "-n", "-c", result.command], check=True)
 
     def test_records_session_created_in_working_directory(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)

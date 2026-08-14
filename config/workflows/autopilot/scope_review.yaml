@@ -4,10 +4,10 @@ name: scope_review
 # score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
 spec_gate: true
 thinking_level: high
-cli_tool: claude
-cli_model: sonnet
+cli_tool: codex
+cli_model: gpt-5.6-terra
 fallback_cli_tool: pi
-fallback_cli_model: openrouter/mimo-v2.5-pro
+fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
 description: |
   Gate between product requirements and architecture. Verifies that the
   extracted requirements exactly match the original design doc scope — no

@@ -650,6 +650,12 @@ async def _resume_interrupted_workflows(
                 if wf.status in ("paused", "failed"):
                     wf.status = "active"
                     wf.paused_by = None
+                    # A manual/on-demand recovery starts a fresh attempt.  If
+                    # the exhausted-retry reason is left behind, status
+                    # derivation and the phase manager can immediately treat
+                    # the reactivated workflow as paused again, even though
+                    # its failed tasks were reset and re-dispatched.
+                    wf.status_reason = None
                     # A workflow that failed by exhausting max_total_gotos
                     # (or the arbitration cap that follows it) needs a
                     # genuinely fresh budget, not just a status flip -- the
@@ -3328,6 +3334,69 @@ async def delete_task_endpoint(task_id: str):
     except Exception as e:
         logger.error(f"Failed to delete task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tasks/{task_id}/complete")
+async def complete_task_as_user(
+    task_id: str,
+    summary: str = Body(..., embed=True, min_length=1),
+):
+    """Record human-verified completion after an agent cannot report back.
+
+    This intentionally accepts only ``done`` and performs the same output
+    checks as an agent completion before changing a failed task's state.
+    It is for local operator recovery, not a general status-update API.
+    """
+    from src.core.database import resolve_project_for_workflow
+    from src.services.task_completion_service import TaskCompletionService
+
+    session = server_state.db_manager.get_session()
+    try:
+        task = session.query(Task).filter_by(id=task_id).first()
+        if not task:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        if task.status == "done":
+            return {"success": True, "task_id": task.id, "message": "Task already done"}
+        if task.status not in ("failed", "blocked"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Only failed or blocked tasks can be human-completed (status: {task.status})",
+            )
+
+        phase = session.query(Phase).filter_by(id=task.phase_id).first() if task.phase_id else None
+        for verify in (
+            TaskCompletionService.verify_output_artifact,
+            TaskCompletionService.verify_gate_result_schema,
+            TaskCompletionService.verify_no_open_tickets,
+        ):
+            rejection = verify(session, task, phase=phase)
+            if rejection:
+                raise HTTPException(status_code=400, detail=rejection["message"])
+
+        task.status = "done"
+        task.completed_at = datetime.utcnow()
+        task.completion_notes = summary.strip()
+        task.failure_reason = None
+        workflow_id = task.workflow_id
+        await TaskCompletionService.fire_spec_gate_if_ready(session, task)
+        session.commit()
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to human-complete task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+    project_id, project_name = resolve_project_for_workflow(workflow_id)
+    await server_state.broadcast_update(
+        {"type": "task_completed", "task_id": task_id, "human_verified": True},
+        project_id=project_id,
+        project_name=project_name,
+    )
+    return {"success": True, "task_id": task_id, "message": "Task marked done"}
 
 
 @app.post("/api/cancel_queued_task")

@@ -130,6 +130,31 @@ class TestResumeInterruptedWorkflowsResetsGotoBudget:
         session.close()
         assert result["resumed"] == 0  # no tasks to unblock, but the workflow itself was reactivated
 
+    @pytest.mark.asyncio
+    async def test_reactivate_clears_stale_pause_reason(self, test_db):
+        """A recovered workflow must not be immediately re-paused by the
+        exhausted-retry reason from its previous attempt."""
+        session = test_db.get_session()
+        session.add(
+            Workflow(
+                id="wf-stale-reason", name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="system",
+                status_reason="scope_review: exhausted retries",
+                definition_id="autopilot",
+            )
+        )
+        session.commit()
+        session.close()
+
+        await _run_resume(test_db, "wf-stale-reason")
+
+        session = test_db.get_session()
+        wf = session.query(Workflow).filter_by(id="wf-stale-reason").first()
+        assert wf.status == "active"
+        assert wf.paused_by is None
+        assert wf.status_reason is None
+        session.close()
+
 
 class TestResumeInterruptedWorkflowsProjectScoping:
     """Regression: the project-level Play button, on hitting the "already
