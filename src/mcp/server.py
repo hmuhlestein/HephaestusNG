@@ -3378,6 +3378,26 @@ async def complete_task_as_user(
         task.completion_notes = summary.strip()
         task.failure_reason = None
         workflow_id = task.workflow_id
+
+        # Mirror update_task_status's normal completion path: commit the
+        # worktree and re-verify the declared output(s) survived the commit
+        # before advancing the pipeline. Skipped for git_commit_push itself
+        # -- the operator completing this phase manually has already done
+        # the actual commit/push/PR outside Hephaestus; the pipeline must
+        # never commit on its own here (see AgentManager.create_agent_for_
+        # task's PermissionError guard for the same phase).
+        output_lost_rejection = None
+        if not phase or phase.name != "git_commit_push":
+            await TaskCompletionService.commit_and_link_ticket(
+                session, task.assigned_agent_id or "human-operator", task, summary.strip()
+            )
+            output_lost_rejection = TaskCompletionService.verify_output_survived_commit(session, task, phase=phase)
+            if output_lost_rejection:
+                task.status = "failed"
+                task.failure_reason = output_lost_rejection["message"]
+                session.commit()
+                raise HTTPException(status_code=400, detail=output_lost_rejection["message"])
+
         await TaskCompletionService.fire_spec_gate_if_ready(session, task)
         session.commit()
     except HTTPException:
