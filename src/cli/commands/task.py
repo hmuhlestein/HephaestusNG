@@ -132,15 +132,14 @@ def cancel_task(args):
 def complete_task(args):
     if not require_backend(args):
         return 1
-    payload = {
-        "status": "done",
-        "summary": args.summary,
-        "key_learnings": args.learnings,
-        "code_changes": [],
-    }
-    data = api_post(args, f"/api/tasks/{args.task_id}/status", payload)
-    if data:
+    data = api_post(
+        args,
+        f"/api/tasks/{args.task_id}/complete",
+        {"summary": args.summary},
+    )
+    if data and data.get("success"):
         print(f"Task {args.task_id[:8]} marked as done")
         return 0
-    print(f"Failed to complete task {args.task_id[:8]}")
+    detail = data.get("detail", data) if data else "Backend not running"
+    print(f"Failed to complete task {args.task_id[:8]}: {detail}")
     return 1

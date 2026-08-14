@@ -1663,6 +1663,18 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
         task_id = task.get("id")
         phase_id = task.get("phase_id")
 
+        # Never feed the human-only Git hand-off back into the agent retry
+        # path.  Its intentional dispatch rejection is a hand-off signal,
+        # not an agent failure.
+        try:
+            with get_db() as phase_db:
+                failed_phase = phase_db.query(Phase).filter_by(id=phase_id).first()
+                if failed_phase and failed_phase.name == "git_commit_push":
+                    logger.info(f"  Skipping retry for manual-only phase task {task_id[:8]}")
+                    continue
+        except Exception as exc:
+            logger.debug(f"  Could not inspect phase for failed task {task_id[:8]}: {exc}")
+
         # Arbitration tasks carry a one-off custom prompt
         # (enriched_data["validation_prompt"], see _trigger_arbitration) that
         # this generic retry path has no way to reconstruct -- re-creating
@@ -5319,6 +5331,16 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             .count()
         )
         if failed_count > 0:
+            if phase.name == "git_commit_push":
+                wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                if wf and wf.status != "paused":
+                    wf.status = "paused"
+                    wf.paused_by = "review"
+                    wf.status_reason = "git_commit_push is manual-only; human approval is required"
+                    wf.paused_at = datetime.utcnow()
+                    db.commit()
+                logger.info(f"[PHASE-ADVANCE] {phase.name} is manual-only; pausing for human hand-off")
+                continue
             # Has failed tasks — try to retry them before marking complete
             if not _claim_phase_task_creation(db, phase.id):
                 continue
@@ -5483,6 +5505,22 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
 
     Returns None if no retry was needed, True if tasks were reset for retry.
     """
+    # Git hand-off is deliberately human-only.  The agent manager rejects
+    # dispatching this phase, so treating its rejection like an ordinary
+    # agent failure creates an endless retry loop that starves the design
+    # queue.  Park the workflow for the operator instead; other workflows
+    # remain eligible for the autopilot queue.
+    if phase.name == "git_commit_push":
+        workflow = db.query(Workflow).filter_by(id=phase.workflow_id).first()
+        if workflow and workflow.status != "paused":
+            workflow.status = "paused"
+            workflow.paused_by = "review"
+            workflow.status_reason = "git_commit_push is manual-only; human approval is required"
+            workflow.paused_at = datetime.utcnow()
+            db.commit()
+        logger.info(f"[PHASE-ADVANCE] {phase.name} is manual-only; pausing for human hand-off")
+        return None
+
     cycle_filter = (Task.created_at >= cycle_start,) if cycle_start else ()
     failed_count = db.query(Task).filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter).count()
     total_count = db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
