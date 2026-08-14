@@ -22,6 +22,7 @@ from src.core.database import (
     BoardConfig,
     DatabaseManager,
     Task,
+    TaskStatus,
     get_db,
 )
 from src.core.simple_config import get_config
@@ -906,9 +907,48 @@ class AgentManager:
             # why the paused pipeline kept reporting itself as "running".
             with self.db_manager.get_session() as _term_check:
                 _current = _term_check.query(Agent).filter_by(id=agent_id).first()
-                if _current and _current.status == "terminated":
+                _agent_terminated = bool(_current and _current.status == "terminated")
+
+                # Same race, one layer up: the AGENT row never gets marked
+                # terminated at all when what actually happened is the TASK
+                # was cancelled out from under this in-flight launch (e.g. a
+                # human/self-heal marking it "duplicated"/"failed" directly,
+                # or QueueService.resolve_cli_model_dispatch's own fallback-
+                # model retry racing a separate dispatch attempt for the
+                # same task) -- the agent-status check above is blind to
+                # that. Re-fetch the task fresh (not the possibly-stale
+                # `task` parameter captured before this 25s wait) and check
+                # both signals: a terminal status means it's definitively
+                # done needing an agent; assigned_agent_id pointing
+                # elsewhere means a DIFFERENT dispatch attempt already won
+                # this task. Observed live: one task cycled through five
+                # separate agent launches in a row -- each one individually
+                # got its assigned agent terminated, but the next queued
+                # fallback attempt (a different agent_id every time) just
+                # kept going, oblivious to the task itself having been
+                # cancelled, until it was manually re-terminated five times.
+                _fresh_task = _term_check.query(Task).filter_by(id=task.id).first()
+                _task_cancelled = bool(
+                    _fresh_task
+                    and (
+                        _fresh_task.status in TaskStatus.TERMINAL
+                        or (
+                            _fresh_task.assigned_agent_id
+                            and _fresh_task.assigned_agent_id != agent_id
+                        )
+                    )
+                )
+
+                if _agent_terminated or _task_cancelled:
+                    reason = (
+                        "was terminated"
+                        if _agent_terminated
+                        else f"its task {task.id} was reassigned/cancelled "
+                        f"(status={_fresh_task.status}, assigned_agent_id="
+                        f"{_fresh_task.assigned_agent_id})"
+                    )
                     logger.warning(
-                        f"Agent {agent_id} was terminated while its CLI was still "
+                        f"Agent {agent_id} {reason} while its CLI was still "
                         "initializing -- aborting launch, not delivering initial prompt"
                     )
                     if self.tmux_server.has_session(session_name):

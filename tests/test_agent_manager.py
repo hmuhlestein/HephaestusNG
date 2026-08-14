@@ -246,6 +246,82 @@ class TestCreateAgentForTask:
             assert agent.current_task_id == "task-1"
 
     @pytest.mark.asyncio
+    async def test_aborts_launch_when_task_cancelled_during_cli_init(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Regression: the existing "agent was terminated mid-CLI-init"
+        abort (test below) only checks the AGENT row -- but a task can be
+        cancelled (marked duplicated/failed, or reassigned to a different
+        agent) without its OWN agent ever being terminated, e.g. when a
+        separate dispatch attempt already won the same task, or a human/
+        self-heal cancels the task directly. Without also checking the
+        task's own fresh status here, the coroutine plows ahead and
+        delivers the initial prompt to an agent working a task nobody
+        wants it to work anymore. Observed live: one task cycled through
+        five separate agent launches in a row this way -- each agent
+        individually had to be terminated by hand, and the next queued
+        fallback attempt (a different agent_id every time) just kept
+        going regardless.
+        """
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-agent",
+                "branch_name": "agent-test-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-1"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+        mock_agent_manager.tmux_server.has_session.return_value = True
+
+        async def _cancel_task_during_sleep(*args, **kwargs):
+            # Simulates a competing dispatch attempt winning this task
+            # while THIS agent's CLI is still initializing.
+            with db_manager.session_scope() as session:
+                task = session.query(Task).filter_by(id="task-1").first()
+                task.status = "duplicated"
+
+        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
+             patch(
+                 "src.agents.manager.asyncio.sleep",
+                 new_callable=AsyncMock,
+                 side_effect=_cancel_task_during_sleep,
+             ), patch.object(
+                 mock_agent_manager, "_send_initial_prompt_with_retry", new_callable=AsyncMock
+             ) as mock_send_prompt:
+            mock_cli = MagicMock()
+            mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
+            mock_cli.default_model = "sonnet"
+            mock_get_cli.return_value = mock_cli
+
+            agent = await mock_agent_manager.create_agent_for_task(
+                task=sample_task,
+                enriched_data={"description": "Implement feature X"},
+                memories=[],
+                project_context="Test project context",
+                cli_type="pi",
+                working_directory="/tmp/test-project",
+            )
+
+        assert agent is not None
+        # has_session mocked True unconditionally, so kill_session also
+        # fires once earlier for the unrelated "stale session with this
+        # name already exists" pre-creation cleanup -- the abort path's
+        # own call is what matters here, not the total count. The real
+        # session name is derived from the generated agent_id, not the
+        # mocked tmux Session object's .name.
+        mock_agent_manager.tmux_server.kill_session.assert_called_with(f"agent_{agent.id[:8]}")
+        # The actual prompt-delivery step (everything past the CLI-init
+        # wait) never runs.
+        mock_send_prompt.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_pipe_pane_transcript_command_autoflushes(
         self, mock_agent_manager, sample_task, db_manager
     ):
