@@ -3252,6 +3252,91 @@ class TestRunOneFeatureStateIsolation:
             assert feat.workflow_id == "wf-correct"
 
 
+class TestRunOneFeatureDoesNotOverrideGotoBudget:
+    """Regression: _run_one_feature used to pass its own max_iterations
+    parameter straight through to run_single_workflow's max_iterations=
+    kwarg -- but that parameter carries the CLI's --max-iterations value
+    (default 3), a DESIGN-level retry concept (see MAX_DESIGN_RETRIES,
+    which is separate and unaffected) that has nothing to do with a single
+    feature workflow's goto budget. run_single_workflow's max_iterations
+    maps directly to the engine's max_total_gotos -- so every feature
+    pipeline in the system got silently capped at 3 total gotos across its
+    entire 13-phase lifetime instead of workflow.yaml's real, deliberate
+    max_total_gotos: 30. Observed live: adversarial_review found real
+    BLOCKERs and scored correctly, but total_gotos had already reached 6
+    from legitimate earlier review cycles -- "GOTO limit exceeded (6/3).
+    Forcing continue" silently waved the findings through instead of
+    sending them back to development."""
+
+    def _make_design_entry(self, tmp_path, design_id):
+        from src.autopilot.orchestrator import DesignEntry
+
+        design_path = tmp_path / "design.md"
+        design_path.write_text("# Design\n")
+        return DesignEntry(path=design_path, name="Test Design", content_hash="hash", db_id=design_id)
+
+    def test_max_iterations_is_not_forwarded_to_run_single_workflow(
+        self, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            PipelineState,
+            _run_one_feature,
+        )
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        design_id = "design-1"
+        feature_key = "feat-a"
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D"))
+            session.add(Feature(
+                id="feature-row-1", design_id=design_id, feature_key=feature_key,
+                name="Feature A", scope="s", status="pending",
+            ))
+
+        design_entry = self._make_design_entry(tmp_path, design_id)
+        feature = {"id": feature_key, "name": "Feature A"}
+        designs_folder = tmp_path / "designs"
+        (designs_folder / "features" / feature_key).mkdir(parents=True)
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+        worktree_dir = tmp_path / "worktree"
+        worktree_dir.mkdir()
+
+        captured_kwargs = {}
+
+        def fake_run_single_workflow(sdk, wf_def, wt, desc, logger, **kwargs):
+            captured_kwargs.update(kwargs)
+            return "completed"
+
+        with patch(
+            "src.autopilot.orchestrator._create_integration_worktree",
+            return_value=worktree_dir,
+        ), patch(
+            "src.autopilot.orchestrator.run_single_workflow",
+            side_effect=fake_run_single_workflow,
+        ):
+            _run_one_feature(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                feature=feature,
+                designs_folder=designs_folder,
+                project_path=project_path,
+                logger=OrchestratorLogger(tmp_path),
+                state=PipelineState(),
+                # Simulates the CLI's --max-iterations default (3) flowing
+                # in from AutopilotService -- must NOT reach
+                # run_single_workflow's goto-budget override.
+                max_iterations=3,
+            )
+
+        assert "max_iterations" not in captured_kwargs or captured_kwargs["max_iterations"] is None, (
+            "max_iterations must not be forwarded to run_single_workflow -- "
+            "it would silently override workflow.yaml's own max_total_gotos"
+        )
+
+
 class TestRunOneFeatureWorktreeCleanupTiming:
     """Regression: _run_one_feature used to delete its shared worktree
     unconditionally in a `finally:` block, on every exit -- including
