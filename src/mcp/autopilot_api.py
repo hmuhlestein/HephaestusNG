@@ -530,8 +530,12 @@ async def get_pipeline_status(
                 else:
                     # Also check: are any agents working on tasks in this
                     # project's workflows? A workflow can be "failed" while
-                    # an agent is still actively working on it.
-                    project_wf_ids = [w.id for w in db.query(Workflow).filter(Workflow.project_id == project_id).all()]
+                    # an agent is still actively working on it. Excludes
+                    # "paused" workflows -- a deliberate pause must not get
+                    # reported back as "still running" just because a
+                    # straggler agent (e.g. one whose launch was already
+                    # mid-flight when the pause hit) hasn't cleaned up yet.
+                    project_wf_ids = [w.id for w in db.query(Workflow).filter(Workflow.project_id == project_id, Workflow.status != "paused").all()]
                     if project_wf_ids:
                         active_agent = (
                             db.query(Agent).join(Task, Agent.current_task_id == Task.id).filter(Task.workflow_id.in_(project_wf_ids), Agent.status.in_(["working", "starting", "idle"])).first()
@@ -545,7 +549,10 @@ async def get_pipeline_status(
             from src.core.database import Agent, Workflow, get_db
 
             with get_db() as db:
-                active_wf = db.query(Workflow).filter(Workflow.status.in_(["active", "paused"])).first()
+                # Excludes "paused" -- see the project_id-scoped check above,
+                # which deliberately does the same for the same reason: a
+                # user pause must not be reported back as "still running".
+                active_wf = db.query(Workflow).filter(Workflow.status.in_(["active", "running"])).first()
                 if active_wf:
                     active_agents = (
                         db.query(Agent)

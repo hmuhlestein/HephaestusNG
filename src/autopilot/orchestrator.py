@@ -940,7 +940,7 @@ def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids:
         Number of workflows paused.
     """
     from src.core.constants import DESIGN_WORKFLOW_DEFINITION_IDS
-    from src.core.database import Agent, Task
+    from src.core.database import Agent, Feature, Task
 
     if definition_ids is None:
         definition_ids = DESIGN_WORKFLOW_DEFINITION_IDS
@@ -969,6 +969,16 @@ def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids:
         workflow_ids.append(wf.id)
 
     if paused_count > 0:
+        # Mirrors the per-feature pause endpoint (autopilot_api.py's
+        # pause_feature), which sets feature.status="paused" directly --
+        # without this, derive_feature_status (status_derivation.py) has no
+        # branch that maps "workflow paused" to "feature paused" (its only
+        # PAUSED-preserving check is feature.status already being PAUSED),
+        # so every feature under a workflow this function pauses keeps
+        # showing "Active" in the UI even though nothing is working on it.
+        for feature in db.query(Feature).filter(Feature.workflow_id.in_(workflow_ids)).all():
+            feature.status = "paused"
+
         agents_to_terminate = (
             db.query(Agent)
             .join(Task, Agent.current_task_id == Task.id)
