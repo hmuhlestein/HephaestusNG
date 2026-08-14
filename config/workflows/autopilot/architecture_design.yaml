@@ -3,10 +3,10 @@ name: architecture_design
 thinking_level: high
 self_review:
   enabled: true
-cli_tool: claude
-cli_model: sonnet
+cli_tool: codex
+cli_model: gpt-5.6-terra
 fallback_cli_tool: pi
-fallback_cli_model: openrouter/mimo-v2.5-pro
+fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
 description: |
   Create detailed technical architecture and task breakdown.
 

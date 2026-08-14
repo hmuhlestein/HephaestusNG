@@ -4,10 +4,10 @@ name: product_validation
 # score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
 spec_gate: true
 thinking_level: medium
-cli_tool: claude
-cli_model: sonnet
+cli_tool: codex
+cli_model: gpt-5.6-terra
 fallback_cli_tool: pi
-fallback_cli_model: openrouter/mimo-v2.5-pro
+fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
 description: |
   Validate that the implementation meets the original design intent.
 
