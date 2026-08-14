@@ -6830,13 +6830,62 @@ def _create_corrective_task(
     complete -- a normal 'done' claim doesn't know a downstream hard-floor
     check will later reject it.
 
+    Claims phase_id itself, same as _create_phase_task's own
+    target_already_claimed=False path and for the identical reason: this
+    is called from _negotiate_validation_fix while the background sweep
+    can independently decide the same (routinely phase-0/1) phase needs a
+    task of its own, and nothing here previously stopped that race.
+
     Returns the new task's id, or None if agent creation failed.
     """
     import uuid
 
     from src.core.database import Phase, PhaseExecution, Task, Workflow, get_db
 
+    with get_db() as _claim_db:
+        if not _claim_phase_task_creation(_claim_db, phase_id):
+            stale_cutoff = datetime.utcnow() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
+            cleared = (
+                _claim_db.query(PhaseExecution)
+                .filter(
+                    PhaseExecution.phase_id == phase_id,
+                    PhaseExecution.task_creation_claimed_at.isnot(None),
+                    PhaseExecution.task_creation_claimed_at < stale_cutoff,
+                )
+                .update({"task_creation_claimed_at": None}, synchronize_session=False)
+            )
+            _claim_db.commit()
+            if not cleared or not _claim_phase_task_creation(_claim_db, phase_id):
+                logger.info(f"[CORRECTIVE-TASK] {phase_name} task creation already claimed by another caller -- skipping")
+                return None
+
     task_id = str(uuid.uuid4())
+    try:
+        _corrective_task_id = _create_corrective_task_body(
+            workflow_id, phase_id, phase_name, feedback, logger, task_id
+        )
+        return _corrective_task_id
+    finally:
+        with get_db() as _release_db:
+            _release_db.query(PhaseExecution).filter_by(phase_id=phase_id).update(
+                {"task_creation_claimed_at": None}, synchronize_session=False
+            )
+            _release_db.commit()
+
+
+def _create_corrective_task_body(
+    workflow_id: str,
+    phase_id: str,
+    phase_name: str,
+    feedback: str,
+    logger: OrchestratorLogger,
+    task_id: str,
+) -> Optional[str]:
+    """The actual task+agent creation _create_corrective_task wraps with a
+    claim -- split out only so that wrapper's try/finally doesn't have to
+    re-indent this whole body."""
+    from src.core.database import Phase, PhaseExecution, Task, Workflow, get_db
+
     with get_db() as db:
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
         if not wf:
@@ -6858,14 +6907,14 @@ def _create_corrective_task(
         execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
         if execution and execution.status != "in_progress":
             execution.status = "in_progress"
-            # Same reopen-point fix as _create_phase_task -- this phase may
-            # have been marked "completed" with its task_creation_claimed_at
-            # already consumed by that prior cycle's evaluation. Without
-            # resetting it here, the new corrective task's eventual
-            # completion would find the claim already held and
-            # _case_in_progress_complete would skip evaluating the
-            # transition forever.
-            execution.task_creation_claimed_at = None
+            # NOT clearing task_creation_claimed_at here -- the wrapper
+            # (_create_corrective_task) now holds this phase's claim for
+            # this whole call and releases it itself once the task exists
+            # (or creation fails). Clearing it here, mid-body, would open
+            # exactly the race the wrapper's claim exists to close: a
+            # concurrent self-heal caller could claim the "now unclaimed"
+            # phase and create a sibling task before db.add(task) below
+            # even commits.
 
         phase = db.query(Phase).filter_by(id=phase_id).first()
         done_def = " AND ".join(phase.done_definitions) if phase and phase.done_definitions else "Complete phase objectives"

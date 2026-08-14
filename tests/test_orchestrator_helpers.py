@@ -2303,6 +2303,41 @@ class TestCreateCorrectiveTask:
             assert _claim_phase_task_creation(session, "phase-1") is True
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_refuses_when_target_phase_is_freshly_claimed_by_another_caller(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """Regression: _negotiate_validation_fix's corrective-task path had
+        no claim protection at all -- while it's running (routinely
+        against phase 0/1 of a feature_architect workflow), the background
+        self-heal sweep could independently decide the same phase needs a
+        task and create a sibling. Mirrors _create_phase_task's own
+        target_already_claimed=False protection."""
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _claim_phase_task_creation,
+            _create_corrective_task,
+        )
+        from src.core.database import PhaseExecution, Task
+
+        self._seed_workflow_and_phase(orch_db_env)
+        with orch_db_env.session_scope() as session:
+            # A genuinely live, concurrent claim on this exact phase.
+            assert _claim_phase_task_creation(session, "phase-1") is True
+
+        result = _create_corrective_task(
+            "wf-1", "phase-1", "Feature Architect", "got 6, expected 1-5",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is None
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            # The fresh claim is still held -- untouched by our refused attempt.
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is not None
+            assert session.query(Task).filter_by(phase_id="phase-1").count() == 0
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     def test_missing_workflow_returns_none(self, mock_create_agent, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger, _create_corrective_task
 
