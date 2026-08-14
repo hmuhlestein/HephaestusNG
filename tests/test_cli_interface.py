@@ -7,7 +7,9 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-from src.interfaces.cli_interface import ClaudeCodeAgent, CodexAgent, LaunchResult
+import pytest
+
+from src.interfaces.cli_interface import AGENT_SAFE_BIN_DIR, ClaudeCodeAgent, CodexAgent, LaunchResult
 
 
 class TestClaudeSessionExists:
@@ -204,7 +206,7 @@ class TestCodexAgent:
         )
 
         assert "codex resume 019ff292-2164-74b2-8f9a-01b68469cd99" in result.command
-        assert result.command.startswith('PATH="/home/kusgan/HephaestusNG/scripts/agent-safe-bin:$PATH"; (')
+        assert result.command.startswith(f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH"; (')
         assert "|| codex --dangerously-bypass-approvals-and-sandbox" in result.command
         subprocess.run(["bash", "-n", "-c", result.command], check=True)
 

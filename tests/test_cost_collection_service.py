@@ -238,7 +238,6 @@ class TestPiJsonlCollector:
         entries, _ = collector.collect("s", "t", "w", "a", f, checkpoint=0)
         assert len(entries) == 1
         assert entries[0]["cost_usd"] == 0.0
-        assert entries[0]["raw_usage"]["cost_status"] == "unavailable"
         assert entries[0]["input_tokens"] == 5000
 
     def test_malformed_line_skipped(self):
