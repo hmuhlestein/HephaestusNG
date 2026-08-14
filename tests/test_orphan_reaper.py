@@ -154,6 +154,63 @@ class TestOrphanSessionReaper:
         active_session.kill_session.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_terminating_agent_for_inactive_workflow_resets_its_task(self, reaper):
+        """Regression: this path terminated the agent but never reset the
+        Task it was working on -- a Task left "assigned"/"in_progress"
+        pointing at a now-terminated agent is indistinguishable from one
+        whose agent is still genuinely working, until an unrelated
+        periodic sweep (attempt_recovery's stale-assigned-task cleanup)
+        eventually notices the mismatch and fails it with a generic
+        "terminated unexpectedly" reason instead of resetting it for a
+        clean retry."""
+        mock_agent = MagicMock()
+        mock_agent.id = "agent-orphan-wf"
+        mock_agent.tmux_session_name = "agent-orphan-wf"
+        mock_agent.status = "working"
+        mock_agent.current_task_id = "task-1"
+        mock_agent.last_activity = None  # no recent activity -- no grace window
+
+        mock_task = MagicMock()
+        mock_task.workflow_id = "wf-gone"
+        mock_task.status = "in_progress"
+
+        # Must be non-empty or cleanup_orphaned_tmux_sessions returns
+        # before ever reaching the active_agents loop this test exercises.
+        unrelated_session = MagicMock()
+        unrelated_session.name = "agent-unrelated"
+        reaper.agent_manager.tmux_server.sessions = [unrelated_session]
+
+        mock_db_session = MagicMock()
+        reaper.db_manager.get_session.return_value = mock_db_session
+
+        agent_query = MagicMock()
+        agent_query.filter.return_value.all.return_value = [mock_agent]
+
+        wf_query = MagicMock()
+        wf_query.filter.return_value.all.return_value = []  # no active workflows
+
+        task_query = MagicMock()
+        task_query.filter_by.return_value.first.return_value = mock_task
+
+        def query_side_effect(model):
+            from src.core.database import Agent, Task, Workflow
+            if model == Agent:
+                return agent_query
+            elif model == Workflow:
+                return wf_query
+            elif model == Task:
+                return task_query
+            return MagicMock()
+
+        mock_db_session.query.side_effect = query_side_effect
+
+        await reaper.cleanup_orphaned_tmux_sessions()
+
+        assert mock_agent.status == "terminated"
+        assert mock_task.status == "pending", "task must be reset, not left dangling"
+        assert mock_task.assigned_agent_id is None
+
+    @pytest.mark.asyncio
     async def test_grace_period_protects_new_sessions(self, reaper):
         """Sessions created since last check should not be killed."""
         # Agent session in tmux but not in DB

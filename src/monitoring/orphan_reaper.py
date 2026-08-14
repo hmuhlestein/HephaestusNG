@@ -123,6 +123,20 @@ class OrphanSessionReaper:
                             agent.status = "terminated"
                             agent.current_task_id = None  # Clear stale reference
                             agent.terminated_at = datetime.now()
+                            # Without this, a Task left "assigned"/"in_
+                            # progress" pointing at this now-terminated
+                            # agent is indistinguishable from one whose
+                            # agent is still genuinely working, until an
+                            # unrelated periodic sweep (attempt_recovery's
+                            # stale-assigned-task cleanup) eventually
+                            # notices the mismatch and fails it with a
+                            # generic "terminated unexpectedly" reason
+                            # instead of resetting it for a clean retry --
+                            # same gap already closed at AgentManager.
+                            # terminate_agent's own safety net.
+                            if task.status in ("assigned", "in_progress", "pending"):
+                                task.status = "pending"
+                                task.assigned_agent_id = None
                 session.commit()
 
             finally:
