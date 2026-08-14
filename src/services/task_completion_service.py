@@ -601,25 +601,65 @@ class TaskCompletionService:
         if not (wf and wf.working_directory):
             return
 
+        # Claim this phase's transition before doing the slow work below
+        # (build_phase_output can run pytest for minutes, and
+        # mark_phase_complete's own evaluate() call can be an LLM call).
+        # _case_in_progress_complete's periodic-sweep path (orchestrator.py)
+        # already takes this same claim before calling mark_phase_complete
+        # -- but this synchronous path (fired straight from
+        # update_task_status) never did, so the sweep's claim check never
+        # actually excluded it: while this path was mid-evaluation, a
+        # concurrent sweep tick saw no claim held, took it itself, and
+        # re-evaluated the same phase completion a second time.
+        # mark_phase_complete's execution.status == "completed" idempotency
+        # guard doesn't catch this either -- _handle_evaluation_goto resets
+        # that SAME status back to "pending" as part of its own
+        # stale-execution reset (the phase being closed is always included,
+        # by design, since it needs a fresh cycle for its next run) before
+        # a second caller's status check ever runs. Observed live:
+        # architecture_design still "in_progress" while three design_review
+        # tasks were created back to back off the same evaluation cycle.
+        from src.autopilot.orchestrator import _claim_phase_task_creation
+        from src.core.database import PhaseExecution
+
+        if not _claim_phase_task_creation(session, phase.id):
+            logger.info(f"[SPEC-GATE] {phase.name}: transition already being evaluated by another caller — skipping")
+            return
+
         import functools
         from pathlib import Path
 
-        # build_phase_output may run pytest (Enhancement 1: independent test
-        # verification). Run it in a thread pool executor so the async event
-        # loop is not blocked by a potentially multi-minute subprocess call.
-        loop = asyncio.get_event_loop()
-        phase_output = await loop.run_in_executor(
-            None,
-            functools.partial(build_phase_output, phase.name, Path(wf.working_directory)),
-        )
-        logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
-        pm = PhaseManager(_DbMgr())
-        pm.workflow_id = task.workflow_id
-        result = pm.mark_phase_complete(
-            phase.id,
-            "Phase completed (spec gate fired from update_task_status)",
-            phase_output=phase_output,
-        )
+        try:
+            # build_phase_output may run pytest (Enhancement 1: independent
+            # test verification). Run it in a thread pool executor so the
+            # async event loop is not blocked by a potentially multi-minute
+            # subprocess call.
+            loop = asyncio.get_event_loop()
+            phase_output = await loop.run_in_executor(
+                None,
+                functools.partial(build_phase_output, phase.name, Path(wf.working_directory)),
+            )
+            logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
+            pm = PhaseManager(_DbMgr())
+            pm.workflow_id = task.workflow_id
+            result = pm.mark_phase_complete(
+                phase.id,
+                "Phase completed (spec gate fired from update_task_status)",
+                phase_output=phase_output,
+            )
+        finally:
+            # Release only the claim -- not via _release_phase_task_
+            # creation_claim, which also flips status to "in_progress" and
+            # stamps started_at. That's correct for its own "claimed to
+            # create a NEW task" use case but wrong here: mark_phase_complete
+            # has already left this phase's execution in whatever state the
+            # evaluation decided (e.g. "pending", reset by
+            # _handle_evaluation_goto for its next cycle), and flipping it
+            # back to "in_progress" would corrupt that.
+            session.query(PhaseExecution).filter_by(phase_id=phase.id).update(
+                {"task_creation_claimed_at": None}, synchronize_session=False
+            )
+            session.commit()
         if result.get("action") == "already_completed":
             logger.info(f"[SPEC-GATE] {phase.name}: already completed by another caller")
         elif result.get("action") == "arbitrate":
@@ -706,6 +746,19 @@ class TaskCompletionService:
                     .filter(
                         Phase.workflow_id == task.workflow_id,
                         Phase.order >= target_order,
+                        # Excludes THIS phase's own execution -- mark_phase_
+                        # complete (via _handle_evaluation_goto) already
+                        # closed it "completed" one call up, and this
+                        # phase's own order is always >= its own goto
+                        # target's order, so without this exclusion this
+                        # duplicate reset (see 084edcf's identical fix to
+                        # _handle_evaluation_goto's own copy of this query)
+                        # immediately flipped that same "completed" mark
+                        # back to "pending", defeating mark_phase_complete's
+                        # idempotency guard for this synchronous spec-gate
+                        # path specifically -- the sweep-side goto path
+                        # doesn't run this block at all.
+                        PhaseExecution.phase_id != phase.id,
                         PhaseExecution.status.in_(["in_progress", "completed"]),
                     )
                     .all()
