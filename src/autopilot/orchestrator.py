@@ -1696,6 +1696,52 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
             # Create agent for it
             agent_data = create_agent_for_task_direct(task_id, workflow_id, phase_id)
             if not agent_data:
+                # create_agent_for_task_direct returns None for two
+                # different reasons: a genuine creation failure, or its
+                # own deliberate "another active task already owns this
+                # phase" duplicate-dispatch guard. Only the former is a
+                # real retry failure -- treating both the same way marks
+                # a merely-superseded task "failed" with a misleading
+                # "agent creation failed" reason, and burns through its
+                # retry budget for a decision that was actually correct.
+                # Observed live: a task reset to "pending" by a manual
+                # recovery collided with a fresh task the pipeline had
+                # already, legitimately created for the same phase in the
+                # meantime -- 5 retries later it was permanently "failed"
+                # with a reason that had nothing to do with what actually
+                # happened.
+                with get_db() as _db_check:
+                    sibling = (
+                        _db_check.query(Task)
+                        .filter(
+                            Task.phase_id == phase_id,
+                            Task.id != task_id,
+                            Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+                        )
+                        .first()
+                    )
+                    sibling_id = sibling.id if sibling else None
+                if sibling_id:
+                    logger.info(
+                        f"  Task {task_id[:8]} superseded by active task {sibling_id[:8]} "
+                        "on the same phase -- marking duplicated, not failed"
+                    )
+                    with get_db() as _db_skip:
+                        _t_skip = _db_skip.query(Task).filter_by(id=task_id).first()
+                        if _t_skip and _t_skip.status == "pending":
+                            # "duplicated" (not "skipped", which isn't a
+                            # valid Task.status per the DB CHECK
+                            # constraint) is the established status for
+                            # exactly this case -- see
+                            # task_similarity_service.py's identical use
+                            # of status="duplicated" +
+                            # duplicate_of_task_id for a debris task
+                            # superseded by a sibling.
+                            _t_skip.status = "duplicated"
+                            _t_skip.duplicate_of_task_id = sibling_id
+                            _t_skip.failure_reason = f"Superseded by task {sibling_id[:8]}, which already owns this phase"
+                            _db_skip.commit()
+                    continue
                 raise RuntimeError("create_agent_for_task_direct returned no agent")
             agent_id = agent_data.get("agent_id", "unknown")
             logger.info(f"  Created agent {agent_id[:8]} for retried task")

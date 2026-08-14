@@ -1563,6 +1563,45 @@ class TestRetryFailedTasks:
             assert task.status == "failed"
             assert task.retry_count == 1
 
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct", return_value=None)
+    def test_superseded_by_active_sibling_is_skipped_not_failed(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """Regression: create_agent_for_task_direct returns None for two
+        different reasons -- a genuine creation failure, or its own
+        deliberate "another active task already owns this phase"
+        duplicate-dispatch guard (avoiding two agents on the same phase).
+        Treating both as a retry failure marked a merely-superseded task
+        "failed" with a misleading "agent creation failed" reason, and
+        burned its retry budget for a decision that was actually correct.
+        Observed live: a task reset to "pending" by a manual recovery
+        collided with a fresh task the pipeline had already, legitimately
+        created for the same phase in the meantime -- 5 retries later it
+        was permanently "failed" with a reason unrelated to what actually
+        happened."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _retry_failed_tasks
+        from src.core.database import Task
+
+        self._make_workflow_and_failed_task(orch_db_env, phase_id="phase-1")
+        with orch_db_env.session_scope() as session:
+            # A fresh task the pipeline already dispatched for the SAME
+            # phase, independent of the stale failed one being retried.
+            session.add(Task(
+                id="task-sibling", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="r", done_definition="d", status="in_progress",
+            ))
+
+        recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert recovered == []
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "duplicated", "superseded task must be duplicated, not failed"
+            assert task.duplicate_of_task_id == "task-sibling"
+            assert "task-sib" in task.failure_reason
+            sibling = session.query(Task).filter_by(id="task-sibling").first()
+            assert sibling.status == "in_progress", "the active sibling must be untouched"
+
 
 class TestMaybeRetryFailedTasksPreservesGotoTarget:
     """Regression: a task's action/action_target_phase, when it's still
