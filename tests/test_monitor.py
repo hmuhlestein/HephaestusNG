@@ -3219,3 +3219,87 @@ class TestAutoRestartFlushesCleanTranscript:
             "the clean transcript must be flushed before the session is "
             "killed -- capture-pane can't see anything once it's gone"
         )
+
+
+class TestAutoRestartResetsTask:
+    """Regression: _auto_restart_agent used to only ever touch the Agent
+    row (status="terminated"), never the Task it was working on. A Task
+    left "assigned"/"in_progress" pointing at a now-terminated agent is
+    indistinguishable from one whose agent is still genuinely working,
+    until an unrelated periodic sweep (attempt_recovery's stale-assigned-
+    task cleanup) eventually notices the mismatch and fails the task with
+    a generic "terminated unexpectedly" reason -- discarding any real work
+    the agent had already done and couldn't report (verify_agent_
+    authentication correctly, and by design, rejects completion calls from
+    an agent already marked terminated)."""
+
+    @pytest.mark.asyncio
+    async def test_resets_task_before_terminating_agent(
+        self, make_monitoring_loop, mock_db, mock_agent_manager
+    ):
+        from contextlib import contextmanager
+
+        from src.core.database import Agent as AgentModel
+        from src.core.database import Task as TaskModel
+
+        agent = Agent(
+            id="agent-1",
+            tmux_session_name="agent_agent-1",
+            status="working",
+            current_task_id="task-1",
+        )
+        task = Mock(id="task-1", status="in_progress", assigned_agent_id="agent-1", failure_reason="stale")
+        db_agent = Mock(id="agent-1", status="working")
+
+        session = Mock()
+
+        def query_side_effect(model):
+            m = Mock()
+            if model is TaskModel:
+                m.filter_by.return_value.filter.return_value.first.return_value = task
+            elif model is AgentModel:
+                m.filter_by.return_value.first.return_value = db_agent
+            else:
+                m.filter_by.return_value.first.return_value = None
+            return m
+
+        session.query.side_effect = query_side_effect
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        mock_agent_manager._resolve_tmux_transcript_dir = Mock(return_value=None)
+
+        await make_monitoring_loop._auto_restart_agent(agent)
+
+        assert task.status == "pending"
+        assert task.assigned_agent_id is None
+        assert task.failure_reason is None
+        assert db_agent.status == "terminated"
+        mock_agent_manager.tmux_server.kill_session.assert_called_once_with("agent_agent-1")
+
+    @pytest.mark.asyncio
+    async def test_no_current_task_id_skips_reset_without_error(
+        self, make_monitoring_loop, mock_db, mock_agent_manager
+    ):
+        """An agent with no current_task_id (already cleared, or never
+        assigned) must not crash the restart path."""
+        from contextlib import contextmanager
+
+        agent = Agent(id="agent-1", tmux_session_name="agent_agent-1", status="working")
+
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = None
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        mock_agent_manager._resolve_tmux_transcript_dir = Mock(return_value=None)
+
+        await make_monitoring_loop._auto_restart_agent(agent)
+
+        mock_agent_manager.tmux_server.kill_session.assert_called_once_with("agent_agent-1")
