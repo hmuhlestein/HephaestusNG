@@ -1177,13 +1177,18 @@ const TaskRow: React.FC<{
               done
             </span>
           )}
+          {task.cli_type && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400 font-medium">
+              {task.cli_type}
+            </span>
+          )}
           {task.created_at && (
             <span className="text-[10px] text-gray-400">
               {formatElapsed(
-                Math.floor(
+                Math.max(0, Math.floor(
                   ((task.completed_at ? new Date(task.completed_at).getTime() : Date.now()) -
                     new Date(task.created_at).getTime()) / 1000
-                )
+                ))
               )}
             </span>
           )}

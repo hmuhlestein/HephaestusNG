@@ -3337,10 +3337,20 @@ async def get_project_design_status(project_id: str, filename: str):
                         "phase_id": t.phase_id,
                         "phase_name": phase_map.get(t.phase_id),
                         "workflow_id": t.workflow_id,
-                        "created_at": t.created_at.isoformat() if t.created_at else None,
-                        "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                        # "Z" suffix required: these are naive datetimes that
+                        # ARE utc (see the utc-only invariant), but plain
+                        # .isoformat() on a naive datetime carries no
+                        # timezone marker at all -- the frontend's
+                        # `new Date(iso_string)` then parses it as LOCAL
+                        # time, not UTC. On a host whose local timezone
+                        # trails UTC, that makes the parsed timestamp look
+                        # HOURS in the future relative to real now(),
+                        # producing a large negative "elapsed" display.
+                        "created_at": t.created_at.isoformat() + "Z" if t.created_at else None,
+                        "completed_at": t.completed_at.isoformat() + "Z" if t.completed_at else None,
                         "agent_id": t.assigned_agent_id,
                         "agent_status": agent.status if agent else None,
+                        "cli_type": agent.cli_type if agent else None,
                         "cost_total_usd": t.cost_total_usd or 0.0,
                     }
                 )
@@ -3529,9 +3539,11 @@ async def get_project_design_status(project_id: str, filename: str):
 
                 for t in wf_tasks:
                     agent_status = None
+                    agent_cli_type = None
                     if t.assigned_agent_id:
                         agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
                         agent_status = agent.status if agent else None
+                        agent_cli_type = agent.cli_type if agent else None
                     # The full (untruncated) text -- goto_reason is parsed
                     # out of this, not the 200-char-truncated `description`
                     # below, since a long phase description could otherwise
@@ -3559,10 +3571,17 @@ async def get_project_design_status(project_id: str, filename: str):
                             "phase_id": t.phase_id,
                             "phase_name": phase_map.get(t.phase_id),
                             "workflow_id": t.workflow_id,
-                            "created_at": t.created_at.isoformat() if t.created_at else None,
-                            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                            # "Z" suffix required -- see the sibling task-list
+                            # builder above for why: a naive-but-UTC datetime
+                            # serialized without a timezone marker gets
+                            # misparsed as local time by the frontend's
+                            # `new Date(...)`, producing a large negative
+                            # "elapsed" display on hosts behind UTC.
+                            "created_at": t.created_at.isoformat() + "Z" if t.created_at else None,
+                            "completed_at": t.completed_at.isoformat() + "Z" if t.completed_at else None,
                             "agent_id": t.assigned_agent_id,
                             "agent_status": agent_status,
+                            "cli_type": agent_cli_type,
                             "cost_total_usd": t.cost_total_usd or 0.0,
                         }
                     )
