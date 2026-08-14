@@ -455,6 +455,14 @@ const TASK_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode 
   done: { color: 'text-blue-500', icon: <CheckCircle2 className="w-4 h-4" /> },
   failed: { color: 'text-red-500', icon: <XCircle className="w-4 h-4" /> },
   blocked: { color: 'text-amber-500', icon: <PauseCircle className="w-4 h-4" /> },
+  // A duplicate never ran -- it was superseded by a sibling task that
+  // already owns the phase (see task_similarity_service.py / the
+  // orchestrator's "Superseded by task X" bailout) -- but it isn't
+  // pending or in-flight either, so the fallback Clock below misleadingly
+  // suggested it was still waiting to run. Checkmark (purple, matching
+  // StatusBadge's own "duplicated" color) reads as resolved without
+  // claiming it did the same real work "done" represents.
+  duplicated: { color: 'text-purple-500', icon: <CheckCircle2 className="w-4 h-4" /> },
 };
 
 const TaskStatusIcon: React.FC<{ status: string }> = ({ status }) => {
@@ -1140,7 +1148,7 @@ const TaskRow: React.FC<{
 
   return (
     <div className={`flex items-center gap-2 px-2 py-1.5 rounded border transition-colors ${
-      task.status === 'done'
+      task.status === 'done' || task.status === 'duplicated'
         ? 'bg-gray-100 dark:bg-gray-700/50 border-gray-200 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700'
         : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:border-gray-200 dark:hover:border-gray-600'
     }`}>
