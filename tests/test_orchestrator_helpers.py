@@ -3003,6 +3003,13 @@ class TestAttemptRecovery:
         # Mock get_db to avoid database queries
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.all.return_value = []
+        # _retry_failed_tasks's own sibling pre-check queries .first() on
+        # this same chain before ever reaching create_agent_for_task_direct
+        # -- an unstubbed MagicMock() there is truthy, so it reads as "a
+        # sibling task already owns this phase" and skips the retry this
+        # test exists to verify. Explicitly empty, matching mock_tasks'
+        # single-task/no-sibling setup below.
+        mock_db.query.return_value.filter.return_value.first.return_value = None
         mock_db.__enter__ = MagicMock(return_value=mock_db)
         mock_db.__exit__ = MagicMock(return_value=False)
         mock_get_db.return_value = mock_db
