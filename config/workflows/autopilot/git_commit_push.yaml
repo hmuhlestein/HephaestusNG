@@ -1,7 +1,6 @@
 id: 13
 name: git_commit_push
 thinking_level: low
-manual_only: true
 description: |
   Human-only Git hand-off. The pipeline must not commit, push, create pull
   requests, or merge branches. An operator reviews the validated worktree and
