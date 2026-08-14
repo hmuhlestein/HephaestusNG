@@ -394,3 +394,106 @@ class TestUpdateTaskStatusIdempotentOnAlreadyTerminalTask:
         task = session.query(Task).filter_by(id=task_id).first()
         assert task.status == "done"
         assert task.completion_notes == "first real completion"
+
+
+def _seed_failed(test_db, tmp_path, phase_name="development"):
+    """Same shape as _seed, but the task starts 'failed' (the precondition
+    for POST /api/tasks/{id}/complete) and has no assigned agent -- this
+    endpoint exists specifically for a task whose agent can't report back."""
+    session = test_db.get_session()
+    workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
+    phase_id = f"phase-{uuid.uuid4().hex[:8]}"
+    task_id = f"task-{uuid.uuid4().hex[:8]}"
+
+    session.add(
+        Workflow(id=workflow_id, name="t", phases_folder_path="/tmp", status="active", working_directory=str(tmp_path))
+    )
+    session.add(
+        Phase(id=phase_id, workflow_id=workflow_id, order=5, name=phase_name, description="d", done_definitions=["done"])
+    )
+    session.add(
+        Task(
+            id=task_id, raw_description="raw", done_definition="done", status="failed",
+            workflow_id=workflow_id, phase_id=phase_id, failure_reason="agent terminated unexpectedly",
+        )
+    )
+    session.commit()
+    return task_id
+
+
+class TestCompleteTaskAsUserCommitsWorktree:
+    """Regression: POST /api/tasks/{id}/complete (human-operator recovery
+    for a task whose agent can't report back) skipped commit_and_link_
+    ticket/verify_output_survived_commit entirely -- unlike update_task_
+    status, which always commits the worktree before advancing. Used for
+    any failed/blocked task, not just git_commit_push, a human confirming
+    "done" on e.g. a development task could mark it done while the agent's
+    actual code changes sat uncommitted in the worktree, and the pipeline
+    would advance later phases against a worktree missing that work."""
+
+    def test_commits_worktree_for_non_git_commit_push_phase(self, test_db, test_client, tmp_path):
+        task_id = _seed_failed(test_db, tmp_path, phase_name="development")
+        tcs = "src.services.task_completion_service.TaskCompletionService"
+
+        with patch(f"{tcs}.verify_output_artifact", return_value=None), \
+             patch(f"{tcs}.verify_gate_result_schema", return_value=None), \
+             patch(f"{tcs}.verify_no_open_tickets", return_value=None), \
+             patch(f"{tcs}.commit_and_link_ticket", new_callable=AsyncMock, return_value="deadbeef") as mock_commit, \
+             patch(f"{tcs}.verify_output_survived_commit", return_value=None), \
+             patch(f"{tcs}.fire_spec_gate_if_ready", new_callable=AsyncMock):
+            resp = test_client.post(
+                f"/api/tasks/{task_id}/complete",
+                json={"summary": "manually verified and committed by operator"},
+            )
+
+        assert resp.status_code == 200, resp.text
+        mock_commit.assert_called_once()
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert task.status == "done"
+
+    def test_skips_commit_for_git_commit_push_phase(self, test_db, test_client, tmp_path):
+        """git_commit_push is the one phase whose whole job IS the git
+        commit/push -- an operator completing it manually has already done
+        that outside Hephaestus, so this must not also try to commit."""
+        task_id = _seed_failed(test_db, tmp_path, phase_name="git_commit_push")
+        tcs = "src.services.task_completion_service.TaskCompletionService"
+
+        with patch(f"{tcs}.verify_output_artifact", return_value=None), \
+             patch(f"{tcs}.verify_gate_result_schema", return_value=None), \
+             patch(f"{tcs}.verify_no_open_tickets", return_value=None), \
+             patch(f"{tcs}.commit_and_link_ticket", new_callable=AsyncMock, return_value="deadbeef") as mock_commit, \
+             patch(f"{tcs}.verify_output_survived_commit", return_value=None), \
+             patch(f"{tcs}.fire_spec_gate_if_ready", new_callable=AsyncMock):
+            resp = test_client.post(
+                f"/api/tasks/{task_id}/complete",
+                json={"summary": "committed and pushed manually"},
+            )
+
+        assert resp.status_code == 200, resp.text
+        mock_commit.assert_not_called()
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert task.status == "done"
+
+    def test_rejects_completion_when_output_vanished_after_commit(self, test_db, test_client, tmp_path):
+        task_id = _seed_failed(test_db, tmp_path, phase_name="development")
+        tcs = "src.services.task_completion_service.TaskCompletionService"
+
+        with patch(f"{tcs}.verify_output_artifact", return_value=None), \
+             patch(f"{tcs}.verify_gate_result_schema", return_value=None), \
+             patch(f"{tcs}.verify_no_open_tickets", return_value=None), \
+             patch(f"{tcs}.commit_and_link_ticket", new_callable=AsyncMock, return_value="deadbeef"), \
+             patch(f"{tcs}.verify_output_survived_commit", return_value={"message": "output vanished"}), \
+             patch(f"{tcs}.fire_spec_gate_if_ready", new_callable=AsyncMock) as mock_gate:
+            resp = test_client.post(
+                f"/api/tasks/{task_id}/complete",
+                json={"summary": "claims done but output is gone"},
+            )
+
+        assert resp.status_code == 400, resp.text
+        mock_gate.assert_not_called()
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert task.status == "failed"
+        assert task.failure_reason == "output vanished"

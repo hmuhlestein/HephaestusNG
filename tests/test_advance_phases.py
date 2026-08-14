@@ -11,6 +11,7 @@ import pytest
 
 from src.core.database import (
     Agent,
+    AutopilotProject,
     DatabaseManager,
     Phase,
     PhaseExecution,
@@ -521,12 +522,17 @@ class TestCaseInProgressNoTasks:
 class TestMaybeRetryFailedTasks:
     """Tests for _maybe_retry_failed_tasks function."""
 
-    def test_manual_git_phase_pauses_without_retrying(self, db_manager, sample_workflow):
+    def test_manual_git_phase_pauses_without_retrying_in_review_mode(self, db_manager, sample_workflow):
         """The human-only hand-off must not consume agent retries or spawn
-        rejected agents, otherwise it starves the global design queue."""
+        rejected agents, otherwise it starves the global design queue --
+        but only when the project is actually in review mode (see the
+        companion full-autopilot test below)."""
         from src.autopilot.orchestrator import _maybe_retry_failed_tasks
 
         with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1", review_mode=True))
+            workflow = session.query(Workflow).filter_by(id="wf-1").first()
+            workflow.project_id = "proj-1"
             phase = session.query(Phase).filter_by(id="phase-1").first()
             phase.name = "git_commit_push"
             session.add(Task(
@@ -551,6 +557,41 @@ class TestMaybeRetryFailedTasks:
             assert workflow.status == "paused"
             assert workflow.paused_by == "review"
             assert "manual-only" in workflow.status_reason
+
+    def test_manual_git_phase_retries_normally_in_full_autopilot(self, db_manager, sample_workflow):
+        """Regression: full autopilot (no project, or review_mode off) must
+        retain the original autonomous git_commit_push behavior -- a real
+        agent commits, pushes, and opens the PR, same as any other phase.
+        Only review_mode actually asks for a human in the loop."""
+        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            phase.name = "git_commit_push"
+            session.add(Task(
+                id="task-manual-git",
+                workflow_id="wf-1",
+                phase_id="phase-1",
+                raw_description="Human Git hand-off",
+                done_definition="Human approval",
+                status="failed",
+                failure_reason="transient git error",
+            ))
+
+        logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            side_effect=_agent_row_side_effect("git-agent"),
+        ) as dispatch:
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                assert _maybe_retry_failed_tasks(session, phase, logger) is True
+                dispatch.assert_called_once()
+
+        with db_manager.session_scope() as session:
+            workflow = session.query(Workflow).filter_by(id="wf-1").first()
+            assert workflow.status == "active"
+            assert workflow.paused_by is None
 
     def test_retries_all_failed_tasks(self, db_manager, sample_workflow):
         """Should reset failed tasks and dispatch a fresh agent for each,
@@ -2848,6 +2889,75 @@ class TestTriggerArbitration:
             assert wf.status == "failed"
             assert "requirements" in wf.status_reason
             assert "3 times" in wf.status_reason
+
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.PhaseManager")
+    @patch("src.autopilot.orchestrator.build_phase_output")
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_cap_exhausted_with_no_pending_decision_advances_if_output_already_passes(
+        self, mock_create_agent, mock_build_output, mock_pm_class, mock_fire_transition,
+        db_manager, sample_workflow, tmp_path
+    ):
+        """Regression: once the arbitration cap is hit AND there's no
+        pending decision left to resolve (already consumed, or the last
+        arbitration agent never wrote one), the old behavior was to fail
+        the workflow unconditionally -- even if a later redo cycle had
+        already fixed the underlying issue and the phase's real output
+        now genuinely passes. Check the current output fresh (bypassing
+        WorkflowOrchestrator.evaluate()'s retry-count gate, which would
+        otherwise short-circuit straight back to "arbitrate" without ever
+        reading the score) and advance instead of failing when it does."""
+        from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _trigger_arbitration
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.working_directory = str(tmp_path)
+            # 3 prior arbitration tasks -- cap is exhausted -- but none of
+            # them left a pending, unprocessed arbitration_result.json (no
+            # such file exists in tmp_path), so there's nothing to resolve.
+            for i in range(3):
+                session.add(
+                    Task(
+                        id=f"prior-arb-{i}",
+                        raw_description="Arbitrate stuck phase: qa_validation",
+                        done_definition="x",
+                        status="done",
+                        phase_id="phase-1",
+                        workflow_id="wf-1",
+                        created_by_agent_id=ARBITRATION_CREATED_BY,
+                        action="arbitrate",
+                    )
+                )
+
+        mock_build_output.return_value = {"score": 0.9}
+
+        fake_eval_point = MagicMock(evaluator="heuristic", conditions=[])
+        fake_orchestrator = MagicMock()
+        fake_orchestrator._find_evaluation_point.return_value = fake_eval_point
+        fake_orchestrator._heuristic_evaluate.return_value = (0.9, {})
+        fake_orchestrator._evaluate_conditions.return_value = MagicMock(
+            action=MagicMock(value="continue"), reason="score >= 0.7"
+        )
+        mock_pm_instance = MagicMock()
+        mock_pm_instance._get_orchestrator.return_value = fake_orchestrator
+        mock_pm_class.return_value = mock_pm_instance
+
+        mock_fire_transition.return_value = True
+
+        with patch("src.autopilot.orchestrator.GATED_PHASES", ("qa_validation",)):
+            result = _trigger_arbitration(
+                "wf-1", "phase-1", "qa_validation", "still not converging", MagicMock()
+            )
+
+        assert result is True
+        mock_create_agent.assert_not_called()
+        mock_fire_transition.assert_called_once_with(
+            "wf-1", "phase-1", "qa_validation", ANY, force_continue=True
+        )
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            # Advancing, not failing.
+            assert wf.status != "failed"
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     def test_retry_resets_the_arbitration_cap_via_gotos_reset_at(
