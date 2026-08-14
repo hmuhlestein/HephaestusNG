@@ -829,7 +829,21 @@ def increment_task_retry_count(task_id: str) -> int:
 
 
 def terminate_agent_direct(agent_id: str) -> bool:
-    """Terminate agent directly in database (H-2 fix)."""
+    """Terminate agent directly in database (H-2 fix).
+
+    Also resets any Task still pointing at this agent -- mirroring the
+    safety net AgentManager.terminate_agent() already has for its own ~15
+    call sites (src/agents/manager.py, "closing the gap at the shared
+    primitive instead of requiring every... call site to remember it").
+    This is a SEPARATE termination primitive (direct DB write, no tmux
+    kill, used by this file's own agent-cleanup call sites) that never
+    got the same treatment: a Task left "assigned"/"in_progress" pointing
+    at a now-terminated agent is indistinguishable from one whose agent
+    is still genuinely working, until an unrelated periodic sweep
+    (attempt_recovery's stale-assigned-task cleanup) eventually notices
+    the mismatch and fails the task with a generic "terminated
+    unexpectedly" reason instead of resetting it for a clean retry.
+    """
     try:
         with get_db() as session:
             agent = session.query(Agent).filter_by(id=agent_id).first()
@@ -837,6 +851,17 @@ def terminate_agent_direct(agent_id: str) -> bool:
                 agent.status = "terminated"
                 agent.current_task_id = None  # Clear stale reference
                 agent.terminated_at = datetime.utcnow()
+
+                stray_tasks = (
+                    session.query(Task)
+                    .filter_by(assigned_agent_id=agent_id)
+                    .filter(Task.status.in_(["assigned", "in_progress", "pending"]))
+                    .all()
+                )
+                for stray in stray_tasks:
+                    stray.status = "pending"
+                    stray.assigned_agent_id = None
+
                 return True
         return False
     except Exception as e:

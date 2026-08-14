@@ -6603,3 +6603,64 @@ class TestWaitForPendingReviews:
             _wait_for_pending_reviews("proj-mine", MagicMock())
 
         mock_sleep.assert_not_called()
+
+
+class TestTerminateAgentDirectResetsTask:
+    """terminate_agent_direct is a separate termination primitive (direct
+    DB write, no tmux kill) from AgentManager.terminate_agent -- used at 4
+    call sites in this file. It never got the same safety net terminate_
+    agent already has for its own ~15 call sites (src/agents/manager.py):
+    resetting any Task still pointing at the agent being terminated. A
+    Task left "assigned"/"in_progress" pointing at a now-terminated agent
+    is indistinguishable from one whose agent is still genuinely working,
+    until an unrelated periodic sweep (attempt_recovery's stale-assigned-
+    task cleanup) eventually notices the mismatch and fails it with a
+    generic "terminated unexpectedly" reason instead of resetting it for
+    a clean retry."""
+
+    def test_resets_task_assigned_to_the_terminated_agent(self, orch_db_env):
+        from src.autopilot.orchestrator import terminate_agent_direct
+        from src.core.database import Agent, Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="w", phases_folder_path="/tmp", status="active"))
+            session.add(Agent(id="agent-1", status="working", cli_type="claude", system_prompt="x", current_task_id="task-1"))
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", raw_description="x", done_definition="x",
+                status="in_progress", assigned_agent_id="agent-1",
+            ))
+
+        result = terminate_agent_direct("agent-1")
+        assert result is True
+
+        with orch_db_env.session_scope() as session:
+            agent = session.query(Agent).filter_by(id="agent-1").first()
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert agent.status == "terminated"
+            assert task.status == "pending", "task must be reset, not left dangling"
+            assert task.assigned_agent_id is None
+
+    def test_does_not_touch_a_different_agents_task(self, orch_db_env):
+        """Only the Task actually assigned to the terminated agent is
+        reset -- a Task belonging to some other, still-working agent must
+        survive untouched."""
+        from src.autopilot.orchestrator import terminate_agent_direct
+        from src.core.database import Agent, Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="w", phases_folder_path="/tmp", status="active"))
+            session.add(Agent(id="agent-1", status="working", cli_type="claude", system_prompt="x"))
+            session.add(Agent(id="agent-2", status="working", cli_type="claude", system_prompt="x", current_task_id="task-2"))
+            session.add(Task(
+                id="task-2", workflow_id="wf-1", raw_description="x", done_definition="x",
+                status="in_progress", assigned_agent_id="agent-2",
+            ))
+
+        terminate_agent_direct("agent-1")
+
+        with orch_db_env.session_scope() as session:
+            other_task = session.query(Task).filter_by(id="task-2").first()
+            other_agent = session.query(Agent).filter_by(id="agent-2").first()
+            assert other_task.status == "in_progress"
+            assert other_task.assigned_agent_id == "agent-2"
+            assert other_agent.status == "working"

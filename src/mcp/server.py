@@ -4953,6 +4953,18 @@ async def stop_workflow(workflow_id: str, request: Request):
                 agent.terminated_at = datetime.utcnow()
                 terminated_count += 1
 
+            # Reset the tasks those agents were working on -- without this,
+            # a task left "assigned"/"in_progress" pointing at a now-
+            # terminated agent is indistinguishable from one whose agent is
+            # still genuinely working, until an unrelated periodic sweep
+            # (attempt_recovery's stale-assigned-task cleanup) eventually
+            # notices the mismatch and fails it with a generic "terminated
+            # unexpectedly" reason instead of resetting it for a clean
+            # retry once this workflow resumes.
+            for t in session.query(Task).filter(Task.id.in_(task_ids), Task.status.in_(["assigned", "in_progress"])).all():
+                t.status = "pending"
+                t.assigned_agent_id = None
+
         workflow.status = "paused"
         # Marks this as a deliberate user pause so the background sweep's
         # _try_auto_resume_paused_workflow (orchestrator.py) leaves it alone
