@@ -432,6 +432,117 @@ class TestQueueRerun:
         assert call_args[0] == worktree
         assert str(call_args[2]) == str(project_dir)
 
+    def test_rerun_does_not_touch_an_unrelated_designs_agents(
+        self, project_client, monkeypatch, tmp_path
+    ):
+        """Regression: Step 2 used to query Agent/Workflow with NO scoping
+        at all -- db.query(Agent).filter(Agent.status.in_(["working",
+        "starting", "idle"])) terminated every active agent and paused
+        every active workflow SYSTEM-WIDE, across every other project and
+        design, every time anyone reran any one design. It also never
+        reset the Task rows those agents were working on -- only the
+        Agent row -- leaving them "assigned"/"in_progress" pointing at a
+        now-terminated agent, indistinguishable from one still genuinely
+        working. Observed live: rerunning one stuck design's Phase 0
+        silently killed a healthy, unrelated feature's adversarial_review
+        agent mid-review, after it had already written a complete, correct
+        report -- the agent couldn't report completion (correctly rejected
+        as already-terminated) and the feature's workflow burned through
+        its entire retry budget and failed with no visible cause.
+
+        Verifies both halves: an agent/task/workflow belonging to a
+        completely unrelated design must survive untouched, while an
+        agent/task/workflow belonging to a FEATURE spawned from the design
+        actually being rerun (not just its Phase 0 workflow, which Step 2b
+        deletes wholesale) must still be stopped and properly reset."""
+        client, dirs = project_client
+        project_dir = dirs["project_dir"]
+
+        from src.core.database import (
+            Agent,
+            AutopilotDesign,
+            AutopilotProject,
+            Task,
+            Workflow,
+            get_db,
+        )
+
+        with get_db() as db:
+            target_proj = AutopilotProject(id="proj-target", name="target", base_dir=str(project_dir))
+            db.add(target_proj)
+            target_design = AutopilotDesign(
+                id="des-target", project_id="proj-target", filename="01-auth.md", name="Auth", status="active",
+            )
+            db.add(target_design)
+            # A FEATURE workflow spawned from the design being rerun -- not
+            # a Phase 0 workflow, so Step 2b's own hard-delete (scoped to
+            # DESIGN_WORKFLOW_DEFINITION_IDS) never touches it. Step 2 must
+            # stop it directly.
+            db.add(Workflow(
+                id="wf-target-feature", name="autopilot", phases_folder_path="/tmp",
+                status="active", definition_id="autopilot", design_id="des-target",
+            ))
+            db.add(Task(
+                id="task-target", workflow_id="wf-target-feature", phase_id=None,
+                raw_description="x", done_definition="x", status="in_progress", assigned_agent_id="agent-target",
+            ))
+            db.add(Agent(id="agent-target", status="working", current_task_id="task-target", cli_type="claude", system_prompt="x"))
+
+            # A completely unrelated project/design -- must survive.
+            other_proj = AutopilotProject(id="proj-other", name="other", base_dir=str(tmp_path / "otherproject"))
+            db.add(other_proj)
+            other_design = AutopilotDesign(
+                id="des-other", project_id="proj-other", filename="other.md", name="Other", status="active",
+            )
+            db.add(other_design)
+            db.add(Workflow(
+                id="wf-other-feature", name="autopilot", phases_folder_path="/tmp",
+                status="active", definition_id="autopilot", design_id="des-other",
+            ))
+            db.add(Task(
+                id="task-other", workflow_id="wf-other-feature", phase_id=None,
+                raw_description="x", done_definition="x", status="in_progress", assigned_agent_id="agent-other",
+            ))
+            db.add(Agent(id="agent-other", status="working", current_task_id="task-other", cli_type="claude", system_prompt="x"))
+
+        fake_service = Mock()
+        fake_service.running = False
+        fake_service.start = AsyncMock(return_value={"started": True})
+        fake_service.stop = AsyncMock(return_value={"stopped": True})
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-target"
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._get_or_create_project_id",
+            lambda project_path: "proj-target",
+        )
+
+        resp = client.post(
+            "/api/autopilot/queue/rerun",
+            json={"filename": "01-auth.md", "project_path": str(project_dir)},
+        )
+        assert resp.status_code == 200, resp.text
+
+        with get_db() as db:
+            other_agent = db.query(Agent).filter_by(id="agent-other").first()
+            other_task = db.query(Task).filter_by(id="task-other").first()
+            other_wf = db.query(Workflow).filter_by(id="wf-other-feature").first()
+            assert other_agent.status == "working", "unrelated design's agent must not be touched"
+            assert other_task.status == "in_progress"
+            assert other_task.assigned_agent_id == "agent-other"
+            assert other_wf.status == "active"
+
+            target_agent = db.query(Agent).filter_by(id="agent-target").first()
+            target_task = db.query(Task).filter_by(id="task-target").first()
+            target_wf = db.query(Workflow).filter_by(id="wf-target-feature").first()
+            assert target_agent.status == "terminated"
+            assert target_task.status == "pending", "task must be reset, not left dangling"
+            assert target_task.assigned_agent_id is None
+            assert target_wf.status == "paused"
+
 
 # ── Caching ──────────────────────────────────────────────────────
 
