@@ -994,20 +994,66 @@ async def rerun_design(request: dict):
     except Exception as e:
         logger.error(f"Error killing stray orchestrator subprocess: {e}")
 
-    # Step 2: Stop all active workflows and agents
+    # Step 2: Stop this design's active workflows and agents (Phase 0 AND
+    # any feature pipelines already spawned from it -- a fresh
+    # decomposition can produce different features, so anything still
+    # running under the old one must stop before Step 2b wipes it).
+    #
+    # SCOPED TO THIS DESIGN ONLY. A prior version of this queried Agent/
+    # Workflow with no filter at all -- db.query(Agent).filter(Agent.
+    # status.in_(["working", "starting", "idle"])) with nothing narrowing
+    # it to this project or design -- terminating every active agent and
+    # pausing every active workflow SYSTEM-WIDE, across every other
+    # project and design, every time anyone reran any one design. It also
+    # never touched the Task rows those agents were working on, only the
+    # Agent row -- a Task left "assigned"/"in_progress" pointing at an
+    # agent now marked terminated is indistinguishable from one whose
+    # agent is still genuinely working, until an unrelated periodic sweep
+    # (attempt_recovery's stale-assigned-task cleanup) eventually noticed
+    # the mismatch and failed the task with a generic "terminated
+    # unexpectedly" reason. Observed live: rerunning one stuck design's
+    # Phase 0 silently killed a healthy, unrelated feature's adversarial_
+    # review agent mid-review -- it had already written a complete,
+    # correct report and just hadn't reported completion yet -- and the
+    # feature's workflow burned through its entire retry budget and
+    # failed with no visible cause.
     try:
         with get_db() as db:
-            # Terminate all active agents
-            active_agents = db.query(Agent).filter(Agent.status.in_(["working", "starting", "idle"])).all()
-            for agent in active_agents:
-                agent.status = "terminated"
-                agent.current_task_id = None  # Clear stale reference
-                agent.terminated_at = datetime.utcnow()
+            proj_for_scope = db.query(AutopilotProject).filter_by(base_dir=str(project)).first()
+            design_for_scope = (
+                db.query(AutopilotDesign).filter_by(project_id=proj_for_scope.id, filename=filename).first()
+                if proj_for_scope else None
+            )
+            design_wf_ids = (
+                [
+                    wf.id for wf in db.query(Workflow.id).filter(Workflow.design_id == design_for_scope.id).all()
+                ]
+                if design_for_scope else []
+            )
 
-            # Mark all active workflows as paused (not active/running)
-            active_workflows = db.query(Workflow).filter(Workflow.status.in_(["active", "running"])).all()
-            for wf in active_workflows:
-                wf.status = "paused"
+            if design_wf_ids:
+                # Reset tasks before touching their agents -- same ordering
+                # used elsewhere to close this exact race (see monitor.py's
+                # _auto_restart_agent).
+                stuck_tasks = (
+                    db.query(Task)
+                    .filter(Task.workflow_id.in_(design_wf_ids), Task.status.in_(["assigned", "in_progress"]))
+                    .all()
+                )
+                stuck_agent_ids = [t.assigned_agent_id for t in stuck_tasks if t.assigned_agent_id]
+                for t in stuck_tasks:
+                    t.status = "pending"
+                    t.assigned_agent_id = None
+                    t.failure_reason = None
+
+                if stuck_agent_ids:
+                    for agent in db.query(Agent).filter(Agent.id.in_(stuck_agent_ids)).all():
+                        agent.status = "terminated"
+                        agent.current_task_id = None
+                        agent.terminated_at = datetime.utcnow()
+
+                for wf in db.query(Workflow).filter(Workflow.id.in_(design_wf_ids), Workflow.status.in_(["active", "running"])).all():
+                    wf.status = "paused"
 
             db.commit()
     except Exception as e:
