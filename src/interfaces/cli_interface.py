@@ -850,10 +850,19 @@ class CodexAgent(CLIAgentInterface):
         codex_session_id = self._saved_session_id(
             kwargs.get("session_id", ""), kwargs.get("working_directory", "")
         )
-        command = f"codex resume {codex_session_id}" if codex_session_id else "codex"
+        flags = f"--dangerously-bypass-approvals-and-sandbox --no-alt-screen{model_flag}"
+        # A recovered task can retain a session mapping while another Codex
+        # process still owns that thread.  Resume then exits immediately with
+        # "already has an active writer"; fall back to a new session so the
+        # manager can still deliver the task prompt and make progress.
+        command = (
+            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH"; '
+            f"(codex resume {codex_session_id} {flags} || codex {flags})"
+            if codex_session_id
+            else f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" codex {flags}'
+        )
         return LaunchResult(
-            f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" {command} --dangerously-bypass-approvals-and-sandbox'
-            f' --no-alt-screen{model_flag}',
+            command,
             LaunchResult.DEFERRED,
         )
 

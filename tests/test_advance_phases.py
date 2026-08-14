@@ -521,6 +521,37 @@ class TestCaseInProgressNoTasks:
 class TestMaybeRetryFailedTasks:
     """Tests for _maybe_retry_failed_tasks function."""
 
+    def test_manual_git_phase_pauses_without_retrying(self, db_manager, sample_workflow):
+        """The human-only hand-off must not consume agent retries or spawn
+        rejected agents, otherwise it starves the global design queue."""
+        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            phase.name = "git_commit_push"
+            session.add(Task(
+                id="task-manual-git",
+                workflow_id="wf-1",
+                phase_id="phase-1",
+                raw_description="Human Git hand-off",
+                done_definition="Human approval",
+                status="failed",
+                failure_reason="manual-only",
+            ))
+
+        logger = MagicMock()
+        with patch("src.autopilot.orchestrator.create_agent_for_task_direct") as dispatch:
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                assert _maybe_retry_failed_tasks(session, phase, logger) is None
+                dispatch.assert_not_called()
+
+        with db_manager.session_scope() as session:
+            workflow = session.query(Workflow).filter_by(id="wf-1").first()
+            assert workflow.status == "paused"
+            assert workflow.paused_by == "review"
+            assert "manual-only" in workflow.status_reason
+
     def test_retries_all_failed_tasks(self, db_manager, sample_workflow):
         """Should reset failed tasks and dispatch a fresh agent for each,
         landing on in_progress -- not just reset to pending and abandoned

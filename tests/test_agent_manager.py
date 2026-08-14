@@ -6,6 +6,7 @@ These tests address the critical test coverage gap identified in ARCHITECTURE_RE
 
 import asyncio
 import json
+import shlex
 import shutil
 import time
 import uuid
@@ -112,8 +113,30 @@ class TestCreateAgentForTask:
             )
 
     @pytest.mark.asyncio
+    async def test_rejects_git_commit_push_without_human_approval(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Git actions must never be dispatched by the autonomous pipeline."""
+        with db_manager.session_scope() as session:
+            session.query(Phase).filter_by(id=sample_task.phase_id).update(
+                {"name": "git_commit_push"}
+            )
+
+        with pytest.raises(PermissionError, match="manual-only"):
+            await mock_agent_manager.create_agent_for_task(
+                task=sample_task,
+                enriched_data={},
+                memories=[],
+                project_context="",
+            )
+
+        with db_manager.session_scope() as session:
+            assert session.query(Agent).count() == 0
+
+    @pytest.mark.asyncio
     async def test_creates_agent_with_valid_task(self, mock_agent_manager, sample_task, db_manager):
         """Should create agent successfully with valid task."""
+        sample_task.enriched_description = "Read `./.hephaestus/design.md` before implementing"
         # Mock dependencies — must mock create_agent_worktree (not create_worktree)
         # because the workflow's working_directory doesn't contain '.worktrees/'
         # so the code takes the isolated-worktree branch.
@@ -154,6 +177,17 @@ class TestCreateAgentForTask:
         # AgentInfo with only .id — status lives on the DB row)
         assert agent is not None
         assert agent.id is not None
+
+        task_echo = next(
+            call.args[0]
+            for call in mock_session.attached_window.attached_pane.send_keys.call_args_list
+            if call.args[0].startswith("echo -- ") and "TASK:" in call.args[0]
+        )
+        assert shlex.split(task_echo) == [
+            "echo",
+            "--",
+            "TASK: Read `./.hephaestus/design.md` before implementing",
+        ]
 
         # Verify agent was saved to database
         with db_manager.session_scope() as session:

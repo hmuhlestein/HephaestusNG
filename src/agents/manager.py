@@ -312,6 +312,21 @@ class AgentManager:
                 "task is REQUIRED for create_agent_for_task — cannot create agent without a task"
             )
 
+        # Git history and remotes are external state.  A pipeline may prepare
+        # a Git hand-off, but it must never autonomously launch an agent that
+        # can commit, push, open a PR, or merge.  An operator explicitly
+        # performs those actions after reviewing the validated worktree.
+        if task.phase_id:
+            from src.core.database import Phase
+
+            with self.db_manager.get_session() as _phase_session:
+                phase = _phase_session.query(Phase).filter_by(id=task.phase_id).first()
+                if phase and phase.name == "git_commit_push":
+                    raise PermissionError(
+                        "git_commit_push is manual-only: explicit human approval is "
+                        "required before any commit, push, PR, or merge"
+                    )
+
         # Guard: don't create a second agent for a task that already has one.
         # Two concurrent code paths (e.g. orchestrator + task_completion_service)
         # can both try to spawn an agent for the same task.
@@ -797,9 +812,12 @@ class AgentManager:
             # Echo task info to terminal so we can see what the agent is working on
             task_desc = (task.enriched_description or task.raw_description or "")[:200]
             pane.send_keys('echo "="', enter=True)
-            pane.send_keys(f'echo "AGENT: {agent_id[:8]}"', enter=True)
-            pane.send_keys(f'echo "PHASE: {phase_order}. {phase_name}"', enter=True)
-            pane.send_keys(f'echo "TASK: {task_desc}"', enter=True)
+            pane.send_keys(f"echo -- {shlex.quote(f'AGENT: {agent_id[:8]}')}", enter=True)
+            pane.send_keys(f"echo -- {shlex.quote(f'PHASE: {phase_order}. {phase_name}')}", enter=True)
+            # Task descriptions are external text and often contain Markdown
+            # backticks.  Shell-quote them so a display echo cannot invoke
+            # command substitution or leave the pane at a continuation prompt.
+            pane.send_keys(f"echo -- {shlex.quote(f'TASK: {task_desc}')}", enter=True)
             pane.send_keys('echo "="', enter=True)
             await asyncio.sleep(0.3)
 
