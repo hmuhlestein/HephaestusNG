@@ -1869,6 +1869,57 @@ class TestProjectDesigns:
         assert body["features"][0]["cost_total_usd"] == 1.5
         assert body["cost_total_usd"] == 1.5
 
+    def test_design_status_task_timestamps_are_utc_marked_and_include_cli_type(
+        self, project_client
+    ):
+        """Regression: task created_at/completed_at were serialized via
+        plain datetime.isoformat() -- a naive-but-UTC datetime with no
+        timezone marker at all. The frontend's `new Date(iso_string)` then
+        parses it as LOCAL time, not UTC; on a host whose local timezone
+        trails UTC, the parsed timestamp looks HOURS in the future relative
+        to real now(), producing a large negative "elapsed" display (e.g.
+        "-21263s"). Also verifies cli_type is now surfaced per task so the
+        UI can show which CLI (pi/claude/codex) ran it."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import (
+            Agent,
+            AutopilotDesign,
+            Feature,
+            Task,
+            Workflow,
+            get_db,
+        )
+
+        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        (design_dir / "cli-design.md").write_text("# Design")
+
+        with get_db() as db:
+            db.add(AutopilotDesign(
+                id="des-test-cli", project_id=pid, filename="cli-design.md", name="CLI Design",
+                ordinal=14, size_bytes=10, extension=".md", status="active",
+            ))
+            db.add(Workflow(id="wf-cli-1", name="autopilot", phases_folder_path="/tmp", status="active"))
+            db.add(Agent(id="agent-cli-1", status="working", cli_type="pi", system_prompt="x"))
+
+        with get_db() as db:
+            db.add(Feature(
+                id="feat-cli-1", design_id="des-test-cli", feature_key="core", name="Core",
+                scope="s", status="active", workflow_id="wf-cli-1",
+            ))
+            db.add(Task(
+                id="task-cli-1", workflow_id="wf-cli-1", raw_description="x", done_definition="x",
+                status="in_progress", assigned_agent_id="agent-cli-1",
+            ))
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/cli-design.md/status")
+        assert resp.status_code == 200, resp.text
+        task = resp.json()["features"][0]["tasks"][0]
+        assert task["created_at"].endswith("Z"), "must carry an explicit UTC marker"
+        assert task["cli_type"] == "pi"
+
     def test_design_status_ignores_stale_active_workflow_whose_feature_is_done(
         self, project_client
     ):
