@@ -6250,7 +6250,7 @@ class TestCreatePhaseTaskReviewCap:
 
         assert result is True
         mock_fire_transition.assert_called_once_with(
-            "wf-cap", "phase-cap", "architectural_review", ANY
+            "wf-cap", "phase-cap", "architectural_review", ANY, force_continue=True
         )
         mock_create_agent.assert_not_called()
         with orch_db_env.session_scope() as session:
@@ -6299,7 +6299,7 @@ class TestCreatePhaseTaskReviewCap:
 
         assert result is True
         mock_fire_transition.assert_called_once_with(
-            "wf-cap", "phase-cap", "security_review", ANY
+            "wf-cap", "phase-cap", "security_review", ANY, force_continue=True
         )
         mock_create_agent.assert_not_called()
         with orch_db_env.session_scope() as session:

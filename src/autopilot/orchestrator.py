@@ -5661,15 +5661,41 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
     return None
 
 
-def _fire_phase_transition(workflow_id: str, phase_id: str, phase_name: str, logger: OrchestratorLogger) -> bool:
+def _fire_phase_transition(
+    workflow_id: str,
+    phase_id: str,
+    phase_name: str,
+    logger: OrchestratorLogger,
+    force_continue: bool = False,
+) -> bool:
     """Fire the phase transition: mark complete, evaluate, create next task/agent.
 
-    Returns True if something was done.
+    force_continue: skip the normal orchestrator evaluation entirely and
+    force a "continue" (force_action="continue" on mark_phase_complete).
+    _cap_out_review_phase's whole point is "this phase already exhausted
+    its retry budget -- stop re-reviewing, treat it as clean, move on" --
+    but a normal (non-forced) call here re-runs orchestrator.evaluate(),
+    whose OWN retry-count check (WorkflowOrchestrator.evaluate, checked
+    BEFORE the score) short-circuits straight to "arbitrate" the instant
+    phase_retry_counts[phase_name] >= eval_point.max_retries, without ever
+    reading the synthetic clean score _cap_out_review_phase just wrote.
+    Since max_retries and max_review_runs are commonly configured to the
+    same threshold (e.g. design_review: both 4), by the time the review-run
+    cap trips, the retry-count cap has always already tripped too --
+    arbitration then decides "goto" right back to the phase that fed this
+    one, which redoes real work, completes, and immediately re-hits this
+    exact same cap again. Observed live: design_review capped out at 4
+    runs, arbitrated back to architecture_design, which re-ran (real,
+    substantive work each time) and tried to hand off to design_review
+    again -- hitting the same permanently-tripped cap every time, in a loop
+    that ran for hours with design_review never actually re-reviewed again.
     """
     try:
-        # Build phase output for gated phases
+        # Build phase output for gated phases -- skipped entirely for a
+        # forced continue, which doesn't read it (_handle_force_continue
+        # takes no phase_output) and shouldn't pay for computing it.
         phase_output = {}
-        if phase_name in GATED_PHASES:
+        if not force_continue and phase_name in GATED_PHASES:
             with get_db() as db:
                 wf = db.query(Workflow).filter_by(id=workflow_id).first()
                 # Path is already imported at module level -- a redundant
@@ -5693,10 +5719,14 @@ def _fire_phase_transition(workflow_id: str, phase_id: str, phase_name: str, log
 
         pm = PhaseManager(DatabaseManager())
         pm.workflow_id = workflow_id
-        result = pm.mark_phase_complete(
-            phase_id,
-            "Phase completed",
-            phase_output=phase_output,
+        result = (
+            pm.mark_phase_complete(phase_id, "Phase completed", force_action="continue")
+            if force_continue
+            else pm.mark_phase_complete(
+                phase_id,
+                "Phase completed",
+                phase_output=phase_output,
+            )
         )
 
         action = result.get("action", "continue")
@@ -6448,7 +6478,14 @@ def _cap_out_review_phase(
         (docs_dir / f"{phase.name}_capped_notice.md").write_text(body)
 
     logger.warning(f"[PHASE-TASK] {phase.name} hit its review-run cap ({run_count}/{max_runs}) -- marking done with caveats instead of re-reviewing again")
-    return _fire_phase_transition(workflow_id, phase.id, phase.name, logger)
+    # force_continue=True: a normal (non-forced) transition re-runs
+    # orchestrator.evaluate(), whose retry-count check fires before the
+    # score is even read -- since max_retries and max_review_runs are
+    # typically the same threshold, that check has always already tripped
+    # by the time this cap engages, sending the phase straight to
+    # arbitration/goto instead of past it. See _fire_phase_transition's
+    # force_continue docstring for the live incident this closes.
+    return _fire_phase_transition(workflow_id, phase.id, phase.name, logger, force_continue=True)
 
 
 def _create_phase_task(
