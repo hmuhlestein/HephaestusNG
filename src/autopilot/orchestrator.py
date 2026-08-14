@@ -4841,13 +4841,34 @@ def _release_phase_task_creation_claim(db, phase_id: str) -> None:
     no-op write SQLAlchemy doesn't even consider dirty, silently leaving
     the claim held in the database forever. Found by
     test_maybe_retry_failed_tasks_is_claim_protected.
+
+    started_at is anchored to the guarded task's own created_at, NOT
+    datetime.utcnow() -- this function always runs strictly after that
+    task was already committed by the caller (server.py's create_task,
+    which can spend real seconds on enrichment/embedding/dedup/capacity-
+    queue checks before returning), so "now" is always later than the
+    task's created_at, sometimes by several seconds. _case_in_progress_
+    complete later uses execution.started_at as cycle_start and filters
+    tasks with `Task.created_at >= cycle_start` to decide whether the
+    phase has any tasks in its current cycle -- stamping "now" here made
+    that filter exclude the very task this function exists to release the
+    claim for, so the phase looked like it had zero in-cycle tasks and
+    self-heal spawned a duplicate for it. Observed live: a UI-launched
+    workflow's phase 1 task completed successfully while a duplicate
+    self-heal task sat pending beside it, created ~15s after the first.
     """
     execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).populate_existing().first()
     if not execution:
         return
     if execution.status in ("pending", "completed"):
         execution.status = "in_progress"
-        execution.started_at = datetime.utcnow()  # matches _create_phase_task's own convention
+        earliest_task = (
+            db.query(Task)
+            .filter_by(phase_id=phase_id)
+            .order_by(Task.created_at.asc())
+            .first()
+        )
+        execution.started_at = earliest_task.created_at if earliest_task else datetime.utcnow()
     execution.task_creation_claimed_at = None
     db.commit()
 
