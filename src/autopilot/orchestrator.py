@@ -1664,12 +1664,15 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
         phase_id = task.get("phase_id")
 
         # Never feed the human-only Git hand-off back into the agent retry
-        # path.  Its intentional dispatch rejection is a hand-off signal,
-        # not an agent failure.
+        # path while review mode actually requires one -- its intentional
+        # dispatch rejection is a hand-off signal there, not an agent
+        # failure. In full autopilot (review_mode off), git_commit_push
+        # dispatches like any other phase, so a real failure there is a
+        # real failure and should retry normally.
         try:
             with get_db() as phase_db:
                 failed_phase = phase_db.query(Phase).filter_by(id=phase_id).first()
-                if failed_phase and failed_phase.name == "git_commit_push":
+                if failed_phase and failed_phase.name in MANUAL_ONLY_PHASES and _manual_handoff_required(workflow_id):
                     logger.info(f"  Skipping retry for manual-only phase task {task_id[:8]}")
                     continue
         except Exception as exc:
@@ -5083,6 +5086,54 @@ def _case_completed_with_successor(db, workflow_id: str, completed: list, pendin
     return None
 
 
+MANUAL_ONLY_PHASES = {"git_commit_push"}
+
+
+def _manual_handoff_required(workflow_id: str) -> bool:
+    """Whether MANUAL_ONLY_PHASES should actually block autonomous dispatch
+    for this workflow's project.
+
+    Full autopilot (the default: AutopilotProject.review_mode is False)
+    keeps git_commit_push exactly as autonomous as every other phase -- a
+    real agent commits, pushes, and opens the PR, same as before this
+    gate existed. review_mode=True is what actually asks for a human in
+    the loop, so that's the only case this reuses _should_pause_for_review
+    for: same project-level toggle, same paused_by='review' convention,
+    one flag rather than a second, independent "is this phase manual"
+    concept a project would have to separately configure.
+    """
+    from src.core.database import resolve_project_for_workflow
+
+    project_id, _ = resolve_project_for_workflow(workflow_id)
+    return bool(project_id) and _should_pause_for_review(project_id)
+
+
+def _pause_for_manual_handoff(db, workflow_id: str, phase_name: str, logger: OrchestratorLogger) -> None:
+    """Park the workflow for an operator instead of treating a manual-only
+    phase's failed tasks as ordinary agent failures.
+
+    Only called once _manual_handoff_required has already confirmed this
+    project is in review mode. AgentManager.create_agent_for_task raises
+    PermissionError for any phase in MANUAL_ONLY_PHASES under the same
+    condition (the pipeline must never commit, push, or merge on its own
+    while a human is meant to be reviewing) -- create_agent_for_task_direct
+    converts that into a normal "dispatch failed" None return, so without
+    this, both the per-task retry sweep and the phase-completion retry path
+    would treat the intentional rejection as an agent failure and retry
+    forever, starving the design queue. Idempotent: a no-op past the first
+    call for a given pause (checked here so every caller can call this
+    unconditionally without re-querying wf.status itself).
+    """
+    wf = db.query(Workflow).filter_by(id=workflow_id).first()
+    if wf and wf.status != "paused":
+        wf.status = "paused"
+        wf.paused_by = "review"
+        wf.status_reason = f"{phase_name} is manual-only; human approval is required"
+        wf.paused_at = datetime.utcnow()
+        db.commit()
+    logger.info(f"[PHASE-ADVANCE] {phase_name} is manual-only; pausing for human hand-off")
+
+
 def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: OrchestratorLogger) -> Optional[bool]:
     """Case 2: In-progress phase that is now complete.
 
@@ -5331,15 +5382,8 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             .count()
         )
         if failed_count > 0:
-            if phase.name == "git_commit_push":
-                wf = db.query(Workflow).filter_by(id=workflow_id).first()
-                if wf and wf.status != "paused":
-                    wf.status = "paused"
-                    wf.paused_by = "review"
-                    wf.status_reason = "git_commit_push is manual-only; human approval is required"
-                    wf.paused_at = datetime.utcnow()
-                    db.commit()
-                logger.info(f"[PHASE-ADVANCE] {phase.name} is manual-only; pausing for human hand-off")
+            if phase.name in MANUAL_ONLY_PHASES and _manual_handoff_required(workflow_id):
+                _pause_for_manual_handoff(db, workflow_id, phase.name, logger)
                 continue
             # Has failed tasks — try to retry them before marking complete
             if not _claim_phase_task_creation(db, phase.id):
@@ -5505,20 +5549,12 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
 
     Returns None if no retry was needed, True if tasks were reset for retry.
     """
-    # Git hand-off is deliberately human-only.  The agent manager rejects
-    # dispatching this phase, so treating its rejection like an ordinary
-    # agent failure creates an endless retry loop that starves the design
-    # queue.  Park the workflow for the operator instead; other workflows
-    # remain eligible for the autopilot queue.
-    if phase.name == "git_commit_push":
-        workflow = db.query(Workflow).filter_by(id=phase.workflow_id).first()
-        if workflow and workflow.status != "paused":
-            workflow.status = "paused"
-            workflow.paused_by = "review"
-            workflow.status_reason = "git_commit_push is manual-only; human approval is required"
-            workflow.paused_at = datetime.utcnow()
-            db.commit()
-        logger.info(f"[PHASE-ADVANCE] {phase.name} is manual-only; pausing for human hand-off")
+    # Git hand-off is human-only in review mode -- see _pause_for_manual_
+    # handoff's own docstring for why that case can't be treated as an
+    # ordinary agent failure. In full autopilot this phase retries like any
+    # other.
+    if phase.name in MANUAL_ONLY_PHASES and _manual_handoff_required(phase.workflow_id):
+        _pause_for_manual_handoff(db, phase.workflow_id, phase.name, logger)
         return None
 
     cycle_filter = (Task.created_at >= cycle_start,) if cycle_start else ()
@@ -5945,6 +5981,64 @@ WHAT TO DO:
 """
 
 
+def _phase_currently_passes(
+    workflow_id: str,
+    phase_name: str,
+    working_directory: str,
+    logger: OrchestratorLogger,
+) -> Tuple[bool, str]:
+    """Whether phase_name's CURRENT on-disk output already scores as
+    passing, evaluated fresh against the workflow's real eval_point
+    conditions -- bypassing WorkflowOrchestrator.evaluate()'s retry-count
+    gate (checked before any score is even read), which is exactly what
+    makes evaluate() itself unusable for this: a phase whose retry/
+    arbitration budget is exhausted always short-circuits straight to
+    "arbitrate" there, regardless of what its actual output says.
+
+    Used only by _trigger_arbitration's cap-exhausted fallback, once
+    there's no pending arbitration decision left to resolve, to
+    distinguish "genuinely still broken, a human should look" from "a
+    later redo cycle already fixed this, but the loop never got to
+    re-check." Returns (False, ...) for anything that isn't a clean,
+    confident "continue" -- a non-gated phase, a missing orchestrator
+    config, a non-heuristic evaluator, or (the common case) a missing/
+    still-failing artifact, e.g. this phase's own gate-result file having
+    been deleted by consume_gate_artifacts after its last real run and
+    never regenerated since. Never skips evaluation the way the
+    max_review_runs bug (cb60308) did -- it only ever advances on a
+    genuine fresh passing score.
+    """
+    if phase_name not in GATED_PHASES:
+        return False, "not a gated phase"
+    if not working_directory or not Path(working_directory).exists():
+        return False, "no working directory"
+
+    try:
+        phase_output = build_phase_output(
+            phase_name, Path(working_directory), skip_independent_verification=True
+        )
+
+        pm = PhaseManager(DatabaseManager())
+        session = pm.db_manager.get_session()
+        try:
+            orchestrator = pm._get_orchestrator(session, workflow_id)
+            if not orchestrator:
+                return False, "no orchestrator config"
+            eval_point = orchestrator._find_evaluation_point(phase_name)
+            if not eval_point:
+                return False, "no evaluation point"
+            if eval_point.evaluator != "heuristic":
+                return False, f"non-heuristic evaluator ({eval_point.evaluator}), can't safely re-score outside a real run"
+            score, metadata = orchestrator._heuristic_evaluate(phase_name, phase_output, eval_point.conditions)
+            action = orchestrator._evaluate_conditions(eval_point.conditions, score, metadata, phase_output)
+            return action.action.value == "continue", f"score={score}, {action.reason}"
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"[ARBITRATE] {phase_name}: fresh pass-check failed ({e}) -- treating as not passing")
+        return False, f"pass-check error: {e}"
+
+
 def _trigger_arbitration(
     workflow_id: str,
     phase_id: str,
@@ -6023,7 +6117,47 @@ def _trigger_arbitration(
                         workflow_id, phase_id, phase_name, pending_decision,
                         pending_target, pending_reason or reason, logger,
                     )
+                    # Consume it now that it's been acted on -- without
+                    # this, the NEXT time this cap-exhausted branch fires
+                    # (nothing here prevents phase_id's claim from being
+                    # re-armed later, e.g. by _maybe_resolve_arbitration
+                    # re-discovering this same "done" last_task on a later
+                    # sweep tick) _read_arbitration_result finds the exact
+                    # same file and replays the exact same decision again --
+                    # a real, costly agent run every cycle, forever. See
+                    # _consume_arbitration_result's docstring for the live
+                    # incident this closes: the same "goto architecture_
+                    # design" decision replayed for 4.5 hours across 20+
+                    # architecture_design runs after design_review's
+                    # arbitration cap was hit once.
+                    _consume_arbitration_result(pending_working_directory)
                     return True
+
+            # Nothing left to resolve (already consumed by an earlier pass,
+            # or the last arbitration agent never wrote a decision). Before
+            # failing outright: check whether the phase's CURRENT on-disk
+            # output already passes for real, evaluated fresh against its
+            # actual eval_point conditions. This is deliberately NOT the
+            # max_review_runs mistake cb60308 fixed (silently skipping the
+            # review and waving it through) -- it only ever fires here, past
+            # the arbitration cap with no pending decision, and only
+            # advances on a genuine fresh "continue" verdict; a missing or
+            # still-failing artifact (e.g. this same phase's challenge.md,
+            # deleted by consume_gate_artifacts after its last real run and
+            # never regenerated since) correctly scores as not-passing and
+            # falls through to failing the workflow below, same as today.
+            wf_for_check = db.query(Workflow).filter_by(id=workflow_id).first()
+            if wf_for_check and wf_for_check.working_directory:
+                passes, fresh_reason = _phase_currently_passes(
+                    workflow_id, phase_name, wf_for_check.working_directory, logger
+                )
+                if passes:
+                    logger.warning(
+                        f"[ARBITRATE] {phase_name} exhausted its {max_arbitrations_per_phase}-arbitration "
+                        f"cap with nothing pending to resolve, but its current output already passes "
+                        f"({fresh_reason}) -- advancing instead of failing the workflow."
+                    )
+                    return _fire_phase_transition(workflow_id, phase_id, phase_name, logger, force_continue=True)
             logger.error(f"[ARBITRATE] {phase_name} has already been arbitrated {prior_arbitrations} times without converging -- failing the workflow instead of arbitrating again")
             wf = db.query(Workflow).filter_by(id=workflow_id).first()
             if wf:
@@ -6207,6 +6341,13 @@ def _maybe_resolve_arbitration(workflow_id: str, logger: OrchestratorLogger) -> 
             continue
 
         _resolve_arbitration_outcome(workflow_id, phase_id, phase_name, decision, target_phase, dec_reason, logger)
+        # Consume it -- see _consume_arbitration_result's docstring. Not
+        # strictly needed on THIS path today (a fresh arbitration task
+        # overwrites the file before it's ever re-read here), but leaving
+        # a resolved decision on disk is exactly the trap the cap-exhausted
+        # fallback below fell into; don't leave a second copy of that trap
+        # lying around for some future caller to walk into.
+        _consume_arbitration_result(working_directory)
 
 
 def _read_arbitration_result(
@@ -6227,6 +6368,33 @@ def _read_arbitration_result(
     if decision not in ("continue", "goto", "fail"):
         return None, None, None
     return decision, data.get("target_phase"), data.get("reason") or "(no reason given)"
+
+
+def _consume_arbitration_result(working_directory: Optional[str]) -> None:
+    """Delete arbitration_result.json once its decision has been acted on --
+    mirrors consume_gate_artifacts's identical rationale for gate result
+    files (spec.py): without this, the SAME already-resolved decision is
+    still sitting on disk for any later caller to read again.
+
+    _trigger_arbitration's cap-exhausted fallback re-reads this file every
+    time it's invoked past max_arbitrations_per_phase, with no record of
+    whether THIS exact decision already got acted on -- so a phase whose
+    task_creation_claimed_at claim gets re-armed after the cap is hit (e.g.
+    via _maybe_resolve_arbitration re-discovering the same "done"
+    arbitration task on a later sweep tick) replayed the identical stale
+    "goto" forever: a fresh, real, costly agent run for the goto target
+    every cycle, never actually re-reviewing anything. Observed live:
+    design_review's arbitration cap was hit once at 13:20, and the same
+    "goto architecture_design" decision was silently replayed for the next
+    4.5 hours across 20+ architecture_design runs.
+    """
+    if not working_directory:
+        return
+    path = Path(working_directory) / CONTEXT_DIR_NAME / "arbitration_result.json"
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _resolve_arbitration_outcome(

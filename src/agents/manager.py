@@ -313,20 +313,34 @@ class AgentManager:
                 "task is REQUIRED for create_agent_for_task — cannot create agent without a task"
             )
 
-        # Git history and remotes are external state.  A pipeline may prepare
-        # a Git hand-off, but it must never autonomously launch an agent that
-        # can commit, push, open a PR, or merge.  An operator explicitly
+        # Git history and remotes are external state. In review mode
+        # (AutopilotProject.review_mode), a pipeline may prepare a Git
+        # hand-off, but must never autonomously launch an agent that can
+        # commit, push, open a PR, or merge -- an operator explicitly
         # performs those actions after reviewing the validated worktree.
+        # Full autopilot (review_mode off, the default) keeps this phase
+        # exactly as autonomous as every other phase, same as before this
+        # guard existed -- see orchestrator.py's _manual_handoff_required
+        # for the same project-level check applied to this phase's retry
+        # handling.
         if task.phase_id:
-            from src.core.database import Phase
+            from src.core.database import Phase, resolve_project_for_workflow
 
             with self.db_manager.get_session() as _phase_session:
                 phase = _phase_session.query(Phase).filter_by(id=task.phase_id).first()
                 if phase and phase.name == "git_commit_push":
-                    raise PermissionError(
-                        "git_commit_push is manual-only: explicit human approval is "
-                        "required before any commit, push, PR, or merge"
-                    )
+                    project_id, _ = resolve_project_for_workflow(task.workflow_id)
+                    review_mode = False
+                    if project_id:
+                        from src.core.database import AutopilotProject
+
+                        proj = _phase_session.query(AutopilotProject).get(project_id)
+                        review_mode = bool(proj and proj.review_mode)
+                    if review_mode:
+                        raise PermissionError(
+                            "git_commit_push is manual-only in review mode: explicit "
+                            "human approval is required before any commit, push, PR, or merge"
+                        )
 
         # Guard: don't create a second agent for a task that already has one.
         # Two concurrent code paths (e.g. orchestrator + task_completion_service)
