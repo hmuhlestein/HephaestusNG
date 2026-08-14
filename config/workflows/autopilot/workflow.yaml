@@ -94,7 +94,23 @@ orchestrator:
       max_retries: 4
       goto_counts_as_retry: true
       on_budget_exhausted: arbitrate
-      max_review_runs: 4
+      # No max_review_runs here, unlike the post-development review gates
+      # below: _cap_out_review_phase's whole trade-off (stop re-reviewing,
+      # mark done with caveats, MOVE ON) is only safe when the alternative
+      # is re-running expensive development work -- exactly the case this
+      # phase's own comment above argues against for itself. Skipping
+      # design_review means development starts on architecture nobody ever
+      # confirmed is sound; max_retries + on_budget_exhausted: arbitrate is
+      # this phase's only escalation path, sending it back to
+      # architecture_design (never skipping ahead) until arbitration
+      # decides otherwise. Observed live: with max_review_runs: 4 set here
+      # (same threshold as max_retries), every "continue" hand-off from a
+      # freshly-redone architecture_design got silently capped out and
+      # skipped straight to development -- for hours, never actually
+      # re-reviewing the new content -- because run_count counts ALL Task
+      # rows ever created for this phase_id, all-time, and design_review's
+      # only predecessor (architecture_design) can legitimately be redone
+      # many times.
       conditions:
         - if: "score < 0.6"
           action: goto
