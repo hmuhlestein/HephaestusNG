@@ -275,6 +275,57 @@ class TestReleasePhaseTaskCreationClaim:
             exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert exec1.task_creation_claimed_at is None  # actually persisted to the DB
 
+    def test_started_at_anchors_to_the_guarded_tasks_created_at_not_now(
+        self, db_manager, sample_workflow
+    ):
+        """Regression: server.py's /start_workflow_execution claims, then
+        calls create_task() (which can spend real seconds on enrichment /
+        embedding / dedup / capacity-queue checks) before this function ever
+        runs -- so datetime.utcnow() at release time is always later than
+        the task it's releasing the claim for, sometimes by several
+        seconds. _case_in_progress_complete uses execution.started_at as
+        cycle_start and filters tasks with `Task.created_at >= cycle_start`
+        to find tasks in the phase's current cycle -- stamping "now" here
+        put cycle_start after the very task this call exists to release,
+        so that task fell outside its own cycle and the phase looked
+        task-less, spawning a duplicate. started_at must anchor to the
+        task's own created_at instead. Observed live: a UI-launched
+        workflow's phase 1 task completed successfully while a duplicate
+        self-heal task sat pending beside it, created ~15s later."""
+        from src.autopilot.orchestrator import (
+            _claim_phase_task_creation,
+            _release_phase_task_creation_claim,
+        )
+
+        task_created_at = datetime.utcnow() - timedelta(seconds=15)
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.status = "pending"
+            # Mirrors server.py's create_task(): the task is committed
+            # well before the claim is released, same as the real
+            # enrichment/dedup/capacity-queue pipeline taking real time.
+            session.add(Task(
+                id="task-1",
+                workflow_id="wf-1",
+                phase_id="phase-1",
+                raw_description="r",
+                done_definition="d",
+                status="pending",
+                created_at=task_created_at,
+            ))
+
+        with db_manager.session_scope() as session:
+            assert _claim_phase_task_creation(session, "phase-1") is True
+
+        with db_manager.session_scope() as session:
+            _release_phase_task_creation_claim(session, "phase-1")
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert exec1.started_at == task_created_at
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert exec1.started_at <= task.created_at
+
 
 class TestAdvancePhases:
     """Tests for _advance_phases function."""
