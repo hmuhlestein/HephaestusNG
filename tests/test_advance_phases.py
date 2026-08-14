@@ -2139,13 +2139,79 @@ class TestCreatePhaseTaskResetsClaim:
             exec1.status = "in_progress"
             exec1.task_creation_claimed_at = datetime.utcnow()
 
-        result = _create_phase_task("wf-1", "phase-1", "requirements", "continue", MagicMock())
+        # target_already_claimed=True: mirrors the real call site
+        # (_case_in_progress_no_tasks), which takes this exact claim
+        # itself immediately before calling _create_phase_task for the
+        # same phase_id -- without it, _create_phase_task would now try
+        # to claim phase-1 a second time on top of the fresh claim just
+        # simulated above and correctly refuse (a genuinely different
+        # scenario: two independent, uncoordinated callers).
+        result = _create_phase_task(
+            "wf-1", "phase-1", "requirements", "continue", MagicMock(),
+            target_already_claimed=True,
+        )
 
         assert result is True
         with db_manager.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is None
             assert _claim_phase_task_creation(session, "phase-1") is True
+
+
+class TestCreatePhaseTaskClaimsTargetPhase:
+    """Regression: _fire_phase_transition and _resolve_arbitration_outcome
+    both claim the SOURCE phase they're evaluating before calling
+    _create_phase_task, but its target_phase_id is routinely a DIFFERENT
+    phase (a goto target) that nothing claims -- _create_phase_task's own
+    existing-task check openly admits it can't fully cover this alone (a
+    task mid-dispatch, still "pending" with no agent, looks exactly like a
+    genuine orphan once its age crosses the 1-minute cutoff). Observed
+    live: two goto tasks landed on architecture_design 85s apart. Fixed by
+    having _create_phase_task claim its own phase_id when the caller
+    hasn't already (target_already_claimed=False, the default) -- this
+    class tests that claim directly, independent of the reset-on-
+    reactivation behavior covered above."""
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_refuses_when_target_phase_is_freshly_claimed_by_another_caller(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        from src.autopilot.orchestrator import _claim_phase_task_creation, _create_phase_task
+
+        mock_create_agent.side_effect = _agent_row_side_effect("new-agent")
+
+        with db_manager.session_scope() as session:
+            # A genuinely live, concurrent claim -- e.g. another
+            # _create_phase_task call for this same phase_id already in
+            # flight, mid-dispatch.
+            assert _claim_phase_task_creation(session, "phase-1") is True
+
+        result = _create_phase_task("wf-1", "phase-1", "requirements", "goto", MagicMock())
+
+        assert result is False
+        mock_create_agent.assert_not_called()
+        with db_manager.session_scope() as session:
+            # The fresh claim is still held -- untouched by our refused attempt.
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is not None
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_claims_and_creates_when_target_phase_is_unclaimed(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """The default (target_already_claimed=False) path: no pre-existing
+        claim on phase_id at all -- _create_phase_task takes one itself,
+        creates the task, and releases it."""
+        from src.autopilot.orchestrator import _create_phase_task
+
+        mock_create_agent.side_effect = _agent_row_side_effect("new-agent")
+
+        result = _create_phase_task("wf-1", "phase-1", "requirements", "continue", MagicMock())
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is None
 
 
 class TestFirePhaseTransition:

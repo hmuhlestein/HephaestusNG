@@ -1692,6 +1692,40 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
             )
             continue
 
+        # Pre-check: does this phase already have an active task -- e.g. one
+        # a goto/retry from _fire_phase_transition created independently
+        # while this task was sitting failed? The dispatch-time check below
+        # (inside create_agent_for_task_direct) already catches this, but
+        # only AFTER burning a retry_count increment and resetting this task
+        # to "pending", just to lose the race and land right back here as
+        # "duplicated" -- wasted churn for an outcome already decidable up
+        # front. Observed live: task ce152617 (architecture_design) went
+        # through exactly this cycle against sibling 8b9d0368.
+        with get_db() as _db_precheck:
+            _sibling = (
+                _db_precheck.query(Task)
+                .filter(
+                    Task.phase_id == phase_id,
+                    Task.id != task_id,
+                    Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+                )
+                .first()
+            )
+            _sibling_id = _sibling.id if _sibling else None
+        if _sibling_id:
+            logger.info(
+                f"  Task {task_id[:8]} superseded by active task {_sibling_id[:8]} "
+                "on the same phase -- marking duplicated without retrying"
+            )
+            with get_db() as _db_skip:
+                _t_skip = _db_skip.query(Task).filter_by(id=task_id).first()
+                if _t_skip and _t_skip.status == "failed":
+                    _t_skip.status = "duplicated"
+                    _t_skip.duplicate_of_task_id = _sibling_id
+                    _t_skip.failure_reason = f"Superseded by task {_sibling_id[:8]}, which already owns this phase"
+                    _db_skip.commit()
+            continue
+
         logger.info(f"  Retrying failed task {task_id[:8]} (retry #{retry_count + 1})")
         # Persist the increment before attempting — counting only successful
         # attempts would let a task that fails every single retry (e.g. a
@@ -4894,6 +4928,7 @@ def _case_start_first_phase(db, workflow_id: str, pending: list, in_progress: li
                 first_phase["phase"].name,
                 "continue",
                 logger,
+                target_already_claimed=True,
             )
     return None
 
@@ -4924,6 +4959,7 @@ def _case_in_progress_no_tasks(db, workflow_id: str, in_progress: list, logger: 
                 phase.name,
                 "continue",
                 logger,
+                target_already_claimed=True,
             )
     return None
 
@@ -5030,6 +5066,7 @@ def _case_completed_with_successor(db, workflow_id: str, completed: list, pendin
                 logger,
                 feedback=(last_task.completion_notes if successor_action != "continue" and last_task else None),
                 source_phase_name=(last_completed["phase"].name if successor_action != "continue" else None),
+                target_already_claimed=True,
             )
     return None
 
@@ -5244,7 +5281,7 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                 if not _claim_phase_task_creation(db, phase.id):
                     continue
                 logger.warning(f"[PHASE-ADVANCE] {phase.name} is in_progress but has no tasks within its own cycle (stale started_at?) — creating a fresh one")
-                return _create_phase_task(workflow_id, phase.id, phase.name, "continue", logger)
+                return _create_phase_task(workflow_id, phase.id, phase.name, "continue", logger, target_already_claimed=True)
 
             # Check if ALL tasks are failed — retry them. Same claim
             # protection as the _fire_phase_transition path below, for the
@@ -6422,6 +6459,7 @@ def _create_phase_task(
     logger: OrchestratorLogger,
     feedback: Optional[str] = None,
     source_phase_name: Optional[str] = None,
+    target_already_claimed: bool = False,
 ) -> bool:
     """Create a task and agent for a phase via API.
 
@@ -6431,7 +6469,54 @@ def _create_phase_task(
     (same field _tag_completing_task sets on the DECIDING phase's task, just
     the complementary direction: "where I came from" here vs. "where I sent
     things" there). Irrelevant for action="continue" (normal advancement).
+
+    target_already_claimed: True when the caller already holds phase_id's
+    task_creation_claimed_at claim before calling (every self-heal case in
+    this file that dispatches to the SAME phase_id it just evaluated --
+    _case_start_first_phase, _case_in_progress_no_tasks,
+    _case_completed_with_successor, _case_in_progress_complete's own
+    empty-cycle branch). Callers that dispatch to a phase OTHER than the one
+    they hold a claim on (_fire_phase_transition and
+    _resolve_arbitration_outcome, whose target_phase_id is routinely a goto
+    target different from the source phase they claimed) leave this False,
+    so this function claims phase_id itself -- closing a gap the existing-
+    task check below openly can't close alone (see its own comment): a
+    caller with no claim on phase_id sees a "pending, no agent yet" task
+    that's actually just a slow create_agent_for_task_direct dispatch
+    (worktree setup, tmux launch can run past the 1-minute orphan cutoff)
+    still in flight, and races right past it with a second task for the
+    same phase. Observed live: two goto tasks landed on architecture_design
+    85s apart this way.
     """
+    own_claim = False
+    if not target_already_claimed:
+        with get_db() as _claim_db:
+            if not _claim_phase_task_creation(_claim_db, phase_id):
+                # Held, but not necessarily by anyone still alive -- this
+                # function can't assume _release_stale_task_creation_claims
+                # already swept the TARGET phase this cycle (it only ever
+                # runs on phases the current sweep tick's own workflow-wide
+                # pass reached; a direct/out-of-band caller gets no such
+                # guarantee). Reuse the same staleness window before
+                # deferring to a claim that's actually just abandoned: clear
+                # it and take a fresh one, exactly what
+                # _release_stale_task_creation_claims would have done to it
+                # anyway had it reached this phase first.
+                stale_cutoff = datetime.utcnow() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
+                cleared = (
+                    _claim_db.query(PhaseExecution)
+                    .filter(
+                        PhaseExecution.phase_id == phase_id,
+                        PhaseExecution.task_creation_claimed_at.isnot(None),
+                        PhaseExecution.task_creation_claimed_at < stale_cutoff,
+                    )
+                    .update({"task_creation_claimed_at": None}, synchronize_session=False)
+                )
+                _claim_db.commit()
+                if not cleared or not _claim_phase_task_creation(_claim_db, phase_id):
+                    logger.info(f"[PHASE-TASK] {phase_name} task creation already claimed by another caller -- skipping")
+                    return False
+        own_claim = True
     try:
         import uuid
 
@@ -6712,6 +6797,23 @@ def _create_phase_task(
     except Exception as e:
         logger.warning(f"[PHASE-TASK] Error creating task for {phase_name}: {e}")
         return False
+    finally:
+        # Release only the claim this call itself took. A claim the caller
+        # already held (target_already_claimed=True) is the caller's own
+        # to release -- this function's existing success-path already
+        # clears task_creation_claimed_at once the task exists either way,
+        # so this only matters for the early-return/bail-out paths above,
+        # which never touched it. Direct clear, not _release_phase_task_
+        # creation_claim -- that helper also flips a pending/completed
+        # execution to "in_progress", which would be wrong on a bail-out
+        # (e.g. "existing active task found", "retry bound hit") where
+        # nothing was actually started.
+        if own_claim:
+            with get_db() as _release_db:
+                _release_db.query(PhaseExecution).filter_by(phase_id=phase_id).update(
+                    {"task_creation_claimed_at": None}, synchronize_session=False
+                )
+                _release_db.commit()
 
 
 def _create_corrective_task(
