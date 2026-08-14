@@ -6920,7 +6920,7 @@ def run_single_workflow(
     logger: OrchestratorLogger,
     launch_params: Dict[str, Any] = None,
     state: PipelineState = None,
-    max_iterations: int = 10,
+    max_iterations: Optional[int] = None,
     design_id: Optional[str] = None,
     timeout_seconds: int = None,
     pause_existing: bool = True,
@@ -6966,8 +6966,28 @@ def run_single_workflow(
     # re-arbitrating scope_review forever, total_gotos climbing into the
     # hundreds, because its budget kept getting reset out from under it by
     # unrelated Phase 0 runs.
+    #
+    # max_iterations defaults to None (no override) rather than a hardcoded
+    # number, and is only written into launch_params when a caller
+    # EXPLICITLY passes one -- run_phase0 is the one deliberate case,
+    # hardcoding max_iterations=3 to cap how many times ITS OWN
+    # decomposition may goto/retry. Every regular feature pipeline launch
+    # (_run_one_feature) used to pass this same parameter through from the
+    # CLI's --max-iterations flag (default 3, semantically "how many times
+    # to retry a whole DESIGN" -- see MAX_DESIGN_RETRIES for that actual
+    # mechanism, which is unrelated and unaffected by this value) -- so
+    # instead of an unset override letting workflow.yaml's own generous
+    # max_total_gotos: 30 apply, EVERY feature workflow in the system got
+    # silently capped at 3 total gotos across its entire 13-phase pipeline
+    # lifetime. Observed live: adversarial_review found real BLOCKERs,
+    # scored correctly, but total_gotos had already reached 6 from
+    # legitimate earlier review cycles -- "GOTO limit exceeded (6/3).
+    # Forcing continue to prevent infinite loop" silently waved the
+    # findings through to security_review instead of sending them back to
+    # development.
     launch_params = dict(launch_params or {})
-    launch_params["max_iterations"] = max_iterations
+    if max_iterations is not None:
+        launch_params["max_iterations"] = max_iterations
 
     # Check for existing active workflows and stop them -- but never the
     # workflow we're about to resume ourselves. Without this exclusion, an
@@ -8451,7 +8471,15 @@ def _run_one_feature(
             logger,
             launch_params=launch_params,
             state=thread_state,
-            max_iterations=max_iterations,
+            # Deliberately NOT passing max_iterations here -- this
+            # function's own `max_iterations` parameter carries the CLI's
+            # --max-iterations value (a DIFFERENT, design-level retry
+            # concept -- see MAX_DESIGN_RETRIES), not this workflow's
+            # goto budget. run_single_workflow's own default (None) means
+            # "no override", letting workflow.yaml's real max_total_gotos
+            # (30, for the "autopilot" definition) apply as intended. See
+            # the long comment on run_single_workflow's max_iterations
+            # parameter for the incident this closes.
             design_id=design_entry.db_id,
             pause_existing=False,  # features run in parallel; don't clobber each other
             existing_workflow_id=existing_workflow_id,
