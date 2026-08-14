@@ -877,6 +877,31 @@ class AgentManager:
             )
             await asyncio.sleep(wait_time)
 
+            # A pause (or any other termination) issued while this coroutine
+            # was mid-sleep flips this agent's DB row to "terminated" but has
+            # no way to reach into this in-flight launch to stop it --
+            # without this check, the coroutine plows ahead and delivers the
+            # initial prompt anyway, so the agent starts real work seconds
+            # after being told to stop. Observed live: pausing the pipeline
+            # terminated 3 agents instantly, but all 3 still received their
+            # initial prompt ~25-30s later and kept working, which is also
+            # why the paused pipeline kept reporting itself as "running".
+            with self.db_manager.get_session() as _term_check:
+                _current = _term_check.query(Agent).filter_by(id=agent_id).first()
+                if _current and _current.status == "terminated":
+                    logger.warning(
+                        f"Agent {agent_id} was terminated while its CLI was still "
+                        "initializing -- aborting launch, not delivering initial prompt"
+                    )
+                    if self.tmux_server.has_session(session_name):
+                        self.tmux_server.kill_session(session_name)
+
+                    class AgentInfo:
+                        def __init__(self, id):
+                            self.id = id
+
+                    return AgentInfo(agent_id_to_return)
+
             # Check if tmux session is still alive
             if not self.tmux_server.has_session(session_name):
                 logger.error(
