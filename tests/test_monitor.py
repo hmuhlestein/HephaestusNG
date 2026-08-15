@@ -1195,10 +1195,10 @@ class TestDetectCliModelFallback:
     by PiAgent to use its `/model` picker). See
     docs/PI_MODEL_FALLBACK_DESIGN.md."""
 
-    def _frozen_agent(self, make_monitoring_loop, frozen_for_seconds, cli_type="pi", cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf"):
+    def _frozen_agent(self, make_monitoring_loop, frozen_for_seconds, cli_type="pi", cli_model="Qwen3.8-27B-UD-Q4_K_XL.gguf"):
         agent = Agent(id="a1", cli_type=cli_type, cli_model=cli_model, current_task_id="t1")
         make_monitoring_loop.config.default_cli_tool = "pi"
-        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
         make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
         make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
         make_monitoring_loop._stuck_state = {
@@ -1232,7 +1232,7 @@ class TestDetectCliModelFallback:
         that only recognizes pi's global default model."""
         agent = Agent(id="a1", cli_type="claude", cli_model="sonnet", current_task_id="t1")
         make_monitoring_loop.config.default_cli_tool = "pi"
-        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
         make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
         make_monitoring_loop.config.secondary_cli_model_fallback = "opus"
         make_monitoring_loop._stuck_state = {
@@ -1284,7 +1284,7 @@ class TestDetectCliModelFallback:
         that doesn't survive a restart."""
         agent = Agent(id="a1", cli_type="claude", cli_model="sonnet", current_task_id="t1")
         make_monitoring_loop.config.default_cli_tool = "pi"
-        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
         make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
         make_monitoring_loop.config.secondary_cli_model_fallback = "sonnet"
         make_monitoring_loop._stuck_state = {
@@ -1305,7 +1305,7 @@ class TestDetectCliModelFallback:
         and its baseline-default gate must compare against PiAgent's own
         default_model, not config.cli_model (which is Claude's local model
         here, meaningless to pi)."""
-        agent = Agent(id="a1", cli_type="pi", cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf", current_task_id="t1")
+        agent = Agent(id="a1", cli_type="pi", cli_model="Qwen3.8-27B-UD-Q4_K_XL.gguf", current_task_id="t1")
         make_monitoring_loop.config.default_cli_tool = "claude"
         make_monitoring_loop.config.cli_model = "local-claude-model"
         make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
@@ -1336,7 +1336,7 @@ class TestDetectCliModelFallback:
         exclude it rather than attempt a further in-session switch on it."""
         agent = Agent(id="a1", cli_type="pi", cli_model="openrouter/mimo-v2.5-pro", current_task_id="t1")
         make_monitoring_loop.config.default_cli_tool = "pi"
-        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
         make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
         make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
         make_monitoring_loop._stuck_state = {
@@ -1401,8 +1401,8 @@ class TestDetectCliModelFallback:
     async def test_not_yet_frozen_ignored(self, make_monitoring_loop, mock_agent_manager):
         """No _stuck_state entry at all -- _mechanical_recovery_for_agent
         hasn't observed a repeated signature for this agent yet."""
-        agent = Agent(id="a1", cli_type="pi", cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf", current_task_id="t1")
-        make_monitoring_loop.config.cli_model = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        agent = Agent(id="a1", cli_type="pi", cli_model="Qwen3.8-27B-UD-Q4_K_XL.gguf", current_task_id="t1")
+        make_monitoring_loop.config.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
         make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
         make_monitoring_loop._stuck_state = {}
 
@@ -1514,7 +1514,7 @@ class TestDetectCliModelFallback:
         logged = session.add.call_args[0][0]
         assert logged.agent_id == "a1"
         assert logged.log_type == "cli_model_fallback"
-        assert logged.details["from_model"] == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        assert logged.details["from_model"] == "Qwen3.8-27B-UD-Q4_K_XL.gguf"
         assert logged.details["to_model"] == "mimo-v2.5-pro"
         assert logged.details["task_id"] == "t1"
 
@@ -1530,7 +1530,7 @@ class TestDetectCliModelFallback:
         original model as "the agent's current model" indefinitely."""
         from contextlib import contextmanager
 
-        agent_row = Mock(cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf")
+        agent_row = Mock(cli_model="Qwen3.8-27B-UD-Q4_K_XL.gguf")
         session = Mock()
         session.query.return_value.filter_by.return_value.first.return_value = agent_row
 
@@ -1578,7 +1578,7 @@ class TestDetectCliModelFallback:
 
         assert result is False
         assert "a1" not in make_monitoring_loop._switched_to_fallback_model
-        assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        assert agent_row.cli_model == "Qwen3.8-27B-UD-Q4_K_XL.gguf"
 
     @pytest.mark.asyncio
     async def test_send_failure_at_max_attempts_gives_up_permanently(
@@ -1610,7 +1610,7 @@ class TestDetectCliModelFallback:
 
         assert result is False
         assert "a1" in make_monitoring_loop._switched_to_fallback_model
-        assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        assert agent_row.cli_model == "Qwen3.8-27B-UD-Q4_K_XL.gguf"
 
 
 class TestVerifyCliModelFallback:
@@ -1659,7 +1659,7 @@ class TestVerifyCliModelFallback:
         agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = "Model: xiaomi/mimo-v2.5-pro"
         make_monitoring_loop._pending_fallback_verification = {
-            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time())
+            "a1": ("mimo-v2.5-pro", "Qwen3.8-27B-UD-Q4_K_XL.gguf", time.time())
         }
 
         await make_monitoring_loop._verify_cli_model_fallback(agent)
@@ -1676,7 +1676,7 @@ class TestVerifyCliModelFallback:
         agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = "still on the old model"
         make_monitoring_loop._pending_fallback_verification = {
-            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time())  # just switched
+            "a1": ("mimo-v2.5-pro", "Qwen3.8-27B-UD-Q4_K_XL.gguf", time.time())  # just switched
         }
 
         await make_monitoring_loop._verify_cli_model_fallback(agent)
@@ -1701,7 +1701,7 @@ class TestVerifyCliModelFallback:
         agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = "still on the old model"
         make_monitoring_loop._pending_fallback_verification = {
-            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time() - 200)  # past 2x120s grace
+            "a1": ("mimo-v2.5-pro", "Qwen3.8-27B-UD-Q4_K_XL.gguf", time.time() - 200)  # past 2x120s grace
         }
 
         await make_monitoring_loop._verify_cli_model_fallback(agent)
@@ -1736,7 +1736,7 @@ class TestVerifyCliModelFallback:
         mock_agent_manager.get_agent_output.return_value = "still on the old model"
         make_monitoring_loop._switched_to_fallback_model = {"a1"}
         make_monitoring_loop._pending_fallback_verification = {
-            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time() - 200)
+            "a1": ("mimo-v2.5-pro", "Qwen3.8-27B-UD-Q4_K_XL.gguf", time.time() - 200)
         }
 
         await make_monitoring_loop._verify_cli_model_fallback(agent)
@@ -1745,7 +1745,7 @@ class TestVerifyCliModelFallback:
         # The optimistic write must be reverted -- otherwise the retry this
         # just re-enabled would immediately be blocked by
         # _detect_cli_model_fallback's own "already off default model" gate.
-        assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        assert agent_row.cli_model == "Qwen3.8-27B-UD-Q4_K_XL.gguf"
 
     @pytest.mark.asyncio
     async def test_unconfirmed_past_grace_period_stops_retrying_after_max_attempts(
@@ -1778,14 +1778,14 @@ class TestVerifyCliModelFallback:
         make_monitoring_loop._switched_to_fallback_model = {"a1"}
         make_monitoring_loop._fallback_attempt_count = {"a1": MAX_FALLBACK_ATTEMPTS}
         make_monitoring_loop._pending_fallback_verification = {
-            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time() - 200)
+            "a1": ("mimo-v2.5-pro", "Qwen3.8-27B-UD-Q4_K_XL.gguf", time.time() - 200)
         }
 
         await make_monitoring_loop._verify_cli_model_fallback(agent)
 
         assert "a1" in make_monitoring_loop._switched_to_fallback_model
         # The DB write is still reverted regardless -- we just stop retrying.
-        assert agent_row.cli_model == "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        assert agent_row.cli_model == "Qwen3.8-27B-UD-Q4_K_XL.gguf"
 
     @pytest.mark.asyncio
     async def test_confirmed_switch_does_not_clear_the_one_shot_set(
@@ -1804,7 +1804,7 @@ class TestVerifyCliModelFallback:
         mock_agent_manager.get_agent_output.return_value = "Model: xiaomi/mimo-v2.5-pro"
         make_monitoring_loop._switched_to_fallback_model = {"a1"}
         make_monitoring_loop._pending_fallback_verification = {
-            "a1": ("mimo-v2.5-pro", "Qwen3.6-27B-UD-Q4_K_XL.gguf", time.time())
+            "a1": ("mimo-v2.5-pro", "Qwen3.8-27B-UD-Q4_K_XL.gguf", time.time())
         }
 
         await make_monitoring_loop._verify_cli_model_fallback(agent)
