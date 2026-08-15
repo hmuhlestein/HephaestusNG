@@ -990,6 +990,21 @@ class AgentManager:
             # up on it. Observed live: cli_type=claude with no `claude`
             # binary on PATH -- raising here routes into the existing
             # fallback_cli_tool retry below instead of silently proceeding.
+            #
+            # A CLI that IS on PATH can reject its own launch flags just as
+            # fatally, printing its own error and exiting straight back to
+            # the shell -- same dead-pane outcome, different wording than a
+            # missing binary. Observed live: pi's `Error: Model "..." not
+            # found. Use --list-models to see available models.` (a Phase
+            # row's cli_model baked in before a local model got renamed) --
+            # this went completely undetected by the check above, so the
+            # task-instructions pointer below got typed into a bare zsh
+            # prompt instead ("Task ID: ...", then the bracketed follow-up
+            # line, both literally executed as shell commands), and the
+            # workflow retried the identical doomed dispatch 7 times before
+            # anything noticed, since none of those retries ever route
+            # through the fallback_cli_tool path this check exists to
+            # trigger.
             import re
 
             try:
@@ -998,7 +1013,7 @@ class AgentManager:
             except Exception:
                 launch_check_text = ""
             if re.search(
-                r"command not found|No such file or directory",
+                r"command not found|No such file or directory|model.{0,60}not found",
                 launch_check_text,
                 re.IGNORECASE,
             ):
