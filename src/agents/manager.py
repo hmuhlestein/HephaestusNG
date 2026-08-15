@@ -324,7 +324,7 @@ class AgentManager:
         # for the same project-level check applied to this phase's retry
         # handling.
         if task.phase_id:
-            from src.core.database import Phase, resolve_project_for_workflow
+            from src.core.database import AutopilotProject, Phase, resolve_project_for_workflow
 
             with self.db_manager.get_session() as _phase_session:
                 phase = _phase_session.query(Phase).filter_by(id=task.phase_id).first()
@@ -332,8 +332,6 @@ class AgentManager:
                     project_id, _ = resolve_project_for_workflow(task.workflow_id)
                     review_mode = False
                     if project_id:
-                        from src.core.database import AutopilotProject
-
                         proj = _phase_session.query(AutopilotProject).get(project_id)
                         review_mode = bool(proj and proj.review_mode)
                     if review_mode:
