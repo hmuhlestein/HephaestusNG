@@ -340,7 +340,7 @@ class TestGetNextQueuedTask:
 
 class TestCliModelConcurrencyLimit:
     """Regression: a local model with a single inference slot (e.g. pi's
-    Qwen3.6-27B-UD-Q4_K_XL.gguf) used to have no way to cap concurrency --
+    Qwen3.8-27B-UD-Q4_K_XL.gguf) used to have no way to cap concurrency --
     a second agent dispatched onto it just sat frozen waiting its turn
     instead of doing anything. cli_model_concurrency_limits caps active
     agents per (cli_tool, cli_model) combo. This fixture has no fallback

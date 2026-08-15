@@ -32,7 +32,7 @@ class QueueService:
             max_concurrent_agents: Maximum number of agents that can run concurrently
             cli_model_concurrency_limits: Per-(cli_tool, cli_model) concurrency
                 cap, keyed by "cli_tool/cli_model" (e.g. a local model with a
-                single inference slot: {"pi/Qwen3.6-27B-UD-Q4_K_XL.gguf": 1}).
+                single inference slot: {"pi/Qwen3.8-27B-UD-Q4_K_XL.gguf": 1}).
                 A task whose phase would resolve to a combo already at its
                 limit is dispatched on that cli_tool's configured fallback
                 MODEL instead (same CLI, different model -- e.g. pi staying

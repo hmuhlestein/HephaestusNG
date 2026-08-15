@@ -105,7 +105,7 @@ class Config:
         self.secondary_cli_model_fallback = agents.get("secondary_cli_model_fallback")
         # Per-(cli_tool, cli_model) concurrency cap, keyed by "cli_tool/cli_model"
         # (e.g. a local model with a single inference slot:
-        # {"pi/Qwen3.6-27B-UD-Q4_K_XL.gguf": 1}). Distinct from
+        # {"pi/Qwen3.8-27B-UD-Q4_K_XL.gguf": 1}). Distinct from
         # max_concurrent_agents (mcp section) below, which caps total agents
         # regardless of which CLI/model they're on -- this stops the queue
         # from dispatching a second agent onto a combo that can only

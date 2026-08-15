@@ -72,7 +72,7 @@ llm:
       reasoning_effort: low
 agents:
   default_cli_tool: pi
-  cli_model: Qwen3.6-27B-UD-Q4_K_XL.gguf
+  cli_model: Qwen3.8-27B-UD-Q4_K_XL.gguf
   default_fallback_cli_tool: pi
   default_fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
   cli_model_fallback_wait_seconds: 120
@@ -83,7 +83,7 @@ agents:
   # anything. Cap it at 1; the queue then dispatches the second task on
   # cli_model_fallback (mimo-v2.5-pro, above) instead of stalling it.
   cli_model_concurrency_limits:
-    "pi/Qwen3.6-27B-UD-Q4_K_XL.gguf": 1
+    "pi/Qwen3.8-27B-UD-Q4_K_XL.gguf": 1
   tmux_session_prefix: agent
   health_check_interval: 60
   max_health_failures: 3
