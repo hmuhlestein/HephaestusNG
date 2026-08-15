@@ -20,6 +20,7 @@ from src.interfaces.cli_interface import CodexAgent, LaunchResult
 from src.core.database import (
     Agent,
     AgentLog,
+    AutopilotProject,
     DatabaseManager,
     Phase,
     Task,
@@ -28,9 +29,17 @@ from src.core.database import (
 
 
 @pytest.fixture
-def db_manager(tmp_path):
-    """Create a test database manager."""
+def db_manager(tmp_path, monkeypatch):
+    """Create a test database manager.
+
+    Also points HEPHAESTUS_TEST_DB at this same file -- code under test that
+    calls get_db() directly (e.g. resolve_project_for_workflow, used by the
+    git_commit_push review-mode guard) must see this fixture's data, not the
+    untracked, table-less ":memory:" db conftest.py sets as the module-level
+    default.
+    """
     db_path = tmp_path / "test.db"
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
     db = DatabaseManager(str(db_path))
     db.create_tables()
     return db
@@ -113,11 +122,17 @@ class TestCreateAgentForTask:
             )
 
     @pytest.mark.asyncio
-    async def test_rejects_git_commit_push_without_human_approval(
+    async def test_rejects_git_commit_push_without_human_approval_in_review_mode(
         self, mock_agent_manager, sample_task, db_manager
     ):
-        """Git actions must never be dispatched by the autonomous pipeline."""
+        """Git actions must never be dispatched by the autonomous pipeline
+        while the project is actually in review mode (see the companion
+        full-autopilot test below for the review_mode-off case)."""
         with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1", review_mode=True))
+            session.query(Workflow).filter_by(id=sample_task.workflow_id).update(
+                {"project_id": "proj-1"}
+            )
             session.query(Phase).filter_by(id=sample_task.phase_id).update(
                 {"name": "git_commit_push"}
             )
@@ -132,6 +147,29 @@ class TestCreateAgentForTask:
 
         with db_manager.session_scope() as session:
             assert session.query(Agent).count() == 0
+
+    @pytest.mark.asyncio
+    async def test_does_not_reject_git_commit_push_in_full_autopilot(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Regression: full autopilot (no project, or review_mode off) must
+        retain the original autonomous git_commit_push behavior -- the
+        pipeline dispatches a real agent for it same as any other phase.
+        Only review_mode actually asks for a human in the loop."""
+        with db_manager.session_scope() as session:
+            session.query(Phase).filter_by(id=sample_task.phase_id).update(
+                {"name": "git_commit_push"}
+            )
+
+        sentinel = RuntimeError("sentinel: reached worktree setup, past the review-mode guard")
+        with patch.object(mock_agent_manager, "_scoped_worktree_manager", side_effect=sentinel):
+            with pytest.raises(RuntimeError, match="sentinel"):
+                await mock_agent_manager.create_agent_for_task(
+                    task=sample_task,
+                    enriched_data={},
+                    memories=[],
+                    project_context="",
+                )
 
     @pytest.mark.asyncio
     async def test_creates_agent_with_valid_task(self, mock_agent_manager, sample_task, db_manager):
