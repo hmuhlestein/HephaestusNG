@@ -944,6 +944,125 @@ class TestCreateAgentForTaskFallback:
         # the one that ultimately succeeded and was returned.
         assert discarded_agent_id != agent.id
 
+    @pytest.mark.asyncio
+    async def test_falls_back_when_cli_rejects_its_own_launch_model(
+        self, mock_agent_manager, db_manager
+    ):
+        """Regression: a CLI that IS on PATH but rejects an invalid --model
+        flag (e.g. a Phase row's cli_model baked in before a local model
+        got renamed) prints its own error and exits straight back to the
+        shell -- same dead-pane outcome as a missing binary, but the
+        launch-check regex only ever matched "command not found"/"No such
+        file or directory", so this went completely undetected: the task-
+        instructions pointer got typed into a bare shell prompt instead of
+        the CLI, and nothing ever routed through fallback_cli_tool.
+        Observed live: pi's `Error: Model "..." not found. Use
+        --list-models to see available models.`"""
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-badmodel",
+                    name="Bad Model WF",
+                    status="active",
+                    working_directory="/tmp/test-project-badmodel",
+                    phases_folder_path="/tmp",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-badmodel",
+                    workflow_id="wf-badmodel",
+                    name="development",
+                    order=1,
+                    description="d",
+                    done_definitions=["d"],
+                    cli_tool="pi",
+                    cli_model="Qwen3.6-27B-UD-Q4_K_XL.gguf",
+                    fallback_cli_tool="claude",
+                    fallback_cli_model="sonnet",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-badmodel",
+                    workflow_id="wf-badmodel",
+                    phase_id="phase-badmodel",
+                    raw_description="r",
+                    enriched_description="r",
+                    done_definition="d",
+                    status="pending",
+                )
+            )
+
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-badmodel-agent",
+                "branch_name": "agent-badmodel-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.branch_manager.discard_agent = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-badmodel"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        pane = mock_session.attached_window.attached_pane
+        # pane.cmd() is used for several unrelated purposes before the
+        # launch-check ever runs (env-var export readback, pipe-pane setup,
+        # etc.) -- a plain ordered side_effect list would hand the bad-model
+        # text to the wrong call. Only the launch-check's own exact
+        # `capture-pane -p -S -15` invocation matters here: the primary
+        # (pi) attempt's first such call sees the CLI's own fatal error,
+        # the fallback (claude) attempt's sees a clean pane.
+        capture_pane_calls = {"count": 0}
+
+        def _pane_cmd(*args, **kwargs):
+            if args[:1] == ("capture-pane",) and "-15" in args:
+                capture_pane_calls["count"] += 1
+                if capture_pane_calls["count"] == 1:
+                    return MagicMock(
+                        stdout=['Error: Model "Qwen3.6-27B-UD-Q4_K_XL.gguf" not found. Use --list-models to see available models.']
+                    )
+                return MagicMock(stdout=["$ "])
+            return MagicMock(stdout=[""])
+
+        pane.cmd.side_effect = _pane_cmd
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-badmodel").first()
+
+            with patch("src.agents.manager.get_cli_agent") as mock_get_cli, patch(
+                "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
+            ):
+                mock_cli = MagicMock()
+                mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
+                mock_cli.default_model = "test-model"
+                mock_cli.post_launch_confirmation_keys.return_value = []
+                mock_get_cli.return_value = mock_cli
+                mock_agent_manager._send_initial_prompt_with_retry = AsyncMock(return_value=None)
+                mock_agent_manager._verify_instructions_file_read = AsyncMock(return_value=None)
+                mock_agent_manager._record_cli_session = AsyncMock(return_value=None)
+                mock_agent_manager._send_goal_command = AsyncMock(return_value=None)
+
+                agent = await mock_agent_manager.create_agent_for_task(
+                    task=task,
+                    enriched_data={"description": "d"},
+                    memories=[],
+                    project_context="",
+                    working_directory="/tmp/test-project-badmodel",
+                )
+
+        assert agent is not None
+        # Both launch-check capture-pane calls happened (primary's fatal
+        # one, then the fallback's clean one) -- proving the bad-model
+        # error actually routed into the fallback path instead of silently
+        # proceeding to type the task prompt into a dead shell.
+        assert capture_pane_calls["count"] == 2
+        mock_agent_manager.branch_manager.discard_agent.assert_called_once()
+
 
 class TestCreateAgentForTaskSessionLimitPause:
     """A Claude session-limit rejection with no working fallback will keep
