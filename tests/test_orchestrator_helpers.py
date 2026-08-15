@@ -1602,6 +1602,44 @@ class TestRetryFailedTasks:
             sibling = session.query(Task).filter_by(id="task-sibling").first()
             assert sibling.status == "in_progress", "the active sibling must be untouched"
 
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_phase_less_task_is_not_falsely_superseded_by_an_unrelated_one(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """Regression: Task.phase_id == phase_id compiles to "IS NULL" in
+        SQLAlchemy when phase_id is None, not a no-match -- an unguarded
+        sibling query treated EVERY phase-less task in the database (ad-hoc
+        ones an agent created directly via create_task, e.g. an
+        adversarial re-review request) as a "sibling" of every other one,
+        regardless of workflow or how long apart they were created.
+        Observed live: a phase-less adversarial re-review task got marked
+        "duplicated" of an unrelated debris task from five weeks earlier
+        that also happened to have no phase_id -- the only thing they had
+        in common."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _retry_failed_tasks
+        from src.core.database import Agent, Task
+
+        self._make_workflow_and_failed_task(orch_db_env, phase_id=None)
+        with orch_db_env.session_scope() as session:
+            # An unrelated, also phase-less task -- must NOT be treated as
+            # this one's sibling just because both have phase_id=None.
+            session.add(Task(
+                id="unrelated-null-phase-task", workflow_id="wf-1", phase_id=None,
+                raw_description="r", done_definition="d", status="assigned",
+            ))
+            session.add(Agent(id="new-agent", system_prompt="p", status="working", cli_type="pi"))
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert recovered == ["retried task task-1"]
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "in_progress"
+            assert task.assigned_agent_id == "new-agent"
+            unrelated = session.query(Task).filter_by(id="unrelated-null-phase-task").first()
+            assert unrelated.status == "assigned", "the unrelated task must be untouched"
+
 
 class TestMaybeRetryFailedTasksPreservesGotoTarget:
     """Regression: a task's action/action_target_phase, when it's still
