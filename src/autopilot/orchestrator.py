@@ -1716,17 +1716,29 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
         # "duplicated" -- wasted churn for an outcome already decidable up
         # front. Observed live: task ce152617 (architecture_design) went
         # through exactly this cycle against sibling 8b9d0368.
-        with get_db() as _db_precheck:
-            _sibling = (
-                _db_precheck.query(Task)
-                .filter(
-                    Task.phase_id == phase_id,
-                    Task.id != task_id,
-                    Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+        # Scoped to phase_id being set -- Task.phase_id == None compiles to
+        # "IS NULL" in SQLAlchemy, not a no-match, so an unguarded query
+        # here would treat EVERY phase-less task in the database (ad-hoc
+        # ones an agent created directly via create_task, e.g. an
+        # adversarial re-review request) as a "sibling" of every other one,
+        # regardless of workflow or how many months apart they were
+        # created. Observed live: task 5b29d427 (a phase-less adversarial
+        # re-review request) got marked "duplicated" of task a7430ccc -- an
+        # unrelated debris task from five weeks earlier with no phase_id of
+        # its own, matched only because both were NULL.
+        _sibling_id = None
+        if phase_id:
+            with get_db() as _db_precheck:
+                _sibling = (
+                    _db_precheck.query(Task)
+                    .filter(
+                        Task.phase_id == phase_id,
+                        Task.id != task_id,
+                        Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+                    )
+                    .first()
                 )
-                .first()
-            )
-            _sibling_id = _sibling.id if _sibling else None
+                _sibling_id = _sibling.id if _sibling else None
         if _sibling_id:
             logger.info(
                 f"  Task {task_id[:8]} superseded by active task {_sibling_id[:8]} "
@@ -1769,17 +1781,22 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
                 # meantime -- 5 retries later it was permanently "failed"
                 # with a reason that had nothing to do with what actually
                 # happened.
-                with get_db() as _db_check:
-                    sibling = (
-                        _db_check.query(Task)
-                        .filter(
-                            Task.phase_id == phase_id,
-                            Task.id != task_id,
-                            Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+                # Scoped to phase_id being set -- see the identical guard
+                # (and its rationale) on this function's own pre-check
+                # above; the same NULL-matches-NULL trap applies here too.
+                sibling_id = None
+                if phase_id:
+                    with get_db() as _db_check:
+                        sibling = (
+                            _db_check.query(Task)
+                            .filter(
+                                Task.phase_id == phase_id,
+                                Task.id != task_id,
+                                Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+                            )
+                            .first()
                         )
-                        .first()
-                    )
-                    sibling_id = sibling.id if sibling else None
+                        sibling_id = sibling.id if sibling else None
                 if sibling_id:
                     logger.info(
                         f"  Task {task_id[:8]} superseded by active task {sibling_id[:8]} "
