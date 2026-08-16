@@ -322,7 +322,7 @@ class TestRunPhase0Tiers:
         design_entry = self._make_design_entry(design, tmp_path)
 
         with patch("src.autopilot.orchestrator.run_single_workflow") as mock_run, \
-             patch("src.autopilot.orchestrator.worktree_integration._create_integration_worktree") as mock_wt:
+             patch("src.autopilot.orchestrator._create_integration_worktree") as mock_wt:
             mock_wt.return_value = None  # short-circuit before launching a real workflow
             run_phase0(
                 sdk=MagicMock(),
@@ -395,7 +395,7 @@ class TestRunPhase0Tiers:
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
+            "src.autopilot.orchestrator._create_integration_worktree",
             return_value=worktree,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
@@ -470,7 +470,7 @@ class TestRunPhase0Tiers:
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
+            "src.autopilot.orchestrator._create_integration_worktree",
             return_value=worktree,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
@@ -539,7 +539,7 @@ class TestRunPhase0Tiers:
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
+            "src.autopilot.orchestrator._create_integration_worktree",
             return_value=worktree,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
@@ -637,7 +637,7 @@ class TestRunPhase0ReviewMode:
         workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
+            "src.autopilot.orchestrator._create_integration_worktree",
             return_value=worktree,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
@@ -681,7 +681,7 @@ class TestRunPhase0ReviewMode:
         workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
+            "src.autopilot.orchestrator._create_integration_worktree",
             return_value=worktree,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
@@ -718,7 +718,7 @@ class TestRunPhase0ReviewMode:
         workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
+            "src.autopilot.orchestrator._create_integration_worktree",
             return_value=worktree,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",

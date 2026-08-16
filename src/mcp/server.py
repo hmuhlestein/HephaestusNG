@@ -1733,23 +1733,22 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     exercise the pipeline-resync path don't need to fake one up.
     """
     from src.autopilot.orchestrator import _resync_pipeline_registry
-from src.autopilot.orchestrator.features import (
+    from src.autopilot.orchestrator.features import (
     _clean_stale_assigned_tasks,
     _sync_stale_design_statuses,
     _sync_stale_feature_statuses,
 )
-from src.autopilot.orchestrator.phase_transitions import (
+    from src.autopilot.orchestrator.phase_transitions import (
     _try_advance_phases,
     _maybe_resolve_arbitration,
     _retry_exhausted_paused_workflows,
     _retry_failed_tasks,
 )
-from src.autopilot.orchestrator.worktree_integration import (
+    from src.autopilot.orchestrator.worktree_integration import (
     _recover_abandoned_workflows_missing_worktree,
     _recover_abandoned_workflows_with_completed_phase,
     heal_orphaned_agent_branches,
 )
-    from src.core.database import Workflow
 
     # Feature-table-wide, not scoped to any one workflow -- see its own
     # docstring for why this can't just live inside _run_one_feature.

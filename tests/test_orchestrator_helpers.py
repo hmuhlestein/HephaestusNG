@@ -1559,6 +1559,61 @@ class TestRetryFailedTasks:
             assert task.status == "failed"
             assert task.retry_count == 5
 
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_orphaned_task_incorrectly_capped_bug(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """Characterization of a LIVE BUG, not intended behavior: this
+        function's own comments and code (`is_orphan = "Orphaned" in
+        (task.get("failure_reason") or "")`) claim orphaned tasks (never
+        dispatched) retry indefinitely, exempt from max_task_retries --
+        mirroring _maybe_retry_failed_tasks's identical, and actually
+        working, exemption (see
+        TestMaybeRetryFailedTasks.test_orphaned_task_retries_past_the_cap
+        in test_advance_phases.py).
+
+        But `task` here comes from get_tasks() (engine_client.py), whose
+        returned dict never includes "failure_reason" at all -- so
+        task.get("failure_reason") is always None, is_orphan is always
+        False, and an orphaned task IS capped at max_task_retries just
+        like a genuine agent failure, contradicting this function's own
+        stated intent. Captured as-is (not as the intended behavior) so a
+        future fix or consolidation with _maybe_retry_failed_tasks doesn't
+        silently re-cement this gap -- flip this test's assertions once
+        get_tasks() is fixed to include failure_reason."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
+        from src.core.database import Agent, Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+            )
+            session.add(
+                Task(
+                    id="task-orphan-past-cap",
+                    workflow_id="wf-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="Orphaned: never dispatched to an agent",
+                    retry_count=10,
+                )
+            )
+            session.add(Agent(id="new-agent", system_prompt="p", status="working", cli_type="pi"))
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        # BUG: should be ["retried task task-orphan-past-cap"] per this
+        # function's own documented intent -- see docstring above.
+        assert recovered == []
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-orphan-past-cap").first()
+            assert task.status == "failed"
+            assert task.retry_count == 10
+
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct", return_value=None)
     def test_agent_dispatch_failure_lands_back_on_failed_not_stuck_pending(
         self, mock_create_agent, orch_db_env, tmp_path
@@ -6722,6 +6777,103 @@ class TestCreatePhaseTaskOrphanedPendingAge:
             original = session.query(Task).filter_by(id="task-maybe-orphan").first()
             assert original.status == "pending"
             assert original.failure_reason is None
+
+
+class TestCreatePhaseTaskStaleClaimFallback:
+    """Characterization test for _create_phase_task's own inline
+    stale-claim-clear-and-retry fallback (target_already_claimed=False
+    path) -- one of three near-identical copies of this pattern in this
+    module (the others: _create_corrective_task, already covered by
+    TestCreateCorrectiveTask.test_reopening_resets_stale_task_creation_claim
+    / test_refuses_when_target_phase_is_freshly_claimed_by_another_caller;
+    and the periodic-sweep version _release_stale_task_creation_claims,
+    covered in test_advance_phases.py). Captures current behavior before
+    any future consolidation of these three copies, so that consolidation
+    is provably behavior-preserving rather than just "didn't crash"."""
+
+    def _seed(self, db):
+        from src.core.database import Phase, PhaseExecution, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-stale-claim",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    working_directory="/tmp/wf-stale-claim",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-stale-claim",
+                    workflow_id="wf-stale-claim",
+                    name="architecture_design",
+                    order=2,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-stale-claim",
+                    phase_id="phase-stale-claim",
+                    workflow_execution_id="wf-stale-claim",
+                    status="pending",
+                )
+            )
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_stale_claim_is_cleared_and_dispatch_proceeds(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """A claim held well past CLAIM_STALE_TIMEOUT_SECONDS must be
+        treated as abandoned: cleared, re-claimed, and dispatch proceeds --
+        mirroring _create_corrective_task's identical fallback."""
+        from datetime import datetime
+
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.core.database import PhaseExecution
+
+        self._seed(orch_db_env)
+        with orch_db_env.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-stale-claim").first()
+            execution.task_creation_claimed_at = datetime(2020, 1, 1)
+        mock_create_agent.return_value = {"agent_id": "agent-stale-claim"}
+
+        result = _create_phase_task(
+            "wf-stale-claim", "phase-stale-claim", "architecture_design", "continue",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is True
+        mock_create_agent.assert_called_once()
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_refuses_when_claim_is_fresh(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """A genuinely live, concurrent claim (well within the staleness
+        window) must not be cleared -- dispatch is skipped, matching
+        _create_corrective_task's own negative case."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import (
+            _claim_phase_task_creation,
+            _create_phase_task,
+        )
+
+        self._seed(orch_db_env)
+        with orch_db_env.session_scope() as session:
+            assert _claim_phase_task_creation(session, "phase-stale-claim") is True
+
+        result = _create_phase_task(
+            "wf-stale-claim", "phase-stale-claim", "architecture_design", "continue",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is False
+        mock_create_agent.assert_not_called()
 
 
 class TestWaitForPendingReviews:

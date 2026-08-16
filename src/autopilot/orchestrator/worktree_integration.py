@@ -169,13 +169,22 @@ def _cleanup_worktree(
             except Exception as e:
                 logger.warning(f"Failed to archive tmux transcripts: {e}")
 
-            # Remove worktree
+            # Remove worktree -- routed through WorktreeManager._remove_worktree
+            # (require_clean=True) instead of a raw `git worktree remove
+            # --force`, so a feature pipeline that completed with real,
+            # uncommitted work still sitting in this worktree (e.g. a
+            # crash-induced false "abandoned" marking, or a phase's own
+            # commit step silently failing) doesn't get destroyed here the
+            # same way cleanup_all_stale_branches's identical bypass did
+            # before that bug was fixed.
             if worktree.exists():
-                try:
-                    wt_mgr.main_repo.git.worktree("remove", str(worktree), "--force")
+                wt_mgr._remove_worktree(str(worktree), require_clean=True)
+                if worktree.exists():
+                    logger.warning(
+                        f"Worktree not removed (uncommitted changes or removal error): {worktree}"
+                    )
+                else:
                     logger.info(f"Removed worktree: {worktree}")
-                except Exception as e:
-                    logger.warning(f"Failed to remove worktree: {e}")
 
                 # Clear stale working_directory from any workflows pointing to
                 # this worktree -- but never touch a workflow that's still
