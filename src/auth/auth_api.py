@@ -78,7 +78,7 @@ class UserResponse(BaseModel):
 # Helper functions
 def get_db_manager() -> DatabaseManager:
     """Get database manager instance."""
-    return DatabaseManager()
+    return DatabaseManager(None)
 
 
 def validate_password(password: str) -> bool:

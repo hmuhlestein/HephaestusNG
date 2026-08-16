@@ -178,7 +178,7 @@ def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:
     try:
         from src.core.database import DatabaseManager, Workflow
 
-        db = DatabaseManager()
+        db = DatabaseManager(None)
         session = db.get_session()
         try:
             wf = session.query(Workflow).filter_by(id=workflow_id).first()
@@ -227,7 +227,7 @@ def load_optional_phases(workflow_id: Optional[str] = None) -> set:
     try:
         from src.core.database import DatabaseManager, Workflow
 
-        db = DatabaseManager()
+        db = DatabaseManager(None)
         session = db.get_session()
         try:
             wf = session.query(Workflow).filter_by(id=workflow_id).first()

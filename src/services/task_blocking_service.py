@@ -180,7 +180,7 @@ class TaskBlockingService:
             from src.core.database import DatabaseManager
             from src.services.queue_service import QueueService
 
-            db_manager = DatabaseManager()
+            db_manager = DatabaseManager(None)
             queue_service = QueueService(db_manager)
             queue_service._recalculate_queue_positions()
             logger.info(f"Recalculated queue positions after unblocking task {task_id}")

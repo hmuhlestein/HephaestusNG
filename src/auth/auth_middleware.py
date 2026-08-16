@@ -83,7 +83,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
         )
 
     # Get user from database
-    db_manager = DatabaseManager()
+    db_manager = DatabaseManager(None)
     with db_manager.get_session() as db:
         user = db.query(User).filter(User.id == user_id).first()
 
