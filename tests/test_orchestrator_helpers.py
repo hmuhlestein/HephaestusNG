@@ -2705,7 +2705,7 @@ class TestPeekAgentOutput:
 
 
 class TestGetTaskProgress:
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.get_tasks")
     def test_counts(self, mock_tasks):
         from src.autopilot.orchestrator.engine_client import get_task_progress
 
@@ -2924,8 +2924,8 @@ class TestArchiveAndCleanup:
 
 
 class TestCheckApiCredits:
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
     def test_no_credits_issue(self, mock_agents, mock_tasks):
         from src.autopilot.orchestrator.policy import check_api_credits
 
@@ -2934,8 +2934,8 @@ class TestCheckApiCredits:
         found, msg = check_api_credits()
         assert found is False
 
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
     def test_agent_credit_error(self, mock_agents, mock_tasks):
         from src.autopilot.orchestrator.policy import check_api_credits
 
@@ -2947,8 +2947,8 @@ class TestCheckApiCredits:
         assert found is True
         assert "credit" in msg.lower()
 
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
     def test_task_credit_error(self, mock_agents, mock_tasks):
         from src.autopilot.orchestrator.policy import check_api_credits
 
@@ -2957,8 +2957,8 @@ class TestCheckApiCredits:
         found, msg = check_api_credits()
         assert found is True
 
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
     def test_agent_output_log_credit(self, mock_agents, mock_tasks):
         from src.autopilot.orchestrator.policy import check_api_credits
 
@@ -2976,9 +2976,9 @@ class TestCheckApiCredits:
 
 
 class TestIsDesignFullyComplete:
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
+    @patch("src.autopilot.orchestrator.queue.get_agents")
+    @patch("src.autopilot.orchestrator.queue.get_tasks")
+    @patch("src.autopilot.orchestrator.queue.get_workflow_status")
     def test_incomplete_workflow_status(self, mock_wf, mock_tasks, mock_agents):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.queue import is_design_fully_complete
@@ -2991,9 +2991,9 @@ class TestIsDesignFullyComplete:
         assert result is False
         assert "Workflow status" in msg
 
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
+    @patch("src.autopilot.orchestrator.queue.get_agents")
+    @patch("src.autopilot.orchestrator.queue.get_tasks")
+    @patch("src.autopilot.orchestrator.queue.get_workflow_status")
     def test_incomplete_has_active_tasks(self, mock_wf, mock_tasks, mock_agents):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.queue import is_design_fully_complete
@@ -3023,9 +3023,9 @@ class TestIsDesignFullyComplete:
         assert result is False
         assert "active" in msg.lower()
 
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
+    @patch("src.autopilot.orchestrator.queue.get_agents")
+    @patch("src.autopilot.orchestrator.queue.get_tasks")
+    @patch("src.autopilot.orchestrator.queue.get_workflow_status")
     def test_incomplete_has_failed_tasks(self, mock_wf, mock_tasks, mock_agents):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.queue import is_design_fully_complete
@@ -3056,9 +3056,9 @@ class TestIsDesignFullyComplete:
         assert result is False
         assert "failed" in msg.lower()
 
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
+    @patch("src.autopilot.orchestrator.queue.get_agents")
+    @patch("src.autopilot.orchestrator.queue.get_tasks")
+    @patch("src.autopilot.orchestrator.queue.get_workflow_status")
     def test_incomplete_has_active_agents(self, mock_wf, mock_tasks, mock_agents):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.queue import is_design_fully_complete
@@ -3091,10 +3091,10 @@ class TestIsDesignFullyComplete:
 
 
 class TestAttemptRecovery:
-    @patch("src.autopilot.orchestrator.get_db")
-    @patch("src.autopilot.orchestrator.phase_transitions.api_post")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.core.database.get_db")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
+    @patch("src.autopilot.orchestrator.engine_client.api_post")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
     def test_no_recovery_needed(self, mock_tasks, mock_agents, mock_post, mock_get_db):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.policy import attempt_recovery
@@ -3113,11 +3113,11 @@ class TestAttemptRecovery:
         assert success is False
         assert "No recovery" in msg
 
-    @patch("src.autopilot.orchestrator.get_db")
+    @patch("src.core.database.get_db")
     @patch("src.autopilot.orchestrator.phase_transitions.update_task_status")
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
     def test_retries_failed_tasks(
         self, mock_tasks, mock_agents, mock_create_agent, mock_update_status, mock_get_db
     ):
@@ -3151,7 +3151,7 @@ class TestAttemptRecovery:
         assert "retried" in msg.lower()
 
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
     def test_retry_count_persists_and_eventually_stops(
         self, mock_agents, mock_create_agent, orch_db_env
     ):
@@ -3220,10 +3220,10 @@ class TestAttemptRecovery:
             task = session.query(Task).filter_by(id="t1").first()
             assert task.retry_count == 5  # unchanged -- never even attempted
 
-    @patch("src.autopilot.orchestrator.get_db")
-    @patch("src.autopilot.orchestrator.phase_transitions.api_post")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.core.database.get_db")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
+    @patch("src.autopilot.orchestrator.engine_client.api_post")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
     def test_skips_max_retries(self, mock_tasks, mock_agents, mock_post, mock_get_db):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.policy import attempt_recovery
@@ -3243,15 +3243,13 @@ class TestAttemptRecovery:
         success, msg = attempt_recovery("wf-1", logger)
         assert success is False
 
-    @patch("src.autopilot.orchestrator.phase_transitions.terminate_agent_direct")
+    @patch("src.autopilot.orchestrator.policy.terminate_agent_direct")
     @patch("src.core.database.get_db")
-    @patch("src.autopilot.orchestrator.get_db")
-    @patch("src.autopilot.orchestrator.phase_transitions.api_post")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
-    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
     def test_terminates_stale_agents(
-        self, mock_tasks, mock_agents, mock_post, mock_get_db,
-        mock_core_get_db, mock_terminate, tmp_path
+        self, mock_tasks, mock_agents, mock_get_db,
+        mock_terminate, tmp_path
     ):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.policy import attempt_recovery
@@ -3403,7 +3401,7 @@ class TestRunOneFeatureStateIsolation:
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
+            "src.autopilot.orchestrator._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
@@ -3565,13 +3563,13 @@ class TestRunOneFeatureWorktreeCleanupTiming:
             orch_db_env, tmp_path, feature_key
         )
         with patch(
-            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
+            "src.autopilot.orchestrator._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             return_value=wf_status,
         ), patch(
-            "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
+            "src.autopilot.orchestrator._cleanup_worktree"
         ) as mock_cleanup:
             status = _run_one_feature(
                 sdk=MagicMock(),
@@ -3624,13 +3622,13 @@ class TestRunOneFeatureWorktreeCleanupTiming:
             orch_db_env, tmp_path
         )
         with patch(
-            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
+            "src.autopilot.orchestrator._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             side_effect=RuntimeError("boom"),
         ), patch(
-            "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
+            "src.autopilot.orchestrator._cleanup_worktree"
         ) as mock_cleanup:
             status = _run_one_feature(
                 sdk=MagicMock(),
@@ -3712,13 +3710,13 @@ class TestRunOneFeatureWithDependencies:
         worktree_dir.mkdir()
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
+            "src.autopilot.orchestrator._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             return_value="completed",
         ), patch(
-            "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
+            "src.autopilot.orchestrator._cleanup_worktree"
         ):
             status = _run_one_feature(
                 sdk=MagicMock(),
@@ -3829,13 +3827,13 @@ class TestRunOneFeatureThreadsProjectId:
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
+            "src.autopilot.orchestrator._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             side_effect=fake_run_single_workflow,
         ), patch(
-            "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
+            "src.autopilot.orchestrator._cleanup_worktree"
         ):
             _run_one_feature(
                 sdk=MagicMock(),

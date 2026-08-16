@@ -209,15 +209,13 @@ class AutopilotService:
         from src.autopilot.orchestrator.state import (
             _RUNNING_STATE_KEY_LEGACY,
             _RUNNING_STATE_KEY_PREFIX,
+            _delete_project_context,
+            _get_project_context,
+            _get_project_contexts_by_prefix,
+            _resolve_project_id,
+            _running_state_key,
+            _set_project_context,
         )
-from src.autopilot.orchestrator.state import (
-    _delete_project_context,
-    _get_project_context,
-    _get_project_contexts_by_prefix,
-    _resolve_project_id,
-    _running_state_key,
-    _set_project_context,
-)
         from src.core.database import get_db
 
         results: List[Tuple[str, Dict[str, Any]]] = []
