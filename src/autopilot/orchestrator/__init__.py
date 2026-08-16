@@ -1130,7 +1130,7 @@ def run_single_workflow(
                             PhaseExecution,
                         )
 
-                        _db = DatabaseManager()
+                        _db = DatabaseManager(None)
                         _session = _db.get_session()
                         try:
                             pending_phases = (
@@ -2804,7 +2804,7 @@ def _register_orchestrator_agent(log_dir: Path, cli_tool: str, logger: Orchestra
 
         from src.core.database import Agent, DatabaseManager
 
-        db_manager = DatabaseManager()
+        db_manager = DatabaseManager(None)
         session = db_manager.get_session()
         try:
             new_agent_id = f"orchestrator-{uuid.uuid4().hex[:8]}"

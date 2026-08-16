@@ -1720,7 +1720,7 @@ def _fire_phase_transition(
         # Mark phase complete and get engine decision
         from src.core.database import DatabaseManager
 
-        pm = PhaseManager(DatabaseManager())
+        pm = PhaseManager(DatabaseManager(None))
         pm.workflow_id = workflow_id
         result = (
             pm.mark_phase_complete(phase_id, "Phase completed", force_action="continue")
@@ -1934,7 +1934,7 @@ def _phase_currently_passes(
             phase_name, Path(working_directory), skip_independent_verification=True
         )
 
-        pm = PhaseManager(DatabaseManager())
+        pm = PhaseManager(DatabaseManager(None))
         session = pm.db_manager.get_session()
         try:
             orchestrator = pm._get_orchestrator(session, workflow_id)
@@ -2185,7 +2185,7 @@ def _trigger_arbitration(
                 task.status = "failed"
                 task.failure_reason = "Failed to dispatch arbitration agent"
 
-        pm = PhaseManager(DatabaseManager())
+        pm = PhaseManager(DatabaseManager(None))
         pm.workflow_id = workflow_id
         pm.mark_phase_complete(
             phase_id,
@@ -2343,7 +2343,7 @@ def _resolve_arbitration_outcome(
     """
     logger.warning(f"[ARBITRATE] {phase_name}: decision={decision} -- {reason}")
 
-    pm = PhaseManager(DatabaseManager())
+    pm = PhaseManager(DatabaseManager(None))
     pm.workflow_id = workflow_id
     result: Dict[str, Any] = {}
     try:
