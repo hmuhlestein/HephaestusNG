@@ -598,7 +598,7 @@ class TestRunningStatePersistence:
         first read after this change deploys must migrate it onto the
         namespaced key in place, or it silently stops auto-resuming."""
         from src.autopilot.orchestrator.state import _RUNNING_STATE_KEY_LEGACY
-from src.autopilot.orchestrator.state import (
+        from src.autopilot.orchestrator.state import (
     _running_state_key,
     _set_project_context,
 )

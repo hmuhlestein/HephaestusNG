@@ -74,7 +74,7 @@ class TestForensicsAnalysisGating:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition", return_value=True
+            "src.autopilot.orchestrator.phase_transitions._fire_phase_transition", return_value=True
         ) as mock_fire:
             result = _create_phase_task(
                 "wf-forensics", "phase-forensics", "forensics_analysis",
@@ -102,7 +102,7 @@ class TestForensicsAnalysisGating:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition", return_value=True
+            "src.autopilot.orchestrator.phase_transitions._fire_phase_transition", return_value=True
         ) as mock_fire:
             _create_phase_task(
                 "wf-forensics", "phase-forensics", "forensics_analysis",
@@ -149,7 +149,7 @@ class TestForensicsAnalysisGating:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition", return_value=True
+            "src.autopilot.orchestrator.phase_transitions._fire_phase_transition", return_value=True
         ) as mock_fire:
             _create_phase_task(
                 "wf-other", "phase-dev", "development", "continue", logger

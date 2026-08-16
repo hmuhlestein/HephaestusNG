@@ -68,7 +68,7 @@ class TestSweepCompletedWorkflowWorktrees:
 
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
 
-        with patch("src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree") as mock_cleanup:
+        with patch("src.autopilot.orchestrator.worktree_integration._cleanup_worktree") as mock_cleanup:
             removed = sweep_completed_workflow_worktrees(MagicMock())
 
         assert removed == 1
@@ -103,7 +103,7 @@ class TestSweepCompletedWorkflowWorktrees:
 
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
 
-        with patch("src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree") as mock_cleanup:
+        with patch("src.autopilot.orchestrator.worktree_integration._cleanup_worktree") as mock_cleanup:
             removed = sweep_completed_workflow_worktrees(MagicMock())
 
         assert removed == 0
@@ -133,7 +133,7 @@ class TestSweepCompletedWorkflowWorktrees:
 
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
 
-        with patch("src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree") as mock_cleanup:
+        with patch("src.autopilot.orchestrator.worktree_integration._cleanup_worktree") as mock_cleanup:
             removed = sweep_completed_workflow_worktrees(MagicMock())
 
         assert removed == 0
@@ -165,7 +165,7 @@ class TestSweepCompletedWorkflowWorktrees:
 
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
 
-        with patch("src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree") as mock_cleanup:
+        with patch("src.autopilot.orchestrator.worktree_integration._cleanup_worktree") as mock_cleanup:
             removed = sweep_completed_workflow_worktrees(MagicMock())
 
         assert removed == 0
@@ -222,7 +222,7 @@ class TestSweepCompletedWorkflowWorktrees:
 
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
 
-        with patch("src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree") as mock_cleanup:
+        with patch("src.autopilot.orchestrator.worktree_integration._cleanup_worktree") as mock_cleanup:
             removed = sweep_completed_workflow_worktrees(MagicMock())
 
         assert removed == 0
