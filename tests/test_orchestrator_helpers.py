@@ -3113,13 +3113,15 @@ class TestAttemptRecovery:
         assert success is False
         assert "No recovery" in msg
 
+    @patch("src.autopilot.orchestrator.phase_transitions.get_db")
     @patch("src.core.database.get_db")
     @patch("src.autopilot.orchestrator.phase_transitions.update_task_status")
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     @patch("src.autopilot.orchestrator.policy.get_agents")
-    @patch("src.autopilot.orchestrator.policy.get_tasks")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
     def test_retries_failed_tasks(
-        self, mock_tasks, mock_agents, mock_create_agent, mock_update_status, mock_get_db
+        self, mock_tasks, mock_agents, mock_create_agent, mock_update_status,
+        mock_get_db, mock_pt_get_db
     ):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.policy import attempt_recovery
@@ -3137,6 +3139,7 @@ class TestAttemptRecovery:
         mock_db.__enter__ = MagicMock(return_value=mock_db)
         mock_db.__exit__ = MagicMock(return_value=False)
         mock_get_db.return_value = mock_db
+        mock_pt_get_db.return_value = mock_db
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_tasks.side_effect = [
@@ -3245,11 +3248,13 @@ class TestAttemptRecovery:
 
     @patch("src.autopilot.orchestrator.policy.terminate_agent_direct")
     @patch("src.core.database.get_db")
+    @patch("src.core.database.get_db")
+    @patch("src.autopilot.orchestrator.engine_client.api_post")
     @patch("src.autopilot.orchestrator.policy.get_agents")
     @patch("src.autopilot.orchestrator.policy.get_tasks")
     def test_terminates_stale_agents(
-        self, mock_tasks, mock_agents, mock_get_db,
-        mock_terminate, tmp_path
+        self, mock_tasks, mock_agents, mock_post, mock_get_db,
+        mock_core_get_db, mock_terminate, tmp_path
     ):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.policy import attempt_recovery
