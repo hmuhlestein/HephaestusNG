@@ -3027,7 +3027,7 @@ class TestStuckTaskNudgeCap:
     ):
         task_id, agent_id = self._seed_stuck_task(real_db)
 
-        with patch("src.mcp.autopilot_api.run_health_audit", return_value={"findings": []}):
+        with patch("src.mcp.autopilot.control_routes.run_health_audit", return_value={"findings": []}):
             await audit_monitor._audit_system_health()
 
         mock_agent_manager.send_message_to_agent.assert_called_once()
@@ -3045,7 +3045,7 @@ class TestStuckTaskNudgeCap:
 
         task_id, agent_id = self._seed_stuck_task(real_db)
 
-        with patch("src.mcp.autopilot_api.run_health_audit", return_value={"findings": []}):
+        with patch("src.mcp.autopilot.control_routes.run_health_audit", return_value={"findings": []}):
             # Each cycle: agent is idle (due for a nudge -- grace period
             # from the previous nudge is force-expired directly, since real
             # wall-clock time won't elapse meaningfully in a fast test),
@@ -3096,7 +3096,7 @@ class TestStuckTaskNudgeCap:
 
         task_id, agent_id = self._seed_stuck_task(real_db, idle_minutes=0)
 
-        with patch("src.mcp.autopilot_api.run_health_audit", return_value={"findings": []}):
+        with patch("src.mcp.autopilot.control_routes.run_health_audit", return_value={"findings": []}):
             for _ in range(MAX_STUCK_TASK_NUDGES + 2):
                 self._set_agent_last_activity(real_db, agent_id, datetime.utcnow())
                 await audit_monitor._audit_system_health()
@@ -3164,7 +3164,7 @@ class TestStuckTaskPromotionClearsStaleFailureReason:
         session.commit()
         session.close()
 
-        with patch("src.mcp.autopilot_api.run_health_audit", return_value={"findings": []}):
+        with patch("src.mcp.autopilot.control_routes.run_health_audit", return_value={"findings": []}):
             await audit_monitor._audit_system_health()
 
         session = real_db.get_session()

@@ -2873,7 +2873,7 @@ class MonitoringLoop:
 
         Delegates to shared run_health_audit() function.
         """
-        from src.mcp.autopilot_api import run_health_audit
+        from src.mcp.autopilot.control_routes import run_health_audit
 
         result = run_health_audit(self.db_manager)
 

@@ -697,7 +697,7 @@ class TestSecurityValidation:
         """Test that negative cost values are rejected."""
         from pydantic import ValidationError
 
-        from src.mcp.autopilot_api import CostEntryCreate
+        from src.mcp.autopilot.project_routes import CostEntryCreate
 
         with pytest.raises(ValidationError, match="cost_usd must be non-negative"):
             CostEntryCreate(
@@ -709,7 +709,7 @@ class TestSecurityValidation:
         """Test that excessively large cost values are rejected."""
         from pydantic import ValidationError
 
-        from src.mcp.autopilot_api import CostEntryCreate
+        from src.mcp.autopilot.project_routes import CostEntryCreate
 
         with pytest.raises(ValidationError, match="cost_usd exceeds maximum"):
             CostEntryCreate(
@@ -721,7 +721,7 @@ class TestSecurityValidation:
         """Test that invalid source values are rejected."""
         from pydantic import ValidationError
 
-        from src.mcp.autopilot_api import CostEntryCreate
+        from src.mcp.autopilot.project_routes import CostEntryCreate
 
         with pytest.raises(ValidationError, match="source must be one of"):
             CostEntryCreate(
@@ -731,7 +731,7 @@ class TestSecurityValidation:
 
     def test_accept_valid_source(self):
         """Test that valid source values are accepted."""
-        from src.mcp.autopilot_api import CostEntryCreate
+        from src.mcp.autopilot.project_routes import CostEntryCreate
 
         for source in ["pi", "claude_code", "opencode", "codex", "openrouter_direct"]:
             entry = CostEntryCreate(source=source, cost_usd=1.0, task_id="task-123")
@@ -741,7 +741,7 @@ class TestSecurityValidation:
         """Test that negative token counts are rejected."""
         from pydantic import ValidationError
 
-        from src.mcp.autopilot_api import CostEntryCreate
+        from src.mcp.autopilot.project_routes import CostEntryCreate
 
         with pytest.raises(ValidationError, match="token counts must be non-negative"):
             CostEntryCreate(
@@ -754,7 +754,7 @@ class TestSecurityValidation:
         """Test that excessively large token counts are rejected."""
         from pydantic import ValidationError
 
-        from src.mcp.autopilot_api import CostEntryCreate
+        from src.mcp.autopilot.project_routes import CostEntryCreate
 
         with pytest.raises(ValidationError, match="token count exceeds maximum"):
             CostEntryCreate(
@@ -765,14 +765,14 @@ class TestSecurityValidation:
 
     def test_accept_zero_cost(self):
         """Test that zero cost is valid (could be free tier or cached)."""
-        from src.mcp.autopilot_api import CostEntryCreate
+        from src.mcp.autopilot.project_routes import CostEntryCreate
 
         entry = CostEntryCreate(source="pi", cost_usd=0.0, task_id="task-123")
         assert entry.cost_usd == 0.0
 
     def test_accept_valid_cost_range(self):
         """Test that reasonable cost values are accepted."""
-        from src.mcp.autopilot_api import CostEntryCreate
+        from src.mcp.autopilot.project_routes import CostEntryCreate
 
         for cost in [0.001, 0.05, 1.0, 50.0, 100.0, 999.0]:
             entry = CostEntryCreate(source="pi", cost_usd=cost, task_id="task-123")
@@ -786,7 +786,7 @@ class TestSecurityValidation:
         """
         from pydantic import ValidationError
 
-        from src.mcp.autopilot_api import CostEntryCreate
+        from src.mcp.autopilot.project_routes import CostEntryCreate
 
         with pytest.raises(ValidationError, match="At least one of task_id or workflow_id"):
             CostEntryCreate(
@@ -796,7 +796,7 @@ class TestSecurityValidation:
 
     def test_accept_with_task_id_only(self):
         """Test that cost entries with only task_id are accepted."""
-        from src.mcp.autopilot_api import CostEntryCreate
+        from src.mcp.autopilot.project_routes import CostEntryCreate
 
         entry = CostEntryCreate(source="pi", cost_usd=1.0, task_id="task-123")
         assert entry.task_id == "task-123"
@@ -804,7 +804,7 @@ class TestSecurityValidation:
 
     def test_accept_with_workflow_id_only(self):
         """Test that cost entries with only workflow_id are accepted."""
-        from src.mcp.autopilot_api import CostEntryCreate
+        from src.mcp.autopilot.project_routes import CostEntryCreate
 
         entry = CostEntryCreate(source="pi", cost_usd=1.0, workflow_id="wf-456")
         assert entry.workflow_id == "wf-456"
@@ -812,7 +812,7 @@ class TestSecurityValidation:
 
     def test_accept_with_both_ids(self):
         """Test that cost entries with both task_id and workflow_id are accepted."""
-        from src.mcp.autopilot_api import CostEntryCreate
+        from src.mcp.autopilot.project_routes import CostEntryCreate
 
         entry = CostEntryCreate(source="pi", cost_usd=1.0, task_id="task-123", workflow_id="wf-456")
         assert entry.task_id == "task-123"
