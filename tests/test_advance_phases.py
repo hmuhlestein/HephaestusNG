@@ -1468,8 +1468,8 @@ class TestReleaseStaleTaskCreationClaims:
         from datetime import timedelta
 
         from src.autopilot.orchestrator.phase_transitions import CLAIM_STALE_TIMEOUT_SECONDS
-from src.autopilot.orchestrator import PhaseExecution
-from src.autopilot.orchestrator.phase_transitions import _release_stale_task_creation_claims
+        from src.autopilot.orchestrator import PhaseExecution
+        from src.autopilot.orchestrator.phase_transitions import _release_stale_task_creation_claims
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -1497,8 +1497,8 @@ from src.autopilot.orchestrator.phase_transitions import _release_stale_task_cre
         from datetime import timedelta
 
         from src.autopilot.orchestrator.phase_transitions import CLAIM_STALE_TIMEOUT_SECONDS
-from src.autopilot.orchestrator import PhaseExecution
-from src.autopilot.orchestrator.phase_transitions import _release_stale_task_creation_claims
+        from src.autopilot.orchestrator import PhaseExecution
+        from src.autopilot.orchestrator.phase_transitions import _release_stale_task_creation_claims
 
         with db_manager.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
@@ -1549,8 +1549,8 @@ from src.autopilot.orchestrator.phase_transitions import _release_stale_task_cre
         from datetime import timedelta
 
         from src.autopilot.orchestrator.phase_transitions import CLAIM_STALE_TIMEOUT_SECONDS
-from src.autopilot.orchestrator import PhaseExecution
-from src.autopilot.orchestrator.phase_transitions import _advance_phases
+        from src.autopilot.orchestrator import PhaseExecution
+        from src.autopilot.orchestrator.phase_transitions import _advance_phases
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
