@@ -1098,7 +1098,7 @@ async def startup_event():
     # for the opposite case (the workflow finished, not that it was
     # interrupted mid-flight).
     try:
-        from src.autopilot.orchestrator import sweep_completed_workflow_worktrees
+        from src.autopilot.orchestrator.worktree_integration import sweep_completed_workflow_worktrees
 
         swept = sweep_completed_workflow_worktrees(logger)
         if swept:
@@ -1732,19 +1732,23 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     be used here). Optional/defaulted so direct test calls that don't
     exercise the pipeline-resync path don't need to fake one up.
     """
-    from src.autopilot.orchestrator import (
-        _try_advance_phases,
-        _clean_stale_assigned_tasks,
-        _maybe_resolve_arbitration,
-        _recover_abandoned_workflows_missing_worktree,
-        _recover_abandoned_workflows_with_completed_phase,
-        _resync_pipeline_registry,
-        _retry_exhausted_paused_workflows,
-        _retry_failed_tasks,
-        _sync_stale_design_statuses,
-        _sync_stale_feature_statuses,
-        heal_orphaned_agent_branches,
-    )
+    from src.autopilot.orchestrator import _resync_pipeline_registry
+from src.autopilot.orchestrator.features import (
+    _clean_stale_assigned_tasks,
+    _sync_stale_design_statuses,
+    _sync_stale_feature_statuses,
+)
+from src.autopilot.orchestrator.phase_transitions import (
+    _try_advance_phases,
+    _maybe_resolve_arbitration,
+    _retry_exhausted_paused_workflows,
+    _retry_failed_tasks,
+)
+from src.autopilot.orchestrator.worktree_integration import (
+    _recover_abandoned_workflows_missing_worktree,
+    _recover_abandoned_workflows_with_completed_phase,
+    heal_orphaned_agent_branches,
+)
     from src.core.database import Workflow
 
     # Feature-table-wide, not scoped to any one workflow -- see its own
@@ -4872,7 +4876,7 @@ async def start_workflow_execution(request: StartWorkflowRequest):
             # agent run duplicating work the first task had already done).
             phase_uuid = initial_task_info.get("phase_uuid")
             if phase_uuid:
-                from src.autopilot.orchestrator import _claim_phase_task_creation
+                from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation
                 from src.core.database import get_db as _get_db_for_claim
 
                 with _get_db_for_claim() as _claim_db:
@@ -4905,9 +4909,7 @@ async def start_workflow_execution(request: StartWorkflowRequest):
                 # _release_phase_task_creation_claim's own docstring for
                 # what silently breaks without this call.
                 try:
-                    from src.autopilot.orchestrator import (
-                        _release_phase_task_creation_claim,
-                    )
+                    from src.autopilot.orchestrator.phase_transitions import _release_phase_task_creation_claim
                     from src.core.database import get_db as _get_db_for_release
 
                     with _get_db_for_release() as _pdb:

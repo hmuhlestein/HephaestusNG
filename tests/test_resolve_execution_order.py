@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.autopilot.orchestrator import _resolve_execution_order
+from src.autopilot.orchestrator.features import _resolve_execution_order
 
 
 @pytest.fixture

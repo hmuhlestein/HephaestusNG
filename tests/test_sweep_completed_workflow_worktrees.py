@@ -45,7 +45,7 @@ class TestSweepCompletedWorkflowWorktrees:
     def test_cleans_up_orphaned_worktree_for_completed_workflow(
         self, tmp_path, test_db, config, monkeypatch
     ):
-        from src.autopilot.orchestrator import sweep_completed_workflow_worktrees
+        from src.autopilot.orchestrator.worktree_integration import sweep_completed_workflow_worktrees
 
         worktree = _make_worktree(tmp_path, ".worktrees/wt_feature-x")
         project_path = tmp_path / "project"
@@ -68,7 +68,7 @@ class TestSweepCompletedWorkflowWorktrees:
 
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
 
-        with patch("src.autopilot.orchestrator._cleanup_worktree") as mock_cleanup:
+        with patch("src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree") as mock_cleanup:
             removed = sweep_completed_workflow_worktrees(MagicMock())
 
         assert removed == 1
@@ -80,7 +80,7 @@ class TestSweepCompletedWorkflowWorktrees:
     def test_skips_workflow_whose_worktree_is_already_gone(
         self, tmp_path, test_db, config, monkeypatch
     ):
-        from src.autopilot.orchestrator import sweep_completed_workflow_worktrees
+        from src.autopilot.orchestrator.worktree_integration import sweep_completed_workflow_worktrees
 
         worktree = _make_worktree(tmp_path, ".worktrees/wt_feature-y", real=False)
         project_path = tmp_path / "project"
@@ -103,7 +103,7 @@ class TestSweepCompletedWorkflowWorktrees:
 
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
 
-        with patch("src.autopilot.orchestrator._cleanup_worktree") as mock_cleanup:
+        with patch("src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree") as mock_cleanup:
             removed = sweep_completed_workflow_worktrees(MagicMock())
 
         assert removed == 0
@@ -112,7 +112,7 @@ class TestSweepCompletedWorkflowWorktrees:
     def test_skips_workflow_missing_project_path_instead_of_guessing(
         self, tmp_path, test_db, config, monkeypatch
     ):
-        from src.autopilot.orchestrator import sweep_completed_workflow_worktrees
+        from src.autopilot.orchestrator.worktree_integration import sweep_completed_workflow_worktrees
 
         worktree = _make_worktree(tmp_path, ".worktrees/wt_feature-z")
 
@@ -133,7 +133,7 @@ class TestSweepCompletedWorkflowWorktrees:
 
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
 
-        with patch("src.autopilot.orchestrator._cleanup_worktree") as mock_cleanup:
+        with patch("src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree") as mock_cleanup:
             removed = sweep_completed_workflow_worktrees(MagicMock())
 
         assert removed == 0
@@ -142,7 +142,7 @@ class TestSweepCompletedWorkflowWorktrees:
     def test_does_not_touch_active_or_paused_workflow_worktrees(
         self, tmp_path, test_db, config, monkeypatch
     ):
-        from src.autopilot.orchestrator import sweep_completed_workflow_worktrees
+        from src.autopilot.orchestrator.worktree_integration import sweep_completed_workflow_worktrees
 
         worktree = _make_worktree(tmp_path, ".worktrees/wt_feature-active")
         project_path = tmp_path / "project"
@@ -165,7 +165,7 @@ class TestSweepCompletedWorkflowWorktrees:
 
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
 
-        with patch("src.autopilot.orchestrator._cleanup_worktree") as mock_cleanup:
+        with patch("src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree") as mock_cleanup:
             removed = sweep_completed_workflow_worktrees(MagicMock())
 
         assert removed == 0
@@ -180,7 +180,7 @@ class TestSweepCompletedWorkflowWorktrees:
         through a different path. Force-removing the worktree in that
         case destroys the live agent's in-progress work and leaves it
         stuck forever with a deleted cwd."""
-        from src.autopilot.orchestrator import sweep_completed_workflow_worktrees
+        from src.autopilot.orchestrator.worktree_integration import sweep_completed_workflow_worktrees
 
         worktree = _make_worktree(tmp_path, ".worktrees/wt_feature-straggler")
         project_path = tmp_path / "project"
@@ -222,7 +222,7 @@ class TestSweepCompletedWorkflowWorktrees:
 
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
 
-        with patch("src.autopilot.orchestrator._cleanup_worktree") as mock_cleanup:
+        with patch("src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree") as mock_cleanup:
             removed = sweep_completed_workflow_worktrees(MagicMock())
 
         assert removed == 0

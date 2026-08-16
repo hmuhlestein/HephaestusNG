@@ -15,7 +15,7 @@ from src.core.constants import CONTEXT_DIR_NAME
 
 class TestCleanupWorktreeTmuxArchive:
     def test_archives_tmux_logs_before_worktree_removal(self, tmp_path):
-        from src.autopilot.orchestrator import _cleanup_worktree
+        from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree
 
         worktree = tmp_path / "worktree"
         project_path = tmp_path / "project"
@@ -40,7 +40,7 @@ class TestCleanupWorktreeTmuxArchive:
     def test_merges_into_existing_archive_without_clobbering(self, tmp_path):
         """Regression: a second feature's cleanup must not wipe out a first
         feature's already-archived transcripts (dest dir already has files)."""
-        from src.autopilot.orchestrator import _cleanup_worktree
+        from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree
 
         worktree = tmp_path / "worktree"
         project_path = tmp_path / "project"
@@ -66,7 +66,7 @@ class TestCleanupWorktreeTmuxArchive:
     def test_no_tmux_dir_does_not_error(self, tmp_path):
         """No .hephaestus/tmux/ in the worktree (e.g. pipe-pane setup failed
         earlier) -> cleanup must not crash."""
-        from src.autopilot.orchestrator import _cleanup_worktree
+        from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree
 
         worktree = tmp_path / "worktree"
         worktree.mkdir()

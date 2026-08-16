@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.autopilot.orchestrator import _validate_features_json
+from src.autopilot.orchestrator.features import _validate_features_json
 
 
 class TestValidateFeaturesJson:

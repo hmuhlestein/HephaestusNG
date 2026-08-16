@@ -48,7 +48,7 @@ def _seed_sentinel_agents(db_manager):
     constant string (ARBITRATION_CREATED_BY, _orchestrator_agent_id).
     Without these, any code path that sets
     task.created_by_agent_id=ARBITRATION_CREATED_BY FK-fails."""
-    from src.autopilot.orchestrator import ARBITRATION_CREATED_BY
+    from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
     with db_manager.session_scope() as session:
         for aid in (ARBITRATION_CREATED_BY, "orchestrator"):
             if not session.query(Agent).filter_by(id=aid).first():
@@ -128,7 +128,7 @@ class TestClaimPhaseTaskCreation:
     phase's first task."""
 
     def test_first_caller_wins(self, db_manager, sample_workflow):
-        from src.autopilot.orchestrator import _claim_phase_task_creation
+        from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation
 
         with db_manager.session_scope() as session:
             assert _claim_phase_task_creation(session, "phase-1") is True
@@ -136,7 +136,7 @@ class TestClaimPhaseTaskCreation:
     def test_second_caller_loses(self, db_manager, sample_workflow):
         """The core guarantee: only one of two callers racing for the same
         phase can ever win the claim, regardless of ordering."""
-        from src.autopilot.orchestrator import _claim_phase_task_creation
+        from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation
 
         with db_manager.session_scope() as session:
             first = _claim_phase_task_creation(session, "phase-1")
@@ -148,7 +148,7 @@ class TestClaimPhaseTaskCreation:
 
     def test_different_phases_both_win(self, db_manager, sample_workflow):
         """Claims are scoped per phase -- unrelated phases don't block each other."""
-        from src.autopilot.orchestrator import _claim_phase_task_creation
+        from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation
 
         with db_manager.session_scope() as session:
             session.add(
@@ -183,10 +183,10 @@ class TestReleasePhaseTaskCreationClaim:
     """
 
     def test_clears_claim_and_marks_in_progress(self, db_manager, sample_workflow):
-        from src.autopilot.orchestrator import (
-            _claim_phase_task_creation,
-            _release_phase_task_creation_claim,
-        )
+        from src.autopilot.orchestrator.phase_transitions import (
+    _claim_phase_task_creation,
+    _release_phase_task_creation_claim,
+)
 
         with db_manager.session_scope() as session:
             exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
@@ -206,7 +206,7 @@ class TestReleasePhaseTaskCreationClaim:
 
     def test_missing_phase_execution_is_a_noop(self, db_manager, sample_workflow):
         """No PhaseExecution row for this phase yet -- must not raise."""
-        from src.autopilot.orchestrator import _release_phase_task_creation_claim
+        from src.autopilot.orchestrator.phase_transitions import _release_phase_task_creation_claim
 
         with db_manager.session_scope() as session:
             _release_phase_task_creation_claim(session, "nonexistent-phase")
@@ -215,10 +215,10 @@ class TestReleasePhaseTaskCreationClaim:
         """Only flip pending/completed -> in_progress -- don't stomp a status
         this call didn't set (e.g. a race where something else already
         advanced it further)."""
-        from src.autopilot.orchestrator import (
-            _claim_phase_task_creation,
-            _release_phase_task_creation_claim,
-        )
+        from src.autopilot.orchestrator.phase_transitions import (
+    _claim_phase_task_creation,
+    _release_phase_task_creation_claim,
+)
 
         with db_manager.session_scope() as session:
             _claim_phase_task_creation(session, "phase-1")
@@ -253,10 +253,10 @@ class TestReleasePhaseTaskCreationClaim:
         forever. Unlike the tests above, this one deliberately keeps
         claim + release on ONE session with a pre-load in between, since
         the bug only reproduces when they share a session."""
-        from src.autopilot.orchestrator import (
-            _claim_phase_task_creation,
-            _release_phase_task_creation_claim,
-        )
+        from src.autopilot.orchestrator.phase_transitions import (
+    _claim_phase_task_creation,
+    _release_phase_task_creation_claim,
+)
 
         with db_manager.session_scope() as session:
             # The pre-load every real caller does (e.g. _get_phase_statuses)
@@ -293,10 +293,10 @@ class TestReleasePhaseTaskCreationClaim:
         task's own created_at instead. Observed live: a UI-launched
         workflow's phase 1 task completed successfully while a duplicate
         self-heal task sat pending beside it, created ~15s later."""
-        from src.autopilot.orchestrator import (
-            _claim_phase_task_creation,
-            _release_phase_task_creation_claim,
-        )
+        from src.autopilot.orchestrator.phase_transitions import (
+    _claim_phase_task_creation,
+    _release_phase_task_creation_claim,
+)
 
         task_created_at = datetime.utcnow() - timedelta(seconds=15)
         with db_manager.session_scope() as session:
@@ -333,7 +333,7 @@ class TestAdvancePhases:
 
     def test_returns_false_when_workflow_not_found(self, db_manager):
         """Should return False when workflow doesn't exist."""
-        from src.autopilot.orchestrator import _advance_phases
+        from src.autopilot.orchestrator.phase_transitions import _advance_phases
 
         logger = MagicMock()
         result = _advance_phases("nonexistent-wf", logger)
@@ -341,7 +341,7 @@ class TestAdvancePhases:
 
     def test_returns_false_when_workflow_paused(self, db_manager, sample_workflow):
         """Should return False when workflow is paused (no done tasks)."""
-        from src.autopilot.orchestrator import _advance_phases
+        from src.autopilot.orchestrator.phase_transitions import _advance_phases
 
         # Pause the workflow
         with db_manager.session_scope() as session:
@@ -352,10 +352,10 @@ class TestAdvancePhases:
         result = _advance_phases("wf-1", logger)
         assert result is False
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_auto_resumes_paused_workflow_with_done_task(self, mock_create_agent, db_manager, sample_workflow):
         """Should auto-resume paused workflow if it has a done task in stalled phase."""
-        from src.autopilot.orchestrator import _advance_phases
+        from src.autopilot.orchestrator.phase_transitions import _advance_phases
 
         mock_create_agent.return_value = {"agent_id": "new-agent-1"}
 
@@ -392,7 +392,7 @@ class TestAdvancePhases:
         "active" on its very next tick (~20s later), fighting the user's
         pause until whatever made the phase look stalled resolved on its
         own."""
-        from src.autopilot.orchestrator import _advance_phases
+        from src.autopilot.orchestrator.phase_transitions import _advance_phases
 
         with db_manager.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
@@ -423,10 +423,10 @@ class TestCaseStartFirstPhase:
 
     def test_starts_first_phase_when_no_progress(self, db_manager, sample_workflow):
         """Should start first phase when no phases are in progress or completed."""
-        from src.autopilot.orchestrator import (
-            _case_start_first_phase,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator.phase_transitions import (
+    _case_start_first_phase,
+    _get_phase_statuses,
+)
 
         with db_manager.session_scope() as session:
             # Reset phase execution to pending
@@ -440,7 +440,7 @@ class TestCaseStartFirstPhase:
             completed = [p for p in phase_statuses if p["status"] == "completed"]
 
         logger = MagicMock()
-        with patch("src.autopilot.orchestrator._create_phase_task", return_value=True) as mock_create:
+        with patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task", return_value=True) as mock_create:
             with db_manager.session_scope() as session:
                 result = _case_start_first_phase(session, "wf-1", pending, in_progress, completed, logger)
                 assert result is True
@@ -463,11 +463,11 @@ class TestCaseStartFirstPhase:
         creating a task. Simulates the other code path winning that claim
         first -- _case_start_first_phase must see the lost claim and skip.
         """
-        from src.autopilot.orchestrator import (
-            _case_start_first_phase,
-            _claim_phase_task_creation,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator.phase_transitions import (
+    _case_start_first_phase,
+    _claim_phase_task_creation,
+    _get_phase_statuses,
+)
 
         with db_manager.session_scope() as session:
             exec = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
@@ -488,7 +488,7 @@ class TestCaseStartFirstPhase:
             assert won is True
 
         logger = MagicMock()
-        with patch("src.autopilot.orchestrator._create_phase_task", return_value=True) as mock_create:
+        with patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task", return_value=True) as mock_create:
             with db_manager.session_scope() as session:
                 result = _case_start_first_phase(
                     session, "wf-1", pending, in_progress, completed, logger
@@ -505,14 +505,14 @@ class TestCaseInProgressNoTasks:
 
     def test_creates_task_for_phase_without_tasks(self, db_manager, sample_workflow):
         """Should create task when in-progress phase has no tasks."""
-        from src.autopilot.orchestrator import _case_in_progress_no_tasks
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_no_tasks
 
         with db_manager.session_scope() as session:
             phase = session.query(Phase).filter_by(id="phase-1").first()
             in_progress = [{"phase": phase, "status": "in_progress"}]
 
         logger = MagicMock()
-        with patch("src.autopilot.orchestrator._create_phase_task", return_value=True) as mock_create:
+        with patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task", return_value=True) as mock_create:
             with db_manager.session_scope() as session:
                 result = _case_in_progress_no_tasks(session, "wf-1", in_progress, logger)
                 assert result is True
@@ -527,7 +527,7 @@ class TestMaybeRetryFailedTasks:
         rejected agents, otherwise it starves the global design queue --
         but only when the project is actually in review mode (see the
         companion full-autopilot test below)."""
-        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
 
         with db_manager.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1", review_mode=True))
@@ -546,7 +546,7 @@ class TestMaybeRetryFailedTasks:
             ))
 
         logger = MagicMock()
-        with patch("src.autopilot.orchestrator.create_agent_for_task_direct") as dispatch:
+        with patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct") as dispatch:
             with db_manager.session_scope() as session:
                 phase = session.query(Phase).filter_by(id="phase-1").first()
                 assert _maybe_retry_failed_tasks(session, phase, logger) is None
@@ -563,7 +563,7 @@ class TestMaybeRetryFailedTasks:
         retain the original autonomous git_commit_push behavior -- a real
         agent commits, pushes, and opens the PR, same as any other phase.
         Only review_mode actually asks for a human in the loop."""
-        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
 
         with db_manager.session_scope() as session:
             phase = session.query(Phase).filter_by(id="phase-1").first()
@@ -580,7 +580,7 @@ class TestMaybeRetryFailedTasks:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct",
             side_effect=_agent_row_side_effect("git-agent"),
         ) as dispatch:
             with db_manager.session_scope() as session:
@@ -598,7 +598,7 @@ class TestMaybeRetryFailedTasks:
         landing on in_progress -- not just reset to pending and abandoned
         (the old behavior was a dead end: nothing else ever picked a
         pending-with-no-agent task back up)."""
-        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
 
         with db_manager.session_scope() as session:
             # Add failed tasks
@@ -618,7 +618,7 @@ class TestMaybeRetryFailedTasks:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct",
             side_effect=_agent_row_side_effect("new-agent-1"),
         ):
             with db_manager.session_scope() as session:
@@ -641,7 +641,7 @@ class TestMaybeRetryFailedTasks:
         last time -- e.g. a specific 'missing output artifact: X' from
         update_task_status's validation gate. The reason must survive into
         enriched_description (what the agent's prompt actually reads)."""
-        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
 
         with db_manager.session_scope() as session:
             session.add(
@@ -659,7 +659,7 @@ class TestMaybeRetryFailedTasks:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct",
             side_effect=_agent_row_side_effect("new-agent-1"),
         ):
             with db_manager.session_scope() as session:
@@ -679,7 +679,7 @@ class TestMaybeRetryFailedTasks:
     def test_task_without_failure_reason_gets_plain_reset(self, db_manager, sample_workflow):
         """A failed task with no recorded reason (e.g. a hard crash before
         anything could be logged) just resets normally -- nothing to fold in."""
-        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
 
         with db_manager.session_scope() as session:
             session.add(
@@ -696,7 +696,7 @@ class TestMaybeRetryFailedTasks:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct",
             side_effect=_agent_row_side_effect("new-agent-1"),
         ):
             with db_manager.session_scope() as session:
@@ -716,7 +716,7 @@ class TestMaybeRetryFailedTasks:
         triggers on status="failed", so leaving it "pending" here would
         permanently strand the task: no other code path dispatches an
         agent for an already-existing pending task."""
-        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
 
         with db_manager.session_scope() as session:
             session.add(
@@ -733,7 +733,7 @@ class TestMaybeRetryFailedTasks:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct",
             return_value=None,
         ):
             with db_manager.session_scope() as session:
@@ -757,7 +757,7 @@ class TestMaybeRetryFailedTasks:
         re-attempt, the exact live bug this covers."""
         from datetime import timedelta
 
-        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
         from src.core.database import Agent
 
         with db_manager.session_scope() as session:
@@ -791,7 +791,7 @@ class TestMaybeRetryFailedTasks:
         cycle_start = datetime.utcnow() - timedelta(minutes=5)
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct",
             side_effect=_agent_row_side_effect("new-agent-1"),
         ):
             with db_manager.session_scope() as session:
@@ -816,7 +816,7 @@ class TestMaybeRetryFailedTasks:
         workflow's turn in the same poll loop, since nothing here ever
         checked retry_count. Once every failed task in the phase is past
         the cap, this must stop retrying and pause the workflow instead."""
-        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
 
         with db_manager.session_scope() as session:
             session.add(
@@ -834,7 +834,7 @@ class TestMaybeRetryFailedTasks:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct"
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct"
         ) as mock_create_agent:
             with db_manager.session_scope() as session:
                 phase = session.query(Phase).filter_by(id="phase-1").first()
@@ -855,7 +855,7 @@ class TestMaybeRetryFailedTasks:
     ):
         """A human may have already looked at this and left the workflow
         paused with their own note -- don't clobber it on every poll."""
-        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
 
         with db_manager.session_scope() as session:
             session.add(
@@ -876,7 +876,7 @@ class TestMaybeRetryFailedTasks:
             wf.status_reason = "user's own note"
 
         logger = MagicMock()
-        with patch("src.autopilot.orchestrator.create_agent_for_task_direct"):
+        with patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct"):
             with db_manager.session_scope() as session:
                 phase = session.query(Phase).filter_by(id="phase-1").first()
                 _maybe_retry_failed_tasks(session, phase, logger)
@@ -936,7 +936,7 @@ class TestCaseInProgressComplete:
                 )
             )
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_pending_task_pointing_at_dead_agent_is_marked_failed(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -955,7 +955,7 @@ class TestCaseInProgressComplete:
         one-pass self-heal (orphan -> failed -> retried -> in_progress with
         a fresh agent) actually succeed instead of erroring on a missing
         live agent manager."""
-        from src.autopilot.orchestrator import _case_in_progress_complete, _get_phase_statuses
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
         from src.core.database import Agent, Task as _Task
 
         self._seed_pending_task_with_agent(db_manager, agent_status="terminated")
@@ -978,7 +978,7 @@ class TestCaseInProgressComplete:
     ):
         """A task assigned to a genuinely still-working agent is real
         active work, not an orphan -- must not be touched."""
-        from src.autopilot.orchestrator import _case_in_progress_complete, _get_phase_statuses
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
         from src.core.database import Task as _Task
 
         self._seed_pending_task_with_agent(db_manager, agent_status="working")
@@ -993,9 +993,9 @@ class TestCaseInProgressComplete:
             assert task.status == "pending"
             assert task.failure_reason is None
 
-    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
     def test_fires_transition_when_claim_succeeds(self, mock_fire, db_manager, sample_workflow):
-        from src.autopilot.orchestrator import _case_in_progress_complete, _get_phase_statuses
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
 
         self._seed_done_task(db_manager)
         mock_fire.return_value = True
@@ -1008,7 +1008,7 @@ class TestCaseInProgressComplete:
         assert result is True
         mock_fire.assert_called_once()
 
-    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
     def test_claim_is_released_after_transition_fires(
         self, mock_fire, db_manager, sample_workflow
     ):
@@ -1023,11 +1023,11 @@ class TestCaseInProgressComplete:
         crashed outright on a separate bug (OrchestratorLogger has no
         .debug) the one time this was hit live, but even without that
         crash it would have silently done nothing forever)."""
-        from src.autopilot.orchestrator import (
-            PhaseExecution,
-            _case_in_progress_complete,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import (
+    _case_in_progress_complete,
+    _get_phase_statuses,
+)
 
         self._seed_done_task(db_manager)
         mock_fire.return_value = True
@@ -1041,18 +1041,18 @@ class TestCaseInProgressComplete:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is None
 
-    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
     def test_claim_is_released_even_if_transition_raises(
         self, mock_fire, db_manager, sample_workflow
     ):
         """The release must happen regardless of outcome -- an exception
         mid-transition must not leave the phase permanently unclaimable
         either."""
-        from src.autopilot.orchestrator import (
-            PhaseExecution,
-            _case_in_progress_complete,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import (
+    _case_in_progress_complete,
+    _get_phase_statuses,
+)
 
         self._seed_done_task(db_manager)
         mock_fire.side_effect = RuntimeError("boom")
@@ -1069,16 +1069,16 @@ class TestCaseInProgressComplete:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is None
 
-    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
     def test_skips_when_evaluation_already_claimed(self, mock_fire, db_manager, sample_workflow):
         """Simulates a concurrent caller having already claimed this
         phase's evaluation (e.g. still awaiting a slow engine decision) --
         this call must not also fire a transition for the same phase."""
-        from src.autopilot.orchestrator import (
-            _case_in_progress_complete,
-            _claim_phase_task_creation,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator.phase_transitions import (
+    _case_in_progress_complete,
+    _claim_phase_task_creation,
+    _get_phase_statuses,
+)
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -1093,7 +1093,7 @@ class TestCaseInProgressComplete:
         assert result is None
         mock_fire.assert_not_called()
 
-    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
     def test_any_held_claim_blocks_evaluation(
         self, mock_fire, db_manager, sample_workflow
     ):
@@ -1104,11 +1104,11 @@ class TestCaseInProgressComplete:
         still present is a genuinely live one (e.g. mid-arbitration)."""
         from datetime import timedelta
 
-        from src.autopilot.orchestrator import (
-            PhaseExecution,
-            _case_in_progress_complete,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import (
+    _case_in_progress_complete,
+    _get_phase_statuses,
+)
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -1126,7 +1126,7 @@ class TestCaseInProgressComplete:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is not None
 
-    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
     def test_orphaned_diagnostic_task_does_not_block_completion(
         self, mock_fire, db_manager, sample_workflow
     ):
@@ -1139,7 +1139,7 @@ class TestCaseInProgressComplete:
         convention, so a leftover diagnostic task permanently blocked the
         phase from ever being recognized as complete, even with its real
         task already done."""
-        from src.autopilot.orchestrator import _case_in_progress_complete, _get_phase_statuses
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -1163,7 +1163,7 @@ class TestCaseInProgressComplete:
         assert result is True
         mock_fire.assert_called_once()
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_claimed_phase_with_failed_task_is_not_retried(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -1174,11 +1174,11 @@ class TestCaseInProgressComplete:
         arbitration-specific prompt entirely and launching a confused
         agent. Only _maybe_resolve_arbitration may act on a claimed
         phase's failed task."""
-        from src.autopilot.orchestrator import (
-            _case_in_progress_complete,
-            _claim_phase_task_creation,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator.phase_transitions import (
+    _case_in_progress_complete,
+    _claim_phase_task_creation,
+    _get_phase_statuses,
+)
 
         with db_manager.session_scope() as session:
             session.add(
@@ -1205,7 +1205,7 @@ class TestCaseInProgressComplete:
             task = session.query(Task).filter_by(id="failed-task-1").first()
             assert task.status == "failed"  # untouched, not reset to pending
 
-    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
     def test_old_cycles_done_task_does_not_mask_current_cycle_failure(
         self, mock_fire, db_manager, sample_workflow
     ):
@@ -1220,11 +1220,11 @@ class TestCaseInProgressComplete:
         reason instead of just retrying the failed attempt."""
         from datetime import timedelta
 
-        from src.autopilot.orchestrator import (
-            PhaseExecution,
-            _case_in_progress_complete,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import (
+    _case_in_progress_complete,
+    _get_phase_statuses,
+)
         from src.core.database import Agent
 
         with db_manager.session_scope() as session:
@@ -1258,7 +1258,7 @@ class TestCaseInProgressComplete:
             )
 
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct",
             side_effect=_agent_row_side_effect("new-agent-1"),
         ):
             with db_manager.session_scope() as session:
@@ -1297,11 +1297,11 @@ class TestCaseInProgressComplete:
         this way."""
         from datetime import timedelta
 
-        from src.autopilot.orchestrator import (
-            PhaseExecution,
-            _case_in_progress_complete,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import (
+    _case_in_progress_complete,
+    _get_phase_statuses,
+)
         from src.core.database import Agent
 
         with db_manager.session_scope() as session:
@@ -1327,7 +1327,7 @@ class TestCaseInProgressComplete:
             execution.started_at = datetime.utcnow() + timedelta(minutes=5)
 
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct",
             side_effect=_agent_row_side_effect("new-agent-1"),
         ):
             with db_manager.session_scope() as session:
@@ -1353,11 +1353,11 @@ class TestCaseInProgressComplete:
         released afterward -- a bug in the release would strand the phase
         behind a permanently-held claim, a worse outcome than the race
         this fix closes."""
-        from src.autopilot.orchestrator import (
-            PhaseExecution,
-            _case_in_progress_complete,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import (
+    _case_in_progress_complete,
+    _get_phase_statuses,
+)
 
         with db_manager.session_scope() as session:
             session.add(
@@ -1373,7 +1373,7 @@ class TestCaseInProgressComplete:
             )
 
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct",
             side_effect=_agent_row_side_effect("new-agent-1"),
         ):
             with db_manager.session_scope() as session:
@@ -1388,7 +1388,7 @@ class TestCaseInProgressComplete:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is None  # released, not stranded
 
-    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
     def test_exhausted_retry_cap_fails_the_workflow_instead_of_firing_transition(
         self, mock_fire, db_manager, sample_workflow
     ):
@@ -1402,7 +1402,7 @@ class TestCaseInProgressComplete:
         Observed live: architectural_review exhausted its retry cap on a
         real frontmatter-schema defect and the pipeline advanced straight
         to qa_validation as if the review had passed."""
-        from src.autopilot.orchestrator import _case_in_progress_complete, _get_phase_statuses
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -1467,11 +1467,9 @@ class TestReleaseStaleTaskCreationClaims:
     ):
         from datetime import timedelta
 
-        from src.autopilot.orchestrator import (
-            CLAIM_STALE_TIMEOUT_SECONDS,
-            PhaseExecution,
-            _release_stale_task_creation_claims,
-        )
+        from src.autopilot.orchestrator.phase_transitions import CLAIM_STALE_TIMEOUT_SECONDS
+from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import _release_stale_task_creation_claims
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -1498,11 +1496,9 @@ class TestReleaseStaleTaskCreationClaims:
         happen; just free the claim so Case 0/0b can create one fresh."""
         from datetime import timedelta
 
-        from src.autopilot.orchestrator import (
-            CLAIM_STALE_TIMEOUT_SECONDS,
-            PhaseExecution,
-            _release_stale_task_creation_claims,
-        )
+        from src.autopilot.orchestrator.phase_transitions import CLAIM_STALE_TIMEOUT_SECONDS
+from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import _release_stale_task_creation_claims
 
         with db_manager.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
@@ -1525,7 +1521,9 @@ class TestReleaseStaleTaskCreationClaims:
         for -- must be left completely untouched."""
         from datetime import timedelta
 
-        from src.autopilot.orchestrator import PhaseExecution, _release_stale_task_creation_claims
+        from src.autopilot.orchestrator import PhaseExecution
+
+        from src.autopilot.orchestrator.phase_transitions import _release_stale_task_creation_claims
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -1540,7 +1538,7 @@ class TestReleaseStaleTaskCreationClaims:
             assert execution.task_creation_claimed_at is not None
             assert execution.status == "in_progress"  # unchanged from fixture default
 
-    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
     def test_advance_phases_end_to_end_fires_transition_for_stale_pending_phase(
         self, mock_fire, db_manager, sample_workflow
     ):
@@ -1550,11 +1548,9 @@ class TestReleaseStaleTaskCreationClaims:
         have its claim cleared in isolation."""
         from datetime import timedelta
 
-        from src.autopilot.orchestrator import (
-            CLAIM_STALE_TIMEOUT_SECONDS,
-            PhaseExecution,
-            _advance_phases,
-        )
+        from src.autopilot.orchestrator.phase_transitions import CLAIM_STALE_TIMEOUT_SECONDS
+from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import _advance_phases
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -1603,10 +1599,8 @@ class TestReleasePendingPhasesWithDoneTasks:
     def test_pending_phase_with_done_task_flips_to_in_progress(
         self, db_manager, sample_workflow
     ):
-        from src.autopilot.orchestrator import (
-            PhaseExecution,
-            _release_pending_phases_with_done_tasks,
-        )
+        from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_done_tasks
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -1627,10 +1621,8 @@ class TestReleasePendingPhasesWithDoneTasks:
     def test_pending_phase_with_no_task_is_left_alone(self, db_manager, sample_workflow):
         """No task exists yet -- don't fabricate progress that didn't
         happen; Case 0/0b already own creating this phase's first task."""
-        from src.autopilot.orchestrator import (
-            PhaseExecution,
-            _release_pending_phases_with_done_tasks,
-        )
+        from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_done_tasks
 
         with db_manager.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
@@ -1646,10 +1638,8 @@ class TestReleasePendingPhasesWithDoneTasks:
     def test_already_in_progress_phase_is_untouched(self, db_manager, sample_workflow):
         """Only 'pending' is the broken state here -- don't touch a phase
         that's already correctly flipped."""
-        from src.autopilot.orchestrator import (
-            PhaseExecution,
-            _release_pending_phases_with_done_tasks,
-        )
+        from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_done_tasks
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -1665,7 +1655,7 @@ class TestReleasePendingPhasesWithDoneTasks:
             assert execution.status == "in_progress"
             assert execution.started_at == fixed_started_at  # untouched
 
-    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
     def test_advance_phases_end_to_end_fires_transition_for_stuck_pending_phase(
         self, mock_fire, db_manager, sample_workflow
     ):
@@ -1673,7 +1663,8 @@ class TestReleasePendingPhasesWithDoneTasks:
         "pending" phase with a done task and no claim at all (so
         _release_stale_task_creation_claims alone can't catch it) must
         still actually advance."""
-        from src.autopilot.orchestrator import PhaseExecution, _advance_phases
+        from src.autopilot.orchestrator import PhaseExecution
+        from src.autopilot.orchestrator.phase_transitions import _advance_phases
 
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
@@ -1701,10 +1692,8 @@ class TestReleasePendingPhasesWithDoneTasks:
         repaired."""
         from datetime import timedelta
 
-        from src.autopilot.orchestrator import (
-            PhaseExecution,
-            _release_pending_phases_with_done_tasks,
-        )
+        from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_done_tasks
 
         with db_manager.session_scope() as session:
             # phase-1: an OLD completion from an earlier goto cycle.
@@ -1755,10 +1744,8 @@ class TestReleasePendingPhasesWithDoneTasks:
         """A workflow legitimately doing something must never gain a
         second concurrent in-progress phase -- even if some OTHER pending
         phase happens to carry an old done task from an earlier cycle."""
-        from src.autopilot.orchestrator import (
-            PhaseExecution,
-            _release_pending_phases_with_done_tasks,
-        )
+        from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_done_tasks
 
         with db_manager.session_scope() as session:
             # phase-1 stays "in_progress" (sample_workflow's default) --
@@ -1799,10 +1786,8 @@ class TestReleasePendingPhasesWithDoneTasks:
         from datetime import timedelta
 
         from src.core.constants import DIAGNOSTIC_TASK_PREFIX
-        from src.autopilot.orchestrator import (
-            PhaseExecution,
-            _release_pending_phases_with_done_tasks,
-        )
+        from src.autopilot.orchestrator import PhaseExecution
+from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_done_tasks
 
         with db_manager.session_scope() as session:
             exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
@@ -1875,11 +1860,11 @@ class TestCaseCompletedWithSuccessor:
                 )
             )
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     def test_creates_successor_task_directly(self, mock_create, db_manager, sample_workflow):
         """The fix: call _create_phase_task for the successor directly
         instead of re-deciding an already-made decision."""
-        from src.autopilot.orchestrator import _case_completed_with_successor, _get_phase_statuses
+        from src.autopilot.orchestrator.phase_transitions import _case_completed_with_successor, _get_phase_statuses
 
         self._seed_completed_with_pending_successor(db_manager)
         mock_create.return_value = True
@@ -1896,9 +1881,9 @@ class TestCaseCompletedWithSuccessor:
         assert result is True
         assert mock_create.call_args[0][:4] == ("wf-1", "phase-2", "implementation", "continue")
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     def test_skips_when_successor_already_has_task(self, mock_create, db_manager, sample_workflow):
-        from src.autopilot.orchestrator import _case_completed_with_successor, _get_phase_statuses
+        from src.autopilot.orchestrator.phase_transitions import _case_completed_with_successor, _get_phase_statuses
 
         self._seed_completed_with_pending_successor(db_manager)
         with db_manager.session_scope() as session:
@@ -1925,15 +1910,15 @@ class TestCaseCompletedWithSuccessor:
         assert result is False
         mock_create.assert_not_called()
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     def test_skips_when_claim_already_held(self, mock_create, db_manager, sample_workflow):
         """Simulates a concurrent caller having already claimed the
         successor's task creation -- this call must not also create one."""
-        from src.autopilot.orchestrator import (
-            _case_completed_with_successor,
-            _claim_phase_task_creation,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator.phase_transitions import (
+    _case_completed_with_successor,
+    _claim_phase_task_creation,
+    _get_phase_statuses,
+)
 
         self._seed_completed_with_pending_successor(db_manager)
         with db_manager.session_scope() as session:
@@ -1966,10 +1951,10 @@ class TestCaseCompletedWithSuccessor:
         though development's own recorded decision (action="goto",
         action_target_phase="adversarial_review") already specified a
         different, later target. The explicit decision must win."""
-        from src.autopilot.orchestrator import (
-            _case_completed_with_successor,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator.phase_transitions import (
+    _case_completed_with_successor,
+    _get_phase_statuses,
+)
 
         with db_manager.session_scope() as session:
             exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
@@ -2010,7 +1995,7 @@ class TestCaseCompletedWithSuccessor:
                 )
             )
 
-        with patch("src.autopilot.orchestrator._create_phase_task") as mock_create:
+        with patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task") as mock_create:
             mock_create.return_value = True
             with db_manager.session_scope() as session:
                 phase_statuses = _get_phase_statuses(session, "wf-1")
@@ -2033,10 +2018,10 @@ class TestCaseCompletedWithSuccessor:
         """Sanity check the fix isn't overbroad: a plain "continue"
         completion with no goto/retry target must still use the normal
         next-pending-by-order successor selection, unchanged."""
-        from src.autopilot.orchestrator import (
-            _case_completed_with_successor,
-            _get_phase_statuses,
-        )
+        from src.autopilot.orchestrator.phase_transitions import (
+    _case_completed_with_successor,
+    _get_phase_statuses,
+)
 
         self._seed_completed_with_pending_successor(db_manager)
         with db_manager.session_scope() as session:
@@ -2052,7 +2037,7 @@ class TestCaseCompletedWithSuccessor:
                 )
             )
 
-        with patch("src.autopilot.orchestrator._create_phase_task") as mock_create:
+        with patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task") as mock_create:
             mock_create.return_value = True
             with db_manager.session_scope() as session:
                 phase_statuses = _get_phase_statuses(session, "wf-1")
@@ -2066,7 +2051,7 @@ class TestCaseCompletedWithSuccessor:
         assert result is True
         assert mock_create.call_args[0][:4] == ("wf-1", "phase-2", "implementation", "continue")
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     def test_ignores_a_done_task_from_a_prior_cycle(self, mock_create, db_manager, sample_workflow):
         """Regression, observed live: phase-2 succeeded once weeks ago,
         then got reset back to "pending" by a later goto for a fresh pass
@@ -2079,7 +2064,7 @@ class TestCaseCompletedWithSuccessor:
         stale task and dispatch a fresh one."""
         from datetime import datetime, timedelta
 
-        from src.autopilot.orchestrator import _case_completed_with_successor, _get_phase_statuses
+        from src.autopilot.orchestrator.phase_transitions import _case_completed_with_successor, _get_phase_statuses
 
         self._seed_completed_with_pending_successor(db_manager)
         with db_manager.session_scope() as session:
@@ -2117,7 +2102,7 @@ class TestGetPhaseStatuses:
 
     def test_returns_phase_statuses(self, db_manager, sample_workflow):
         """Should return all phases with their execution statuses."""
-        from src.autopilot.orchestrator import _get_phase_statuses
+        from src.autopilot.orchestrator.phase_transitions import _get_phase_statuses
 
         with db_manager.session_scope() as session:
             statuses = _get_phase_statuses(session, "wf-1")
@@ -2145,9 +2130,9 @@ class TestCreatePhaseTaskResetsClaim:
     advanced, until a stall-detector eventually noticed and spawned a
     (confused, chasing-a-red-herring) diagnostic agent."""
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_resets_stale_claim_on_reactivation(self, mock_create_agent, db_manager, sample_workflow):
-        from src.autopilot.orchestrator import _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         mock_create_agent.side_effect = _agent_row_side_effect("new-agent")
 
@@ -2165,7 +2150,7 @@ class TestCreatePhaseTaskResetsClaim:
             assert execution.status == "in_progress"
             assert execution.task_creation_claimed_at is None
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_reactivated_phase_can_claim_after_completion(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -2173,7 +2158,7 @@ class TestCreatePhaseTaskResetsClaim:
         _create_phase_task, a fresh _claim_phase_task_creation call for that
         same phase must succeed -- proving the transition-evaluation claim
         isn't permanently blocked by the stale value from the prior cycle."""
-        from src.autopilot.orchestrator import _claim_phase_task_creation, _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation, _create_phase_task
 
         mock_create_agent.side_effect = _agent_row_side_effect("new-agent")
 
@@ -2187,7 +2172,7 @@ class TestCreatePhaseTaskResetsClaim:
         with db_manager.session_scope() as session:
             assert _claim_phase_task_creation(session, "phase-1") is True
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_resets_claim_when_entry_status_already_in_progress(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -2202,7 +2187,7 @@ class TestCreatePhaseTaskResetsClaim:
         Observed live: a Feature Architect task finished successfully but
         its phase sat in_progress forever, and a stall-detector kept
         spawning fresh replacement agents for it."""
-        from src.autopilot.orchestrator import _claim_phase_task_creation, _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation, _create_phase_task
 
         mock_create_agent.side_effect = _agent_row_side_effect("new-agent")
 
@@ -2244,11 +2229,11 @@ class TestCreatePhaseTaskClaimsTargetPhase:
     class tests that claim directly, independent of the reset-on-
     reactivation behavior covered above."""
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_refuses_when_target_phase_is_freshly_claimed_by_another_caller(
         self, mock_create_agent, db_manager, sample_workflow
     ):
-        from src.autopilot.orchestrator import _claim_phase_task_creation, _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation, _create_phase_task
 
         mock_create_agent.side_effect = _agent_row_side_effect("new-agent")
 
@@ -2267,14 +2252,14 @@ class TestCreatePhaseTaskClaimsTargetPhase:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is not None
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_claims_and_creates_when_target_phase_is_unclaimed(
         self, mock_create_agent, db_manager, sample_workflow
     ):
         """The default (target_already_claimed=False) path: no pre-existing
         claim on phase_id at all -- _create_phase_task takes one itself,
         creates the task, and releases it."""
-        from src.autopilot.orchestrator import _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         mock_create_agent.side_effect = _agent_row_side_effect("new-agent")
 
@@ -2290,10 +2275,10 @@ class TestFirePhaseTransition:
     """Tests for _fire_phase_transition function."""
 
     @patch("src.autopilot.orchestrator.PhaseManager")
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     def test_fires_transition_successfully(self, mock_create, mock_pm_class, db_manager, sample_workflow):
         """Should fire phase transition and create next task."""
-        from src.autopilot.orchestrator import _fire_phase_transition
+        from src.autopilot.orchestrator.phase_transitions import _fire_phase_transition
 
         # Mock phase manager
         mock_pm = MagicMock()
@@ -2313,7 +2298,7 @@ class TestFirePhaseTransition:
         mock_create.assert_called_once()
 
     @patch("src.autopilot.orchestrator.PhaseManager")
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     @patch("src.autopilot.orchestrator.build_phase_output")
     def test_gated_phase_with_working_directory_does_not_raise(
         self, mock_build_output, mock_create, mock_pm_class, db_manager, sample_workflow, tmp_path
@@ -2330,7 +2315,7 @@ class TestFirePhaseTransition:
         existing working_directory exercises the buggy line at all (the
         Path(...).exists() check on the same line as the redundant import).
         """
-        from src.autopilot.orchestrator import _fire_phase_transition
+        from src.autopilot.orchestrator.phase_transitions import _fire_phase_transition
 
         with db_manager.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
@@ -2355,7 +2340,7 @@ class TestFirePhaseTransition:
         mock_pm.mark_phase_complete.assert_called_once()
 
     @patch("src.autopilot.orchestrator.PhaseManager")
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     def test_prefers_completing_tasks_own_notes_over_result_missing_reason(
         self, mock_create, mock_pm_class, db_manager, sample_workflow
     ):
@@ -2371,7 +2356,7 @@ class TestFirePhaseTransition:
         about whether the agent actually did the work -- the completing
         task's own completion_notes, when present, is strictly more
         accurate and must win."""
-        from src.autopilot.orchestrator import _fire_phase_transition
+        from src.autopilot.orchestrator.phase_transitions import _fire_phase_transition
 
         with db_manager.session_scope() as session:
             session.add(
@@ -2412,14 +2397,14 @@ class TestFirePhaseTransition:
         )
 
     @patch("src.autopilot.orchestrator.PhaseManager")
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     def test_uses_missing_reason_when_no_completion_notes_available(
         self, mock_create, mock_pm_class, db_manager, sample_workflow
     ):
         """Sanity check the fix isn't overbroad: with no completing task
         (or no completion_notes on it), the gate's own "missing" reason is
         still the best available signal and must be used as before."""
-        from src.autopilot.orchestrator import _fire_phase_transition
+        from src.autopilot.orchestrator.phase_transitions import _fire_phase_transition
 
         mock_pm = MagicMock()
         mock_pm_class.return_value = mock_pm
@@ -2450,12 +2435,12 @@ class TestFirePhaseTransitionArbitrate:
     phase's PhaseExecution.status="pending" forever with no agent ever
     dispatched to resolve it. Must now actually trigger arbitration."""
 
-    @patch("src.autopilot.orchestrator._trigger_arbitration")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._trigger_arbitration")
     @patch("src.autopilot.orchestrator.PhaseManager")
     def test_arbitrate_action_triggers_arbitration(
         self, mock_pm_class, mock_trigger, db_manager, sample_workflow
     ):
-        from src.autopilot.orchestrator import _fire_phase_transition
+        from src.autopilot.orchestrator.phase_transitions import _fire_phase_transition
 
         mock_pm = MagicMock()
         mock_pm_class.return_value = mock_pm
@@ -2482,11 +2467,11 @@ class TestCreatePhaseTaskExhaustionArbitrates:
     workflow must stay "active" -- arbitration is live, visible progress,
     not a silent stop."""
 
-    @patch("src.autopilot.orchestrator._trigger_arbitration")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._trigger_arbitration")
     def test_exhausting_bound_triggers_arbitration_not_pause(
         self, mock_trigger, db_manager, sample_workflow
     ):
-        from src.autopilot.orchestrator import _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         # 5 prior orchestrator-created retry/goto tasks for phase-1 --
         # MAX_PHASE_ATTEMPTS is 5, so the 6th attempt must exhaust it.
@@ -2524,7 +2509,7 @@ class TestCreatePhaseTaskExhaustionArbitrates:
     def test_four_prior_attempts_does_not_exhaust(self, db_manager, sample_workflow):
         """Confirms the bound is actually 5, not still 3 -- one attempt
         short of exhaustion must proceed normally."""
-        from src.autopilot.orchestrator import _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         with db_manager.session_scope() as session:
             for i in range(4):
@@ -2542,7 +2527,7 @@ class TestCreatePhaseTaskExhaustionArbitrates:
                 )
 
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct",
             side_effect=_agent_row_side_effect("a1"),
         ):
             result = _create_phase_task(
@@ -2563,7 +2548,7 @@ class TestCreatePhaseTaskExhaustionArbitrates:
         action_target_phase was never populated at all, showing a bare
         "goto" badge with no indication of which phase's finding sent it
         back."""
-        from src.autopilot.orchestrator import _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
         from src.core.database import Agent
 
         # create_agent_for_task_direct is mocked below (this test isn't
@@ -2574,7 +2559,7 @@ class TestCreatePhaseTaskExhaustionArbitrates:
             session.add(Agent(id="a1", system_prompt="p", status="working", cli_type="pi"))
 
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct",
             side_effect=_agent_row_side_effect("a1"),
         ):
             result = _create_phase_task(
@@ -2598,14 +2583,14 @@ class TestCreatePhaseTaskExhaustionArbitrates:
         """source_phase_name is irrelevant for normal forward advancement --
         must not leak onto a "continue"-created task even if a caller
         passed one."""
-        from src.autopilot.orchestrator import _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
         from src.core.database import Agent
 
         with db_manager.session_scope() as session:
             session.add(Agent(id="a1", system_prompt="p", status="working", cli_type="pi"))
 
         with patch(
-            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            "src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct",
             side_effect=_agent_row_side_effect("a1"),
         ):
             result = _create_phase_task(
@@ -2677,11 +2662,11 @@ class TestArbitrationDoesNotConfuseAdvancement:
                     )
                 )
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_advance_phases_does_not_bypass_arbitrating_phase(
         self, mock_create_agent, db_manager, sample_workflow
     ):
-        from src.autopilot.orchestrator import _advance_phases, _trigger_arbitration
+        from src.autopilot.orchestrator.phase_transitions import _advance_phases, _trigger_arbitration
 
         self._seed_realistic_pipeline(db_manager)
         mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
@@ -2706,11 +2691,12 @@ class TestTriggerArbitration:
     the phase's task_creation_claimed_at so a repeat sweep tick can't spawn
     a duplicate. See _maybe_resolve_arbitration for consumption."""
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_creates_task_and_dispatches_arbitration_agent(
         self, mock_create_agent, db_manager, sample_workflow
     ):
-        from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _trigger_arbitration
+        from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
 
         mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
@@ -2748,7 +2734,7 @@ class TestTriggerArbitration:
             assert "requirements" in wf.status_reason
             assert "exhausted 5 attempts" in wf.status_reason
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_creates_its_own_sentinel_agent_if_missing(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -2767,7 +2753,8 @@ class TestTriggerArbitration:
         failed attempts over ~30 hours on one workflow, zero arbitration
         tasks ever created. This test undoes the fixture's seeding to
         reproduce the true production condition."""
-        from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _trigger_arbitration
+        from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
 
         with db_manager.session_scope() as session:
             session.query(Agent).filter_by(id=ARBITRATION_CREATED_BY).delete()
@@ -2788,7 +2775,7 @@ class TestTriggerArbitration:
             )
             assert task is not None
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_agent_type_satisfies_the_check_constraint(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -2809,7 +2796,7 @@ class TestTriggerArbitration:
         schema -- the authoritative check, not a hardcoded copy of the
         constraint's allowed list that could itself drift out of sync."""
         from src.core.database import Agent as _Agent
-        from src.autopilot.orchestrator import _trigger_arbitration
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
 
         mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
@@ -2827,7 +2814,7 @@ class TestTriggerArbitration:
                 agent_type=agent_type,
             ))
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_prompt_lists_valid_phase_names(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -2835,7 +2822,7 @@ class TestTriggerArbitration:
         fall back (see TestResolveArbitrationOutcome's unresolvable-target
         test) -- enumerating the real, exact names up front is the
         prevention half of that defense, not just the fallback."""
-        from src.autopilot.orchestrator import _trigger_arbitration
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
 
         mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
@@ -2848,7 +2835,7 @@ class TestTriggerArbitration:
         assert "requirements" in prompt
         assert "implementation" in prompt  # sample_workflow's phase-2
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_caps_repeated_arbitration_and_fails_workflow(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -2858,7 +2845,8 @@ class TestTriggerArbitration:
         arbitrate again...). Past MAX_ARBITRATIONS_PER_PHASE, fail instead
         of spawning yet another arbitration agent -- "never pause for a
         human" doesn't mean "never terminate"."""
-        from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _trigger_arbitration
+        from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
 
         mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
@@ -2890,10 +2878,10 @@ class TestTriggerArbitration:
             assert "requirements" in wf.status_reason
             assert "3 times" in wf.status_reason
 
-    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
     @patch("src.autopilot.orchestrator.PhaseManager")
     @patch("src.autopilot.orchestrator.build_phase_output")
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_cap_exhausted_with_no_pending_decision_advances_if_output_already_passes(
         self, mock_create_agent, mock_build_output, mock_pm_class, mock_fire_transition,
         db_manager, sample_workflow, tmp_path
@@ -2907,7 +2895,8 @@ class TestTriggerArbitration:
         WorkflowOrchestrator.evaluate()'s retry-count gate, which would
         otherwise short-circuit straight back to "arbitrate" without ever
         reading the score) and advance instead of failing when it does."""
-        from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _trigger_arbitration
+        from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
 
         with db_manager.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
@@ -2959,7 +2948,7 @@ class TestTriggerArbitration:
             # Advancing, not failing.
             assert wf.status != "failed"
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_retry_resets_the_arbitration_cap_via_gotos_reset_at(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -2974,7 +2963,9 @@ class TestTriggerArbitration:
         count, so a retried workflow actually gets a real shot again."""
         from datetime import datetime, timedelta
 
-        from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _trigger_arbitration
+        from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
+
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
 
         mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
@@ -3010,7 +3001,7 @@ class TestTriggerArbitration:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status != "failed"
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_already_in_flight_uses_real_orchestrator_logger(
         self, mock_create_agent, db_manager, sample_workflow, tmp_path
     ):
@@ -3027,11 +3018,11 @@ class TestTriggerArbitration:
         has no attribute 'debug'"), right as the retry bound fired for
         real. At least the "already claimed" path must be exercised
         against the REAL logger class, not a mock that hides this."""
-        from src.autopilot.orchestrator import (
-            OrchestratorLogger,
-            _claim_phase_task_creation,
-            _trigger_arbitration,
-        )
+        from src.autopilot.orchestrator import OrchestratorLogger
+from src.autopilot.orchestrator.phase_transitions import (
+    _claim_phase_task_creation,
+    _trigger_arbitration,
+)
 
         with db_manager.session_scope() as session:
             _claim_phase_task_creation(session, "phase-1")
@@ -3044,7 +3035,7 @@ class TestTriggerArbitration:
         assert result is False
         mock_create_agent.assert_not_called()
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_prompt_forbids_editing_files(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -3053,7 +3044,7 @@ class TestTriggerArbitration:
         explicit boundary, an eager coding agent could "just fix it"
         directly instead of writing a decision, skipping the fix's own
         review/test cycle entirely."""
-        from src.autopilot.orchestrator import _trigger_arbitration
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
 
         mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
@@ -3065,11 +3056,11 @@ class TestTriggerArbitration:
         prompt = kwargs["enriched_data_override"]["validation_prompt"].lower()
         assert "do not edit" in prompt or "not edit" in prompt
 
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_already_in_flight_skips_duplicate(
         self, mock_create_agent, db_manager, sample_workflow
     ):
-        from src.autopilot.orchestrator import _claim_phase_task_creation, _trigger_arbitration
+        from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation, _trigger_arbitration
 
         with db_manager.session_scope() as session:
             _claim_phase_task_creation(session, "phase-1")
@@ -3082,14 +3073,14 @@ class TestTriggerArbitration:
         mock_create_agent.assert_not_called()
 
     @patch("src.autopilot.orchestrator.PhaseManager")
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
     def test_dispatch_failure_fails_workflow_instead_of_silent_pause(
         self, mock_create_agent, mock_pm_class, db_manager, sample_workflow
     ):
         """Regression scenario within a regression fix: if even spawning the
         arbitration agent fails, the phase must not end up silently
         re-claimed forever -- it fails loudly and immediately."""
-        from src.autopilot.orchestrator import _trigger_arbitration
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
 
         mock_create_agent.return_value = None
         mock_pm = MagicMock()
@@ -3112,7 +3103,7 @@ class TestTriggerArbitration:
 
 class TestReadArbitrationResult:
     def test_valid_file(self, tmp_path):
-        from src.autopilot.orchestrator import _read_arbitration_result
+        from src.autopilot.orchestrator.phase_transitions import _read_arbitration_result
         from src.core.constants import CONTEXT_DIR_NAME
 
         d = tmp_path / CONTEXT_DIR_NAME
@@ -3127,17 +3118,17 @@ class TestReadArbitrationResult:
         assert reason == "fix x"
 
     def test_missing_file(self, tmp_path):
-        from src.autopilot.orchestrator import _read_arbitration_result
+        from src.autopilot.orchestrator.phase_transitions import _read_arbitration_result
 
         assert _read_arbitration_result(str(tmp_path)) == (None, None, None)
 
     def test_no_working_directory(self):
-        from src.autopilot.orchestrator import _read_arbitration_result
+        from src.autopilot.orchestrator.phase_transitions import _read_arbitration_result
 
         assert _read_arbitration_result(None) == (None, None, None)
 
     def test_malformed_json(self, tmp_path):
-        from src.autopilot.orchestrator import _read_arbitration_result
+        from src.autopilot.orchestrator.phase_transitions import _read_arbitration_result
         from src.core.constants import CONTEXT_DIR_NAME
 
         d = tmp_path / CONTEXT_DIR_NAME
@@ -3147,7 +3138,7 @@ class TestReadArbitrationResult:
         assert _read_arbitration_result(str(tmp_path)) == (None, None, None)
 
     def test_invalid_decision_value(self, tmp_path):
-        from src.autopilot.orchestrator import _read_arbitration_result
+        from src.autopilot.orchestrator.phase_transitions import _read_arbitration_result
         from src.core.constants import CONTEXT_DIR_NAME
 
         d = tmp_path / CONTEXT_DIR_NAME
@@ -3176,16 +3167,16 @@ class TestResolveArbitrationOutcome:
 
     def _seed_claimed_phase(self, db_manager):
         with db_manager.session_scope() as session:
-            from src.autopilot.orchestrator import _claim_phase_task_creation
+            from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation
 
             _claim_phase_task_creation(session, "phase-1")
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     @patch("src.autopilot.orchestrator.PhaseManager")
     def test_continue_dispatches_next_phase_task(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
     ):
-        from src.autopilot.orchestrator import _resolve_arbitration_outcome
+        from src.autopilot.orchestrator.phase_transitions import _resolve_arbitration_outcome
 
         self._seed_claimed_phase(db_manager)
         mock_pm = MagicMock()
@@ -3214,14 +3205,14 @@ class TestResolveArbitrationOutcome:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status_reason is None
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     @patch("src.autopilot.orchestrator.PhaseManager")
     def test_continue_at_last_phase_does_not_dispatch(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
     ):
         """Workflow-complete case: no next phase, so nothing to dispatch --
         must not crash or call _create_phase_task with a None target."""
-        from src.autopilot.orchestrator import _resolve_arbitration_outcome
+        from src.autopilot.orchestrator.phase_transitions import _resolve_arbitration_outcome
 
         self._seed_claimed_phase(db_manager)
         mock_pm = MagicMock()
@@ -3239,12 +3230,12 @@ class TestResolveArbitrationOutcome:
 
         mock_create_task.assert_not_called()
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     @patch("src.autopilot.orchestrator.PhaseManager")
     def test_goto_dispatches_target_phase_task(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
     ):
-        from src.autopilot.orchestrator import _resolve_arbitration_outcome
+        from src.autopilot.orchestrator.phase_transitions import _resolve_arbitration_outcome
 
         self._seed_claimed_phase(db_manager)
         mock_pm = MagicMock()
@@ -3276,7 +3267,7 @@ class TestResolveArbitrationOutcome:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is None
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     @patch("src.autopilot.orchestrator.PhaseManager")
     def test_goto_dispatch_failure_is_logged_loudly(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
@@ -3284,7 +3275,7 @@ class TestResolveArbitrationOutcome:
         """If _create_phase_task itself fails (e.g. agent creation error),
         this must be logged as an error, not silently swallowed -- "surface
         errors better" applies to this failure mode too."""
-        from src.autopilot.orchestrator import _resolve_arbitration_outcome
+        from src.autopilot.orchestrator.phase_transitions import _resolve_arbitration_outcome
 
         self._seed_claimed_phase(db_manager)
         mock_pm = MagicMock()
@@ -3305,12 +3296,12 @@ class TestResolveArbitrationOutcome:
 
         assert logger.error.called
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     @patch("src.autopilot.orchestrator.PhaseManager")
     def test_fail_calls_force_fail_clears_claim_and_sets_status_reason(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
     ):
-        from src.autopilot.orchestrator import _resolve_arbitration_outcome
+        from src.autopilot.orchestrator.phase_transitions import _resolve_arbitration_outcome
 
         self._seed_claimed_phase(db_manager)
         mock_pm = MagicMock()
@@ -3337,14 +3328,14 @@ class TestResolveArbitrationOutcome:
             assert "no credentials available" in wf.status_reason
             assert "requirements" in wf.status_reason
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     @patch("src.autopilot.orchestrator.PhaseManager")
     def test_goto_without_target_treated_as_fail(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
     ):
         """A malformed decision (goto with no target_phase) must not crash
         or hang -- falls back to fail rather than silently doing nothing."""
-        from src.autopilot.orchestrator import _resolve_arbitration_outcome
+        from src.autopilot.orchestrator.phase_transitions import _resolve_arbitration_outcome
 
         self._seed_claimed_phase(db_manager)
         mock_pm = MagicMock()
@@ -3365,7 +3356,7 @@ class TestResolveArbitrationOutcome:
         )
         mock_create_task.assert_not_called()
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     @patch("src.autopilot.orchestrator.PhaseManager")
     def test_goto_with_unresolvable_target_phase_is_surfaced_not_hidden(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
@@ -3376,7 +3367,7 @@ class TestResolveArbitrationOutcome:
         that ISN'T "goto". The raw decision the arbiter wrote must not be
         trusted blindly for clearing status_reason -- check what actually
         happened."""
-        from src.autopilot.orchestrator import _resolve_arbitration_outcome
+        from src.autopilot.orchestrator.phase_transitions import _resolve_arbitration_outcome
 
         self._seed_claimed_phase(db_manager)
         mock_pm = MagicMock()
@@ -3414,7 +3405,8 @@ class TestMaybeResolveArbitration:
     sweep-tick consumer resolves it."""
 
     def _seed_arbitration_in_flight(self, db_manager, task_status="done"):
-        from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _claim_phase_task_creation
+        from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation
 
         with db_manager.session_scope() as session:
             _claim_phase_task_creation(session, "phase-1")
@@ -3431,13 +3423,13 @@ class TestMaybeResolveArbitration:
                 )
             )
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     @patch("src.autopilot.orchestrator.PhaseManager")
     def test_resolves_done_arbitration_with_valid_result(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow, tmp_path
     ):
         from src.core.constants import CONTEXT_DIR_NAME
-        from src.autopilot.orchestrator import _maybe_resolve_arbitration
+        from src.autopilot.orchestrator.phase_transitions import _maybe_resolve_arbitration
 
         with db_manager.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
@@ -3472,12 +3464,12 @@ class TestMaybeResolveArbitration:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is None
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     @patch("src.autopilot.orchestrator.PhaseManager")
     def test_still_running_arbitration_is_left_alone(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow, tmp_path
     ):
-        from src.autopilot.orchestrator import _maybe_resolve_arbitration
+        from src.autopilot.orchestrator.phase_transitions import _maybe_resolve_arbitration
 
         with db_manager.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
@@ -3495,14 +3487,15 @@ class TestMaybeResolveArbitration:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.task_creation_claimed_at is not None  # still claimed
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     @patch("src.autopilot.orchestrator.PhaseManager")
     def test_failed_arbitration_agent_resolves_as_fail(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow, tmp_path
     ):
         """The arbitration agent itself dying/failing must not leave the
         phase stuck forever -- resolves as a fail decision automatically."""
-        from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _claim_phase_task_creation, _maybe_resolve_arbitration
+        from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation, _maybe_resolve_arbitration
 
         with db_manager.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
@@ -3538,7 +3531,7 @@ class TestMaybeResolveArbitration:
         )
         mock_create_task.assert_not_called()
 
-    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.py._create_phase_task")
     @patch("src.autopilot.orchestrator.PhaseManager")
     def test_done_without_result_file_resolves_as_fail(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow, tmp_path
@@ -3546,7 +3539,7 @@ class TestMaybeResolveArbitration:
         """Regression backstop: an arbitration agent that calls
         update_task_status(done) without ever writing
         arbitration_result.json must not hang the phase forever."""
-        from src.autopilot.orchestrator import _maybe_resolve_arbitration
+        from src.autopilot.orchestrator.phase_transitions import _maybe_resolve_arbitration
 
         with db_manager.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
@@ -3576,7 +3569,7 @@ class TestMaybeResolveArbitration:
         """A phase with a stale/unrelated claim but no arbitration task at
         all (e.g. a normal in-flight task-creation claim) must be left
         alone -- only genuine arbitration in-flight is acted on."""
-        from src.autopilot.orchestrator import _claim_phase_task_creation, _maybe_resolve_arbitration
+        from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation, _maybe_resolve_arbitration
 
         with db_manager.session_scope() as session:
             _claim_phase_task_creation(session, "phase-1")

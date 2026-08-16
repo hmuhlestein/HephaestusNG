@@ -64,7 +64,7 @@ class TestForensicsAnalysisGating:
     def test_skips_agent_creation_on_clean_run(self, db_manager, forensics_workflow):
         """No tmux error patterns anywhere -> skip the agent, fire the
         transition directly instead of falling through to real task creation."""
-        from src.autopilot.orchestrator import _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         tmux_dir = forensics_workflow / ".hephaestus" / "tmux"
         tmux_dir.mkdir(parents=True)
@@ -74,7 +74,7 @@ class TestForensicsAnalysisGating:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator._fire_phase_transition", return_value=True
+            "src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition", return_value=True
         ) as mock_fire:
             result = _create_phase_task(
                 "wf-forensics", "phase-forensics", "forensics_analysis",
@@ -92,7 +92,7 @@ class TestForensicsAnalysisGating:
         """A real error pattern in a tmux log -> do NOT skip; fall through to
         the normal task-creation path (asserted here by confirming the skip
         path's _fire_phase_transition is never called)."""
-        from src.autopilot.orchestrator import _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         tmux_dir = forensics_workflow / ".hephaestus" / "tmux"
         tmux_dir.mkdir(parents=True)
@@ -102,7 +102,7 @@ class TestForensicsAnalysisGating:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator._fire_phase_transition", return_value=True
+            "src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition", return_value=True
         ) as mock_fire:
             _create_phase_task(
                 "wf-forensics", "phase-forensics", "forensics_analysis",
@@ -115,7 +115,7 @@ class TestForensicsAnalysisGating:
         """Regression: the gate must be scoped to forensics_analysis only --
         a differently-named phase must never hit the skip path even if its
         workflow's working_directory has no tmux dir at all."""
-        from src.autopilot.orchestrator import _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         working_directory = tmp_path / "worktree2"
         working_directory.mkdir()
@@ -149,7 +149,7 @@ class TestForensicsAnalysisGating:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator._fire_phase_transition", return_value=True
+            "src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition", return_value=True
         ) as mock_fire:
             _create_phase_task(
                 "wf-other", "phase-dev", "development", "continue", logger

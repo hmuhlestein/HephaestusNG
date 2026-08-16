@@ -213,7 +213,7 @@ class TestStartPipelineConcurrencyCap:
         )
 
         with patch(
-            "src.autopilot.orchestrator._get_or_create_project_id",
+            "src.autopilot.orchestrator.state.py._get_or_create_project_id",
             return_value="proj-c",
         ), patch(
             "src.autopilot.service.get_registry", return_value=fake_registry
@@ -240,7 +240,7 @@ class TestStartPipelineConcurrencyCap:
         fake_service.start = AsyncMock(return_value={"started": True})
 
         with patch(
-            "src.autopilot.orchestrator._get_or_create_project_id",
+            "src.autopilot.orchestrator.state.py._get_or_create_project_id",
             return_value="proj-a",
         ), patch(
             "src.autopilot.service.get_registry", return_value=fake_registry

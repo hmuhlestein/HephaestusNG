@@ -210,10 +210,10 @@ class TestQueueRerun:
             "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-fixed"
+            "src.autopilot.orchestrator.state.py._resolve_project_id", lambda project_path: "proj-fixed"
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._get_or_create_project_id",
+            "src.autopilot.orchestrator.state.py._get_or_create_project_id",
             lambda project_path: "proj-fixed",
         )
 
@@ -247,10 +247,10 @@ class TestQueueRerun:
             "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-fixed"
+            "src.autopilot.orchestrator.state.py._resolve_project_id", lambda project_path: "proj-fixed"
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._get_or_create_project_id",
+            "src.autopilot.orchestrator.state.py._get_or_create_project_id",
             lambda project_path: "proj-fixed",
         )
 
@@ -286,10 +286,10 @@ class TestQueueRerun:
             "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-fixed"
+            "src.autopilot.orchestrator.state.py._resolve_project_id", lambda project_path: "proj-fixed"
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._get_or_create_project_id",
+            "src.autopilot.orchestrator.state.py._get_or_create_project_id",
             lambda project_path: "proj-fixed",
         )
 
@@ -319,10 +319,10 @@ class TestQueueRerun:
             "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-fixed"
+            "src.autopilot.orchestrator.state.py._resolve_project_id", lambda project_path: "proj-fixed"
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._get_or_create_project_id",
+            "src.autopilot.orchestrator.state.py._get_or_create_project_id",
             lambda project_path: "proj-fixed",
         )
 
@@ -346,10 +346,10 @@ class TestQueueRerun:
         (project_dir / ".hephaestus" / "designs" / "my_design.md").write_text("# Design")
 
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: None
+            "src.autopilot.orchestrator.state.py._resolve_project_id", lambda project_path: None
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._get_or_create_project_id",
+            "src.autopilot.orchestrator.state.py._get_or_create_project_id",
             lambda project_path: "proj-over-cap",
         )
         fake_registry = Mock()
@@ -413,14 +413,14 @@ class TestQueueRerun:
             "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-fixed"
+            "src.autopilot.orchestrator.state.py._resolve_project_id", lambda project_path: "proj-fixed"
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._get_or_create_project_id",
+            "src.autopilot.orchestrator.state.py._get_or_create_project_id",
             lambda project_path: "proj-fixed",
         )
 
-        with patch("src.autopilot.orchestrator._cleanup_worktree") as mock_cleanup:
+        with patch("src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree") as mock_cleanup:
             resp = client.post(
                 "/api/autopilot/queue/rerun",
                 json={"filename": "01-auth.md", "project_path": str(project_dir)},
@@ -513,10 +513,10 @@ class TestQueueRerun:
             "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-target"
+            "src.autopilot.orchestrator.state.py._resolve_project_id", lambda project_path: "proj-target"
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._get_or_create_project_id",
+            "src.autopilot.orchestrator.state.py._get_or_create_project_id",
             lambda project_path: "proj-target",
         )
 

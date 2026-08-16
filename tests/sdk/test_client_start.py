@@ -161,7 +161,7 @@ class TestRunContinuousPipelinePassesInProcessFlag:
         with patch("src.sdk.HephaestusSDK", return_value=fake_sdk), patch(
             "src.autopilot.orchestrator.get_config"
         ) as mock_cfg, patch(
-            "src.autopilot.orchestrator.PersistentPipelineState"
+            "src.autopilot.orchestrator.state.py.PersistentPipelineState"
         ) as MockState, patch(
             "src.workflow_registry.get_all_workflow_definitions", return_value=[]
         ):

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.autopilot.orchestrator import _create_feature_records
+from src.autopilot.orchestrator.features import _create_feature_records
 
 
 @pytest.fixture(autouse=True)

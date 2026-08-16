@@ -105,12 +105,12 @@ def _seed_phase0_workflow(db_manager, design_id, phase_execution_status):
 
 class TestGetPhase0Completion:
     def test_returns_none_when_no_workflow_id_set(self, db_manager, design):
-        from src.autopilot.orchestrator import _get_phase0_completion
+        from src.autopilot.orchestrator.queue import _get_phase0_completion
 
         assert _get_phase0_completion(design) is None
 
     def test_returns_none_when_workflow_not_completed(self, db_manager, design):
-        from src.autopilot.orchestrator import _get_phase0_completion
+        from src.autopilot.orchestrator.queue import _get_phase0_completion
 
         _seed_phase0_workflow(db_manager, design, phase_execution_status="active")
 
@@ -119,7 +119,7 @@ class TestGetPhase0Completion:
     def test_returns_none_when_designs_folder_not_set(self, db_manager, design):
         """designs_folder must also be set — that's what the resume path reads
         features.json back from."""
-        from src.autopilot.orchestrator import _get_phase0_completion
+        from src.autopilot.orchestrator.queue import _get_phase0_completion
 
         _seed_phase0_workflow(db_manager, design, phase_execution_status="completed")
         # designs_folder deliberately left unset on the design row
@@ -127,7 +127,7 @@ class TestGetPhase0Completion:
         assert _get_phase0_completion(design) is None
 
     def test_returns_completion_data_when_completed(self, db_manager, design):
-        from src.autopilot.orchestrator import _get_phase0_completion
+        from src.autopilot.orchestrator.queue import _get_phase0_completion
 
         workflow_id = _seed_phase0_workflow(
             db_manager, design, phase_execution_status="completed"
@@ -145,12 +145,12 @@ class TestGetPhase0Completion:
         assert result["designs_folder"] == "/tmp/some-designs-folder"
 
     def test_returns_none_for_missing_design(self, db_manager):
-        from src.autopilot.orchestrator import _get_phase0_completion
+        from src.autopilot.orchestrator.queue import _get_phase0_completion
 
         assert _get_phase0_completion("nonexistent-design-id") is None
 
     def test_returns_none_for_none_design_id(self, db_manager):
-        from src.autopilot.orchestrator import _get_phase0_completion
+        from src.autopilot.orchestrator.queue import _get_phase0_completion
 
         assert _get_phase0_completion(None) is None
 
@@ -162,7 +162,7 @@ class TestGetPhase0Completion:
         Workflow.status="completed" without feature_review ever having run.
         Trusting Workflow.status alone would wrongly treat Phase 0 as fully
         reviewed; the last-phase PhaseExecution check must catch this."""
-        from src.autopilot.orchestrator import _get_phase0_completion
+        from src.autopilot.orchestrator.queue import _get_phase0_completion
 
         session = db_manager.get_session()
         workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
@@ -205,7 +205,7 @@ class TestGetPhase0Completion:
 
 class TestRunPhase0Tiers:
     def _make_design_entry(self, design_id, tmp_path):
-        from src.autopilot.orchestrator import DesignEntry
+        from src.autopilot.orchestrator.state import DesignEntry
 
         design_path = tmp_path / "design.md"
         design_path.write_text("# Design")
@@ -322,7 +322,7 @@ class TestRunPhase0Tiers:
         design_entry = self._make_design_entry(design, tmp_path)
 
         with patch("src.autopilot.orchestrator.run_single_workflow") as mock_run, \
-             patch("src.autopilot.orchestrator._create_integration_worktree") as mock_wt:
+             patch("src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree") as mock_wt:
             mock_wt.return_value = None  # short-circuit before launching a real workflow
             run_phase0(
                 sdk=MagicMock(),
@@ -395,13 +395,13 @@ class TestRunPhase0Tiers:
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
+            "src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree",
             return_value=worktree,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             side_effect=fake_run_single_workflow,
         ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
+            "src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree"
         ):
             features_json, designs_folder = run_phase0(
                 sdk=MagicMock(),
@@ -470,13 +470,13 @@ class TestRunPhase0Tiers:
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
+            "src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree",
             return_value=worktree,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             side_effect=fake_run_single_workflow,
         ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
+            "src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree"
         ):
             features_json, designs_folder = run_phase0(
                 sdk=MagicMock(),
@@ -539,13 +539,13 @@ class TestRunPhase0Tiers:
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
+            "src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree",
             return_value=worktree,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             side_effect=fake_run_single_workflow,
         ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
+            "src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree"
         ):
             _, designs_folder = run_phase0(
                 sdk=MagicMock(),
@@ -565,7 +565,7 @@ class TestRunPhase0ReviewMode:
     therefore any per-feature pipeline -- get created from it."""
 
     def _make_design_entry(self, design_id, tmp_path):
-        from src.autopilot.orchestrator import DesignEntry
+        from src.autopilot.orchestrator.state import DesignEntry
 
         design_path = tmp_path / "design.md"
         design_path.write_text("# Design")
@@ -637,13 +637,13 @@ class TestRunPhase0ReviewMode:
         workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
 
         with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
+            "src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree",
             return_value=worktree,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             side_effect=self._fake_run_single_workflow(db_manager, design, workflow_id),
         ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
+            "src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree"
         ), patch(
             "src.autopilot.orchestrator._wait_for_phase0_review_clearance",
             return_value=True,
@@ -681,13 +681,13 @@ class TestRunPhase0ReviewMode:
         workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
 
         with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
+            "src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree",
             return_value=worktree,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             side_effect=self._fake_run_single_workflow(db_manager, design, workflow_id),
         ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
+            "src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree"
         ), patch(
             "src.autopilot.orchestrator._wait_for_phase0_review_clearance"
         ) as mock_wait:
@@ -718,13 +718,13 @@ class TestRunPhase0ReviewMode:
         workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
 
         with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
+            "src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree",
             return_value=worktree,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             side_effect=self._fake_run_single_workflow(db_manager, design, workflow_id),
         ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
+            "src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree"
         ), patch(
             "src.autopilot.orchestrator._wait_for_phase0_review_clearance",
             return_value=False,
