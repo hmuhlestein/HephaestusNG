@@ -51,9 +51,9 @@ class MockLogger:
 class TestIsDesignFullyComplete:
     """Tests for is_design_fully_complete function."""
 
-    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
-    @patch("src.autopilot.orchestrator.engine_client.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.get_agents")
+    @patch("src.autopilot.orchestrator.queue.get_workflow_status")
+    @patch("src.autopilot.orchestrator.queue.get_tasks")
+    @patch("src.autopilot.orchestrator.queue.get_agents")
     @patch("subprocess.run")
     def test_complete_when_all_done(
         self, mock_subprocess, mock_agents, mock_tasks, mock_wf_status, tmp_path
@@ -81,8 +81,8 @@ class TestIsDesignFullyComplete:
         assert result is True
         assert "done" in reason.lower() or "complete" in reason.lower()
 
-    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
-    @patch("src.autopilot.orchestrator.engine_client.get_tasks")
+    @patch("src.autopilot.orchestrator.queue.get_workflow_status")
+    @patch("src.autopilot.orchestrator.queue.get_tasks")
     def test_incomplete_when_pending_tasks(self, mock_tasks, mock_wf_status):
         """Design is not complete when tasks are pending."""
         mock_wf_status.return_value = {"status": "active"}
@@ -100,9 +100,9 @@ class TestIsDesignFullyComplete:
         assert result is False
         assert "active" in reason.lower() or "task" in reason.lower()
 
-    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
-    @patch("src.autopilot.orchestrator.engine_client.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.get_agents")
+    @patch("src.autopilot.orchestrator.queue.get_workflow_status")
+    @patch("src.autopilot.orchestrator.queue.get_tasks")
+    @patch("src.autopilot.orchestrator.queue.get_agents")
     def test_incomplete_when_agents_active(
         self, mock_agents, mock_tasks, mock_wf_status
     ):
@@ -125,9 +125,9 @@ class TestIsDesignFullyComplete:
         assert result is False
         assert "agent" in reason.lower()
 
-    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
-    @patch("src.autopilot.orchestrator.engine_client.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.get_agents")
+    @patch("src.autopilot.orchestrator.queue.get_workflow_status")
+    @patch("src.autopilot.orchestrator.queue.get_tasks")
+    @patch("src.autopilot.orchestrator.queue.get_agents")
     @patch("subprocess.run")
     def test_incomplete_when_branches_unmerged(
         self, mock_subprocess, mock_agents, mock_tasks, mock_wf_status
@@ -156,8 +156,8 @@ class TestIsDesignFullyComplete:
         assert result is False
         assert "branch" in reason.lower()
 
-    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
-    @patch("src.autopilot.orchestrator.engine_client.get_tasks")
+    @patch("src.autopilot.orchestrator.queue.get_workflow_status")
+    @patch("src.autopilot.orchestrator.queue.get_tasks")
     def test_incomplete_when_tasks_failed(self, mock_tasks, mock_wf_status):
         """Design is not complete when tasks have failed."""
         mock_wf_status.return_value = {"status": "active"}
@@ -175,7 +175,7 @@ class TestIsDesignFullyComplete:
         assert result is False
         assert "fail" in reason.lower()
 
-    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
+    @patch("src.autopilot.orchestrator.queue.get_workflow_status")
     def test_incomplete_when_workflow_failed(self, mock_wf_status):
         """Design is not complete when workflow itself failed."""
         mock_wf_status.return_value = {"status": "failed"}
@@ -188,10 +188,12 @@ class TestIsDesignFullyComplete:
 class TestAttemptRecovery:
     """Tests for attempt_recovery function."""
 
-    @patch("src.autopilot.orchestrator.engine_client.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.update_task_status")
-    @patch("src.autopilot.orchestrator.engine_client.create_agent_for_task_direct")
-    @patch("src.autopilot.orchestrator.engine_client.get_agents")
+    @patch("src.core.database.get_db")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_db")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.autopilot.orchestrator.phase_transitions.update_task_status")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
     @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
     @patch("subprocess.run")
     def test_retries_failed_tasks(
@@ -202,6 +204,8 @@ class TestAttemptRecovery:
         mock_create_agent,
         mock_update_status,
         mock_tasks,
+        mock_pt_get_db,
+        mock_core_get_db,
     ):
         """Recovery should retry failed tasks by creating new agents."""
         mock_wf_status.return_value = {"status": "active"}
@@ -220,9 +224,34 @@ class TestAttemptRecovery:
 
         mock_agents.return_value = []
         mock_subprocess.return_value = MagicMock(returncode=1, stdout="")
+        mock_core_get_db.return_value = MagicMock(
+            __enter__=MagicMock(), __exit__=MagicMock(),
+            query=MagicMock(return_value=MagicMock(
+                filter=MagicMock(return_value=MagicMock(
+                    all=MagicMock(return_value=[]),
+                    first=MagicMock(return_value=None),
+                ))
+            ))
+        )
+        mock_pt_get_db.return_value = MagicMock(
+            __enter__=MagicMock(return_value=MagicMock(
+                query=MagicMock(return_value=MagicMock(
+                    filter=MagicMock(return_value=MagicMock(
+                        all=MagicMock(return_value=[]),
+                        first=MagicMock(return_value=None),
+                    )),
+                    filter_by=MagicMock(return_value=MagicMock(
+                        first=MagicMock(return_value=None),
+                        all=MagicMock(return_value=[]),
+                    )),
+                )),
+            )),
+            __exit__=MagicMock(),
+        )
 
         # Mock successful retry (H-2: create_agent_for_task_direct replaces
         # the old api_post("/api/create_agent_for_task", ...) self-HTTP call)
+        mock_tasks.return_value = [{"id": "task-fail-1", "retry_count": 0, "phase_id": "phase-1"}]
         mock_update_status.return_value = True
         mock_create_agent.return_value = {"agent_id": "agent-new-1", "status": "created"}
 
@@ -232,8 +261,8 @@ class TestAttemptRecovery:
         assert "retry" in msg.lower() or "task" in msg.lower()
         mock_create_agent.assert_called_once()
 
-    @patch("src.autopilot.orchestrator.engine_client.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.get_agents")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
     @patch("src.autopilot.orchestrator.engine_client.api_post")
     @patch("subprocess.run")
     def test_skips_retry_after_max_attempts(
@@ -254,8 +283,8 @@ class TestAttemptRecovery:
         # Should not retry (already max retries)
         assert "skip" in msg.lower() or not success
 
-    @patch("src.autopilot.orchestrator.engine_client.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.get_agents")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
     @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
     @patch("subprocess.run")
     def test_merges_branches(
@@ -293,8 +322,8 @@ class TestAttemptRecovery:
         success, msg = attempt_recovery("wf-123", MockLogger())
         assert "merge" in msg.lower() or success
 
-    @patch("src.autopilot.orchestrator.engine_client.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.get_agents")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
     @patch("src.autopilot.orchestrator.engine_client.api_post")
     @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
     @patch("subprocess.run")
@@ -315,8 +344,8 @@ class TestAttemptRecovery:
         success, msg = attempt_recovery("wf-123", MockLogger())
         assert "terminate" in msg.lower() or success
 
-    @patch("src.autopilot.orchestrator.engine_client.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.get_agents")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
     @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
     @patch("subprocess.run")
     def test_no_recovery_needed(

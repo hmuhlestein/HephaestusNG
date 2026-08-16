@@ -19,7 +19,7 @@ class TestRunAshScan:
 
         logger = MagicMock()
         fake_result = MagicMock(stdout="scan output here", stderr="", returncode=0)
-        with patch("src.autopilot.orchestrator.subprocess.run", return_value=fake_result):
+        with patch("src.autopilot.orchestrator.worktree_integration.subprocess.run", return_value=fake_result):
             with patch("pathlib.Path.exists", return_value=True):
                 _run_ash_scan(tmp_path, logger)
 
@@ -32,7 +32,7 @@ class TestRunAshScan:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator.subprocess.run",
+            "src.autopilot.orchestrator.worktree_integration.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="ash", timeout=300),
         ):
             with patch("pathlib.Path.exists", return_value=True):
@@ -47,7 +47,7 @@ class TestRunAshScan:
 
         logger = MagicMock()
         with patch(
-            "src.autopilot.orchestrator.subprocess.run",
+            "src.autopilot.orchestrator.worktree_integration.subprocess.run",
             side_effect=OSError("uvx not found"),
         ):
             with patch("pathlib.Path.exists", return_value=True):
@@ -117,7 +117,7 @@ class TestAshScanWiredIntoPhaseTaskCreation:
         from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         logger = MagicMock()
-        with patch("src.autopilot.orchestrator.worktree_integration._run_ash_scan") as mock_scan:
+        with patch("src.autopilot.orchestrator.phase_transitions._run_ash_scan") as mock_scan:
             _create_phase_task("wf-sec", "phase-sec", "security_review", "continue", logger)
 
         mock_scan.assert_called_once_with(working_directory, logger)
@@ -167,7 +167,7 @@ class TestAshScanWiredIntoPhaseTaskCreation:
         from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         logger = MagicMock()
-        with patch("src.autopilot.orchestrator.worktree_integration._run_ash_scan") as mock_scan:
+        with patch("src.autopilot.orchestrator.phase_transitions._run_ash_scan") as mock_scan:
             _create_phase_task("wf-dev", "phase-dev", "development", "continue", logger)
 
         mock_scan.assert_not_called()
