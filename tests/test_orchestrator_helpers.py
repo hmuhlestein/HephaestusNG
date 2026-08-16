@@ -214,7 +214,7 @@ class TestPersistentPipelineState:
 
         pps = PersistentPipelineState()
         with patch(
-            "src.autopilot.orchestrator.state.py._set_project_context",
+            "src.autopilot.orchestrator.state._set_project_context",
             side_effect=[RuntimeError("boom"), None],
         ) as mock_set:
             pps.save(PipelineState(run_id="run-999"), {"h1"})
@@ -1440,7 +1440,7 @@ class TestCleanStaleAssignedTasks:
 
     def test_preserves_existing_specific_reason(self, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.features import _clean_stale_assigned_tasks
+        from src.autopilot.orchestrator.features import _clean_stale_assigned_tasks
         from src.core.database import Task
 
         self._make_workflow_task_agent(
@@ -1456,7 +1456,7 @@ from src.autopilot.orchestrator.features import _clean_stale_assigned_tasks
 
     def test_falls_back_to_generic_reason_when_none_recorded(self, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.features import _clean_stale_assigned_tasks
+        from src.autopilot.orchestrator.features import _clean_stale_assigned_tasks
         from src.core.database import Task
 
         self._make_workflow_task_agent(orch_db_env, failure_reason=None)
@@ -1505,7 +1505,7 @@ class TestRetryFailedTasks:
                 )
             )
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_retries_failed_task_and_dispatches_agent(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
@@ -1542,7 +1542,7 @@ class TestRetryFailedTasks:
             assert task.assigned_agent_id == "new-agent"
             assert task.retry_count == 1
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_skips_task_at_retry_cap(self, mock_create_agent, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
@@ -1559,7 +1559,7 @@ class TestRetryFailedTasks:
             assert task.status == "failed"
             assert task.retry_count == 5
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct", return_value=None)
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct", return_value=None)
     def test_agent_dispatch_failure_lands_back_on_failed_not_stuck_pending(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
@@ -1581,7 +1581,7 @@ class TestRetryFailedTasks:
             assert task.status == "failed"
             assert task.retry_count == 1
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct", return_value=None)
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct", return_value=None)
     def test_superseded_by_active_sibling_is_skipped_not_failed(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
@@ -1621,7 +1621,7 @@ class TestRetryFailedTasks:
             sibling = session.query(Task).filter_by(id="task-sibling").first()
             assert sibling.status == "in_progress", "the active sibling must be untouched"
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_phase_less_task_is_not_falsely_superseded_by_an_unrelated_one(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
@@ -1719,7 +1719,7 @@ class TestMaybeRetryFailedTasksPreservesGotoTarget:
                 )
             )
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_retry_preserves_action_target_phase(self, mock_create_agent, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
@@ -1743,7 +1743,7 @@ class TestMaybeRetryFailedTasksPreservesGotoTarget:
             assert task.action == "goto"
             assert task.action_target_phase == "qa_validation"
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_retry_preserves_absence_of_action_target_phase(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
@@ -1863,7 +1863,7 @@ class TestResumeStuckWorkflowTasks:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "active"
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_skips_user_paused_workflow(self, mock_create_agent, orch_db_env, tmp_path):
         """Regression: same class of bug _try_auto_resume_paused_workflow
         was fixed for -- this fires whenever the design/feature queue loop
@@ -1888,7 +1888,7 @@ class TestResumeStuckWorkflowTasks:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "paused"
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_restarts_failed_and_blocked_tasks(self, mock_create_agent, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _resume_stuck_workflow_tasks
@@ -1914,7 +1914,7 @@ class TestResumeStuckWorkflowTasks:
                 assert task.assigned_agent_id == "new-agent"
                 assert task.failure_reason is None
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_restarts_task_whose_agent_was_terminated(self, mock_create_agent, orch_db_env, tmp_path):
         """A task can be stuck 'in_progress' pointing at an agent that was
         already terminated (e.g. the service stop killed it) -- resume must
@@ -1933,7 +1933,7 @@ class TestResumeStuckWorkflowTasks:
         assert restarted == 1
         mock_create_agent.assert_called_once()
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_does_not_restart_task_with_live_agent(self, mock_create_agent, orch_db_env, tmp_path):
         """A task genuinely still being worked by a live agent must be left
         alone -- resume is for stuck work, not active work."""
@@ -1953,7 +1953,7 @@ class TestResumeStuckWorkflowTasks:
             task = session.query(Task).filter_by(id="task-1").first()
             assert task.assigned_agent_id == "live-agent"
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_clears_stale_goto_action_on_restart(self, mock_create_agent, orch_db_env, tmp_path):
         """Regression: this row is reused (not recreated) for the restart --
         a task previously tagged action='goto' by _tag_completing_task (from
@@ -1981,7 +1981,7 @@ class TestResumeStuckWorkflowTasks:
             assert task.action == ""
             assert task.action_target_phase is None
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_restarts_pending_task_with_dead_agent(self, mock_create_agent, orch_db_env, tmp_path):
         """A task can end up 'pending' with a stale assigned_agent_id (e.g.
         an agent manually terminated after the task was dispatched but
@@ -2001,7 +2001,7 @@ class TestResumeStuckWorkflowTasks:
         assert restarted == 1
         mock_create_agent.assert_called_once()
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_restarts_stale_pending_task_with_no_agent(self, mock_create_agent, orch_db_env, tmp_path):
         """A 'pending' task with no agent at all and no automatic pickup
         anywhere else in the codebase (see PENDING_STUCK_MINUTES comment)
@@ -2027,7 +2027,7 @@ class TestResumeStuckWorkflowTasks:
         assert restarted == 1
         mock_create_agent.assert_called_once()
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_does_not_restart_freshly_created_pending_task(self, mock_create_agent, orch_db_env, tmp_path):
         """A 'pending' task with no agent yet that was JUST created is
         normal -- creation and first dispatch happen in the same
@@ -2308,7 +2308,7 @@ class TestCreateCorrectiveTask:
                 )
             )
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_creates_task_with_feedback_and_reopens_phase(self, mock_create_agent, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _create_corrective_task
@@ -2339,7 +2339,7 @@ class TestCreateCorrectiveTask:
             assert task.status == "in_progress"
             assert task.assigned_agent_id == "new-agent"
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_reopening_resets_stale_task_creation_claim(self, mock_create_agent, orch_db_env, tmp_path):
         """Regression: like _create_phase_task, this reopens a phase the
         engine already marked complete -- but until fixed it never reset
@@ -2351,7 +2351,7 @@ class TestCreateCorrectiveTask:
         from datetime import datetime
 
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.phase_transitions import (
+        from src.autopilot.orchestrator.phase_transitions import (
     _claim_phase_task_creation,
     _create_corrective_task,
 )
@@ -2374,7 +2374,7 @@ from src.autopilot.orchestrator.phase_transitions import (
             assert execution.task_creation_claimed_at is None
             assert _claim_phase_task_creation(session, "phase-1") is True
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_refuses_when_target_phase_is_freshly_claimed_by_another_caller(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
@@ -2385,7 +2385,7 @@ from src.autopilot.orchestrator.phase_transitions import (
         task and create a sibling. Mirrors _create_phase_task's own
         target_already_claimed=False protection."""
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.phase_transitions import (
+        from src.autopilot.orchestrator.phase_transitions import (
     _claim_phase_task_creation,
     _create_corrective_task,
 )
@@ -2409,7 +2409,7 @@ from src.autopilot.orchestrator.phase_transitions import (
             assert execution.task_creation_claimed_at is not None
             assert session.query(Task).filter_by(phase_id="phase-1").count() == 0
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_missing_workflow_returns_none(self, mock_create_agent, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _create_corrective_task
@@ -2422,7 +2422,7 @@ from src.autopilot.orchestrator.phase_transitions import (
         assert result is None
         mock_create_agent.assert_not_called()
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_skips_user_paused_workflow(self, mock_create_agent, orch_db_env, tmp_path):
         """Regression: same class of bug _try_auto_resume_paused_workflow
         was fixed for, but worse here -- unguarded, this would both
@@ -2449,7 +2449,7 @@ from src.autopilot.orchestrator.phase_transitions import (
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "paused"
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct", return_value=None)
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct", return_value=None)
     def test_agent_creation_failure_marks_task_failed(self, mock_create_agent, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _create_corrective_task
@@ -2545,9 +2545,9 @@ class TestNegotiateValidationFix:
                 raise ValueError("too many")
 
         with patch(
-            "src.autopilot.orchestrator.phase_transitions.py._create_corrective_task", side_effect=fake_create_task
+            "src.autopilot.orchestrator.phase_transitions._create_corrective_task", side_effect=fake_create_task
         ), patch(
-            "src.autopilot.orchestrator.phase_transitions.py._wait_for_task_terminal", return_value="done"
+            "src.autopilot.orchestrator.phase_transitions._wait_for_task_terminal", return_value="done"
         ):
             success, result = _negotiate_validation_fix(
                 "wf-1", "phase-1", "Feature Architect", output_path, validate_fn,
@@ -2569,9 +2569,9 @@ class TestNegotiateValidationFix:
                 raise ValueError("too many")
 
         with patch(
-            "src.autopilot.orchestrator.phase_transitions.py._create_corrective_task", return_value="task-1"
+            "src.autopilot.orchestrator.phase_transitions._create_corrective_task", return_value="task-1"
         ), patch(
-            "src.autopilot.orchestrator.phase_transitions.py._wait_for_task_terminal", return_value="done"
+            "src.autopilot.orchestrator.phase_transitions._wait_for_task_terminal", return_value="done"
         ) as mock_wait:
             success, result = _negotiate_validation_fix(
                 "wf-1", "phase-1", "Feature Architect", output_path, validate_fn,
@@ -2589,7 +2589,7 @@ class TestNegotiateValidationFix:
         output_path = tmp_path / "features.json"
 
         with patch(
-            "src.autopilot.orchestrator.phase_transitions.py._create_corrective_task", return_value=None
+            "src.autopilot.orchestrator.phase_transitions._create_corrective_task", return_value=None
         ):
             success, result = _negotiate_validation_fix(
                 "wf-1", "phase-1", "Feature Architect", output_path, lambda x: None,
@@ -2606,9 +2606,9 @@ class TestNegotiateValidationFix:
         output_path = tmp_path / "features.json"
 
         with patch(
-            "src.autopilot.orchestrator.phase_transitions.py._create_corrective_task", return_value="task-1"
+            "src.autopilot.orchestrator.phase_transitions._create_corrective_task", return_value="task-1"
         ), patch(
-            "src.autopilot.orchestrator.phase_transitions.py._wait_for_task_terminal", return_value="failed"
+            "src.autopilot.orchestrator.phase_transitions._wait_for_task_terminal", return_value="failed"
         ):
             success, result = _negotiate_validation_fix(
                 "wf-1", "phase-1", "Feature Architect", output_path, lambda x: None,
@@ -2705,7 +2705,7 @@ class TestPeekAgentOutput:
 
 
 class TestGetTaskProgress:
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
     def test_counts(self, mock_tasks):
         from src.autopilot.orchestrator.engine_client import get_task_progress
 
@@ -2924,8 +2924,8 @@ class TestArchiveAndCleanup:
 
 
 class TestCheckApiCredits:
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
     def test_no_credits_issue(self, mock_agents, mock_tasks):
         from src.autopilot.orchestrator.policy import check_api_credits
 
@@ -2934,8 +2934,8 @@ class TestCheckApiCredits:
         found, msg = check_api_credits()
         assert found is False
 
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
     def test_agent_credit_error(self, mock_agents, mock_tasks):
         from src.autopilot.orchestrator.policy import check_api_credits
 
@@ -2947,8 +2947,8 @@ class TestCheckApiCredits:
         assert found is True
         assert "credit" in msg.lower()
 
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
     def test_task_credit_error(self, mock_agents, mock_tasks):
         from src.autopilot.orchestrator.policy import check_api_credits
 
@@ -2957,8 +2957,8 @@ class TestCheckApiCredits:
         found, msg = check_api_credits()
         assert found is True
 
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
     def test_agent_output_log_credit(self, mock_agents, mock_tasks):
         from src.autopilot.orchestrator.policy import check_api_credits
 
@@ -2976,12 +2976,12 @@ class TestCheckApiCredits:
 
 
 class TestIsDesignFullyComplete:
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
     def test_incomplete_workflow_status(self, mock_wf, mock_tasks, mock_agents):
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.queue import is_design_fully_complete
+        from src.autopilot.orchestrator.queue import is_design_fully_complete
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_wf.return_value = {"status": "unknown"}
@@ -2991,12 +2991,12 @@ from src.autopilot.orchestrator.queue import is_design_fully_complete
         assert result is False
         assert "Workflow status" in msg
 
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
     def test_incomplete_has_active_tasks(self, mock_wf, mock_tasks, mock_agents):
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.queue import is_design_fully_complete
+        from src.autopilot.orchestrator.queue import is_design_fully_complete
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_wf.return_value = {"status": "active"}
@@ -3023,12 +3023,12 @@ from src.autopilot.orchestrator.queue import is_design_fully_complete
         assert result is False
         assert "active" in msg.lower()
 
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
     def test_incomplete_has_failed_tasks(self, mock_wf, mock_tasks, mock_agents):
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.queue import is_design_fully_complete
+        from src.autopilot.orchestrator.queue import is_design_fully_complete
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_wf.return_value = {"status": "active"}
@@ -3056,12 +3056,12 @@ from src.autopilot.orchestrator.queue import is_design_fully_complete
         assert result is False
         assert "failed" in msg.lower()
 
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.get_workflow_status")
     def test_incomplete_has_active_agents(self, mock_wf, mock_tasks, mock_agents):
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.queue import is_design_fully_complete
+        from src.autopilot.orchestrator.queue import is_design_fully_complete
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_wf.return_value = {"status": "active"}
@@ -3092,9 +3092,9 @@ from src.autopilot.orchestrator.queue import is_design_fully_complete
 
 class TestAttemptRecovery:
     @patch("src.autopilot.orchestrator.get_db")
-    @patch("src.autopilot.orchestrator.engine_client.py.api_post")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.phase_transitions.api_post")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
     def test_no_recovery_needed(self, mock_tasks, mock_agents, mock_post, mock_get_db):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.policy import attempt_recovery
@@ -3114,10 +3114,10 @@ class TestAttemptRecovery:
         assert "No recovery" in msg
 
     @patch("src.autopilot.orchestrator.get_db")
-    @patch("src.autopilot.orchestrator.engine_client.py.update_task_status")
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.phase_transitions.update_task_status")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
     def test_retries_failed_tasks(
         self, mock_tasks, mock_agents, mock_create_agent, mock_update_status, mock_get_db
     ):
@@ -3150,8 +3150,8 @@ class TestAttemptRecovery:
         assert success is True
         assert "retried" in msg.lower()
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
     def test_retry_count_persists_and_eventually_stops(
         self, mock_agents, mock_create_agent, orch_db_env
     ):
@@ -3221,9 +3221,9 @@ class TestAttemptRecovery:
             assert task.retry_count == 5  # unchanged -- never even attempted
 
     @patch("src.autopilot.orchestrator.get_db")
-    @patch("src.autopilot.orchestrator.engine_client.py.api_post")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.phase_transitions.api_post")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
     def test_skips_max_retries(self, mock_tasks, mock_agents, mock_post, mock_get_db):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.policy import attempt_recovery
@@ -3243,12 +3243,12 @@ class TestAttemptRecovery:
         success, msg = attempt_recovery("wf-1", logger)
         assert success is False
 
-    @patch("src.autopilot.orchestrator.engine_client.py.terminate_agent_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.terminate_agent_direct")
     @patch("src.core.database.get_db")
     @patch("src.autopilot.orchestrator.get_db")
-    @patch("src.autopilot.orchestrator.engine_client.py.api_post")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
-    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.phase_transitions.api_post")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_agents")
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
     def test_terminates_stale_agents(
         self, mock_tasks, mock_agents, mock_post, mock_get_db,
         mock_core_get_db, mock_terminate, tmp_path
@@ -3403,7 +3403,7 @@ class TestRunOneFeatureStateIsolation:
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree",
+            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
@@ -3484,7 +3484,7 @@ class TestRunOneFeatureDoesNotOverrideGotoBudget:
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree",
+            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
@@ -3565,13 +3565,13 @@ class TestRunOneFeatureWorktreeCleanupTiming:
             orch_db_env, tmp_path, feature_key
         )
         with patch(
-            "src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree",
+            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             return_value=wf_status,
         ), patch(
-            "src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree"
+            "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
         ) as mock_cleanup:
             status = _run_one_feature(
                 sdk=MagicMock(),
@@ -3624,13 +3624,13 @@ class TestRunOneFeatureWorktreeCleanupTiming:
             orch_db_env, tmp_path
         )
         with patch(
-            "src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree",
+            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             side_effect=RuntimeError("boom"),
         ), patch(
-            "src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree"
+            "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
         ) as mock_cleanup:
             status = _run_one_feature(
                 sdk=MagicMock(),
@@ -3712,13 +3712,13 @@ class TestRunOneFeatureWithDependencies:
         worktree_dir.mkdir()
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree",
+            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             return_value="completed",
         ), patch(
-            "src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree"
+            "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
         ):
             status = _run_one_feature(
                 sdk=MagicMock(),
@@ -3788,7 +3788,7 @@ class TestRunOneFeatureThreadsProjectId:
             OrchestratorLogger,
             _run_one_feature,
         )
-from src.autopilot.orchestrator.state import DesignEntry
+        from src.autopilot.orchestrator.state import DesignEntry
         from src.core.database import AutopilotDesign, AutopilotProject, Feature
 
         design_id = "design-1"
@@ -3829,13 +3829,13 @@ from src.autopilot.orchestrator.state import DesignEntry
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration.py._create_integration_worktree",
+            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
             side_effect=fake_run_single_workflow,
         ), patch(
-            "src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree"
+            "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
         ):
             _run_one_feature(
                 sdk=MagicMock(),
@@ -3876,7 +3876,7 @@ class TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn:
             OrchestratorLogger,
             _run_one_feature,
         )
-from src.autopilot.orchestrator.state import DesignEntry
+        from src.autopilot.orchestrator.state import DesignEntry
         from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
 
         design_id = "design-1"
@@ -3920,7 +3920,7 @@ from src.autopilot.orchestrator.state import DesignEntry
 
         with patch(
             "src.autopilot.orchestrator.run_single_workflow"
-        ) as mock_run, patch("src.autopilot.orchestrator.worktree_integration.py._cleanup_worktree"):
+        ) as mock_run, patch("src.autopilot.orchestrator.worktree_integration._cleanup_worktree"):
             status = _run_one_feature(
                 sdk=MagicMock(),
                 design_entry=design_entry,
@@ -4550,7 +4550,7 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
 
     def test_rebuilds_worktree_from_branch_and_resumes(self, orch_db_env, tmp_path, monkeypatch):
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_missing_worktree
+        from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_missing_worktree
         from src.core.database import (
             AutopilotDesign,
             AutopilotProject,
@@ -4667,7 +4667,7 @@ from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_w
         is genuinely, persistently broken and needs a human, not another
         automated attempt."""
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_missing_worktree
+        from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_missing_worktree
         from src.core.database import (
             AutopilotDesign,
             AutopilotProject,
@@ -4777,7 +4777,7 @@ from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_w
         real blocker was still fully eligible, purely because of this
         unrelated, ancient, already-superseded history."""
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_missing_worktree
+        from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_missing_worktree
         from src.core.database import (
             AutopilotDesign,
             AutopilotProject,
@@ -4982,7 +4982,7 @@ class TestRecoverAbandonedWorkflowsWithCompletedPhase:
         self, orch_db_env, tmp_path
     ):
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_with_completed_phase
+        from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_with_completed_phase
         from src.core.database import Workflow
 
         with orch_db_env.session_scope() as session:
@@ -5008,7 +5008,7 @@ from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_w
         abandonment flag is stale) must not be force-resumed -- that's a
         different, still-active situation this function must not touch."""
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_with_completed_phase
+        from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_with_completed_phase
         from src.core.database import Workflow
 
         with orch_db_env.session_scope() as session:
@@ -5028,7 +5028,7 @@ from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_w
         that's _recover_abandoned_workflows_missing_worktree's or
         _maybe_retry_failed_tasks' territory, not this function's."""
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_with_completed_phase
+        from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_with_completed_phase
         from src.core.database import Workflow
 
         with orch_db_env.session_scope() as session:
@@ -5048,7 +5048,7 @@ from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_w
         function's case (rebuild the worktree first); this one must not
         try to evaluate a phase with nowhere to read its output from."""
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_with_completed_phase
+        from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_with_completed_phase
         from src.core.database import Workflow
 
         with orch_db_env.session_scope() as session:
@@ -5135,7 +5135,7 @@ class TestRetryExhaustedPausedWorkflows:
 
     def test_resets_retry_count_and_reactivates_past_cooldown(self, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
+        from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
         from src.core.database import Task, Workflow
 
         self._seed_paused_workflow(
@@ -5160,7 +5160,7 @@ from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused
 
     def test_leaves_workflow_alone_within_cooldown(self, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
+        from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
         from src.core.database import Task, Workflow
 
         self._seed_paused_workflow(orch_db_env, paused_at=datetime.utcnow() - timedelta(seconds=5))
@@ -5176,7 +5176,7 @@ from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused
 
     def test_treats_null_paused_at_as_eligible(self, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
+        from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
         from src.core.database import Workflow
 
         self._seed_paused_workflow(orch_db_env, paused_at=None)
@@ -5190,7 +5190,7 @@ from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused
 
     def test_leaves_user_paused_workflows_alone(self, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
+        from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
         from src.core.database import Workflow
 
         self._seed_paused_workflow(
@@ -5211,7 +5211,7 @@ from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused
         not safe to blindly auto-retry the same way (unlike an exhausted-
         retry pause, nothing here confirms every task actually failed)."""
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
+        from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
         from src.core.database import Workflow
 
         self._seed_paused_workflow(
@@ -5230,7 +5230,7 @@ from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused
             OrchestratorLogger,
             _get_paused_workflow_max_retry_cycles,
         )
-from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
+        from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
         from src.core.database import Task, Workflow
 
         self._seed_paused_workflow(
@@ -5309,7 +5309,7 @@ from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused
             )
 
         from src.autopilot.orchestrator import OrchestratorLogger
-from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
+        from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
 
         recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
 
@@ -5568,7 +5568,7 @@ class TestUpdateResumedWorkflowRecoveryAttempts:
         from src.autopilot.orchestrator.policy import _update_resumed_workflow_recovery_attempts
 
         monkeypatch.setattr(
-            "src.autopilot.orchestrator.policy.py._workflow_appears_abandoned",
+            "src.autopilot.orchestrator.policy._workflow_appears_abandoned",
             lambda wf_id: False,
         )
 
@@ -5578,7 +5578,7 @@ class TestUpdateResumedWorkflowRecoveryAttempts:
         from src.autopilot.orchestrator.policy import _update_resumed_workflow_recovery_attempts
 
         monkeypatch.setattr(
-            "src.autopilot.orchestrator.policy.py._workflow_appears_abandoned",
+            "src.autopilot.orchestrator.policy._workflow_appears_abandoned",
             lambda wf_id: True,
         )
 
@@ -5595,7 +5595,7 @@ class TestUpdateResumedWorkflowRecoveryAttempts:
 
         abandoned_flags = iter([True, True, True, False, True, True, True])
         monkeypatch.setattr(
-            "src.autopilot.orchestrator.policy.py._workflow_appears_abandoned",
+            "src.autopilot.orchestrator.policy._workflow_appears_abandoned",
             lambda wf_id: next(abandoned_flags),
         )
 
@@ -5631,12 +5631,12 @@ class TestEscalateStaleActiveWorkflows:
     ):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.policy import STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS
-from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
+        from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
         from src.core.database import Workflow
 
         self._make_workflow(orch_db_env, "wf-1")
         monkeypatch.setattr(
-            "src.autopilot.orchestrator.policy.py._workflow_appears_abandoned",
+            "src.autopilot.orchestrator.policy._workflow_appears_abandoned",
             lambda wf_id: True,
         )
 
@@ -5667,7 +5667,7 @@ from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
     def test_activity_resets_the_streak(self, orch_db_env, tmp_path, monkeypatch):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.policy import STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS
-from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
+        from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
         from src.core.database import Workflow
 
         self._make_workflow(orch_db_env, "wf-1")
@@ -5683,7 +5683,7 @@ from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
             return abandoned
 
         monkeypatch.setattr(
-            "src.autopilot.orchestrator.policy.py._workflow_appears_abandoned",
+            "src.autopilot.orchestrator.policy._workflow_appears_abandoned",
             flip_flopping,
         )
 
@@ -5704,7 +5704,7 @@ from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
     ):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.policy import STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS
-from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
+        from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
         from src.core.database import Task, Workflow
 
         self._make_workflow(orch_db_env, "wf-1")
@@ -6198,7 +6198,7 @@ class TestCreatePhaseTaskReviewCap:
                     )
                 )
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_no_injection_or_cap_when_max_review_runs_unset(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
@@ -6225,7 +6225,7 @@ class TestCreatePhaseTaskReviewCap:
             assert new_task is not None
             assert "PRIOR FINDINGS" not in new_task.raw_description
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_no_injection_on_first_run(self, mock_create_agent, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _create_phase_task
@@ -6249,7 +6249,7 @@ class TestCreatePhaseTaskReviewCap:
             )
             assert "PRIOR FINDINGS" not in new_task.raw_description
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_injects_prior_findings_on_re_entry_under_cap(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
@@ -6282,8 +6282,8 @@ class TestCreatePhaseTaskReviewCap:
             assert "B-1 and B-2" in new_task.raw_description
             assert "Verify ONLY whether" in new_task.raw_description
 
-    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_caps_out_instead_of_creating_another_task(
         self, mock_create_agent, mock_fire_transition, orch_db_env, tmp_path
     ):
@@ -6325,8 +6325,8 @@ class TestCreatePhaseTaskReviewCap:
         frontmatter, _ = read_okf(result_md)
         assert frontmatter["blocker_count"] == 0
 
-    @patch("src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition")
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_caps_out_a_phase_with_no_gate_result_artifacts(
         self, mock_create_agent, mock_fire_transition, orch_db_env, tmp_path
     ):
@@ -6414,7 +6414,7 @@ class TestCreatePhaseTaskReviewCap:
 
         assert result is None
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_falls_through_to_normal_task_when_cap_out_cannot_write(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
@@ -6477,7 +6477,7 @@ class TestCreatePhaseTaskReviewCap:
         with patch(
             "src.autopilot.spec.get_review_findings_history", return_value=history
         ), patch(
-            "src.autopilot.orchestrator.phase_transitions.py._fire_phase_transition", return_value=True
+            "src.autopilot.orchestrator.phase_transitions._fire_phase_transition", return_value=True
         ) as mock_fire:
             with orch_db_env.session_scope() as session:
                 phase = session.query(Phase).filter_by(id="phase-caveats").first()
@@ -6550,7 +6550,7 @@ class TestCreatePhaseTaskOrphanedPendingAge:
                 )
             )
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_recently_created_pending_task_is_not_treated_as_orphaned(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
@@ -6579,7 +6579,7 @@ class TestCreatePhaseTaskOrphanedPendingAge:
             )
             assert duplicate_count == 1
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_genuinely_stale_pending_task_is_still_replaced(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
@@ -6659,7 +6659,7 @@ class TestCreatePhaseTaskOrphanedPendingAge:
                 )
             )
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_pending_task_pointing_at_terminated_agent_is_replaced(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
@@ -6695,7 +6695,7 @@ class TestCreatePhaseTaskOrphanedPendingAge:
             assert fresh is not None
             assert fresh.id != "task-maybe-orphan"
 
-    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_pending_task_pointing_at_working_agent_is_left_alone(
         self, mock_create_agent, orch_db_env, tmp_path
     ):

@@ -117,7 +117,7 @@ class TestAshScanWiredIntoPhaseTaskCreation:
         from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         logger = MagicMock()
-        with patch("src.autopilot.orchestrator.worktree_integration.py._run_ash_scan") as mock_scan:
+        with patch("src.autopilot.orchestrator.worktree_integration._run_ash_scan") as mock_scan:
             _create_phase_task("wf-sec", "phase-sec", "security_review", "continue", logger)
 
         mock_scan.assert_called_once_with(working_directory, logger)
@@ -167,7 +167,7 @@ class TestAshScanWiredIntoPhaseTaskCreation:
         from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         logger = MagicMock()
-        with patch("src.autopilot.orchestrator.worktree_integration.py._run_ash_scan") as mock_scan:
+        with patch("src.autopilot.orchestrator.worktree_integration._run_ash_scan") as mock_scan:
             _create_phase_task("wf-dev", "phase-dev", "development", "continue", logger)
 
         mock_scan.assert_not_called()

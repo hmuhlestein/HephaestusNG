@@ -1013,7 +1013,7 @@ class TestFireSpecGateIfReadyGoto:
             ), patch(
                 "src.autopilot.spec.build_phase_output", return_value={"score": 0.4}
             ), patch(
-                "src.autopilot.orchestrator.phase_transitions.py._create_phase_task"
+                "src.autopilot.orchestrator.phase_transitions._create_phase_task"
             ) as mock_create_task:
                 mock_create_task.return_value = True
                 await TaskCompletionService.fire_spec_gate_if_ready(session, task)
@@ -1067,7 +1067,7 @@ class TestFireSpecGateIfReadyGoto:
             ), patch(
                 "src.autopilot.spec.build_phase_output", return_value={"score": 0.4}
             ), patch(
-                "src.autopilot.orchestrator.phase_transitions.py._create_phase_task"
+                "src.autopilot.orchestrator.phase_transitions._create_phase_task"
             ) as mock_create_task:
                 mock_create_task.return_value = True
                 await TaskCompletionService.fire_spec_gate_if_ready(session, task)
@@ -1096,7 +1096,7 @@ class TestFireSpecGateIfReadyGoto:
             ), patch(
                 "src.autopilot.spec.build_phase_output", return_value={"score": 0.9}
             ), patch(
-                "src.autopilot.orchestrator.phase_transitions.py._create_phase_task"
+                "src.autopilot.orchestrator.phase_transitions._create_phase_task"
             ) as mock_create_task:
                 await TaskCompletionService.fire_spec_gate_if_ready(session, task)
 
@@ -1136,7 +1136,7 @@ class TestFireSpecGateIfReadyGoto:
             ), patch(
                 "src.autopilot.spec.build_phase_output", return_value={"score": 0.4}
             ), patch(
-                "src.autopilot.orchestrator.phase_transitions.py._trigger_arbitration"
+                "src.autopilot.orchestrator.phase_transitions._trigger_arbitration"
             ) as mock_arbitrate:
                 mock_arbitrate.return_value = True
                 await TaskCompletionService.fire_spec_gate_if_ready(session, task)
