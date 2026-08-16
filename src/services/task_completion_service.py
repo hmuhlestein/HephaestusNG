@@ -619,7 +619,7 @@ class TaskCompletionService:
         # a second caller's status check ever runs. Observed live:
         # architecture_design still "in_progress" while three design_review
         # tasks were created back to back off the same evaluation cycle.
-        from src.autopilot.orchestrator import _claim_phase_task_creation
+        from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation
         from src.core.database import PhaseExecution
 
         if not _claim_phase_task_creation(session, phase.id):
@@ -680,7 +680,7 @@ class TaskCompletionService:
             # ever actually created.
             logger.warning(f"[SPEC-GATE] {phase.name}: arbitration needed")
             reason = result.get("reason") or f"{phase.name} exhausted its retry budget"
-            from src.autopilot.orchestrator import _trigger_arbitration
+            from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
 
             await loop.run_in_executor(
                 None,
@@ -714,7 +714,7 @@ class TaskCompletionService:
             # found 4 BLOCKER findings and decided "GOTO development", but
             # the pipeline proceeded straight to security_review with the
             # blockers never addressed.
-            from src.autopilot.orchestrator import _create_phase_task
+            from src.autopilot.orchestrator.phase_transitions import _create_phase_task
             from src.core.database import Phase, PhaseExecution
 
             metadata = result.get("metadata") or {}
@@ -798,7 +798,7 @@ class TaskCompletionService:
             target_phase_id = result.get("target_phase_id")
             target_phase_name = result.get("target_phase")
             if target_phase_id:
-                from src.autopilot.orchestrator import _create_phase_task
+                from src.autopilot.orchestrator.phase_transitions import _create_phase_task
                 await loop.run_in_executor(
                     None,
                     functools.partial(

@@ -115,7 +115,7 @@ class AutopilotService:
         # POST /start's concurrency-cap check) share this exact logic
         # instead of a second, divergent copy.
         try:
-            from src.autopilot.orchestrator import _get_or_create_project_id
+            from src.autopilot.orchestrator.state import _get_or_create_project_id
 
             self.project_id = _get_or_create_project_id(str(project))
         except Exception as e:
@@ -145,10 +145,10 @@ class AutopilotService:
     def _persist_running_state(self) -> None:
         """Write current run params so a restart can resume this pipeline."""
         try:
-            from src.autopilot.orchestrator import (
-                _running_state_key,
-                _set_project_context,
-            )
+            from src.autopilot.orchestrator.state import (
+    _running_state_key,
+    _set_project_context,
+)
             from src.core.database import get_db
 
             with get_db() as db:
@@ -167,10 +167,10 @@ class AutopilotService:
     def clear_persisted_state(self) -> None:
         """Remove the persisted run state (deliberate stop — don't auto-resume)."""
         try:
-            from src.autopilot.orchestrator import (
-                _delete_project_context,
-                _running_state_key,
-            )
+            from src.autopilot.orchestrator.state import (
+    _delete_project_context,
+    _running_state_key,
+)
             from src.core.database import get_db
 
             with get_db() as db:
@@ -181,10 +181,10 @@ class AutopilotService:
     def load_persisted_state(self) -> Optional[Dict[str, Any]]:
         """Read persisted run params, if any (used to auto-resume on startup)."""
         try:
-            from src.autopilot.orchestrator import (
-                _get_project_context,
-                _running_state_key,
-            )
+            from src.autopilot.orchestrator.state import (
+    _get_project_context,
+    _running_state_key,
+)
             from src.core.database import get_db
 
             with get_db() as db:
@@ -206,16 +206,18 @@ class AutopilotService:
         this change deployed would silently stop auto-resuming on the next
         backend restart.
         """
-        from src.autopilot.orchestrator import (
+        from src.autopilot.orchestrator.state import (
             _RUNNING_STATE_KEY_LEGACY,
             _RUNNING_STATE_KEY_PREFIX,
-            _delete_project_context,
-            _get_project_context,
-            _get_project_contexts_by_prefix,
-            _resolve_project_id,
-            _running_state_key,
-            _set_project_context,
         )
+from src.autopilot.orchestrator.state import (
+    _delete_project_context,
+    _get_project_context,
+    _get_project_contexts_by_prefix,
+    _resolve_project_id,
+    _running_state_key,
+    _set_project_context,
+)
         from src.core.database import get_db
 
         results: List[Tuple[str, Dict[str, Any]]] = []

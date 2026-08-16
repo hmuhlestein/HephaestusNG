@@ -39,7 +39,7 @@ class TestCleanupWorktreeDoesNotTouchPausedWorkflow:
     def test_paused_workflow_working_directory_survives(
         self, tmp_path, test_db, config, monkeypatch
     ):
-        from src.autopilot.orchestrator import _cleanup_worktree
+        from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree
 
         worktree = tmp_path / "worktree"
         worktree.mkdir()
@@ -82,7 +82,7 @@ class TestCleanupWorktreeDoesNotTouchPausedWorkflow:
         """Sanity check the guard isn't overbroad: a genuinely terminal
         (failed) workflow should still have its stale working_directory
         cleared, same as before this fix."""
-        from src.autopilot.orchestrator import _cleanup_worktree
+        from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree
 
         worktree = tmp_path / "worktree"
         worktree.mkdir()

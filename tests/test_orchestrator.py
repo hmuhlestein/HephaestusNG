@@ -16,14 +16,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from src.autopilot.orchestrator import (
-    DesignEntry,
-    DesignStatus,
-    attempt_recovery,
-    get_active_workflows,
+from src.autopilot.orchestrator import DesignStatus
+from src.autopilot.orchestrator.engine_client import get_active_workflows
+from src.autopilot.orchestrator.policy import attempt_recovery
+from src.autopilot.orchestrator.queue import (
     is_design_fully_complete,
     pick_next_design,
 )
+from src.autopilot.orchestrator.state import DesignEntry
 
 
 class MockLogger:
@@ -51,9 +51,9 @@ class MockLogger:
 class TestIsDesignFullyComplete:
     """Tests for is_design_fully_complete function."""
 
-    @patch("src.autopilot.orchestrator.get_workflow_status")
-    @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
     @patch("subprocess.run")
     def test_complete_when_all_done(
         self, mock_subprocess, mock_agents, mock_tasks, mock_wf_status, tmp_path
@@ -81,8 +81,8 @@ class TestIsDesignFullyComplete:
         assert result is True
         assert "done" in reason.lower() or "complete" in reason.lower()
 
-    @patch("src.autopilot.orchestrator.get_workflow_status")
-    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
     def test_incomplete_when_pending_tasks(self, mock_tasks, mock_wf_status):
         """Design is not complete when tasks are pending."""
         mock_wf_status.return_value = {"status": "active"}
@@ -100,9 +100,9 @@ class TestIsDesignFullyComplete:
         assert result is False
         assert "active" in reason.lower() or "task" in reason.lower()
 
-    @patch("src.autopilot.orchestrator.get_workflow_status")
-    @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
     def test_incomplete_when_agents_active(
         self, mock_agents, mock_tasks, mock_wf_status
     ):
@@ -125,9 +125,9 @@ class TestIsDesignFullyComplete:
         assert result is False
         assert "agent" in reason.lower()
 
-    @patch("src.autopilot.orchestrator.get_workflow_status")
-    @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
     @patch("subprocess.run")
     def test_incomplete_when_branches_unmerged(
         self, mock_subprocess, mock_agents, mock_tasks, mock_wf_status
@@ -156,8 +156,8 @@ class TestIsDesignFullyComplete:
         assert result is False
         assert "branch" in reason.lower()
 
-    @patch("src.autopilot.orchestrator.get_workflow_status")
-    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
     def test_incomplete_when_tasks_failed(self, mock_tasks, mock_wf_status):
         """Design is not complete when tasks have failed."""
         mock_wf_status.return_value = {"status": "active"}
@@ -175,7 +175,7 @@ class TestIsDesignFullyComplete:
         assert result is False
         assert "fail" in reason.lower()
 
-    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
     def test_incomplete_when_workflow_failed(self, mock_wf_status):
         """Design is not complete when workflow itself failed."""
         mock_wf_status.return_value = {"status": "failed"}
@@ -188,11 +188,11 @@ class TestIsDesignFullyComplete:
 class TestAttemptRecovery:
     """Tests for attempt_recovery function."""
 
-    @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.update_task_status")
-    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
-    @patch("src.autopilot.orchestrator.get_agents")
-    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.py.update_task_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
     @patch("subprocess.run")
     def test_retries_failed_tasks(
         self,
@@ -232,9 +232,9 @@ class TestAttemptRecovery:
         assert "retry" in msg.lower() or "task" in msg.lower()
         mock_create_agent.assert_called_once()
 
-    @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.get_agents")
-    @patch("src.autopilot.orchestrator.api_post")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
+    @patch("src.autopilot.orchestrator.engine_client.py.api_post")
     @patch("subprocess.run")
     def test_skips_retry_after_max_attempts(
         self, mock_subprocess, mock_api_post, mock_agents, mock_tasks
@@ -254,9 +254,9 @@ class TestAttemptRecovery:
         # Should not retry (already max retries)
         assert "skip" in msg.lower() or not success
 
-    @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.get_agents")
-    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
     @patch("subprocess.run")
     def test_merges_branches(
         self, mock_subprocess, mock_wf_status, mock_agents, mock_tasks
@@ -293,10 +293,10 @@ class TestAttemptRecovery:
         success, msg = attempt_recovery("wf-123", MockLogger())
         assert "merge" in msg.lower() or success
 
-    @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.get_agents")
-    @patch("src.autopilot.orchestrator.api_post")
-    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
+    @patch("src.autopilot.orchestrator.engine_client.py.api_post")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
     @patch("subprocess.run")
     def test_terminates_stale_agents(
         self, mock_subprocess, mock_wf_status, mock_api_post, mock_agents, mock_tasks
@@ -315,9 +315,9 @@ class TestAttemptRecovery:
         success, msg = attempt_recovery("wf-123", MockLogger())
         assert "terminate" in msg.lower() or success
 
-    @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.get_agents")
-    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
     @patch("subprocess.run")
     def test_no_recovery_needed(
         self, mock_subprocess, mock_wf_status, mock_agents, mock_tasks
@@ -398,9 +398,9 @@ class TestGetActiveWorkflows:
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
-    @patch("src.autopilot.orchestrator.get_workflow_status")
-    @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
     @patch("subprocess.run")
     def test_handles_none_tasks(
         self, mock_subprocess, mock_agents, mock_tasks, mock_wf_status
@@ -419,7 +419,7 @@ class TestEdgeCases:
             # These are expected if None handling is missing
             pass
 
-    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
     def test_handles_workflow_not_found(self, mock_wf_status):
         """Should handle workflow not found."""
         mock_wf_status.return_value = {}
@@ -427,9 +427,9 @@ class TestEdgeCases:
         result, reason = is_design_fully_complete("wf-123", MockLogger())
         assert result is False
 
-    @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.get_agents")
-    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_tasks")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_agents")
+    @patch("src.autopilot.orchestrator.engine_client.py.get_workflow_status")
     @patch("subprocess.run")
     def test_handles_git_command_failure(
         self, mock_subprocess, mock_wf_status, mock_agents, mock_tasks
@@ -496,7 +496,7 @@ class TestPickNextDesign:
         (tmp_path / "002_design_b.md").write_text("# Design B")
 
         # Mark first as processed (by content hash)
-        from src.autopilot.orchestrator import file_hash
+        from src.autopilot.orchestrator.engine_client import file_hash
 
         processed = {file_hash(tmp_path / "001_design_a.md")}
 
@@ -513,7 +513,7 @@ class TestPickNextDesign:
         """Should return None when all designs are processed."""
         (tmp_path / "001_design_a.md").write_text("# Design A")
 
-        from src.autopilot.orchestrator import file_hash
+        from src.autopilot.orchestrator.engine_client import file_hash
 
         processed = {file_hash(tmp_path / "001_design_a.md")}
 

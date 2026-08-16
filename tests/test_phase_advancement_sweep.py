@@ -83,7 +83,7 @@ class TestBackgroundPhaseAdvancementSweep:
             server.server_state.shutdown_event.set()
 
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._advance_phases", fake_advance_phases
+            "src.autopilot.orchestrator.phase_transitions.py._advance_phases", fake_advance_phases
         )
 
         await server.background_phase_advancement_sweep()
@@ -112,7 +112,7 @@ class TestBackgroundPhaseAdvancementSweep:
             advanced_ids.append(wf_id)
 
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._advance_phases", fake_advance_phases
+            "src.autopilot.orchestrator.phase_transitions.py._advance_phases", fake_advance_phases
         )
 
         await server.background_phase_advancement_sweep()
@@ -158,13 +158,13 @@ class TestSweepSelfHealing:
             return []
 
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._advance_phases", fake_advance_phases
+            "src.autopilot.orchestrator.phase_transitions.py._advance_phases", fake_advance_phases
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._clean_stale_assigned_tasks", fake_clean
+            "src.autopilot.orchestrator.features.py._clean_stale_assigned_tasks", fake_clean
         )
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._retry_failed_tasks", fake_retry
+            "src.autopilot.orchestrator.phase_transitions.py._retry_failed_tasks", fake_retry
         )
 
         await server.background_phase_advancement_sweep()
@@ -201,7 +201,7 @@ class TestSweepMultiProjectScoping:
                 server.server_state.shutdown_event.set()
 
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._advance_phases", fake_advance_phases
+            "src.autopilot.orchestrator.phase_transitions.py._advance_phases", fake_advance_phases
         )
 
         await server.background_phase_advancement_sweep()
@@ -244,7 +244,7 @@ class TestSweepMultiProjectScoping:
             server.server_state.shutdown_event.set()
 
         monkeypatch.setattr(
-            "src.autopilot.orchestrator._advance_phases", fake_advance_phases
+            "src.autopilot.orchestrator.phase_transitions.py._advance_phases", fake_advance_phases
         )
 
         await server.background_phase_advancement_sweep()

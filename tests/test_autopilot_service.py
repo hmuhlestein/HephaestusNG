@@ -597,11 +597,11 @@ class TestRunningStatePersistence:
         its "resume on restart" marker under the old bare key. The very
         first read after this change deploys must migrate it onto the
         namespaced key in place, or it silently stops auto-resuming."""
-        from src.autopilot.orchestrator import (
-            _RUNNING_STATE_KEY_LEGACY,
-            _running_state_key,
-            _set_project_context,
-        )
+        from src.autopilot.orchestrator.state import _RUNNING_STATE_KEY_LEGACY
+from src.autopilot.orchestrator.state import (
+    _running_state_key,
+    _set_project_context,
+)
         from src.autopilot.service import AutopilotService
         from src.core.database import AutopilotProject, get_db
 

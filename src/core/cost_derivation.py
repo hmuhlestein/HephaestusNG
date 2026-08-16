@@ -304,7 +304,7 @@ def _pause_project_workflows(db: Session, project_id: str, paused_by: str, defin
     inline import inside _check_budget_enforcement -- so callers that only
     need the pause behavior (e.g. budget-enforcement tests) don't have to
     reach into src.autopilot.orchestrator directly."""
-    from src.autopilot.orchestrator import pause_project_workflows
+    from src.autopilot.orchestrator.engine_client import pause_project_workflows
 
     return pause_project_workflows(db, project_id, paused_by=paused_by, definition_ids=definition_ids)
 

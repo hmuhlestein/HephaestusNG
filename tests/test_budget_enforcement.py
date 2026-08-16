@@ -256,7 +256,7 @@ class TestPausedByGeneralization:
 
     def test_try_auto_resume_skips_budget_paused(self, db_session, active_autopilot_workflow):
         """_try_auto_resume_paused_workflow should not resume a budget-paused workflow."""
-        from src.autopilot.orchestrator import _try_auto_resume_paused_workflow
+        from src.autopilot.orchestrator.phase_transitions import _try_auto_resume_paused_workflow
 
         active_autopilot_workflow.status = "paused"
         active_autopilot_workflow.paused_by = "budget"
@@ -272,7 +272,7 @@ class TestPausedByGeneralization:
 
     def test_try_auto_resume_skips_user_paused(self, db_session, active_autopilot_workflow):
         """_try_auto_resume_paused_workflow should not resume a user-paused workflow."""
-        from src.autopilot.orchestrator import _try_auto_resume_paused_workflow
+        from src.autopilot.orchestrator.phase_transitions import _try_auto_resume_paused_workflow
 
         active_autopilot_workflow.status = "paused"
         active_autopilot_workflow.paused_by = "user"
@@ -287,7 +287,7 @@ class TestPausedByGeneralization:
 
     def test_try_auto_resume_works_when_not_paused_by_anything(self, db_session, active_autopilot_workflow):
         """_try_auto_resume_paused_workflow should resume when paused_by is None."""
-        from src.autopilot.orchestrator import _try_auto_resume_paused_workflow
+        from src.autopilot.orchestrator.phase_transitions import _try_auto_resume_paused_workflow
 
         active_autopilot_workflow.status = "paused"
         active_autopilot_workflow.paused_by = None

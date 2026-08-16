@@ -15,7 +15,7 @@ from src.core.constants import CONTEXT_DIR_NAME
 
 class TestRunAshScan:
     def test_writes_results_file_on_success(self, tmp_path):
-        from src.autopilot.orchestrator import _run_ash_scan
+        from src.autopilot.orchestrator.worktree_integration import _run_ash_scan
 
         logger = MagicMock()
         fake_result = MagicMock(stdout="scan output here", stderr="", returncode=0)
@@ -28,7 +28,7 @@ class TestRunAshScan:
         assert "scan output here" in results_path.read_text()
 
     def test_writes_failure_marker_on_timeout(self, tmp_path):
-        from src.autopilot.orchestrator import _run_ash_scan
+        from src.autopilot.orchestrator.worktree_integration import _run_ash_scan
 
         logger = MagicMock()
         with patch(
@@ -43,7 +43,7 @@ class TestRunAshScan:
         assert "TIMED OUT" in results_path.read_text()
 
     def test_writes_failure_marker_on_exception(self, tmp_path):
-        from src.autopilot.orchestrator import _run_ash_scan
+        from src.autopilot.orchestrator.worktree_integration import _run_ash_scan
 
         logger = MagicMock()
         with patch(
@@ -61,7 +61,7 @@ class TestRunAshScan:
     def test_skips_gracefully_when_ash_script_missing(self, tmp_path):
         """If scripts/ash doesn't exist at the derived repo path, don't crash
         and don't write a misleading results file."""
-        from src.autopilot.orchestrator import _run_ash_scan
+        from src.autopilot.orchestrator.worktree_integration import _run_ash_scan
 
         logger = MagicMock()
         with patch("pathlib.Path.exists", return_value=False):
@@ -114,10 +114,10 @@ class TestAshScanWiredIntoPhaseTaskCreation:
         session.commit()
         session.close()
 
-        from src.autopilot.orchestrator import _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         logger = MagicMock()
-        with patch("src.autopilot.orchestrator._run_ash_scan") as mock_scan:
+        with patch("src.autopilot.orchestrator.worktree_integration.py._run_ash_scan") as mock_scan:
             _create_phase_task("wf-sec", "phase-sec", "security_review", "continue", logger)
 
         mock_scan.assert_called_once_with(working_directory, logger)
@@ -164,10 +164,10 @@ class TestAshScanWiredIntoPhaseTaskCreation:
         session.commit()
         session.close()
 
-        from src.autopilot.orchestrator import _create_phase_task
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
         logger = MagicMock()
-        with patch("src.autopilot.orchestrator._run_ash_scan") as mock_scan:
+        with patch("src.autopilot.orchestrator.worktree_integration.py._run_ash_scan") as mock_scan:
             _create_phase_task("wf-dev", "phase-dev", "development", "continue", logger)
 
         mock_scan.assert_not_called()

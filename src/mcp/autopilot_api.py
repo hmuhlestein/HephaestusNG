@@ -576,7 +576,7 @@ async def get_pipeline_status(
         # Fall back to persistent state if run-specific state is empty
         if not state:
             try:
-                from src.autopilot.orchestrator import PersistentPipelineState
+                from src.autopilot.orchestrator.state import PersistentPipelineState
 
                 state_obj, _processed = PersistentPipelineState(project_id=project_id).load()
                 state = state_obj.to_dict()
@@ -956,7 +956,7 @@ async def rerun_design(request: dict):
     # order, pipeline state clearing, pipeline start) -- must all scope to
     # the SAME project, not independently-resolved ids that could diverge
     # once more than one project can be active at once.
-    from src.autopilot.orchestrator import _get_or_create_project_id
+    from src.autopilot.orchestrator.state import _get_or_create_project_id
 
     rerun_start_project_id = _get_or_create_project_id(str(project))
 
@@ -976,7 +976,7 @@ async def rerun_design(request: dict):
     # src/autopilot/service.py's module docstring for why the in-process
     # service replaced the subprocess approach in the first place.
     try:
-        from src.autopilot.orchestrator import _resolve_project_id
+        from src.autopilot.orchestrator.state import _resolve_project_id
         from src.autopilot.service import get_autopilot_service
 
         rerun_project_id = _resolve_project_id(str(project))
@@ -1183,7 +1183,7 @@ async def rerun_design(request: dict):
                 # Reset design status so orchestrator picks it up fresh
                 design.status = "pending"
                 # Clear retry counter so fresh retry starts at 0
-                from src.autopilot.orchestrator import _delete_project_context
+                from src.autopilot.orchestrator.state import _delete_project_context
 
                 _delete_project_context(db, f"autopilot_retry_{design.id}")
 
@@ -1206,7 +1206,7 @@ async def rerun_design(request: dict):
                     continue
                 import git as _git
 
-                from src.autopilot.orchestrator import _cleanup_worktree
+                from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree
 
                 try:
                     branch = _git.Repo(wt_path).active_branch.name
@@ -1249,7 +1249,7 @@ async def rerun_design(request: dict):
 
     # Step 5: Clear pipeline state so orchestrator starts fresh
     try:
-        from src.autopilot.orchestrator import PersistentPipelineState
+        from src.autopilot.orchestrator.state import PersistentPipelineState
 
         PersistentPipelineState(project_id=rerun_start_project_id).clear()
     except Exception as e:
@@ -1376,7 +1376,7 @@ async def repair_design(request: dict):
 
 def spawn_repair_review_agent(wf_id: str, filename: str, project: Path, reason: str, logger, actions_taken: list):
     """Spawn a review agent that checks each task, acts, and monitors completion."""
-    from src.autopilot.orchestrator import api_post, get_tasks
+    from src.autopilot.orchestrator.engine_client import api_post, get_tasks
 
     try:
         logger.info(f"[REPAIR-AGENT] Starting for workflow {wf_id[:8]}, design={filename}")
@@ -3192,7 +3192,7 @@ async def remove_project_design(project_id: str, filename: str):
                 continue
             import git as _git
 
-            from src.autopilot.orchestrator import _cleanup_worktree
+            from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree
 
             try:
                 branch = _git.Repo(wt_path).active_branch.name
@@ -3218,7 +3218,7 @@ async def remove_project_design(project_id: str, filename: str):
     try:
         import hashlib
 
-        from src.autopilot.orchestrator import PersistentPipelineState
+        from src.autopilot.orchestrator.state import PersistentPipelineState
 
         # Compute hash of the design file to remove it
         if filepath.exists():
@@ -4619,7 +4619,7 @@ async def delete_feature(feature_id: str):
                 if project_path_str:
                     import git as _git
 
-                    from src.autopilot.orchestrator import _cleanup_worktree
+                    from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree
 
                     try:
                         branch = _git.Repo(wt_path).active_branch.name
@@ -5288,7 +5288,7 @@ async def dismiss_human_input(request_id: str):
 @router.post("/start")
 async def start_pipeline(project_path: str, design_queue: str = "", max_iterations: int = 3):
     """Start the autopilot pipeline."""
-    from src.autopilot.orchestrator import _get_or_create_project_id
+    from src.autopilot.orchestrator.state import _get_or_create_project_id
     from src.autopilot.service import get_registry
 
     project_id = _get_or_create_project_id(project_path)
@@ -5443,7 +5443,7 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
     # (definition_id in ["autopilot", "autopilot-phase0"]).
     terminated_count = 0
     try:
-        from src.autopilot.orchestrator import pause_project_workflows
+        from src.autopilot.orchestrator.engine_client import pause_project_workflows
 
         with get_db() as db:
             for pid in stopped_project_ids:
@@ -5461,7 +5461,7 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
     # this call actually stopped, not the old bare global key, so stopping
     # project A can't wipe project B's still-running pipeline state.
     if clear_state:
-        from src.autopilot.orchestrator import PersistentPipelineState
+        from src.autopilot.orchestrator.state import PersistentPipelineState
 
         for stopped_project_id in stopped_project_ids:
             PersistentPipelineState(project_id=stopped_project_id).clear()

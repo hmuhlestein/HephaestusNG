@@ -81,7 +81,7 @@ class TestHealOrphanedAgentBranches:
     def test_fast_forwards_orphaned_branch_with_no_live_worktree(
         self, test_db, temp_repo, config
     ):
-        from src.autopilot.orchestrator import heal_orphaned_agent_branches
+        from src.autopilot.orchestrator.worktree_integration import heal_orphaned_agent_branches
 
         _register_project(test_db, temp_repo)
 
@@ -118,7 +118,7 @@ class TestHealOrphanedAgentBranches:
         directory, which has uncommitted changes sitting in it. Healing
         must not merge on top of that unattended -- skip and leave both
         the dirty change and the orphaned branch alone for manual review."""
-        from src.autopilot.orchestrator import heal_orphaned_agent_branches
+        from src.autopilot.orchestrator.worktree_integration import heal_orphaned_agent_branches
 
         _register_project(test_db, temp_repo)
 
@@ -145,7 +145,7 @@ class TestHealOrphanedAgentBranches:
     def test_does_not_touch_branch_still_checked_out_in_a_live_worktree(
         self, test_db, temp_repo, config
     ):
-        from src.autopilot.orchestrator import heal_orphaned_agent_branches
+        from src.autopilot.orchestrator.worktree_integration import heal_orphaned_agent_branches
 
         _register_project(test_db, temp_repo)
 
@@ -171,7 +171,7 @@ class TestHealOrphanedAgentBranches:
         """base_branch moved on independently after the orphaned branch
         forked from it -- no longer a clean fast-forward. Must not attempt
         any merge unattended; just leave it for manual review."""
-        from src.autopilot.orchestrator import heal_orphaned_agent_branches
+        from src.autopilot.orchestrator.worktree_integration import heal_orphaned_agent_branches
 
         _register_project(test_db, temp_repo)
 
@@ -200,7 +200,7 @@ class TestHealOrphanedAgentBranches:
     def test_ignores_branches_not_matching_the_agent_prefix(
         self, test_db, temp_repo, config
     ):
-        from src.autopilot.orchestrator import heal_orphaned_agent_branches
+        from src.autopilot.orchestrator.worktree_integration import heal_orphaned_agent_branches
 
         _register_project(test_db, temp_repo)
 
@@ -220,7 +220,7 @@ class TestHealOrphanedAgentBranches:
         assert temp_repo.heads["main"].commit.hexsha == main_tip_before
 
     def test_ignores_branch_fully_caught_up_with_base(self, test_db, temp_repo, config):
-        from src.autopilot.orchestrator import heal_orphaned_agent_branches
+        from src.autopilot.orchestrator.worktree_integration import heal_orphaned_agent_branches
 
         _register_project(test_db, temp_repo)
 
