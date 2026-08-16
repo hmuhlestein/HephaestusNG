@@ -1,12 +1,19 @@
 # Backend Module Decomposition — Design Document
 
-**Status:** Orchestrator split (§3.1) **COMPLETE** — API split (§3.2) pending
+**Status:** Orchestrator split (§3.1) **COMPLETE** — API split (§3.2) **COMPLETE**
 **Verified against:** `src/autopilot/orchestrator.py` @ commit `e9c47f7`
 (10246 lines, 139 top-level symbols) and `src/mcp/autopilot_api.py` @ commit
 `e9c47f7` (5724 lines, 123 def/class + 63 routes) — every line number in
 §3.1/§3.2 and every cross-file import in §4 was re-derived from the live
 files with `ast.parse()` on 2026-08-15, not carried over from an earlier
-pass. This is the **second** re-verification: both files moved again since
+pass. **Third verification pass (2026-08-16, pre-API-split):** `ast.parse()`
+against the live `autopilot_api.py` @ HEAD (`5fbbfbe`) confirmed all 5724
+lines, all 138 top-level symbol spans (123 def/class + 15 module
+constants), all 63 routes, and every §4 internal import line number match
+this doc exactly — commit `a2905e8` (the §3.1 call-site migration) touched
+the file post-`e9c47f7` but only retargeted 14 orchestrator import lines,
+with zero structural change. `scripts/split_autopilot_api.py` hardcodes
+those same 138 ranges and refuses to run if any span drifts. This is the **second** re-verification: both files moved again since
 the previous pass (commits `e9586a2`/`b5f55f6`, 2026-07-21), and not just by
 line shift — four orchestrator symbols listed here were *deleted* in the
 meantime (`generate_html_feature_report` and
@@ -496,7 +503,17 @@ accidental.
 Note the repair flow (1342-1583, ~242 lines) lives here even though the
 architecture review's §11.1 says it was "slimmed to workflow recovery
 only" — it's still a substantial fraction of this cluster, not the small
-tail the wording implies.
+tail the wording implies. **Execution deviation (2026-08-16):** `feature_routes.py`
+reads the mutable global `FEATURES_DIR` directly at one site (original
+line 4696, `get_feature_detail`), and `FEATURES_DIR` is *rebound* (not
+mutated) by `configure_autopilot_api` and test fixtures — a `from
+._shared import FEATURES_DIR` would bind a stale copy at import time, so
+that one line became `feature_dir = _safe_path(_shared.FEATURES_DIR,
+feature_id)` with `from src.mcp.autopilot import _shared`. This is the
+single non-pure move in the split; every other line is byte-identical.
+`AUTOPILOT_STATE_DIR` (read bare in `queue_routes`/`intervention_routes`/
+`_shared`) has no non-test writer, so plain from-imports work there and
+the test fixtures fan the rebind out to all three reader modules.
 
 **`project_routes.py`** (lines 1790-3799, ~2010 lines — now unambiguously
 the largest route cluster: `get_project_design_status`'s body alone runs
@@ -681,6 +698,16 @@ correctly" into "an agent writes and reviews one ~100-line script, plus
 curates 15 short import blocks by hand" — the risk surface shrinks to
 exactly the part that requires judgment.
 
+The §3.2 API split was executed with `scripts/split_autopilot_api.py`
+(one-off, kept for re-verification: `python scripts/split_autopilot_api.py`
+dry-runs the full assertion chain — 138 spans vs §3.2, territory partition,
+cross-module dependency graph, lossless line accounting — without writing).
+Import curation went as predicted: superset header (original import block
+verbatim) + `ruff check --select F401 --fix` (180 unused imports trimmed)
++ the auto-derived cross-module imports, which the script asserts against a
+hardcoded, cycle-free expectation (everything → `_shared`, plus one
+`project_routes → feature_routes` edge for `_find_archived_feature_report`).
+
 ---
 
 ## 4. External call sites to update (grounded, not exhaustive-by-guess)
@@ -722,13 +749,14 @@ All "New home" paths below are inside the new
 | `src/mcp/autopilot_api.py:5291` | `_get_or_create_project_id` | `state.py`; inside `start_pipeline` → `control_routes.py` |
 | `src/mcp/autopilot_api.py:5446` | `pause_project_workflows` | `engine_client.py`; inside `stop_pipeline` → `control_routes.py` |
 | `src/mcp/autopilot_api.py:5464` | `PersistentPipelineState` | `state.py`; inside `stop_pipeline` → `control_routes.py` |
+| `src/monitoring/monitor.py:2876` | `run_health_audit` | `control_routes.py` — function-scoped import inside `_audit_system_health` (missed by the first draft of this §4 table; the §3.2 split found it by grep, not by table) |
 | `src/services/task_completion_service.py:622` | `_claim_phase_task_creation` | `phase_transitions.py` |
 | `src/services/task_completion_service.py:683` | `_trigger_arbitration` | `phase_transitions.py` |
 | `src/services/task_completion_service.py:717,801` | `_create_phase_task` (×2) | `phase_transitions.py` |
 | `src/core/cost_derivation.py:307` | `pause_project_workflows` | `engine_client.py` — this is a deliberately lazy import (orchestrator imports `cost_derivation` too); keep it lazy and just retarget the path, don't hoist it |
 | `src/phases/phase_manager.py:1716` | `finalize_phase0_workflow` | **no change** — stays in `orchestrator/__init__.py` |
 | `tests/` (18 files import from `src.autopilot.orchestrator`: `test_advance_phases`, `test_ash_scan`, `test_autopilot_service`, `test_budget_enforcement`, `test_cleanup_worktree_paused_workflow`, `test_cleanup_worktree_tmux_archive`, `test_cost_tracking`, `test_create_feature_records`, `test_forensics_gating`, `test_heal_orphaned_agent_branches`, `test_orchestrator_helpers`, `test_orchestrator`, `test_phase0_idempotency`, `test_resolve_execution_order`, `test_review_mode`, `test_run_feature_pipelines`, `test_sweep_completed_workflow_worktrees`, `test_validate_features_json`) | varies — **re-grep each file before starting**, don't assume the list above is exhaustive | matches whichever module the imported symbol moved to |
-| `tests/` (6 files reference `src.mcp.autopilot_api` — affected by the §3.2 **rename**, not just the move): `tests/conftest.py` (module import as `api_mod`, :481/:503), `tests/test_autopilot_api.py` (module + `router`, :21/:52/:53/:552), `tests/test_autopilot_api_helpers.py` (`_safe_path`, `_cached`/`_invalidate`/`_store` — all end up in `_shared.py`), `tests/test_cost_tracking.py` (`CostEntryCreate` → `project_routes.py`), `tests/test_design_status_derivation.py` (`get_project_design_status` → `project_routes.py`), `tests/test_monitor.py` (two *string-based* `patch("src.mcp.autopilot_api.run_health_audit", ...)` targets at :3030/:3048 — string patches don't fail at import time, so they need a manual retarget to `src.mcp.autopilot.control_routes`) | — | the new package paths per §3.2 |
+| `tests/` (6 files reference `src.mcp.autopilot_api` — affected by the §3.2 **rename**, not just the move): `tests/conftest.py` (module import as `api_mod`, :481/:503, plus the *string-based* `patch("src.mcp.autopilot_api._get_active_project_id")` at :545, plus module-attribute writes of `DESIGN_QUEUE_DIR`/`FEATURES_DIR`/`AUTOPILOT_STATE_DIR`/`_cache` in the `mock_app`/`client` fixtures), `tests/test_autopilot_api.py` (module + `router` at ~25 sites; `AUTOPILOT_STATE_DIR` rebinds must fan out to `_shared`/`queue_routes`/`intervention_routes`; `_get_active_project_id` and `verify_agent_authentication` patches must target the modules that *look up* the name — `_shared`+`control_routes` and `project_routes` respectively), `tests/test_autopilot_api_helpers.py` (`_safe_path`/`_cached`/`_invalidate`/`_store`/`_feature_status`/`_read_json`/`_read_jsonl_tail` → `_shared.py`; `_design_id` → `project_routes.py`; `_load_queue_order`/`_save_queue_order` + the `_get_queue_order_path` string patches → `queue_routes.py`; `start_pipeline` + the `_invalidate` string patch → `control_routes.py`), `tests/test_cost_tracking.py` (`CostEntryCreate` → `project_routes.py`), `tests/test_design_status_derivation.py` (`get_project_design_status` → `project_routes.py`), `tests/test_monitor.py` (four *string-based* `patch("src.mcp.autopilot_api.run_health_audit", ...)` targets at :3030/:3048/:3099/:3167 — string patches don't fail at import time, so they need a manual retarget to `src.mcp.autopilot.control_routes`; the first draft of this table listed only two) | — | the new package paths per §3.2 |
 
 **Do not leave compatibility re-exports** in `orchestrator/__init__.py` for
 symbols that moved to a submodule (e.g. `from .state import
@@ -762,10 +790,41 @@ is a second, even cheaper one.
    route files → `intervention_routes.py` last, matching the note above).~~
    **§3.1 DONE** — all 8 submodules + `__init__.py` extracted, 139 symbols,
    580/581 tests passing. Commits: `691d22a` through `d481a37`.
-3. **§3.2 (API split) remains TODO.** The `src/mcp/autopilot_api.py` →
-   `src/mcp/autopilot/` package split is independent and can proceed on its
-   own. Same methodology applies: script the extraction, fix call sites,
-   verify with tests.
+3. **§3.2 DONE (2026-08-16).** `src/mcp/autopilot_api.py` →
+   `src/mcp/autopilot/` package split complete via
+   `scripts/split_autopilot_api.py` + import curation + §4 call-site
+   retargeting:
+   - 8 files: `_shared.py` (415 lines, 31 symbols) + 6 route modules +
+     aggregator `__init__.py`; `autopilot_api.py` deleted
+   - Lossless reassembly asserted by the script (5369 extracted lines +
+     355 header/comment/blank remainder = 5724, byte-identical spans);
+     `ruff check --select F401,F811,F821` clean except 3 pre-existing
+     `F821` findings (below), `py_compile` clean
+   - New guard test `TestRouterAggregation::test_all_63_routes_survived_the_split`
+     in `tests/test_autopilot_api.py` (the §6 route-count guardrail; uses
+     recursive `effective_candidates()` expansion because FastAPI ≥ 0.137
+     lazy-wraps `include_router()` in `_IncludedRouter` objects, so
+     `len(router.routes)` is not the route count)
+   - Targeted suite (5 API test files) identical to pre-split baseline on
+     the same tree state: 205 passed / 2 skipped, same 2 pre-existing
+     `TestFeatures` failures both before and after (they read the
+     CWD-relative `hephaestus.db` via `DatabaseManager()` — pass in a
+     clean tree, fail in the repo root; environment sensitivity, not a
+     split regression — verified by running the pre-split worktree with
+     the same DB); `tests/test_monitor.py` 134/134; full-suite collection
+     clean (2428 tests)
+   - **Pre-existing bug found while moving (NOT fixed, per §7):**
+     `review_feature`'s approve path (original line ~4388, now
+     `feature_routes.py`) references `_Phase` without importing it — the
+     `from src.core.database import ...` block imports `_Task` and
+     `_PhaseExecution` but not `Phase as _Phase`, so approving a feature
+     via `POST /features/{id}/review` raises `NameError` at runtime.
+     Present verbatim in `e9c47f7`; kept byte-identical in the move.
+     Logged in `autopilot_architecture_review.md` §11 as B10.
+   - Call sites updated: `server.py:855-856`, `monitor.py:2876`,
+     `conftest.py` (`mock_app`/`client` fixtures), and the 5 test files in
+     §4's last table row. One-line `FEATURES_DIR` deviation documented in
+     §3.2 above.
 
 ---
 

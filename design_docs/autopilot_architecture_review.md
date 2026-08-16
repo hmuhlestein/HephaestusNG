@@ -1002,6 +1002,21 @@ apart — answering "the" pending request can resolve the wrong project's
 prompt. This is strictly worse than the original **B4** TOCTOU finding, not
 just a duplicate of it, and raises the priority of Tier 2 item 1 below.
 
+**B10 (new, 2026-08-16) — `review_feature` approve path references an
+unimported `_Phase` (latent `NameError`).** Found during the §3.2 API split
+(`design_docs/backend_module_decomposition.md`), which surfaced it via
+`ruff F821`: `review_feature`'s approve branch
+(`autopilot_api.py` original line ~4388; now
+`src/mcp/autopilot/feature_routes.py`) does
+`db.query(_PhaseExecution).join(_Phase, ...)` but the local import block
+only brings in `Task as _Task` and `PhaseExecution as _PhaseExecution` —
+`Phase` is never imported under the `_Phase` alias, so approving a feature
+via `POST /features/{feature_id}/review` (`req.action == "approve"`)
+raises `NameError` at runtime (HTTP 500). Present verbatim in `e9c47f7`; the
+split kept the move byte-identical per its §7 no-fix rule. One-line fix when
+it gets picked up: add `Phase as _Phase` to that import block (and check the
+`request_changes`/self-heal paths for the same pattern).
+
 **Tier 2 — finish in-process service + events (P3/P5/P6):**
 1. **Human-input → `autopilot_interventions` DB table + `asyncio.Condition`**; UI submits via REST (fixes **B4** TOCTOU, **B7** option-vocab — now consistent, `c`/`s`/`q`/`m` on both sides — and **B9** above by construction, since a DB row naturally carries `design_id`/`workflow_id`). Removes `input_request_*.json`/`input_response_*.json`. **Still not started** — see the companion spec, `design_docs/human_input_intervention_system.md`, written to be handed to the pipeline as the next self-hosted feature.
 2. `/api/autopilot/stream` (WS/SSE); move UI off interval polling. Still not started — no WebSocket/SSE endpoint exists in `autopilot_api.py`.

@@ -852,8 +852,8 @@ async def startup_event():
     app.include_router(auth_router)
 
     # Add autopilot routes (configure BEFORE including)
-    from src.mcp.autopilot_api import configure_autopilot_api
-    from src.mcp.autopilot_api import router as autopilot_router
+    from src.mcp.autopilot import router as autopilot_router
+    from src.mcp.autopilot._shared import configure_autopilot_api
 
     configure_autopilot_api(
         design_queue_dir=os.environ.get("DESIGN_QUEUE_DIR", ""),

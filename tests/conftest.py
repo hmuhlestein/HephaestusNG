@@ -478,7 +478,8 @@ def mock_app(autopilot_dirs, mock_autopilot_service):
     """Create a FastAPI app with all dependencies mocked."""
     from fastapi import FastAPI
 
-    from src.mcp import autopilot_api as api_mod
+    from src.mcp.autopilot import _shared as api_mod
+    from src.mcp.autopilot import intervention_routes, queue_routes, router as autopilot_router
 
     app = FastAPI()
 
@@ -486,10 +487,13 @@ def mock_app(autopilot_dirs, mock_autopilot_service):
     api_mod.DESIGN_QUEUE_DIR = str(autopilot_dirs["queue"])
     api_mod.FEATURES_DIR = str(autopilot_dirs["features"])
     api_mod.STATE_DIR = str(autopilot_dirs["state"])
-    api_mod.AUTOPILOT_STATE_DIR = str(autopilot_dirs["state"])
+    # AUTOPILOT_STATE_DIR is imported into each route module that reads it,
+    # so the rebind must fan out to every reader's module namespace
+    for _m in (api_mod, queue_routes, intervention_routes):
+        _m.AUTOPILOT_STATE_DIR = str(autopilot_dirs["state"])
 
     # Include the router
-    app.include_router(api_mod.router)
+    app.include_router(autopilot_router)
 
     return app
 
@@ -500,7 +504,8 @@ def client(autopilot_dirs):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from src.mcp import autopilot_api as api_mod
+    from src.mcp.autopilot import _shared as api_mod
+    from src.mcp.autopilot import intervention_routes, queue_routes, router as autopilot_router
 
     app = FastAPI()
 
@@ -508,11 +513,14 @@ def client(autopilot_dirs):
     api_mod.DESIGN_QUEUE_DIR = str(autopilot_dirs["queue"])
     api_mod.FEATURES_DIR = str(autopilot_dirs["features"])
     api_mod.STATE_DIR = str(autopilot_dirs["state"])
-    api_mod.AUTOPILOT_STATE_DIR = str(autopilot_dirs["state"])
+    # AUTOPILOT_STATE_DIR is imported into each route module that reads it,
+    # so the rebind must fan out to every reader's module namespace
+    for _m in (api_mod, queue_routes, intervention_routes):
+        _m.AUTOPILOT_STATE_DIR = str(autopilot_dirs["state"])
     api_mod._cache.clear()
 
     # Include the router
-    app.include_router(api_mod.router)
+    app.include_router(autopilot_router)
 
     with patch("src.core.database.get_db") as mock_get_db:
         mock_session = Mock()
@@ -542,7 +550,9 @@ def client(autopilot_dirs):
                 ),
             )
             with patch(
-                "src.mcp.autopilot_api._get_active_project_id", return_value=None
+                "src.mcp.autopilot._shared._get_active_project_id", return_value=None
+            ), patch(
+                "src.mcp.autopilot.control_routes._get_active_project_id", return_value=None
             ):
                 with patch("src.autopilot.service.get_registry") as mock_reg:
                     mock_reg.return_value.running.return_value = []

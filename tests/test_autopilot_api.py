@@ -18,15 +18,20 @@ def autopilot_dirs(tmp_path):
     features_dir.mkdir()
     state_dir.mkdir()
 
-    import src.mcp.autopilot_api as api_mod
+    from src.mcp.autopilot import _shared as api_mod
+    from src.mcp.autopilot import intervention_routes, queue_routes
 
     api_mod._cache.clear()
 
-    old_state = api_mod.AUTOPILOT_STATE_DIR
+    # AUTOPILOT_STATE_DIR is imported into each route module that reads it,
+    # so the rebind must fan out to every reader's module namespace
+    state_modules = (api_mod, queue_routes, intervention_routes)
+    old_state = {m: m.AUTOPILOT_STATE_DIR for m in state_modules}
     old_queue = api_mod.DESIGN_QUEUE_DIR
     old_features = api_mod.FEATURES_DIR
 
-    api_mod.AUTOPILOT_STATE_DIR = str(state_dir)
+    for m in state_modules:
+        m.AUTOPILOT_STATE_DIR = str(state_dir)
     api_mod.configure_autopilot_api(
         design_queue_dir=str(queue_dir),
         features_dir=str(features_dir),
@@ -38,25 +43,41 @@ def autopilot_dirs(tmp_path):
         "state": state_dir,
     }
 
-    api_mod.AUTOPILOT_STATE_DIR = old_state
+    for m in state_modules:
+        m.AUTOPILOT_STATE_DIR = old_state[m]
     api_mod.DESIGN_QUEUE_DIR = old_queue
     api_mod.FEATURES_DIR = old_features
     api_mod._cache.clear()
 
 
 @pytest.fixture
-def client(autopilot_dirs, monkeypatch):
+def client(autopilot_dirs, tmp_path, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from src.mcp import autopilot_api
-    from src.mcp.autopilot_api import router
+    from src.core.database import DatabaseManager
+    from src.mcp.autopilot import _shared as autopilot_api
+    from src.mcp.autopilot import control_routes
+    from src.mcp.autopilot import router
+
+    # Route handlers that call DatabaseManager(None) (e.g. list_features'
+    # _scan_features) read HEPHAESTUS_TEST_DB fresh on every call -- point
+    # it at a real file, not the session-wide ":memory:" default (conftest.py),
+    # so a test's own DB writes and the route handler's own DatabaseManager(None)
+    # instantiation see the same data. Each ":memory:" DatabaseManager gets its
+    # own isolated, uncached connection (see DatabaseManager's own docstring),
+    # so two separate ":memory:" instances never share rows.
+    db_path = tmp_path / "test.db"
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+    DatabaseManager(str(db_path)).create_tables()
 
     app = FastAPI()
     app.include_router(router)
 
-    # Mock _get_active_project_id to return None (no DB needed)
+    # Mock _get_active_project_id to return None (no DB needed) — patch it in
+    # every module that resolves it from its own globals
     monkeypatch.setattr(autopilot_api, "_get_active_project_id", lambda: None)
+    monkeypatch.setattr(control_routes, "_get_active_project_id", lambda: None)
 
     return TestClient(app)
 
@@ -549,7 +570,7 @@ class TestQueueRerun:
 
 class TestCaching:
     def test_queue_caching(self, client, autopilot_dirs):
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -563,7 +584,7 @@ class TestCaching:
         assert len(resp2.json()) == 1  # cached
 
     def test_add_invalidates_cache(self, client, autopilot_dirs):
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -611,13 +632,13 @@ def two_project_client(tmp_path, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from src.mcp.autopilot_api import router
+    from src.mcp.autopilot import router
 
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
 
-    import src.mcp.autopilot_api as api_mod
+    from src.mcp.autopilot import _shared as api_mod
 
     api_mod._cache.clear()
     api_mod._queue_dir_by_project.clear()
@@ -692,26 +713,49 @@ class TestFeatures:
         assert resp.status_code == 200
         assert resp.json() == []
 
-    def test_list_features(self, client, autopilot_dirs):
-        feature_dir = autopilot_dirs["features"] / "20260101-120000_my_feature"
-        feature_dir.mkdir()
-        docs = feature_dir / "docs"
-        docs.mkdir()
-        (docs / "pipeline_metrics.json").write_text(
-            json.dumps(
-                {
-                    "product_validated": True,
-                    "iterations": 2,
-                    "total_time_seconds": 300,
-                    "stop_reason": "completed",
-                }
-            )
+    def test_list_features(self, client, autopilot_dirs, tmp_path):
+        """list_features reads from the Feature/Workflow DB tables (via
+        _scan_features), not from FEATURES_DIR on disk -- that filesystem
+        path is get_feature_detail's job, a different route entirely. Seed
+        the DB rows the implementation actually reads. "completed" (not
+        the old test's "validated", which the Feature.status CHECK
+        constraint doesn't even permit) is what the current status model
+        actually produces."""
+        from src.core.constants import CONTEXT_DIR_NAME
+        from src.core.database import DatabaseManager, Feature, Workflow
+
+        working_dir = tmp_path / "wf-working-dir"
+        (working_dir / CONTEXT_DIR_NAME).mkdir(parents=True)
+        (working_dir / CONTEXT_DIR_NAME / "feature_report.html").write_text(
+            "<html>report</html>"
         )
-        (feature_dir / "feature_report.html").write_text("<html>report</html>")
+
+        db = DatabaseManager(None)
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-list-features",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    working_directory=str(working_dir),
+                )
+            )
+            session.add(
+                Feature(
+                    id="feat-list-features",
+                    design_id="design-list-features",
+                    feature_key="my_feature",
+                    name="my_feature",
+                    scope="test feature",
+                    status="completed",
+                    workflow_id="wf-list-features",
+                )
+            )
 
         resp = client.get("/api/autopilot/features")
         assert len(resp.json()) == 1
-        assert resp.json()[0]["status"] == "validated"
+        assert resp.json()[0]["status"] == "completed"
         assert resp.json()[0]["has_report"] is True
 
     def test_feature_detail(self, client, autopilot_dirs):
@@ -899,7 +943,7 @@ class TestPipelineStatus:
         assert data["designs_processed"] == 0
 
     def test_status_with_state(self, client, autopilot_dirs):
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -930,7 +974,7 @@ class TestPipelineStatus:
         that's equally confusing whether it's a genuine cross-project
         conflict or the caller's own just-started run (a self-conflict from
         status-polling lag)."""
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -975,7 +1019,7 @@ class TestPipelineStatus:
         concurrency diff; before that, there was only ever one service to
         ask. designs_processed/succeeded/failed must be summed across every
         running project, not just the first one's."""
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -1023,7 +1067,7 @@ class TestPipelineStatus:
         so a caller hitting the concurrency cap can identify and stop
         exactly the project(s) blocking it instead of a bare stop-all call
         that would also kill an unrelated project it was never told about."""
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -1071,7 +1115,7 @@ class TestPipelineStatus:
         (defensive -- real AutopilotService always sets it, but this
         endpoint shouldn't 500 on a test double or future refactor that
         doesn't)."""
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -1110,7 +1154,7 @@ class TestPipelineStatus:
         whose own project IS running but isn't index 0 in that list got
         is_self_conflict=False, so the UI's 409 handler treated it as a
         genuine cross-project conflict and offered to "stop X and start X"."""
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -1153,7 +1197,7 @@ class TestPipelineStatus:
     ):
         """Sanity check the fix isn't overbroad: a project_path that matches
         none of the running projects must still report is_self_conflict=False."""
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -1197,7 +1241,7 @@ class TestPipelineStatus:
 
 class TestMessages:
     def test_messages_empty(self, client, autopilot_dirs):
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -1206,7 +1250,7 @@ class TestMessages:
         assert resp.json() == []
 
     def test_messages_with_events(self, client, autopilot_dirs):
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -1243,7 +1287,7 @@ class TestMessages:
 
 class TestLogs:
     def test_logs_empty(self, client, autopilot_dirs):
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -1252,7 +1296,7 @@ class TestLogs:
         assert resp.json()["lines"] == []
 
     def test_logs_with_content(self, client, autopilot_dirs):
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
@@ -1302,13 +1346,13 @@ def project_client(tmp_path, project_dirs, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from src.mcp.autopilot_api import router
+    from src.mcp.autopilot import router
 
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app, headers={"X-Agent-ID": "system"})
 
-    import src.mcp.autopilot_api as api_mod
+    from src.mcp.autopilot import _shared as api_mod
 
     api_mod._cache.clear()
 
@@ -2674,7 +2718,7 @@ class TestPhase0ReviewAction:
         pid = self._create_project(client, dirs)
         self._seed_paused_phase0(pid, dirs, "wf-phase0-redo")
 
-        from src.mcp import autopilot_api
+        from src.mcp.autopilot import feature_routes as autopilot_api
 
         spawn_mock = AsyncMock()
         monkeypatch.setattr(autopilot_api, "_spawn_agent_for_task", spawn_mock)
@@ -2714,7 +2758,7 @@ class TestPhase0ReviewAction:
         pid = self._create_project(client, dirs)
         self._seed_paused_phase0(pid, dirs, "wf-phase0-redo2")
 
-        from src.mcp import autopilot_api
+        from src.mcp.autopilot import feature_routes as autopilot_api
 
         spawn_mock = AsyncMock()
         monkeypatch.setattr(autopilot_api, "_spawn_agent_for_task", spawn_mock)
@@ -2782,7 +2826,7 @@ class TestPhase0ReviewAction:
                 )
             )
 
-        from src.mcp import autopilot_api
+        from src.mcp.autopilot import feature_routes as autopilot_api
 
         spawn_mock = AsyncMock()
         monkeypatch.setattr(autopilot_api, "_spawn_agent_for_task", spawn_mock)
@@ -2956,7 +3000,7 @@ class TestCostEntryAgentBinding:
         return recorded
 
     def test_real_agent_cannot_claim_a_different_agent_id(self, client, monkeypatch):
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import project_routes as api_mod
 
         monkeypatch.setattr(
             api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
@@ -2976,7 +3020,7 @@ class TestCostEntryAgentBinding:
         assert resp.status_code == 403
 
     def test_real_agent_id_matching_header_is_allowed(self, client, monkeypatch):
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import project_routes as api_mod
 
         monkeypatch.setattr(
             api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
@@ -2998,7 +3042,7 @@ class TestCostEntryAgentBinding:
         assert recorded["agent_id"] == own_id
 
     def test_system_identity_may_post_on_behalf_of_any_agent(self, client, monkeypatch):
-        import src.mcp.autopilot_api as api_mod
+        from src.mcp.autopilot import project_routes as api_mod
 
         monkeypatch.setattr(
             api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
@@ -3194,13 +3238,13 @@ def stop_pipeline_client(tmp_path, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from src.mcp.autopilot_api import router
+    from src.mcp.autopilot import router
 
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
 
-    import src.mcp.autopilot_api as api_mod
+    from src.mcp.autopilot import _shared as api_mod
 
     api_mod._cache.clear()
     yield client
@@ -3227,3 +3271,40 @@ class TestStopPipelineDeactivatesProject:
         with get_db() as db:
             proj = db.query(AutopilotProject).filter_by(id="proj-stop").first()
             assert proj.is_active is False
+
+
+# ── Router aggregation guard ────────────────────────────────────────────
+
+
+class TestRouterAggregation:
+    def test_all_63_routes_survived_the_split(self):
+        """The aggregator must expose the same 63 routes the pre-split
+        autopilot_api module had (backend_module_decomposition.md §6) —
+        guards against include_router() wiring silently dropping a route
+        (the failure mode the GET /status gap in §3.2 describes)."""
+        from src.mcp.autopilot import router
+
+        def _flatten(routes):
+            # FastAPI >= 0.137 wraps include_router() in lazy _IncludedRouter
+            # objects; expand them to the concrete leaf routes
+            out = []
+            for r in routes:
+                if hasattr(r, "effective_candidates"):
+                    out.extend(_flatten(r.effective_candidates()))
+                else:
+                    out.append(r)
+            return out
+
+        flat = _flatten(router.routes)
+        assert len(flat) == 63, f"expected 63 routes, got {len(flat)}"
+        paths = {r.path for r in flat}
+        for critical in (
+            "/api/autopilot/status",
+            "/api/autopilot/health",
+            "/api/autopilot/queue",
+            "/api/autopilot/projects",
+            "/api/autopilot/features",
+            "/api/autopilot/messages",
+            "/api/autopilot/input",
+        ):
+            assert critical in paths, f"missing critical route {critical}"
