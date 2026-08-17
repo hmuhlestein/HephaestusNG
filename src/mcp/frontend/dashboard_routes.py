@@ -5,7 +5,7 @@ Each route is a top-level function that delegates to _shared.frontend_api.
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse

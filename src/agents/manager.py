@@ -27,7 +27,7 @@ from src.core.database import (
 )
 from src.core.simple_config import get_config
 from src.core.worktree_manager import WorktreeManager
-from src.interfaces import LLMProviderInterface, LaunchResult, get_cli_agent
+from src.interfaces import LaunchResult, LLMProviderInterface, get_cli_agent
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +267,6 @@ class AgentManager:
         connect to it instead of each spawning their own.
         """
         import subprocess
-        from pathlib import Path
 
         try:
             result = subprocess.run(
@@ -2037,9 +2036,6 @@ class AgentManager:
                                             log_file = (
                                                 tmux_dir
                                                 / f"{_phase.name}_{agent_id[:8]}.log"
-                                            )
-                                            from src.interfaces.cli_interface import (
-                                                get_cli_agent,
                                             )
 
                                             clean_scrollback = full_scrollback

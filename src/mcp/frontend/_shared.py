@@ -3,15 +3,12 @@
 Extracted from src/mcp/api.py (phase_1b_decomposition.md §4.1).
 """
 
-"""API endpoints for the frontend dashboard."""
-
 import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import HTTPException
 from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import joinedload
 

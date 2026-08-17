@@ -3,8 +3,9 @@ tests/test_task_completion_service.py per Phase 1b decomposition
 (design_docs/phase_1b_decomposition.md section 4.4).
 """
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from src.autopilot.orchestrator.phase_transitions import fire_spec_gate_if_ready
 

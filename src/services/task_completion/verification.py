@@ -94,7 +94,8 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
         # own genuinely-written review.md rejected as "missing" because
         # verification checked a completely different, stale worktree.
         recovered = False
-        from src.core.database import AgentWorktree, Task as _Task
+        from src.core.database import AgentWorktree
+        from src.core.database import Task as _Task
 
         wt_candidates = []
         if task.assigned_agent_id:

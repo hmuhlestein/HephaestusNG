@@ -1734,21 +1734,21 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     """
     from src.autopilot.orchestrator import _resync_pipeline_registry
     from src.autopilot.orchestrator.features import (
-    _clean_stale_assigned_tasks,
-    _sync_stale_design_statuses,
-    _sync_stale_feature_statuses,
-)
+        _clean_stale_assigned_tasks,
+        _sync_stale_design_statuses,
+        _sync_stale_feature_statuses,
+    )
     from src.autopilot.orchestrator.phase_transitions import (
-    _try_advance_phases,
-    _maybe_resolve_arbitration,
-    _retry_exhausted_paused_workflows,
-    _retry_failed_tasks,
-)
+        _maybe_resolve_arbitration,
+        _retry_exhausted_paused_workflows,
+        _retry_failed_tasks,
+        _try_advance_phases,
+    )
     from src.autopilot.orchestrator.worktree_integration import (
-    _recover_abandoned_workflows_missing_worktree,
-    _recover_abandoned_workflows_with_completed_phase,
-    heal_orphaned_agent_branches,
-)
+        _recover_abandoned_workflows_missing_worktree,
+        _recover_abandoned_workflows_with_completed_phase,
+        heal_orphaned_agent_branches,
+    )
 
     # Feature-table-wide, not scoped to any one workflow -- see its own
     # docstring for why this can't just live inside _run_one_feature.
@@ -2554,7 +2554,7 @@ async def update_task_status(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Update task status when complete or failed."""
-    from src.core.log_context import clear_log_context, set_log_context
+    from src.core.log_context import set_log_context
 
     # SECURITY: Verify agent authentication before allowing status updates
     if not await verify_agent_authentication(agent_id):
@@ -3793,8 +3793,8 @@ async def openid_config():
 
 
 # OAuth authorization codes and client registrations (persisted in-memory with proper validation)
-import hashlib
 import base64
+import hashlib
 import threading
 
 _auth_codes: Dict[str, Dict] = {}  # code -> {client_id, redirect_uri, scope, code_challenge, code_challenge_method, expires_at, used}

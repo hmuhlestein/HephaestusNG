@@ -12,10 +12,8 @@ AutoRestart collaborator owns that logic.
 See docs/SOLID_OO_REVIEW.md and design_docs/phase_1b_decomposition.md §4.3.
 """
 
-import json
 import logging
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.core.constants import CONTEXT_DIR_NAME, WORKTREES_SUBDIR
@@ -24,9 +22,7 @@ from src.core.database import (
     AgentLog,
     GuardianAnalysis,
     Task,
-    Workflow,
 )
-from src.core.simple_config import get_config
 
 logger = logging.getLogger(__name__)
 
