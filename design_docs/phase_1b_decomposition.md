@@ -27,7 +27,7 @@ These are not repeated per-section below; they're cross-cutting and each target'
 1. **Test files are a first-class part of the call-site migration, not an afterthought.** The `orchestrator.py` split's own production call-site migration (`a2905e8`) updated production code only and missed test files entirely — 39 stale `@patch(...)` targets and imports in `tests/test_advance_phases.py` alone, found only in a later review. Every target section below includes an explicit, swept (not guessed) test call-site table.
 2. **Patch targets must point at where a name is *looked up*, not where it's *defined*.** Two distinct failure modes exist, both encountered on the prior splits:
    - A **module-level** `from X import name` binds a stale reference at import time — patching `X.name` afterward has no effect on the importer; patch the *importer's* module instead. (This broke `test_phase0_idempotency.py`'s `_create_integration_worktree` patches on the `orchestrator.py` split.)
-   - A **function-scoped** `from X import name` (re-executed on every call) re-resolves fresh each time — patching the *importer's* module has no effect; patch `X` (the defining module) instead. (This is `task_completion_service.py`'s `fire_spec_gate_if_ready` retargeting, §3.4 below — the exact mirror image of the first case.)
+   - A **function-scoped** `from X import name` (re-executed on every call) re-resolves fresh each time — patching the *importer's* module has no effect; patch `X` (the defining module) instead. (This is `task_completion_service.py`'s `fire_spec_gate_if_ready` retargeting, §4.4 below — the exact mirror image of the first case.)
    
    Check which import style each call site actually uses before writing the patch-retarget table; don't assume either direction by default.
 3. **`DatabaseManager()` called with no arguments silently bypasses `HEPHAESTUS_TEST_DB`.** Its default parameter is the literal string `"hephaestus.db"`, not `None` — only `DatabaseManager(None)` checks the env var, matching `get_db()`'s already-correct pattern. All 16 known instances of this bug were found and fixed 2026-08-16 (commits `df8ce2b`, `105589c`); if any new `DatabaseManager()` bare call is encountered while executing this plan (extraction sometimes surfaces code nobody had read closely in a while), fix it to `DatabaseManager(None)` in the same commit, don't defer it.
@@ -119,7 +119,7 @@ Note the two `/tasks/{task_id}/prompt...` routes belong here, not in `task_route
 | GET | `/results/{result_id}/download` | `download_result_markdown` | 2962-2969 | `frontend_api.download_result_markdown` (1917-1943) |
 | GET | `/results/{result_id}/validation/download` | `download_validation_report` | 2971-2978 | `frontend_api.download_validation_report` (1945-1978) |
 
-**`get_task_prompt` and `get_definition_phases` are also un-delegated inline logic, like `stop_workflow`, but the plan's explicit callout names only `stop_workflow` for extraction — leave the other two as inline closures-turned-top-level-functions.** This is a real, deliberate asymmetry, not an oversight to "fix while in there" (per this repo's minimal-touch rule): `stop_workflow` and `reset_phase` are the two routes `AUTOPILOT_REFACTOR_PLAN.md`'s agent-termination-primitive work (§4.2) will need to patch symmetrically in Phase 2 — both terminate agents and both currently have the same `terminated_at`-missing bug. Giving `stop_workflow` the same `FrontendAPI`-method shape `reset_phase` already has is what makes that future consolidation a same-shape edit in both places; `get_definition_phases` and `get_task_prompt` aren't part of that consolidation and have no such forcing function. Flag this inconsistency in review so a future pass doesn't "clean it up" unprompted; don't act on it here.
+**`get_task_prompt` and `get_definition_phases` are also un-delegated inline logic, like `stop_workflow`, but the plan's explicit callout names only `stop_workflow` for extraction — leave the other two as inline closures-turned-top-level-functions.** This is a real, deliberate asymmetry, not an oversight to "fix while in there" (per this repo's minimal-touch rule): `stop_workflow` and `reset_phase` are the two routes `AUTOPILOT_REFACTOR_PLAN.md`'s own agent-termination-primitive work (its §4.2, not this document's) will need to patch symmetrically in Phase 2 — both terminate agents and both currently have the same `terminated_at`-missing bug. Giving `stop_workflow` the same `FrontendAPI`-method shape `reset_phase` already has is what makes that future consolidation a same-shape edit in both places; `get_definition_phases` and `get_task_prompt` aren't part of that consolidation and have no such forcing function. Flag this inconsistency in review so a future pass doesn't "clean it up" unprompted; don't act on it here.
 
 #### The `stop_workflow` / `reset_phase` deviation — verified, and the exact extraction shape
 
@@ -199,7 +199,7 @@ This preserves `create_frontend_routes(db_manager, agent_manager, phase_manager)
 
 No other production file imports from `src.mcp.api` — confirmed by a repo-wide grep returning only `server.py:40`.
 
-**Tests — swept explicitly per the lesson in §3.1 above:**
+**Tests — swept explicitly per lesson 1 in §3 above (test call sites are a first-class part of the migration):**
 
 | Test file | What it references | New home | Change needed |
 |---|---|---|---|
@@ -228,7 +228,7 @@ The plan's line estimates hold almost exactly:
 |---|---|---|---|
 | `create_agent_for_task` | starts 259, body to ~1243, ~970 lines | starts **259**, next sibling def (`_wait_for_shell_ready`) at **1245** | **259–1243** (985 lines, including 51-line docstring) |
 | `restart_agent` | not line-ranged by the plan | starts **2257**, next sibling def (`get_agent_output`) at **2657** | **2257–2655** (399 lines) |
-| `terminate_agent` | not in scope, but sibling to §4.2 (dedup phase) | starts **1939**, next def (`_commit_wip_in_shared_worktree`) at **2210** | **1939–2209** (270 lines) |
+| `terminate_agent` | not in scope, but sibling to `AUTOPILOT_REFACTOR_PLAN.md`'s own §4.2 (agent-termination-primitive dedup phase, not this document's §4.2) | starts **1939**, next def (`_commit_wip_in_shared_worktree`) at **2210** | **1939–2209** (270 lines) |
 | `_create_tmux_session` | referenced as a shared helper | **1281–1428** (used by both `create_agent_for_task` and `restart_agent`) | — |
 
 One correction to the plan: `create_agent_for_task`'s recursive fallback-retry call (line 1135) and cleanup-on-failure block are inside a single `try/except` that wraps almost the entire method body (`try:` at 440, `except Exception as e:` at 1095) — the plan's phase list implies fallback-retry/cleanup is a late, separable step, but structurally the entire launch pipeline (worktree → prompt → env → launch → launch-failure detection → prompt delivery) sits *inside* that one try block, so any extraction has to either keep the whole pipeline inside one big `try`, or have each extracted step raise and let a single wrapping `try` in the caller (or a step-orchestrator) catch it. This matters for the split design below.
@@ -349,12 +349,12 @@ with each subclass **extending** (`return super().get_launch_rejection_patterns(
 - `src/mcp/autopilot/feature_routes.py:912` — feature-pipeline dispatch
 - `src/monitoring/monitor.py:410, 562, 1655` — three separate `create_agent_for_task` call sites inside the monitor's own recovery/retry paths
 - `src/monitoring/monitor.py:2799` (inside `_handle_missing_tmux_session`) — **real** `restart_agent` call. **Do not confuse this with `monitor.py:2512`'s `_auto_restart_agent`**, which is a *third*, independent "kill and let a later sweep re-dispatch" implementation that does **not** call `AgentManager.restart_agent` at all — it kills the tmux session and marks the `Agent` row `terminated` directly, relying on a separate retry sweep to eventually create a *new* agent via `create_agent_for_task`. This is a relevant adjacent finding for whoever scopes the dispatch-pipeline consolidation (`AUTOPILOT_REFACTOR_PLAN.md` §4.3) but is out of scope for this split — flagging so it isn't mistaken for a third caller of the two functions being split.
-- `src/autopilot/orchestrator/engine_client.py:442` — inside `create_agent_for_task_direct`'s async wrapper (itself one of the three independent dispatch implementations §4.3 addresses)
+- `src/autopilot/orchestrator/engine_client.py:442` — inside `create_agent_for_task_direct`'s async wrapper (itself one of the three independent dispatch implementations `AUTOPILOT_REFACTOR_PLAN.md`'s own §4.3 addresses, not this document's §4.3)
 - `src/services/agent_dispatch_service.py:153` — `AgentDispatchService.dispatch`
 - `src/validation/validator_agent.py:157` — `spawn_validator_agent`
 - `src/mcp/server.py:775` — startup-resume path (`restart_agent`, "server restarted — resuming interrupted work")
 
-**Tests — exhaustive, per §3.1's mandate not to repeat the prior split's missed-test-migration mistake:**
+**Tests — exhaustive, per lesson 1 in §3 above (not to repeat the prior split's missed-test-migration mistake):**
 - `tests/test_agent_manager.py` — the primary suite. `create_agent_for_task` called at 17 sites across `TestCreateAgentForTask` (110), `TestCreateAgentForTaskMissingSharedWorktree` (697), `TestProjectScopedWorktreeManager` (748), `TestCreateAgentForTaskFallback` (851), `TestCreateAgentForTaskSessionLimitPause` (1067). `restart_agent` called at 4 sites in `TestRestartAgent` (1175). Also relevant: `TestCodexTmuxLifecycle` (1303) and `TestSendInitialPromptSessionLimitCheck` (1442) exercise shared helper methods this split's shared steps would call.
 - `tests/test_prompt_delivery_cleanup.py` — 3 `create_agent_for_task` call sites (76, 169, 252), specifically testing the cleanup-on-failure path — this is exactly the block flagged create-only above, so these tests gate that step directly.
 - `tests/test_worktree_integration.py` — 4 `create_agent_for_task` call sites (153, 209, 241, 287) — exercises the worktree-resolution step specifically.
@@ -399,7 +399,7 @@ No other test files reference either symbol.
 - **Docstring on the new module explains the extraction rationale** and points at the SOLID review finding by section number, and notes explicitly why the delegator still exists.
 - **Verification**: targeted regression (3 tests) + the full `test_monitor.py` suite run, not just the specific tests.
 
-This is the exact template Phase 1b should reuse for each extraction below: standalone collaborator class taking exactly the constructor args it needs, composed as an instance attribute on `MonitoringLoop`, old method names kept as thin delegators wherever tests call them by name directly on the `MonitoringLoop` instance — which, per §7 below, is the common case here.
+This is the exact template Phase 1b should reuse for each extraction below: standalone collaborator class taking exactly the constructor args it needs, composed as an instance attribute on `MonitoringLoop`, old method names kept as thin delegators wherever tests call them by name directly on the `MonitoringLoop` instance — which, per the External call sites section below, is the common case here.
 
 #### `_monitoring_cycle`'s own Phase 0/1/2/3 comments, mapped to exact ranges
 
@@ -466,7 +466,7 @@ All 32 methods on `MonitoringLoop`, in file order:
 
 **Cluster B — mechanical/heuristic detectors (Phase 0 block), 13 methods, ~1,730 lines (256-1982, minus `_log_agent_event`'s 23 which is a shared helper, not itself a detector):** `_detect_orphaned_idle_agent`, `_detect_credit_exhausted`, `_detect_agent_never_started`, `_mechanical_recovery_for_agent`, `_detect_cli_model_fallback`, `_verify_cli_model_fallback`, `_detect_repetition_loop`, `_detect_dangerous_command_confirmation`, `_detect_max_token_limit_error`, `_detect_unconfirmed_task_completion`, `_detect_mcp_disconnected`, `_detect_connection_errors`, `_detect_bad_model_error` — called in this exact order from `_monitoring_cycle`'s Phase 0 loop. By far the largest cluster and the one the "two heuristic detectors" phrase most undersells.
 
-**Cluster C — Guardian dispatch + supporting helpers, ~590 lines:** `_guardian_analysis_for_agent` (235), `_get_past_summaries_for_agent` (59), `_update_agent_health_from_trajectory` (71), `_handle_missing_tmux_session` (12), `_write_agent_tmux_log` (67) — all called only from `_guardian_analysis_for_agent`'s body. Plus `_auto_restart_agent` (82), which is **shared** — called from both this cluster and cluster B; see §6 below.
+**Cluster C — Guardian dispatch + supporting helpers, ~590 lines:** `_guardian_analysis_for_agent` (235), `_get_past_summaries_for_agent` (59), `_update_agent_health_from_trajectory` (71), `_handle_missing_tmux_session` (12), `_write_agent_tmux_log` (67) — all called only from `_guardian_analysis_for_agent`'s body. Plus `_auto_restart_agent` (82), which is **shared** — called from both this cluster and cluster B; see "Shared state" below.
 
 **Cluster D — Conductor dispatch:** `_save_conductor_analysis` (62). Thin — `_monitoring_cycle`'s Phase 2 block calls `self.conductor.analyze_system_state`/`execute_decisions`/`generate_detailed_report` directly on the existing `Conductor` collaborator; the only `MonitoringLoop`-owned logic here is persisting the analysis result.
 
@@ -484,13 +484,13 @@ Following this repo's existing convention (`src/monitoring/orphan_reaper.py` / `
 
 | New file | New class | Methods moved | Constructor args |
 |---|---|---|---|
-| `src/monitoring/mechanical_recovery.py` | `MechanicalRecoveryDetector` | all 13 cluster-B detectors + `_log_agent_event` | `db_manager`, `agent_manager` — plus a reference to whatever `_auto_restart_agent` becomes (see §6) |
+| `src/monitoring/mechanical_recovery.py` | `MechanicalRecoveryDetector` | all 13 cluster-B detectors + `_log_agent_event` | `db_manager`, `agent_manager` — plus a reference to whatever `_auto_restart_agent` becomes (see "Shared state" below) |
 | `src/monitoring/guardian_dispatch.py` | `GuardianDispatcher` | `_guardian_analysis_for_agent`, `_get_past_summaries_for_agent`, `_update_agent_health_from_trajectory`, `_handle_missing_tmux_session`, `_write_agent_tmux_log` | `db_manager`, `agent_manager`, `guardian`, `phase_manager` — plus the same `_auto_restart_agent` reference |
 | `src/monitoring/health_audit.py` | `SystemHealthAuditor` | `_audit_system_health` | `db_manager`, `agent_manager` — owns `_stuck_task_nudges` and `_health_findings` as its own instance attributes instead of `MonitoringLoop`'s |
 | `src/monitoring/diagnostic_agent.py` | `WorkflowStuckDiagnostics` | `_check_workflow_stuck_state`, `_log_diagnostic_status_report`, `_create_diagnostic_agent`, `_gather_diagnostic_context`, `_generate_diagnostic_prompt` | `db_manager`, `agent_manager`, `phase_manager` |
 | `src/monitoring/monitor.py` (stays) | `MonitoringLoop` | `__init__`, `start`, `stop`, `_monitoring_cycle` (rewritten as a coordinator), `_save_conductor_analysis`, plus delegator stubs | — |
 
-**Delegator stubs on `MonitoringLoop`, matching `1998a11`'s pattern exactly:** because ~180 test call sites (§7) invoke these methods *by name, directly on a `MonitoringLoop` instance*, every moved method needs a same-named async/sync delegator left on `MonitoringLoop` that forwards to the new collaborator:
+**Delegator stubs on `MonitoringLoop`, matching `1998a11`'s pattern exactly:** because ~180 test call sites (see "External call sites" below) invoke these methods *by name, directly on a `MonitoringLoop` instance*, every moved method needs a same-named async/sync delegator left on `MonitoringLoop` that forwards to the new collaborator:
 
 ```python
 async def _detect_repetition_loop(self, agent) -> bool:
@@ -593,7 +593,7 @@ Both `server.py` route handlers already import `TaskCompletionService` locally f
 **Test call sites — this is the one place this migration touches the most surface:**
 
 - `tests/test_task_completion_service.py::TestFireSpecGateIfReadyGoto` (lines 926–1149, 224 lines, 4 test methods) calls `TaskCompletionService.fire_spec_gate_if_ready(session, task)` directly at lines 1019, 1073, 1101, 1142. Since the function is leaving the class entirely (no facade — see below), this whole test class should **physically relocate** to wherever `phase_transitions.py`'s own tests live (`tests/test_orchestrator_helpers.py` or a new `tests/test_phase_transitions_spec_gate.py`), with its 4 call sites rewritten to `fire_spec_gate_if_ready(session, task)` (plain function call). Its own internal `@patch(...)` targets already target `phase_transitions.py` directly — **need no change**, a small confirming signal this test class was written with the eventual destination in mind.
-- `tests/test_update_task_status_ordering.py` — **7 string-patch occurrences** across 3 test methods plus a shared `tcs` prefix variable pattern. All 7 must retarget to `"src.autopilot.orchestrator.phase_transitions.fire_spec_gate_if_ready"`. **Why the source module, not `src.mcp.server.fire_spec_gate_if_ready`:** `server.py` imports the name with a function-scoped import — re-resolved fresh on every route call, per §3.2's lesson.
+- `tests/test_update_task_status_ordering.py` — **7 string-patch occurrences** across 3 test methods plus a shared `tcs` prefix variable pattern. All 7 must retarget to `"src.autopilot.orchestrator.phase_transitions.fire_spec_gate_if_ready"`. **Why the source module, not `src.mcp.server.fire_spec_gate_if_ready`:** `server.py` imports the name with a function-scoped import — re-resolved fresh on every route call, per lesson 2 in §3 above.
 - `tests/test_goto_reconvergence.py:303` and `tests/test_project_scoped_repo_resolution.py:10-11` reference `fire_spec_gate_if_ready`/`task_completion_service.py` only in prose comments — no functional migration needed, though the comments become stale pointers (optional touch-up while in the file).
 
 #### Remaining ~880 lines: cluster into modules
@@ -701,4 +701,4 @@ Each target section above (§4.1–§4.4) specifies its own exact test-file list
 - **Fixing `_auto_restart_agent`'s missing `terminated_at`** (§4.3) — log as a correction to `AUTOPILOT_REFACTOR_PLAN.md` §4.2's existing call-site list; fix when that phase executes, not here.
 - **Fixing `post_phase_prompt_preview`'s hardcoded `DatabaseManager("hephaestus.db")`** (§4.1) — already a tracked Phase 3 item (Tier 2 item 14); move verbatim.
 - **Resolving the `collect_cost_on_completion` taxonomy gap** (§4.4) — an explicit decision point left for whoever executes the split, not defaulted.
-- **Any of Phase 2's actual consolidation work** — this document is decomposition (Phase 1b) only. Where a target's own research surfaced a Phase 2-relevant finding (e.g. `create_agent_for_task`'s shared-step design directly informs §4.2's agent-termination primitive), that's noted in place but not executed here.
+- **Any of Phase 2's actual consolidation work** — this document is decomposition (Phase 1b) only. Where a target's own research surfaced a Phase 2-relevant finding (e.g. `create_agent_for_task`'s shared-step design directly informs `AUTOPILOT_REFACTOR_PLAN.md`'s own §4.2 agent-termination primitive), that's noted in place but not executed here.
