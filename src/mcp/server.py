@@ -2926,7 +2926,8 @@ async def update_task_status(
         # Skipped entirely if output_lost_rejection fired above -- the task is
         # "failed" now, not "done", so the phase isn't actually complete.
         if request.status == "done" and task.phase_id and not output_lost_rejection:
-            await TaskCompletionService.fire_spec_gate_if_ready(session, task)
+            from src.autopilot.orchestrator.phase_transitions import fire_spec_gate_if_ready
+            await fire_spec_gate_if_ready(session, task)
 
         # 5. Broadcast update
         from src.core.database import resolve_project_for_workflow
@@ -3401,7 +3402,8 @@ async def complete_task_as_user(
                 session.commit()
                 raise HTTPException(status_code=400, detail=output_lost_rejection["message"])
 
-        await TaskCompletionService.fire_spec_gate_if_ready(session, task)
+        from src.autopilot.orchestrator.phase_transitions import fire_spec_gate_if_ready
+        await fire_spec_gate_if_ready(session, task)
         session.commit()
     except HTTPException:
         session.rollback()

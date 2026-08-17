@@ -111,7 +111,7 @@ class TestSpecGateFiresAfterWorktreeCommit:
             "src.services.task_completion_service.TaskCompletionService.commit_and_link_ticket",
             side_effect=record_commit,
         ), patch(
-            "src.services.task_completion_service.TaskCompletionService.fire_spec_gate_if_ready",
+            "src.autopilot.orchestrator.phase_transitions.fire_spec_gate_if_ready",
             side_effect=record_gate,
         ):
             resp = test_client.post(
@@ -186,7 +186,7 @@ class TestUpdateTaskStatusTruncatedIdFallback:
             "src.services.task_completion_service.TaskCompletionService.commit_and_link_ticket",
             new_callable=AsyncMock,
         ), patch(
-            "src.services.task_completion_service.TaskCompletionService.fire_spec_gate_if_ready",
+            "src.autopilot.orchestrator.phase_transitions.fire_spec_gate_if_ready",
             new_callable=AsyncMock,
         ):
             resp = test_client.post(
@@ -279,7 +279,7 @@ class TestUpdateTaskStatusClearsStaleFailureReason:
             "src.services.task_completion_service.TaskCompletionService.commit_and_link_ticket",
             new_callable=AsyncMock,
         ), patch(
-            "src.services.task_completion_service.TaskCompletionService.fire_spec_gate_if_ready",
+            "src.autopilot.orchestrator.phase_transitions.fire_spec_gate_if_ready",
             new_callable=AsyncMock,
         ):
             resp = test_client.post(
@@ -375,7 +375,7 @@ class TestUpdateTaskStatusIdempotentOnAlreadyTerminalTask:
             "src.services.task_completion_service.TaskCompletionService.commit_and_link_ticket",
             new_callable=AsyncMock,
         ), patch(
-            "src.services.task_completion_service.TaskCompletionService.fire_spec_gate_if_ready",
+            "src.autopilot.orchestrator.phase_transitions.fire_spec_gate_if_ready",
             new_callable=AsyncMock,
         ):
             resp = test_client.post(
@@ -440,7 +440,7 @@ class TestCompleteTaskAsUserCommitsWorktree:
              patch(f"{tcs}.verify_no_open_tickets", return_value=None), \
              patch(f"{tcs}.commit_and_link_ticket", new_callable=AsyncMock, return_value="deadbeef") as mock_commit, \
              patch(f"{tcs}.verify_output_survived_commit", return_value=None), \
-             patch(f"{tcs}.fire_spec_gate_if_ready", new_callable=AsyncMock):
+             patch("src.autopilot.orchestrator.phase_transitions.fire_spec_gate_if_ready", new_callable=AsyncMock):
             resp = test_client.post(
                 f"/api/tasks/{task_id}/complete",
                 json={"summary": "manually verified and committed by operator"},
@@ -464,7 +464,7 @@ class TestCompleteTaskAsUserCommitsWorktree:
              patch(f"{tcs}.verify_no_open_tickets", return_value=None), \
              patch(f"{tcs}.commit_and_link_ticket", new_callable=AsyncMock, return_value="deadbeef") as mock_commit, \
              patch(f"{tcs}.verify_output_survived_commit", return_value=None), \
-             patch(f"{tcs}.fire_spec_gate_if_ready", new_callable=AsyncMock):
+             patch("src.autopilot.orchestrator.phase_transitions.fire_spec_gate_if_ready", new_callable=AsyncMock):
             resp = test_client.post(
                 f"/api/tasks/{task_id}/complete",
                 json={"summary": "committed and pushed manually"},
@@ -485,7 +485,7 @@ class TestCompleteTaskAsUserCommitsWorktree:
              patch(f"{tcs}.verify_no_open_tickets", return_value=None), \
              patch(f"{tcs}.commit_and_link_ticket", new_callable=AsyncMock, return_value="deadbeef"), \
              patch(f"{tcs}.verify_output_survived_commit", return_value={"message": "output vanished"}), \
-             patch(f"{tcs}.fire_spec_gate_if_ready", new_callable=AsyncMock) as mock_gate:
+             patch("src.autopilot.orchestrator.phase_transitions.fire_spec_gate_if_ready", new_callable=AsyncMock) as mock_gate:
             resp = test_client.post(
                 f"/api/tasks/{task_id}/complete",
                 json={"summary": "claims done but output is gone"},
