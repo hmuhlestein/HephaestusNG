@@ -7,7 +7,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 import libtmux
 
@@ -32,8 +32,39 @@ from src.interfaces import LLMProviderInterface, LaunchResult, get_cli_agent
 logger = logging.getLogger(__name__)
 
 
+class PhaseConfig(NamedTuple):
+    """Resolved phase configuration for agent creation."""
+    cli_type: str
+    # The raw (derived-or-caller) phase tool, before the global-default
+    # fallback applied for cli_type. The model-preference gate downstream
+    # keys off this value's truthiness, not cli_type's, to match pre-split
+    # behavior: a caller passing a model without a tool must NOT get the
+    # model applied (HEAD discarded it in that case).
+    phase_cli_tool: Optional[str]
+    cli_model: Optional[str]
+    glm_token_env: Optional[str]
+    thinking_level: Optional[str]
+    fallback_cli_tool: Optional[str]
+    fallback_cli_model: Optional[str]
+
+
+class WorktreeResolution(NamedTuple):
+    """Result of worktree resolution."""
+    branch_path: str
+    branch_name: Optional[str]
+    context_files: Dict[str, str]
+
+
 class AgentManager:
     """Manages agent lifecycle and tmux sessions."""
+
+    #: Base launch-rejection patterns shared by all CLIs (binary missing from
+    #: PATH).  CLI subclasses ADD their own via get_launch_rejection_patterns()
+    #: without replacing these.
+    _BASE_LAUNCH_REJECTION_PATTERNS = [r"command not found", r"No such file or directory"]
+    # The Claude Code pattern that raises the distinct "stuck on confirmation
+    # dialog" error wording in _detect_launch_failure (pre-split behavior).
+    _CLAUDE_CODE_CONFIRMATION_PATTERN = r"Bypass Permissions mode"
 
     def __init__(
         self,
@@ -256,6 +287,521 @@ class AgentManager:
         except Exception as e:
             logger.warning(f"[CODEGRAPH] Pre-warm failed (non-fatal): {e}")
 
+    async def _check_termination_race(
+        self, agent_id: str, task_id: str, session_name: str, agent_id_to_return: str
+    ) -> Optional[object]:
+        """Check whether the agent or task was terminated/cancelled during
+        the CLI-init sleep. Returns an AgentInfo if launch should be
+        aborted; None if safe to proceed.
+
+        Currently create-only but called by both create and restart after
+        extraction (documented gap-closing for restart).
+        """
+        with self.db_manager.get_session() as _term_check:
+            _current = _term_check.query(Agent).filter_by(id=agent_id).first()
+            _agent_terminated = bool(_current and _current.status == "terminated")
+
+            _fresh_task = _term_check.query(Task).filter_by(id=task_id).first()
+            _task_cancelled = bool(
+                _fresh_task
+                and (
+                    _fresh_task.status in TaskStatus.TERMINAL
+                    or (
+                        _fresh_task.assigned_agent_id
+                        and _fresh_task.assigned_agent_id != agent_id
+                    )
+                )
+            )
+
+            if _agent_terminated or _task_cancelled:
+                reason = (
+                    "was terminated"
+                    if _agent_terminated
+                    else f"its task {task_id} was reassigned/cancelled "
+                    f"(status={_fresh_task.status}, assigned_agent_id="
+                    f"{_fresh_task.assigned_agent_id})"
+                )
+                logger.warning(
+                    f"Agent {agent_id} {reason} while its CLI was still "
+                    "initializing -- aborting launch, not delivering initial prompt"
+                )
+                if self.tmux_server.has_session(session_name):
+                    self.tmux_server.kill_session(session_name)
+
+                class AgentInfo:
+                    def __init__(self, id):
+                        self.id = id
+
+                return AgentInfo(agent_id_to_return)
+        return None
+
+    def _detect_launch_failure(
+        self, pane, cli_agent, cli_type: str, session_name: str
+    ) -> None:
+        """Detect whether the CLI's launch command was rejected by the
+        shell or by the CLI itself, leaving a dead pane.  Uses
+        cli_agent.get_launch_rejection_patterns() — the base generic
+        patterns plus any CLI-specific wording the subclass overrides.
+
+        Detects which pattern fired to preserve distinct error messages
+        (generic shell rejection vs. CLI-specific confirmation dialog).
+        """
+        import re
+
+        try:
+            launch_check = pane.cmd("capture-pane", "-p", "-S", "-15").stdout
+            launch_check_text = "\n".join(launch_check) if launch_check else ""
+        except Exception:
+            launch_check_text = ""
+
+        patterns = cli_agent.get_launch_rejection_patterns()
+        for pattern in patterns:
+            if re.search(pattern, launch_check_text, re.IGNORECASE):
+                # Pre-split wordings: ONLY the Claude Code confirmation-dialog
+                # pattern raised the "stuck on a dialog" message; every other
+                # pattern (base shell rejections and pi's model-not-found)
+                # raised the generic shell-rejection message.
+                if pattern == self._CLAUDE_CODE_CONFIRMATION_PATTERN:
+                    logger.error(
+                        f"{cli_type} launch command is stuck on an unhandled confirmation "
+                        f"dialog in tmux session {session_name}: "
+                        f"{launch_check_text.strip()[-300:]}")
+                    raise Exception(
+                        f"{cli_type} CLI is stuck on an unhandled first-run confirmation "
+                        "dialog"
+                    )
+                logger.error(
+                    f"{cli_type} launch command failed in tmux session {session_name}: "
+                    f"{launch_check_text.strip()[-300:]}")
+                raise Exception(
+                    f"{cli_type} CLI failed to start -- shell reported the launch "
+                    "command was not found"
+                )
+
+    # ── Shared step methods for create_agent_for_task / restart_agent ────
+
+    def _check_duplicate_active_agent(self, task: Task) -> Optional[Agent]:
+        """Guard: don't create a second agent for a task that already has one.
+
+        Returns the existing active agent if found, None otherwise.
+        Create-only — restart already knows its agent.
+        """
+        with self.db_manager.get_session() as session:
+            from src.core.database import Agent as _GuardAgent
+            existing = (
+                session.query(_GuardAgent)
+                .filter(
+                    _GuardAgent.current_task_id == task.id,
+                    _GuardAgent.status.in_(["working", "idle"]),
+                )
+                .first()
+            )
+            if existing:
+                logger.warning(
+                    f"Agent {existing.id[:8]} already active for task "
+                    f"{task.id[:8]} — skipping duplicate creation"
+                )
+                return existing
+        return None
+
+    def _resolve_phase_config(
+        self,
+        task: Task,
+        cli_type: Optional[str],
+        phase_cli_tool: Optional[str],
+        phase_cli_model: Optional[str],
+        phase_glm_token_env: Optional[str],
+        phase_thinking_level: Optional[str],
+    ) -> PhaseConfig:
+        """Resolve phase CLI/model/thinking config with fallback to global defaults.
+
+        Create-only — restart reads frozen agent.cli_type/agent.cli_model.
+        """
+        fallback_cli_tool = None
+        fallback_cli_model = None
+        if task.phase_id and (
+            phase_cli_tool is None
+            and phase_cli_model is None
+            and phase_glm_token_env is None
+            and phase_thinking_level is None
+        ):
+            try:
+                from src.core.database import Phase
+                with self.db_manager.get_session() as _ps:
+                    _ph = _ps.query(Phase).filter_by(id=task.phase_id).first()
+                    if _ph:
+                        phase_cli_tool = _ph.cli_tool
+                        phase_cli_model = _ph.cli_model
+                        fallback_cli_tool = getattr(_ph, 'fallback_cli_tool', None)
+                        fallback_cli_model = getattr(_ph, 'fallback_cli_model', None)
+                        phase_glm_token_env = _ph.glm_api_token_env
+                        phase_thinking_level = _ph.thinking_level
+            except Exception as e:
+                logger.warning(f"Could not derive phase config for task {task.id}: {e}")
+
+        cli_type = phase_cli_tool or cli_type or self.config.default_cli_tool
+
+        if not fallback_cli_tool and self.config.default_fallback_cli_tool:
+            if self.config.default_fallback_cli_tool != cli_type:
+                fallback_cli_tool = self.config.default_fallback_cli_tool
+                fallback_cli_model = self.config.default_fallback_cli_model
+
+        return PhaseConfig(
+            cli_type=cli_type,
+            phase_cli_tool=phase_cli_tool,
+            cli_model=phase_cli_model,
+            glm_token_env=phase_glm_token_env,
+            thinking_level=phase_thinking_level,
+            fallback_cli_tool=fallback_cli_tool,
+            fallback_cli_model=fallback_cli_model,
+        )
+
+    def _resolve_worktree(
+        self,
+        task: Task,
+        wt_mgr: WorktreeManager,
+        *,
+        create_if_missing: bool,
+        agent_id: str,
+        context_files: Optional[Dict[str, str]] = None,
+    ) -> WorktreeResolution:
+        """Resolve the working directory for an agent.
+
+        Shared — create passes create_if_missing=True (fail-loudly for shared
+        worktrees), restart passes create_if_missing=False (silent None on
+        missing).
+        """
+        branch_path = None
+        branch_name = None
+        resolved_context = context_files or {}
+
+        if task.workflow_id:
+            from src.core.database import Workflow
+            with self.db_manager.get_session() as session:
+                wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+                if wf and wf.working_directory:
+                    if ".worktrees/" in wf.working_directory:
+                        # Shared worktree path — must exist and be a valid git repo
+                        wt_path = Path(wf.working_directory)
+                        if not (wt_path.exists() and (wt_path / ".git").exists()):
+                            if create_if_missing:
+                                raise RuntimeError(
+                                    f"Workflow {task.workflow_id[:8]}'s shared worktree "
+                                    f"{wt_path} is missing or not a valid git worktree. "
+                                    "Refusing to fork a disconnected replacement or "
+                                    "silently recover it -- find out what deleted it."
+                                )
+                            # restart: silent None, don't raise
+                        else:
+                            branch_path = wf.working_directory
+                            branch_name = f"shared-{task.workflow_id[:8]}"
+                            if create_if_missing:
+                                wt_mgr.reload(wt_path)
+                            else:
+                                # Restart: reload on a throwaway manager —
+                                # HEAD never reloaded the shared
+                                # self.branch_manager singleton in place
+                                # (races concurrent dispatch threads).
+                                from src.core.worktree_manager import WorktreeManager
+
+                                WorktreeManager(db_manager=self.db_manager).reload(wt_path)
+                            logger.info(
+                                f"Using shared worktree for agent {agent_id[:8]} "
+                                f"at {branch_path}"
+                            )
+                    elif not create_if_missing and Path(wf.working_directory).exists():
+                        # Restart-only: non-worktrees working directory (e.g.
+                        # legacy or direct path) — use it if it exists on disk.
+                        # Create deliberately does NOT take this branch: it
+                        # always forks an isolated per-agent worktree for
+                        # non-shared workflows (pre-split behavior).
+                        branch_path = wf.working_directory
+                        branch_name = f"shared-{task.workflow_id[:8]}"
+                        logger.info(
+                            f"Using workflow working directory for agent {agent_id[:8]} "
+                            f"at {branch_path}"
+                        )
+
+        if branch_path is None and create_if_missing and context_files is not None:
+            branch_info = wt_mgr.create_agent_worktree(
+                agent_id=agent_id,
+                parent_agent_id=getattr(task, "created_by_agent_id", None),
+                context_files=resolved_context,
+            )
+            branch_path = branch_info["working_directory"]
+            branch_name = branch_info["branch_name"]
+            wt_mgr.switch_to_branch(branch_name)
+            logger.info(
+                f"Created worktree {branch_name} for agent {agent_id[:8]} "
+                f"at {branch_path}"
+            )
+        elif branch_path is None and not create_if_missing:
+            # restart fallback: agent's own tracked worktree
+            try:
+                candidate = self.branch_manager.get_agent_branch_path(agent_id)
+                if candidate and Path(candidate).exists():
+                    branch_path = candidate
+            except Exception as e:
+                logger.debug(
+                    f"[RESTART] Could not resolve agent branch path for "
+                    f"{agent_id[:8]}: {e}"
+                )
+
+        return WorktreeResolution(
+            branch_path=branch_path,
+            branch_name=branch_name,
+            context_files=resolved_context,
+        )
+
+    def _resolve_env_and_model(
+        self,
+        cli_type: str,
+        task: Task,
+        agent_id: str,
+        label: str,
+        *,
+        phase_cli_model: Optional[str] = None,
+        phase_cli_tool: Optional[str] = None,
+        phase_glm_token_env: Optional[str] = None,
+        agent_cli_model: Optional[str] = None,
+    ) -> Tuple[Dict[str, str], str, Any]:
+        """Resolve model and environment variables for agent launch.
+
+        Shared — create passes phase_cli_model/phase_cli_tool/phase_glm_token_env;
+        restart passes agent_cli_model.
+        Returns (env_vars, model, cli_agent).
+        """
+        cli_agent = get_cli_agent(cli_type)
+        global_model = (
+            getattr(self.config, "cli_model", None)
+            if cli_type == self.config.default_cli_tool
+            else None
+        )
+        if agent_cli_model is not None:
+            # restart path: prefer agent's frozen model
+            model = agent_cli_model or global_model or cli_agent.default_model
+        else:
+            # create path: prefer phase config
+            model = (phase_cli_model if phase_cli_tool else None) or global_model or cli_agent.default_model
+
+        glm_token = phase_glm_token_env if phase_glm_token_env else None
+        env_vars = self._build_glm_env_vars(model, glm_token, agent_id, label=label)
+
+        timeout_ms = self._resolve_mcp_timeout_ms(
+            cli_type, task.workflow_id, label=label
+        )
+        if timeout_ms is not None:
+            env_vars = env_vars or {}
+            env_vars["MCP_TOOL_TIMEOUT"] = str(timeout_ms)
+
+        env_vars = env_vars or {}
+        env_vars["HEPHAESTUS_AGENT_ID"] = agent_id
+        env_vars["HEPHAESTUS_TASK_ID"] = task.id
+        if task.workflow_id:
+            env_vars["HEPHAESTUS_WORKFLOW_ID"] = task.workflow_id
+        if task.phase_id:
+            env_vars["HEPHAESTUS_PHASE_ID"] = task.phase_id
+        import os
+        _api_port = os.environ.get("HEPHAESTUS_PORT") or str(getattr(self.config, "mcp_port", 8300))
+        env_vars["HEPHAESTUS_API_URL"] = f"http://localhost:{_api_port}"
+
+        return env_vars, model, cli_agent
+
+    def _resolve_phase_name_and_thinking(
+        self,
+        task: Task,
+        phase_thinking_override: Optional[str],
+    ) -> Tuple[Optional[str], str, Optional[str]]:
+        """Resolve phase name, order, and thinking level.
+
+        Shared — returns (phase_name, phase_order, thinking_level).
+        """
+        phase_name = None
+        phase_order = "?"
+        if task.phase_id:
+            from src.core.database import Phase
+            session = self.db_manager.get_session()
+            try:
+                if task.phase_id.isdigit():
+                    phase = (
+                        session.query(Phase)
+                        .filter_by(order=int(task.phase_id), workflow_id=task.workflow_id)
+                        .first()
+                    )
+                else:
+                    phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                if phase:
+                    phase_name = phase.name
+                    phase_order = str(phase.order)
+            finally:
+                session.close()
+
+        thinking_level = phase_thinking_override or getattr(
+            self.config, "cli_thinking_level", "medium"
+        )
+        return phase_name, phase_order, thinking_level
+
+    def _resolve_session_id(
+        self,
+        task: Task,
+        agent_type: str,
+        phase_name: Optional[str],
+        model: str,
+        *,
+        excluded_types: Tuple[str, ...],
+    ) -> str:
+        """Generate deterministic session ID for persistent agent sessions.
+
+        Shared — create passes excluded_types including 'arbitration';
+        restart passes a shorter tuple (Phase 3 mismatch, preserved as-is).
+        """
+        session_id = ""
+        if task.workflow_id and agent_type not in excluded_types:
+            try:
+                _s = self.db_manager.get_session()
+                try:
+                    from src.core.database import Workflow
+                    _wf = _s.query(Workflow).filter_by(id=task.workflow_id).first()
+                    if _wf and _wf.launch_params:
+                        _lp = (
+                            _wf.launch_params
+                            if isinstance(_wf.launch_params, dict)
+                            else {}
+                        )
+                        _pid = _lp.get("project_id") or _lp.get("project_path", "")
+                        _dsl = (
+                            _lp.get("design_slug")
+                            or _lp.get("design_id")
+                            or _lp.get("feature_id", "")
+                        )
+                        if _pid and _dsl and phase_name:
+                            from src.autopilot.phases import get_session_id
+                            session_id = get_session_id(_pid, _dsl, phase_name, model=model)
+                finally:
+                    _s.close()
+            except Exception as e:
+                logger.debug(f"[SESSION] Could not generate session ID: {e}")
+
+        if session_id:
+            logger.info(f"[SESSION] Using session ID: {session_id} for phase {phase_name}")
+        return session_id
+
+    def _prepare_launch_environment(
+        self,
+        session_name: str,
+        working_directory: Optional[str],
+        env_vars: Dict[str, str],
+        task: Task,
+        phase_name: Optional[str],
+        cli_agent=None,
+        prewarm_codegraph: bool = True,
+    ) -> "libtmux.Session":
+        """Create tmux session and prepare the launch environment.
+
+        Shared — caller provides the session_name (create uses base name,
+        restart appends '_r'). cli_agent is used for prepare_working_directory.
+        prewarm_codegraph mirrors pre-split behavior: create pre-warmed
+        codegraph, restart did not.
+        """
+        if working_directory and cli_agent:
+            cli_agent.prepare_working_directory(working_directory)
+            if prewarm_codegraph:
+                self._ensure_codegraph_initialized(working_directory)
+
+        if task.phase_id and working_directory:
+            from pathlib import Path as _Path
+            phase_output_dir = _Path(working_directory) / ".hephaestus" / (phase_name or task.phase_id)
+            phase_output_dir.mkdir(parents=True, exist_ok=True)
+
+        return self._create_tmux_session(
+            session_name, working_directory=working_directory, env_vars=env_vars
+        )
+
+    async def _build_and_send_launch_command(
+        self,
+        cli_agent,
+        tmux_session,
+        *,
+        system_prompt: str,
+        task: Task,
+        model: str,
+        thinking_level: Optional[str],
+        phase_name: Optional[str],
+        agent_id: str,
+        session_id: str,
+        working_directory: Optional[str],
+        instructions_pointer: str,
+        env_vars: Dict[str, str],
+        label: str,
+    ) -> Tuple[Any, Any, float]:
+        """Build launch command, export env vars, and return pane + timestamp.
+
+        Shared — returns (launch_result, pane, cli_launch_started_at).
+        The caller is responsible for sending the command to the pane
+        (after echoing task info).
+        """
+        launch_result = cli_agent.get_launch_command(
+            system_prompt=system_prompt,
+            task_id=task.id,
+            model=model,
+            thinking_level=thinking_level,
+            phase_name=phase_name,
+            agent_id=agent_id,
+            workflow_id=task.workflow_id,
+            phase_id=task.phase_id,
+            session_id=session_id,
+            working_directory=working_directory,
+            instructions_pointer=instructions_pointer,
+        )
+        pane = tmux_session.attached_window.attached_pane
+
+        if env_vars:
+            logger.info(
+                f"Exporting {len(env_vars)} environment variables for {label}: "
+                f"{', '.join(env_vars.keys())}"
+            )
+            await self._export_env_vars_and_verify(
+                tmux_session, pane, env_vars, label=label
+            )
+
+        cli_launch_started_at = datetime.utcnow().timestamp()
+        return launch_result, pane, cli_launch_started_at
+
+    async def _deliver_initial_prompt(
+        self,
+        pane,
+        cli_agent,
+        cli_type: str,
+        initial_message: str,
+        agent_id: str,
+        task: Task,
+        *,
+        agent_type: str = "phase",
+        instructions_rel_path: Optional[str] = None,
+    ) -> None:
+        """Deliver initial prompt with confirmation keys, goal, retry, and verification.
+
+        Shared — unifies the confirmation-key loop + call ordering.
+        """
+        for key in cli_agent.post_launch_confirmation_keys():
+            pane.send_keys(key)
+            await asyncio.sleep(1.5)
+
+        await self._send_goal_command(pane, cli_agent, task, agent_type)
+
+        await self._send_initial_prompt_with_retry(
+            pane=pane,
+            cli_agent=cli_agent,
+            cli_type=cli_type,
+            initial_message=initial_message,
+            agent_id=agent_id,
+            task_id=task.id,
+            max_retries=3,
+        )
+        # Note: _record_cli_session and _verify_instructions_file_read are
+        # called by the caller (they need caller-specific args like session_id,
+        # working_directory, etc.)
+
     async def create_agent_for_task(
         self,
         task: Task,
@@ -310,7 +856,7 @@ class AgentManager:
         """
         if task is None:
             raise ValueError(
-                "task is REQUIRED for create_agent_for_task — cannot create agent without a task"
+                "task is REQUIRED for create_agent_for_task \u2014 cannot create agent without a task"
             )
 
         # Git history and remotes are external state. In review mode
@@ -318,11 +864,6 @@ class AgentManager:
         # hand-off, but must never autonomously launch an agent that can
         # commit, push, open a PR, or merge -- an operator explicitly
         # performs those actions after reviewing the validated worktree.
-        # Full autopilot (review_mode off, the default) keeps this phase
-        # exactly as autonomous as every other phase, same as before this
-        # guard existed -- see orchestrator.py's _manual_handoff_required
-        # for the same project-level check applied to this phase's retry
-        # handling.
         if task.phase_id:
             from src.core.database import AutopilotProject, Phase, resolve_project_for_workflow
 
@@ -340,82 +881,23 @@ class AgentManager:
                             "human approval is required before any commit, push, PR, or merge"
                         )
 
-        # Guard: don't create a second agent for a task that already has one.
-        # Two concurrent code paths (e.g. orchestrator + task_completion_service)
-        # can both try to spawn an agent for the same task.
-        with self.db_manager.get_session() as _guard_session:
-            from src.core.database import Agent as _GuardAgent
-            existing = (
-                _guard_session.query(_GuardAgent)
-                .filter(
-                    _GuardAgent.current_task_id == task.id,
-                    _GuardAgent.status.in_(["working", "idle"]),
-                )
-                .first()
-            )
-            if existing:
-                logger.warning(
-                    f"Agent {existing.id[:8]} already active for task "
-                    f"{task.id[:8]} — skipping duplicate creation"
-                )
-                return existing
+        existing = self._check_duplicate_active_agent(task)
+        if existing:
+            return existing
 
         agent_id = str(uuid.uuid4())
         wt_mgr = self._scoped_worktree_manager(task.workflow_id)
+        phase_config = self._resolve_phase_config(
+            task, cli_type, phase_cli_tool, phase_cli_model, phase_glm_token_env, phase_thinking_level
+        )
+        cli_type = phase_config.cli_type
 
-        # Centralized phase-config fallback: if the caller didn't supply the phase's
-        # CLI/thinking config, derive it from task.phase_id here. This guarantees every
-        # call site (create_task paths, recovery, API endpoint, monitor transitions)
-        # gets the per-phase tool/model/glm/thinking_level without each having to
-        # remember to fetch and forward it.
-        fallback_cli_tool = None
-        fallback_cli_model = None
-        if task.phase_id and (
-            phase_cli_tool is None
-            and phase_cli_model is None
-            and phase_glm_token_env is None
-            and phase_thinking_level is None
-        ):
-            try:
-                from src.core.database import Phase
-
-                with self.db_manager.get_session() as _ps:
-                    _ph = _ps.query(Phase).filter_by(id=task.phase_id).first()
-                    if _ph:
-                        phase_cli_tool = _ph.cli_tool
-                        phase_cli_model = _ph.cli_model
-                        fallback_cli_tool = getattr(_ph, 'fallback_cli_tool', None)
-                        fallback_cli_model = getattr(_ph, 'fallback_cli_model', None)
-                        phase_glm_token_env = _ph.glm_api_token_env
-                        phase_thinking_level = _ph.thinking_level
-            except Exception as e:
-                logger.warning(f"Could not derive phase config for task {task.id}: {e}")
-
-        # Use phase config with fallback to global defaults
-        cli_type = phase_cli_tool or cli_type or self.config.default_cli_tool
-
-        # A phase with no fallback_cli_tool of its own (the common case)
-        # still gets the global default fallback -- mirrors cli_type's own
-        # phase-then-global resolution above. Only applies when the
-        # fallback would actually differ from the primary; a global
-        # fallback equal to the resolved primary is a no-op guarded at the
-        # use site (create_agent_for_task's `if fallback_cli_tool and
-        # fallback_cli_tool != cli_type`) but resolving it here too avoids
-        # ever handing that site a same-as-primary "fallback".
-        if not fallback_cli_tool and self.config.default_fallback_cli_tool:
-            if self.config.default_fallback_cli_tool != cli_type:
-                fallback_cli_tool = self.config.default_fallback_cli_tool
-                fallback_cli_model = self.config.default_fallback_cli_model
-
-        # Set structured log context for this agent's lifetime
         from src.core.log_context import set_log_context
         set_log_context(agent=agent_id, task=task.id, workflow=task.workflow_id or "")
-
         logger.info(f"Creating {cli_type} agent {agent_id} for task {task.id}")
 
         # Insert a stub Agent row BEFORE worktree creation so the
-        # agent_worktrees.agent_id FK passes. The full Agent details
-        # (system_prompt, tmux_session_name) are filled in later.
+        # agent_worktrees.agent_id FK passes.
         session = self.db_manager.get_session()
         agent = Agent(
             id=agent_id,
@@ -438,69 +920,13 @@ class AgentManager:
         session.close()
 
         try:
-            # Gather inbound context (design doc, qa_spec, project context) to copy
-            # into the worktree's git-excluded .hephaestus/ dir, so the agent never
-            # has to read out-of-tree paths.
             context_files = self._gather_worktree_context(task)
+            wt_resolution = self._resolve_worktree(
+                task, wt_mgr, create_if_missing=True, agent_id=agent_id, context_files=context_files
+            )
+            branch_path = wt_resolution.branch_path
 
-            # Check if workflow has a shared worktree (all phases use same worktree)
-            shared_worktree = None
-            if task.workflow_id:
-                from src.core.database import Workflow
-
-                with self.db_manager.get_session() as session:
-                    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
-                    if wf and wf.working_directory:
-                        # If working_directory contains '.worktrees/', it's a shared worktree
-                        if ".worktrees/" in wf.working_directory:
-                            # The worktree must exist -- it holds every prior
-                            # phase's commits for this workflow. There is no
-                            # safe fallback: forking a disconnected new
-                            # worktree strands that work unmergeable, and
-                            # silently recovering it masks whatever actually
-                            # deleted it. Fail loudly instead so the real
-                            # cause gets fixed -- see _run_one_feature, whose
-                            # worktree cleanup used to run on every exit
-                            # (including "paused"/"interrupted"/"failed",
-                            # all resumable via existing_workflow_id, which
-                            # re-uses this exact path) instead of only on
-                            # genuine completion.
-                            wt_path = Path(wf.working_directory)
-                            if not (wt_path.exists() and (wt_path / ".git").exists()):
-                                raise RuntimeError(
-                                    f"Workflow {task.workflow_id[:8]}'s shared worktree "
-                                    f"{wt_path} is missing or not a valid git worktree. "
-                                    "Refusing to fork a disconnected replacement or "
-                                    "silently recover it -- find out what deleted it."
-                                )
-                            shared_worktree = wf.working_directory
-                            wt_mgr.reload(wt_path)
-
-            if shared_worktree:
-                # Use the shared worktree — all phases commit here
-                branch_path = shared_worktree
-                branch_name = f"shared-{task.workflow_id[:8]}"
-                logger.info(
-                    f"Using shared worktree for agent {agent_id} "
-                    f"at {branch_path} (all phases commit here)"
-                )
-            else:
-                # Create an isolated worktree for the agent (legacy path)
-                branch_info = wt_mgr.create_agent_worktree(
-                    agent_id=agent_id,
-                    parent_agent_id=getattr(task, "created_by_agent_id", None),
-                    context_files=context_files,
-                )
-                branch_path = branch_info["working_directory"]
-                branch_name = branch_info["branch_name"]
-                logger.info(
-                    f"Created worktree {branch_name} for agent {agent_id} "
-                    f"at {branch_path} (context: {sorted(context_files) if context_files else 'none'})"
-                )
-                wt_mgr.switch_to_branch(branch_name)
-
-            # 2. Generate system prompt
-            # Get phase name for specialized prompts
+            # Generate system prompt
             phase_name = None
             if task.phase_id:
                 try:
@@ -525,135 +951,31 @@ class AgentManager:
                 phase_name=phase_name,
             )
 
-            # 3. Prepare environment variables for GLM if needed
-            # Use phase config with fallback to global defaults. The global
-            # agents.cli_model is a single string paired with
-            # agents.default_cli_tool (e.g. an OpenRouter path for pi) --
-            # only honor it when this task's resolved cli_type actually IS
-            # that default. A phase that opts into a different cli_tool
-            # must fall back to that CLI's own default_model instead, or it
-            # launches with a model string the CLI can't parse.
-            #
-            # phase_cli_model is only trusted when phase_cli_tool was ALSO
-            # explicitly set. A Phase row can have cli_model populated from
-            # whatever the global default was AT THE TIME it was created,
-            # with cli_tool left null (no explicit per-phase CLI choice) --
-            # if the global default_cli_tool/cli_model pairing later changes
-            # (e.g. switching from pi/mimo to claude/sonnet), that stale
-            # cli_model becomes a phase-level "override" for a CLI it was
-            # never actually paired with. Observed live: default_cli_tool
-            # changed to claude, but an existing Phase row's leftover
-            # cli_model="xiaomi/mimo-v2.5-pro" (from when default_cli_tool
-            # was pi) got handed straight to Claude, which rejected it
-            # outright ("issue with the selected model") and did zero work.
-            cli_agent = get_cli_agent(cli_type)
-            global_model = (
-                getattr(self.config, "cli_model", None)
-                if cli_type == self.config.default_cli_tool
-                else None
+            env_vars, model, cli_agent = self._resolve_env_and_model(
+                cli_type, task, agent_id, label="agent",
+                phase_cli_model=phase_config.cli_model,
+                phase_cli_tool=phase_config.phase_cli_tool,
+                phase_glm_token_env=phase_config.glm_token_env,
             )
-            model = (phase_cli_model if phase_cli_tool else None) or global_model or cli_agent.default_model
-            env_vars = self._build_glm_env_vars(
-                model, phase_glm_token_env, agent_id, label="agent"
-            )
-
-            # 3.5. Set MCP_TOOL_TIMEOUT if workflow has human approval enabled
-            # (Claude Code agents only.)
-            timeout_ms = self._resolve_mcp_timeout_ms(
-                cli_type, task.workflow_id, label="agent"
-            )
-            if timeout_ms is not None:
-                env_vars = env_vars or {}
-                env_vars["MCP_TOOL_TIMEOUT"] = str(timeout_ms)
-
-            # Fallback for MCP tool calls that omit required ID params —
-            # models frequently drop them (e.g. hephaestus_save_memory's
-            # agent_id) even when the prompt's own example shows them filled
-            # in. mcp/mcp_client.py falls back to these env vars
-            # instead of hard-failing the call. workflow_id/phase_id are
-            # only set when this task actually has one (standalone tasks
-            # have neither).
-            env_vars = env_vars or {}
-            env_vars["HEPHAESTUS_AGENT_ID"] = agent_id
-            env_vars["HEPHAESTUS_TASK_ID"] = task.id
-            if task.workflow_id:
-                env_vars["HEPHAESTUS_WORKFLOW_ID"] = task.workflow_id
-            if task.phase_id:
-                env_vars["HEPHAESTUS_PHASE_ID"] = task.phase_id
-            # Cost tracker extension needs the API URL to post cost entries.
-            import os
-
-            _api_port = os.environ.get("HEPHAESTUS_PORT") or str(getattr(self.config, "mcp_port", 8300))
-            env_vars["HEPHAESTUS_API_URL"] = f"http://localhost:{_api_port}"
-
-            # 4. Create tmux session IN THE WORKTREE with env vars
-            # Use agent_id for unique session names (not task_id which can be reused on restarts)
-            cli_agent.prepare_working_directory(branch_path)
-
-            # Pre-initialize codegraph index so agents don't race on
-            # `codegraph init .` (which spawns duplicate daemon MCP servers).
-            self._ensure_codegraph_initialized(branch_path)
-
-            # Create phase-specific output directory in .hephaestus/ so agents
-            # don't have to create it themselves
-            if task.phase_id:
-                from pathlib import Path as _Path
-                phase_output_dir = _Path(branch_path) / ".hephaestus" / (phase_name or task.phase_id)
-                phase_output_dir.mkdir(parents=True, exist_ok=True)
 
             session_name = f"{self.config.tmux_session_prefix}_{agent_id[:8]}"
-            tmux_session = self._create_tmux_session(
-                session_name, working_directory=branch_path, env_vars=env_vars
+            tmux_session = self._prepare_launch_environment(
+                session_name, branch_path, env_vars, task, phase_name, cli_agent=cli_agent
             )
 
-            # 5. Launch CLI agent (cli_agent already resolved above)
-
-            # Resolve phase_name before launching so pi can reference the agent file
-            phase_name = None
-            phase_order = "?"
-            if task.phase_id:
-                from src.core.database import Phase
-
-                session = self.db_manager.get_session()
-                try:
-                    if task.phase_id.isdigit():
-                        phase = (
-                            session.query(Phase)
-                            .filter_by(
-                                order=int(task.phase_id), workflow_id=task.workflow_id
-                            )
-                            .first()
-                        )
-                    else:
-                        phase = session.query(Phase).filter_by(id=task.phase_id).first()
-                    if phase:
-                        phase_name = phase.name
-                        phase_order = str(phase.order)
-                finally:
-                    session.close()
-
-            # Per-turn reasoning budget: per-phase override → global config → "medium"
-            thinking_level = phase_thinking_level or getattr(
-                self.config, "cli_thinking_level", "medium"
+            phase_name_resolved, phase_order, thinking_level = self._resolve_phase_name_and_thinking(
+                task, phase_config.thinking_level
             )
+            if phase_name_resolved:
+                phase_name = phase_name_resolved
 
-            # Complexity-adaptive reasoning: a phase's base budget expresses INTENT
-            # (mechanical=low, reasoning=high). Scale the *reasoning* phases down to the
-            # design's actual complexity so a trivial design (a calculator) doesn't get
-            # 'high' thinking → over-engineering (e.g. 400+ tickets). Classified once per
-            # workflow via a single fast LLM call; mechanical phases keep their low budget.
+            # Complexity-adaptive reasoning
             try:
-                if thinking_level in ("high", "medium") and getattr(
-                    task, "workflow_id", None
-                ):
+                if thinking_level in ("high", "medium") and getattr(task, "workflow_id", None):
                     if not hasattr(self, "_complexity_cache"):
                         self._complexity_cache = {}
                     complexity = self._complexity_cache.get(task.workflow_id)
                     if complexity is None:
-                        # Classify from the actual DESIGN, not the phase task prompt.
-                        # Source priority (whatever exists in the worktree): the original
-                        # design doc → injected design → phase-1 requirements. Fall back to
-                        # the task text only if none are present.
                         design_text = ""
                         try:
                             if working_directory:
@@ -684,102 +1006,22 @@ class AgentManager:
                             design_text, workflow_id=task.workflow_id
                         )
                         self._complexity_cache[task.workflow_id] = complexity
-                    # low complexity → low thinking; medium → medium; high → keep phase base
                     if complexity == "low":
                         thinking_level = "low"
                     elif complexity == "medium" and thinking_level == "high":
                         thinking_level = "medium"
                     logger.info(
-                        f"[COMPLEXITY] phase budget {phase_thinking_level} → {thinking_level} "
+                        f"[COMPLEXITY] phase budget {phase_config.thinking_level} \u2192 {thinking_level} "
                         f"(design complexity={complexity}) for agent {agent_id[:8]}"
                     )
             except Exception as e:
                 logger.debug(f"[COMPLEXITY] adaptive thinking skipped: {e}")
 
-            # Generate deterministic session ID for persistent agent sessions.
-            # Same project + design + role = same session across gotos (§10.1.1).
-            #
-            # EXCLUDED: validator/result_validator/diagnostic/arbitration agents.
-            # The key is (project_id, design_slug, phase_name) -- it doesn't
-            # factor in agent_type or task_id at all. A diagnostic agent is
-            # deliberately assigned the SAME phase_id as the stuck phase it's
-            # investigating (see monitor.py's _create_diagnostic_agent), so it
-            # would compute the identical session_id as every normal phase
-            # agent that has ever worked that phase. Since the CLI
-            # (`pi --session-id X`) resumes an existing session for that ID
-            # rather than starting fresh, the diagnostic agent would silently
-            # resume a PRIOR phase agent's live conversation -- inheriting
-            # that agent's old "=== TASK ASSIGNMENT ===" header (its agent_id,
-            # its task_id) as part of the resumed context, on top of its own
-            # fresh --append-system-prompt. Observed live: a diagnostic agent
-            # spent its entire run trying to close out a stale,
-            # already-terminated agent's task using that agent's identity,
-            # because its resumed session told it that was who it was --
-            # never touching its own actual diagnostic task. Arbitration
-            # agents have the exact same collision (reuse the exhausted
-            # phase's own phase_id -- see _trigger_arbitration in
-            # orchestrator.py). These agent types are one-shot
-            # investigations/verifications, never meant to share warm context
-            # across runs, so they must always get a fresh (empty) session_id.
-            session_id = ""
-            if task.workflow_id and agent_type not in (
-                "validator",
-                "result_validator",
-                "diagnostic",
-                "arbitration",
-            ):
-                try:
-                    _s = self.db_manager.get_session()
-                    try:
-                        from src.core.database import Workflow
+            session_id = self._resolve_session_id(
+                task, agent_type, phase_name, model,
+                excluded_types=("validator", "result_validator", "diagnostic", "arbitration"),
+            )
 
-                        _wf = _s.query(Workflow).filter_by(id=task.workflow_id).first()
-                        if _wf and _wf.launch_params:
-                            _lp = (
-                                _wf.launch_params
-                                if isinstance(_wf.launch_params, dict)
-                                else {}
-                            )
-                            # Feature-model workflows (the standard autopilot
-                            # shape since the Feature Architect split) never
-                            # populate project_id/design_slug — their
-                            # launch_params carry project_path and design_id or feature_id
-                            # instead. Without this fallback, session_id was
-                            # silently always "" for every such workflow,
-                            # meaning phases that are supposed to share a
-                            # session (e.g. architectural_review resuming
-                            # architecture_design's "warm context", per
-                            # session_roles in workflow.yaml) always got a
-                            # cold --no-session agent instead — while the
-                            # phase's own prompt still claimed continuity.
-                            _pid = _lp.get("project_id") or _lp.get("project_path", "")
-                            _dsl = (
-                                _lp.get("design_slug")
-                                or _lp.get("design_id")
-                                or _lp.get("feature_id", "")
-                            )
-                            if _pid and _dsl and phase_name:
-                                from src.autopilot.phases import get_session_id
-
-                                session_id = get_session_id(
-                                    _pid, _dsl, phase_name, model=model
-                                )
-                    finally:
-                        _s.close()
-                except Exception as e:
-                    logger.debug(f"[SESSION] Could not generate session ID: {e}")
-
-            if session_id:
-                logger.info(
-                    f"[SESSION] Using session ID: {session_id} for phase {phase_name}"
-                )
-
-            # Build the task-instructions file and its pointer BEFORE the
-            # launch command. Most CLIs get the pointer delivered as a
-            # short tmux message later (step 7 below), but a CLI like
-            # OpenCode has no separate post-launch "send a message" step --
-            # its launch argument IS its first turn -- so it needs the
-            # pointer available now, via the instructions_pointer kwarg.
             initial_message = self._format_initial_message(
                 task, agent_id, branch_path, agent_type, enriched_data
             )
@@ -793,54 +1035,29 @@ class AgentManager:
             if cli_type == "codex" and session_id:
                 instructions_pointer += f"\nHephaestus Session ID: {session_id}"
 
-            launch_result = cli_agent.get_launch_command(
-                system_prompt=system_prompt,
-                task_id=task.id,
-                model=model,  # Pass phase-specific or global model
-                thinking_level=thinking_level,
-                phase_name=phase_name,
-                agent_id=agent_id,
-                workflow_id=task.workflow_id,
-                phase_id=task.phase_id,
-                session_id=session_id,
-                working_directory=branch_path,
-                instructions_pointer=instructions_pointer,
+            # Build and send launch command
+            launch_result, pane, cli_launch_started_at = await self._build_and_send_launch_command(
+                cli_agent, tmux_session,
+                system_prompt=system_prompt, task=task, model=model,
+                thinking_level=thinking_level, phase_name=phase_name,
+                agent_id=agent_id, session_id=session_id,
+                working_directory=branch_path, instructions_pointer=instructions_pointer,
+                env_vars=env_vars, label=f"agent {agent_id[:8]}",
             )
-            launch_command = launch_result.command
 
-            # Send launch command to tmux
-            pane = tmux_session.attached_window.attached_pane
-
-            # Export env vars in the shell first — these are required for
-            # MCP tool authentication (HEPHAESTUS_AGENT_ID etc.) and GLM.
-            if env_vars:
-                logger.info(
-                    f"Exporting {len(env_vars)} environment variables for agent {agent_id}: "
-                    f"{', '.join(env_vars.keys())}"
-                )
-                await self._export_env_vars_and_verify(
-                    tmux_session, pane, env_vars, label=f"agent {agent_id[:8]}"
-                )
-
-            # Echo task info to terminal so we can see what the agent is working on
+            # Echo task info to terminal
             task_desc = (task.enriched_description or task.raw_description or "")[:200]
             pane.send_keys('echo "="', enter=True)
             pane.send_keys(f"echo -- {shlex.quote(f'AGENT: {agent_id[:8]}')}", enter=True)
             pane.send_keys(f"echo -- {shlex.quote(f'PHASE: {phase_order}. {phase_name}')}", enter=True)
-            # Task descriptions are external text and often contain Markdown
-            # backticks.  Shell-quote them so a display echo cannot invoke
-            # command substitution or leave the pane at a continuation prompt.
             pane.send_keys(f"echo -- {shlex.quote(f'TASK: {task_desc}')}", enter=True)
             pane.send_keys('echo "="', enter=True)
             await asyncio.sleep(0.3)
 
-            # Now send the claude launch command
-            cli_launch_started_at = datetime.utcnow().timestamp()
-            pane.send_keys(
-                launch_command, enter=True
-            )  # enter=True sends Enter key after command
+            # Send the launch command
+            pane.send_keys(launch_result.command, enter=True)
 
-            # 6. Update the stub agent with full details
+            # Update agent record
             session = self.db_manager.get_session()
             agent = session.merge(Agent(
                 id=agent_id,
@@ -855,254 +1072,70 @@ class AgentManager:
                 health_check_failures=0,
                 agent_type=agent_type,
             ))
-
-            # Assign task to agent
             task.assigned_agent_id = agent_id
             task.status = "in_progress"
             task.started_at = datetime.utcnow()
-
-            # Log agent creation
             log_entry = AgentLog(
-                agent_id=agent_id,
-                log_type="created",
+                agent_id=agent_id, log_type="created",
                 message=f"Agent created for task: {task.enriched_description[:100]}",
                 details={"cli_type": cli_type, "task_id": task.id},
             )
             session.add(log_entry)
-
             session.commit()
-
-            # Store the agent ID before closing session (to avoid detached instance issues)
             agent_id_to_return = agent.id
-
             session.close()
 
-            # 7. Send initial task instructions with verification and retry
+            # Wait for CLI to initialize
             logger.info(f"=== INITIAL PROMPT DELIVERY for agent {agent_id} ===")
             logger.info(f"CLI type: {cli_type}")
             logger.info(f"Tmux session: {session_name}")
 
-            # When the CLI loads an agent file as its system prompt
-            # (e.g. Claude Code with --agent), the system prompt is not
-            # sent via a flag. Prepend it to the instructions file (already
-            # written above and referenced by instructions_pointer) so the
-            # agent still gets safety rules, tool descriptions, memory
-            # context, and phase instructions.
             if launch_result.prompt_delivery in (
-                LaunchResult.AGENT_FILE,
-                LaunchResult.DEFERRED,
+                LaunchResult.AGENT_FILE, LaunchResult.DEFERRED,
             ) and system_prompt:
-                initial_message = (
-                    system_prompt
-                    + "\n\n---\n\n"
-                    + initial_message
-                )
+                initial_message = system_prompt + "\n\n---\n\n" + initial_message
                 self._write_task_instructions(branch_path, task.id, initial_message)
 
             logger.info(f"Initial message length: {len(initial_message)} characters")
-
-            # Wait for CLI to initialize first
             wait_time = 25
-            logger.info(
-                f"Waiting {wait_time} seconds for {cli_type} agent {agent_id} to initialize..."
-            )
+            logger.info(f"Waiting {wait_time} seconds for {cli_type} agent {agent_id} to initialize...")
             await asyncio.sleep(wait_time)
 
-            # A pause (or any other termination) issued while this coroutine
-            # was mid-sleep flips this agent's DB row to "terminated" but has
-            # no way to reach into this in-flight launch to stop it --
-            # without this check, the coroutine plows ahead and delivers the
-            # initial prompt anyway, so the agent starts real work seconds
-            # after being told to stop. Observed live: pausing the pipeline
-            # terminated 3 agents instantly, but all 3 still received their
-            # initial prompt ~25-30s later and kept working, which is also
-            # why the paused pipeline kept reporting itself as "running".
-            with self.db_manager.get_session() as _term_check:
-                _current = _term_check.query(Agent).filter_by(id=agent_id).first()
-                _agent_terminated = bool(_current and _current.status == "terminated")
+            # Termination race check
+            term_race_result = await self._check_termination_race(
+                agent_id, task.id, session_name, agent_id_to_return=agent_id_to_return,
+            )
+            if term_race_result is not None:
+                return term_race_result
 
-                # Same race, one layer up: the AGENT row never gets marked
-                # terminated at all when what actually happened is the TASK
-                # was cancelled out from under this in-flight launch (e.g. a
-                # human/self-heal marking it "duplicated"/"failed" directly,
-                # or QueueService.resolve_cli_model_dispatch's own fallback-
-                # model retry racing a separate dispatch attempt for the
-                # same task) -- the agent-status check above is blind to
-                # that. Re-fetch the task fresh (not the possibly-stale
-                # `task` parameter captured before this 25s wait) and check
-                # both signals: a terminal status means it's definitively
-                # done needing an agent; assigned_agent_id pointing
-                # elsewhere means a DIFFERENT dispatch attempt already won
-                # this task. Observed live: one task cycled through five
-                # separate agent launches in a row -- each one individually
-                # got its assigned agent terminated, but the next queued
-                # fallback attempt (a different agent_id every time) just
-                # kept going, oblivious to the task itself having been
-                # cancelled, until it was manually re-terminated five times.
-                _fresh_task = _term_check.query(Task).filter_by(id=task.id).first()
-                _task_cancelled = bool(
-                    _fresh_task
-                    and (
-                        _fresh_task.status in TaskStatus.TERMINAL
-                        or (
-                            _fresh_task.assigned_agent_id
-                            and _fresh_task.assigned_agent_id != agent_id
-                        )
-                    )
-                )
-
-                if _agent_terminated or _task_cancelled:
-                    reason = (
-                        "was terminated"
-                        if _agent_terminated
-                        else f"its task {task.id} was reassigned/cancelled "
-                        f"(status={_fresh_task.status}, assigned_agent_id="
-                        f"{_fresh_task.assigned_agent_id})"
-                    )
-                    logger.warning(
-                        f"Agent {agent_id} {reason} while its CLI was still "
-                        "initializing -- aborting launch, not delivering initial prompt"
-                    )
-                    if self.tmux_server.has_session(session_name):
-                        self.tmux_server.kill_session(session_name)
-
-                    class AgentInfo:
-                        def __init__(self, id):
-                            self.id = id
-
-                    return AgentInfo(agent_id_to_return)
-
-            # Check if tmux session is still alive
             if not self.tmux_server.has_session(session_name):
-                logger.error(
-                    f"Tmux session {session_name} died during initialization wait!"
-                )
+                logger.error(f"Tmux session {session_name} died during initialization wait!")
                 raise Exception("Tmux session died during initialization wait")
 
-            # The tmux session staying alive says nothing about whether
-            # launch_command itself actually started the CLI -- a missing
-            # binary just prints "command not found" and hands control
-            # straight back to the shell, which looks identical to a live,
-            # initializing pane to every check above. Left undetected, the
-            # initial task prompt below gets typed into a bare shell instead
-            # of the CLI, and the agent sits "working" with nothing behind
-            # it until a much slower frozen-output timeout eventually gives
-            # up on it. Observed live: cli_type=claude with no `claude`
-            # binary on PATH -- raising here routes into the existing
-            # fallback_cli_tool retry below instead of silently proceeding.
-            #
-            # A CLI that IS on PATH can reject its own launch flags just as
-            # fatally, printing its own error and exiting straight back to
-            # the shell -- same dead-pane outcome, different wording than a
-            # missing binary. Observed live: pi's `Error: Model "..." not
-            # found. Use --list-models to see available models.` (a Phase
-            # row's cli_model baked in before a local model got renamed) --
-            # this went completely undetected by the check above, so the
-            # task-instructions pointer below got typed into a bare zsh
-            # prompt instead ("Task ID: ...", then the bracketed follow-up
-            # line, both literally executed as shell commands), and the
-            # workflow retried the identical doomed dispatch 7 times before
-            # anything noticed, since none of those retries ever route
-            # through the fallback_cli_tool path this check exists to
-            # trigger.
-            import re
+            self._detect_launch_failure(pane, cli_agent, cli_type, session_name)
 
-            try:
-                launch_check = pane.cmd("capture-pane", "-p", "-S", "-15").stdout
-                launch_check_text = "\n".join(launch_check) if launch_check else ""
-            except Exception:
-                launch_check_text = ""
-            if re.search(
-                r"command not found|No such file or directory|model.{0,60}not found",
-                launch_check_text,
-                re.IGNORECASE,
-            ):
-                logger.error(
-                    f"{cli_type} launch command failed in tmux session {session_name}: "
-                    f"{launch_check_text.strip()[-300:]}"
-                )
-                raise Exception(
-                    f"{cli_type} CLI failed to start -- shell reported the launch "
-                    "command was not found"
-                )
-
-            # A CLI's own first-run interactive gate can also strand a launch
-            # with no one at the keyboard to answer it -- e.g. Claude Code's
-            # "Bypass Permissions mode" warning, which --dangerously-skip-permissions
-            # does not suppress and which no CLIAgentInterface subclass currently
-            # dismisses via post_launch_confirmation_keys(). Observed live: this
-            # left an agent sitting at the dialog indefinitely (option 1 "No,
-            # exit" highlighted by default) until manually killed. Detected here
-            # rather than navigated, since guessing the wrong key risks selecting
-            # "No, exit" and looping.
-            if re.search(r"Bypass Permissions mode", launch_check_text):
-                logger.error(
-                    f"{cli_type} launch command is stuck on an unhandled confirmation "
-                    f"dialog in tmux session {session_name}: "
-                    f"{launch_check_text.strip()[-300:]}"
-                )
-                raise Exception(
-                    f"{cli_type} CLI is stuck on an unhandled first-run confirmation "
-                    "dialog"
-                )
-
-            # Dismiss any CLI-specific one-time interactive confirmation
-            # (e.g. Claude's bypass-permissions warning) before the real
-            # task prompt arrives -- sending it into that dialog instead
-            # of the CLI's prompt would just select whatever's focused.
-            for key in cli_agent.post_launch_confirmation_keys():
-                pane.send_keys(key)
-                await asyncio.sleep(1.5)
-
-            # Set a self-checked completion condition (CLIs that support one)
-            # before the task pointer so the agent can't quietly stop before
-            # task.done_definition is actually met.
-            await self._send_goal_command(pane, cli_agent, task, agent_type)
-
-            # Send initial prompt (or just Enter for OpenCode)
-            await self._send_initial_prompt_with_retry(
-                pane=pane,
-                cli_agent=cli_agent,
-                cli_type=cli_type,
-                initial_message=instructions_pointer,
-                agent_id=agent_id,
-                task_id=task.id,
-                max_retries=3,
+            # Deliver initial prompt
+            await self._deliver_initial_prompt(
+                pane, cli_agent, cli_type, instructions_pointer, agent_id, task,
             )
-            await self._record_cli_session(
-                cli_agent,
-                session_id, branch_path, cli_launch_started_at
-            )
-
-            # Best-effort check that the agent actually engaged with its
-            # instructions file, not just that the (tiny, always-delivered)
-            # pointer text landed in the pane -- logs a warning only, never
-            # blocks agent creation, since it's a heuristic across CLIs with
-            # very different tool-call rendering.
-            await self._verify_instructions_file_read(
-                pane, instructions_rel_path, agent_id
-            )
+            await self._record_cli_session(cli_agent, session_id, branch_path, cli_launch_started_at)
+            await self._verify_instructions_file_read(pane, instructions_rel_path, agent_id)
 
             logger.info(f"=== END INITIAL PROMPT DELIVERY for agent {agent_id} ===")
 
-            # Return a simple object with just the ID to avoid session issues
             class AgentInfo:
                 def __init__(self, id):
                     self.id = id
-
             return AgentInfo(agent_id_to_return)
 
         except Exception as e:
             logger.error(f"Failed to create agent with {cli_type}: {e}")
-
-            # Try fallback if configured
-            if fallback_cli_tool and fallback_cli_tool != cli_type:
+            if phase_config.fallback_cli_tool and phase_config.fallback_cli_tool != cli_type:
                 logger.warning(
                     f"Primary CLI tool '{cli_type}' failed, trying fallback: "
-                    f"{fallback_cli_tool}/{fallback_cli_model or 'default'}"
+                    f"{phase_config.fallback_cli_tool}/{phase_config.fallback_cli_model or 'default'}"
                 )
                 try:
-                    # Clean up the failed attempt
                     if "tmux_session" in locals():
                         try:
                             tmux_session.kill_session()
@@ -1119,99 +1152,50 @@ class AgentManager:
                                     _cs.commit()
                         except Exception:
                             pass
-                        # Discard any isolated worktree/branch the failed
-                        # primary attempt created for this agent_id -- a
-                        # no-op if it used the shared workflow worktree
-                        # instead (discard_agent looks up an AgentBranch
-                        # record by agent_id; a shared-worktree agent never
-                        # creates one). Without this, every fallback leaves
-                        # the primary's orphaned worktree on disk forever.
                         try:
                             wt_mgr.discard_agent(agent_id)
                         except Exception:
                             pass
-
-                    # Retry with fallback
                     return await self.create_agent_for_task(
-                        task=task,
-                        enriched_data=enriched_data,
-                        memories=memories,
-                        project_context=project_context,
-                        cli_type=fallback_cli_tool,
-                        working_directory=working_directory,
-                        agent_type=agent_type,
-                        use_existing_worktree=use_existing_worktree,
-                        commit_sha=commit_sha,
-                        phase_cli_tool=fallback_cli_tool,
-                        phase_cli_model=fallback_cli_model,
-                        phase_glm_token_env=phase_glm_token_env,
-                        phase_thinking_level=phase_thinking_level,
+                        task=task, enriched_data=enriched_data, memories=memories,
+                        project_context=project_context, cli_type=phase_config.fallback_cli_tool,
+                        working_directory=working_directory, agent_type=agent_type,
+                        use_existing_worktree=use_existing_worktree, commit_sha=commit_sha,
+                        phase_cli_tool=phase_config.fallback_cli_tool,
+                        phase_cli_model=phase_config.fallback_cli_model,
+                        phase_glm_token_env=phase_config.glm_token_env,
+                        phase_thinking_level=phase_config.thinking_level,
                     )
                 except Exception as fallback_error:
-                    logger.error(
-                        f"Fallback '{fallback_cli_tool}' also failed: {fallback_error}"
-                    )
-                    # Fall through to the normal failure handling below
+                    logger.error(f"Fallback '{phase_config.fallback_cli_tool}' also failed: {fallback_error}")
                     e = fallback_error
 
-            # Clean up on failure
             try:
-                # Kill tmux session if it exists
                 if "tmux_session" in locals():
                     tmux_session.kill_session()
                     logger.info(f"Killed tmux session {session_name}")
             except Exception as cleanup_error:
-                logger.error(
-                    f"Failed to kill tmux session during cleanup: {cleanup_error}"
-                )
+                logger.error(f"Failed to kill tmux session during cleanup: {cleanup_error}")
 
-            # Mark agent as terminated and task as failed in database
             try:
                 cleanup_session = self.db_manager.get_session()
                 try:
-                    # Mark agent as terminated if it was created
                     if "agent_id" in locals():
-                        agent_record = (
-                            cleanup_session.query(Agent).filter_by(id=agent_id).first()
-                        )
+                        agent_record = cleanup_session.query(Agent).filter_by(id=agent_id).first()
                         if agent_record:
                             agent_record.status = "terminated"
-                            agent_record.current_task_id = None  # Clear stale reference
+                            agent_record.current_task_id = None
                             agent_record.terminated_at = datetime.utcnow()
                             logger.info(f"Marked agent {agent_id} as terminated")
-
-                    # Mark task as failed
-                    task_record = (
-                        cleanup_session.query(Task).filter_by(id=task.id).first()
-                    )
+                    task_record = cleanup_session.query(Task).filter_by(id=task.id).first()
                     if task_record:
                         task_record.status = "failed"
                         task_record.failure_reason = f"Agent creation failed: {str(e)}"
                         task_record.completed_at = datetime.utcnow()
                         logger.info(f"Marked task {task.id} as failed")
-
-                        # A CLI session-limit rejection (Claude's "You've hit
-                        # your session limit", surfaced here as a raised
-                        # "CLI session limit detected" exception) will keep
-                        # failing identically until the limit resets on its
-                        # own -- retrying is pointless, whether or not a
-                        # fallback was configured (no fallback: this is the
-                        # original error; fallback configured but it also
-                        # hit its own session/rate limit: same futility).
-                        # Pause immediately instead of burning 2 more retry
-                        # cycles through _maybe_retry_failed_tasks before it
-                        # eventually reaches the same conclusion. Reuses the
-                        # existing paused_by="system" convention so
-                        # _retry_exhausted_paused_workflows' cooldown-retry
-                        # picks it back up automatically once retried.
                         if "CLI session limit detected" in str(e) and task_record.workflow_id:
                             from src.core.database import Workflow as _Workflow
-
-                            workflow_record = (
-                                cleanup_session.query(_Workflow)
-                                .filter_by(id=task_record.workflow_id)
-                                .first()
-                            )
+                            workflow_record = cleanup_session.query(_Workflow).filter_by(id=task_record.workflow_id).first()
                             if workflow_record and workflow_record.status != "paused":
                                 workflow_record.status = "paused"
                                 workflow_record.paused_by = "system"
@@ -1226,21 +1210,16 @@ class AgentManager:
                                     f"{task_record.workflow_id[:8]} -- {cli_type} "
                                     "session limit hit with no working fallback"
                                 )
-
                     cleanup_session.commit()
                 except Exception as db_error:
-                    logger.error(
-                        f"Failed to update database during cleanup: {db_error}"
-                    )
+                    logger.error(f"Failed to update database during cleanup: {db_error}")
                     cleanup_session.rollback()
                 finally:
                     cleanup_session.close()
             except Exception as session_error:
-                logger.error(
-                    f"Failed to get database session during cleanup: {session_error}"
-                )
-
+                logger.error(f"Failed to get database session during cleanup: {session_error}")
             raise
+
 
     def _wait_for_shell_ready(
         self, pane, timeout: float = 2.0, poll_interval: float = 0.1
@@ -2277,9 +2256,8 @@ class AgentManager:
                 )
                 agent.status = "terminated"
                 agent.terminated_at = datetime.utcnow()
-                # Mark task as failed so pipeline can recover
                 task_id = agent.current_task_id
-                agent.current_task_id = None  # Clear stale reference
+                agent.current_task_id = None
                 session.commit()
                 task = session.query(Task).filter_by(id=task_id).first()
                 if task and task.status not in ("done", "failed"):
@@ -2294,7 +2272,6 @@ class AgentManager:
             agent.health_check_failures = 0
             session.commit()
 
-            # Get task info
             task = session.query(Task).filter_by(id=agent.current_task_id).first()
             if not task:
                 logger.error(f"Task {agent.current_task_id} not found")
@@ -2302,9 +2279,6 @@ class AgentManager:
 
             # Kill existing tmux session
             if agent.tmux_session_name:
-                # Final flush of the stability-tracked "clean" transcript
-                # before the session (and its scrollback) disappears --
-                # see _flush_stable_transcript.
                 try:
                     transcript_dir = self._resolve_tmux_transcript_dir(agent)
                     if transcript_dir:
@@ -2317,110 +2291,42 @@ class AgentManager:
 
                 try:
                     if self.tmux_server.has_session(agent.tmux_session_name):
-                        # Find session by iteration (avoid deprecated get_by_id)
                         tmux_session = None
                         for tmux_sess in self.tmux_server.sessions:
                             if tmux_sess.name == agent.tmux_session_name:
                                 tmux_session = tmux_sess
                                 break
-
                         if tmux_session:
                             tmux_session.kill_session()
                 except Exception:
                     pass
 
-            # Prepare environment variables for GLM if needed. Same
-            # cli_type-scoped fallback as create_agent_for_task_direct --
-            # the global agents.cli_model only applies to the CLI it's
-            # paired with (agents.default_cli_tool).
-            global_model = (
-                getattr(self.config, "cli_model", None)
-                if agent.cli_type == self.config.default_cli_tool
-                else None
-            )
-            model = (
-                agent.cli_model
-                or global_model
-                or get_cli_agent(agent.cli_type).default_model
-            )
-            env_vars = self._build_glm_env_vars(
-                model, None, agent_id, label="restarted agent"
+            # Resolve env vars and model (restart path: uses agent's frozen values)
+            env_vars, model, cli_agent = self._resolve_env_and_model(
+                agent.cli_type, task, agent_id, label="restarted agent",
+                agent_cli_model=agent.cli_model,
             )
 
-            # Set MCP_TOOL_TIMEOUT if workflow has human approval enabled
-            # (Claude Code agents only.)
-            timeout_ms = self._resolve_mcp_timeout_ms(
-                agent.cli_type, task.workflow_id, label="restarted agent"
+            # Resolve worktree (restart: create_if_missing=False, silent None)
+            wt_resolution = self._resolve_worktree(
+                task, self.branch_manager, create_if_missing=False, agent_id=agent_id,
             )
-            if timeout_ms is not None:
-                env_vars = env_vars or {}
-                env_vars["MCP_TOOL_TIMEOUT"] = str(timeout_ms)
+            restart_wd = wt_resolution.branch_path
 
-            env_vars = env_vars or {}
-            env_vars["HEPHAESTUS_AGENT_ID"] = agent_id
-            env_vars["HEPHAESTUS_TASK_ID"] = task.id
-            if task.workflow_id:
-                env_vars["HEPHAESTUS_WORKFLOW_ID"] = task.workflow_id
-            if task.phase_id:
-                env_vars["HEPHAESTUS_PHASE_ID"] = task.phase_id
-            import os
-
-            _api_port = os.environ.get("HEPHAESTUS_PORT") or str(getattr(self.config, "mcp_port", 8300))
-            env_vars["HEPHAESTUS_API_URL"] = f"http://localhost:{_api_port}"
-
-            # Create new tmux session with env vars
-            # Use agent_id for unique session names (not task_id which can be reused on restarts)
             new_session_name = f"{self.config.tmux_session_prefix}_{agent_id[:8]}_r"
-            # Determine working directory from worktree or workflow
-            restart_wd = None
-            if task.workflow_id:
-                from src.core.database import Workflow
 
-                restart_sess = self.db_manager.get_session()
-                try:
-                    wf = restart_sess.query(Workflow).filter_by(id=task.workflow_id).first()
-                    if wf and wf.working_directory and Path(wf.working_directory).exists():
-                        restart_wt_mgr = WorktreeManager(db_manager=self.db_manager)
-                        restart_wt_mgr.reload(Path(wf.working_directory))
-                        restart_wd = wf.working_directory
-                finally:
-                    restart_sess.close()
-            if not restart_wd:
-                # Workflow.working_directory is only tracked for shared-
-                # worktree workflows. Fall back to this agent's own tracked
-                # worktree (the legacy isolated-per-agent-worktree path --
-                # validators, diagnostics) so restart still lands in the
-                # git worktree holding its already-committed work, instead
-                # of relaunching with no working_directory at all.
-                try:
-                    candidate = self.branch_manager.get_agent_branch_path(agent_id)
-                    if candidate and Path(candidate).exists():
-                        restart_wd = candidate
-                except Exception as e:
-                    logger.debug(
-                        f"[RESTART] Could not resolve agent branch path for "
-                        f"{agent_id[:8]}: {e}"
-                    )
-            # Relaunch agent
-            cli_agent = get_cli_agent(agent.cli_type)
-            if restart_wd:
-                cli_agent.prepare_working_directory(restart_wd)
-
-            # Resolve phase_name for the relaunch (needed for output dir and prompt)
+            # Resolve phase name BEFORE preparing the launch environment: the
+            # .hephaestus/ output dir is named by phase NAME (pre-split
+            # behavior), not by the raw phase_id.
             restart_phase_name = None
-            restart_thinking_level = None
             if task.phase_id:
                 from src.core.database import Phase
-
                 restart_session = self.db_manager.get_session()
                 try:
                     if task.phase_id.isdigit():
                         restart_phase = (
                             restart_session.query(Phase)
-                            .filter_by(
-                                order=int(task.phase_id),
-                                workflow_id=task.workflow_id,
-                            )
+                            .filter_by(order=int(task.phase_id), workflow_id=task.workflow_id)
                             .first()
                         )
                     else:
@@ -2432,85 +2338,30 @@ class AgentManager:
                 finally:
                     restart_session.close()
 
-            # Create phase-specific output directory in .hephaestus/ so agents
-            # don't have to create it themselves
-            if task.phase_id and restart_wd:
-                from pathlib import Path as _Path
-                phase_output_dir = _Path(restart_wd) / ".hephaestus" / (restart_phase_name or task.phase_id)
-                phase_output_dir.mkdir(parents=True, exist_ok=True)
-
-            tmux_session = self._create_tmux_session(
-                new_session_name, working_directory=restart_wd, env_vars=env_vars
+            # Prepare launch environment
+            if restart_wd:
+                cli_agent.prepare_working_directory(restart_wd)
+            tmux_session = self._prepare_launch_environment(
+                new_session_name, restart_wd, env_vars, task, restart_phase_name,
+                cli_agent=cli_agent, prewarm_codegraph=False,
             )
 
-            # Prepend restart context to system prompt so pi sees it immediately
             restart_system_prompt = (
-                f"⚠️ RESTART: You were restarted because: {reason}. "
+                f"\u26a0\ufe0f RESTART: You were restarted because: {reason}. "
                 f"Continue working on task {task.id}. "
                 f"Do NOT re-read files you already analyzed. Pick up where you left off.\n\n"
                 f"{agent.system_prompt}"
             )
 
-            # Generate session ID for restart — same session, agent picks up where it left off.
-            # Same exclusion as create_agent_for_task above: the session key is
-            # (project, design, phase_name) only, with no agent_type or agent_id
-            # component. A restarted validator/result_validator/diagnostic agent
-            # would otherwise resolve to the SAME session_id as ordinary phase
-            # agents on that phase and resume THEIR conversation instead of its
-            # own (or start cold with someone else's identity, if none of its
-            # own runs ever set a session at all).
-            session_id = ""
-            if task.workflow_id and agent.agent_type not in (
-                "validator",
-                "result_validator",
-                "diagnostic",
-            ):
-                try:
-                    _s = self.db_manager.get_session()
-                    try:
-                        from src.core.database import Workflow
+            # Session ID for restart (excludes validator/result_validator/diagnostic, NOT arbitration)
+            session_id = self._resolve_session_id(
+                task, agent.agent_type or "phase", restart_phase_name, model,
+                excluded_types=("validator", "result_validator", "diagnostic"),
+            )
 
-                        _wf = _s.query(Workflow).filter_by(id=task.workflow_id).first()
-                        if _wf and _wf.launch_params:
-                            _lp = (
-                                _wf.launch_params
-                                if isinstance(_wf.launch_params, dict)
-                                else {}
-                            )
-                            # See matching comment in create_agent_for_task above —
-                            # feature-model workflows use project_path/feature_id,
-                            # not project_id/design_slug.
-                            _pid = _lp.get("project_id") or _lp.get("project_path", "")
-                            _dsl = (
-                                _lp.get("design_slug")
-                                or _lp.get("design_id")
-                                or _lp.get("feature_id", "")
-                            )
-                            if _pid and _dsl and restart_phase_name:
-                                from src.autopilot.phases import get_session_id
-
-                                session_id = get_session_id(
-                                    _pid, _dsl, restart_phase_name, model=model
-                                )
-                    finally:
-                        _s.close()
-                except Exception as e:
-                    logger.debug(
-                        f"[SESSION] Could not generate session ID for restart: {e}"
-                    )
-
-            # Build the resume message NOW, while the ORM objects are still attached.
-            # It MUST carry the agent-id header (via _format_initial_message → "🔑 Your
-            # Agent ID:") — otherwise the agent has no agent_id and uses the task_id in
-            # MCP calls, so update_task_status/submit_result fail ("Agent not found").
-            #
-            # Built BEFORE the launch command (same reasoning as
-            # create_agent_for_task): OpenCode has no separate post-launch
-            # "send a message" step, so it needs the pointer embedded in
-            # the launch command itself via instructions_pointer.
             restart_message = (
-                f"⚠️ You were restarted ({reason}). Your prior work is committed in this "
-                f"worktree — do NOT redo it; run `git log` / `git status` and inspect existing "
+                f"\u26a0\ufe0f You were restarted ({reason}). Your prior work is committed in this "
+                f"worktree \u2014 do NOT redo it; run `git log` / `git status` and inspect existing "
                 f"files first, then continue toward completion.\n\n"
                 + self._format_initial_message(
                     task, agent_id, agent_type=(agent.agent_type or "phase")
@@ -2528,107 +2379,58 @@ class AgentManager:
                 if agent.cli_type == "codex" and session_id:
                     instructions_pointer += f"\nHephaestus Session ID: {session_id}"
 
-            launch_result = cli_agent.get_launch_command(
-                system_prompt=restart_system_prompt,
-                task_id=task.id,
-                model=model,
-                phase_name=restart_phase_name,
-                agent_id=agent_id,
-                workflow_id=task.workflow_id,
-                phase_id=task.phase_id,
-                thinking_level=restart_thinking_level,
-                session_id=session_id,
-                working_directory=restart_wd,
-                instructions_pointer=instructions_pointer,
+            # Build and send launch command
+            launch_result, pane, cli_launch_started_at = await self._build_and_send_launch_command(
+                cli_agent, tmux_session,
+                system_prompt=restart_system_prompt, task=task, model=model,
+                thinking_level=None, phase_name=restart_phase_name,
+                agent_id=agent_id, session_id=session_id,
+                working_directory=restart_wd, instructions_pointer=instructions_pointer,
+                env_vars=env_vars, label=f"restarted agent {agent_id[:8]}",
             )
-            launch_command = launch_result.command
-
-            pane = tmux_session.attached_window.attached_pane
-
-            # Export env vars in the shell first — these are required for
-            # MCP tool authentication (HEPHAESTUS_AGENT_ID etc.) and GLM.
-            if env_vars:
-                logger.info(
-                    f"Exporting {len(env_vars)} environment variables for restarted agent {agent_id}: "
-                    f"{', '.join(env_vars.keys())}"
-                )
-                await self._export_env_vars_and_verify(
-                    tmux_session, pane, env_vars, label=f"restarted agent {agent_id[:8]}"
-                )
-
-            # Launch the CLI (pi/claude/etc.) in the fresh session
-            cli_launch_started_at = datetime.utcnow().timestamp()
-            pane.send_keys(launch_command, enter=True)
+            pane.send_keys(launch_result.command, enter=True)
 
             restart_cli_type = agent.cli_type
             restart_task_id = task.id
 
-            # When the CLI loads an agent file as its system prompt
-            # (e.g. Claude Code with --agent), the system prompt is
-            # dropped by get_launch_command. Prepend the restart system
-            # prompt (which includes the original system prompt) so the
-            # agent gets safety rules, tools, and context, then refresh
-            # the instructions file already referenced by
-            # instructions_pointer above.
             if launch_result.prompt_delivery in (
-                LaunchResult.AGENT_FILE,
-                LaunchResult.DEFERRED,
+                LaunchResult.AGENT_FILE, LaunchResult.DEFERRED,
             ) and restart_system_prompt:
-                restart_message = (
-                    restart_system_prompt
-                    + "\n\n---\n\n"
-                    + restart_message
-                )
+                restart_message = restart_system_prompt + "\n\n---\n\n" + restart_message
                 if restart_wd:
                     self._write_task_instructions(restart_wd, task.id, restart_message)
 
-            # Update agent record
             agent.tmux_session_name = new_session_name
             agent.status = "working"
             agent.health_check_failures = 0
             agent.last_activity = datetime.utcnow()
             agent.launched_at = datetime.utcnow()
 
-            # Log restart
             log_entry = AgentLog(
-                agent_id=agent_id,
-                log_type="restarted",
+                agent_id=agent_id, log_type="restarted",
                 message=f"Agent restarted: {reason}",
                 details={"new_session": new_session_name},
             )
             session.add(log_entry)
-
             session.commit()
 
-            # Deliver the 'continue' message. Launching the CLI alone leaves pi idle at
-            # its welcome screen (the resumed-agent-stuck bug) — mirror the normal create
-            # path: wait for the CLI to initialize, then send the task as the first turn.
             try:
-                await asyncio.sleep(25)  # let the CLI boot before typing into it
+                await asyncio.sleep(25)
+                term_race_result = await self._check_termination_race(
+                    agent_id, restart_task_id, new_session_name,
+                    agent_id_to_return=agent_id,
+                )
+                if term_race_result is not None:
+                    return term_race_result
+                self._detect_launch_failure(pane, cli_agent, restart_cli_type, new_session_name)
                 if self.tmux_server.has_session(new_session_name):
-                    for key in cli_agent.post_launch_confirmation_keys():
-                        pane.send_keys(key)
-                        await asyncio.sleep(1.5)
-                    # Re-set (a fresh session doesn't necessarily inherit an
-                    # active goal from before the restart).
-                    await self._send_goal_command(
-                        pane, cli_agent, task, agent.agent_type or "phase"
-                    )
-                    # Falls back to the full restart_message text when no
-                    # worktree location was known (restart_wd is None), the
-                    # same as the pre-fallback behavior above.
-                    await self._send_initial_prompt_with_retry(
-                        pane=pane,
-                        cli_agent=cli_agent,
-                        cli_type=restart_cli_type,
-                        initial_message=instructions_pointer if restart_wd else restart_message,
-                        agent_id=agent_id,
-                        task_id=restart_task_id,
-                        max_retries=3,
+                    await self._deliver_initial_prompt(
+                        pane, cli_agent, restart_cli_type,
+                        instructions_pointer if restart_wd else restart_message,
+                        agent_id, task, agent_type=agent.agent_type or "phase",
                     )
                     await self._record_cli_session(
-                        cli_agent,
-                        session_id, restart_wd, cli_launch_started_at
+                        cli_agent, session_id, restart_wd, cli_launch_started_at
                     )
                     if restart_wd:
                         await self._verify_instructions_file_read(
@@ -2653,6 +2455,7 @@ class AgentManager:
             session.rollback()
         finally:
             session.close()
+
 
     def get_agent_output(self, agent_id: str, lines: int = 200) -> str:
         """Get recent output from agent's tmux session or stored output for terminated agents.

@@ -1041,6 +1041,12 @@ class TestCreateAgentForTaskFallback:
                 mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
                 mock_cli.default_model = "test-model"
                 mock_cli.post_launch_confirmation_keys.return_value = []
+                # _detect_launch_failure uses cli_agent.get_launch_rejection_patterns()
+                # -- must return a proper list matching PiAgent's override
+                mock_cli.get_launch_rejection_patterns.return_value = [
+                    r"command not found", r"No such file or directory",
+                    r"model.{0,60}not found",
+                ]
                 mock_get_cli.return_value = mock_cli
                 mock_agent_manager._send_initial_prompt_with_retry = AsyncMock(return_value=None)
                 mock_agent_manager._verify_instructions_file_read = AsyncMock(return_value=None)
