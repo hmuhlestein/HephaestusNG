@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from src.core.database import DatabaseManager, Phase, Workflow
-from src.mcp.api import FrontendAPI
+from src.mcp.frontend._shared import FrontendAPI
 
 
 @pytest.fixture

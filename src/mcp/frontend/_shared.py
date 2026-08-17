@@ -1,3 +1,8 @@
+"""Shared FrontendAPI class and mutable global for the frontend package.
+
+Extracted from src/mcp/api.py (phase_1b_decomposition.md §4.1).
+"""
+
 """API endpoints for the frontend dashboard."""
 
 import logging
@@ -28,9 +33,6 @@ from src.core.database import (
 from src.phases import PhaseManager
 
 logger = logging.getLogger(__name__)
-
-router = APIRouter(prefix="/api", tags=["Frontend API"])
-
 
 class FrontendAPI:
     """API handlers for frontend."""
@@ -2104,6 +2106,84 @@ class FrontendAPI:
         finally:
             session.close()
 
+
+    async def stop_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        """Stop a running workflow and terminate its agents."""
+        from datetime import datetime
+
+        from src.core.database import Agent, Task, Workflow
+
+        session = self.db_manager.get_session()
+        try:
+            workflow = session.query(Workflow).filter_by(id=workflow_id).first()
+            if not workflow:
+                raise HTTPException(
+                    status_code=404, detail=f"Workflow {workflow_id} not found"
+                )
+
+            if workflow.status != "active":
+                raise HTTPException(
+                    status_code=400, detail=f"Workflow is {workflow.status}, not active"
+                )
+
+            # Terminate all active agents for this workflow (agents link via tasks)
+            agents = (
+                session.query(Agent)
+                .join(Task, Agent.current_task_id == Task.id)
+                .filter(Task.workflow_id == workflow_id, Agent.status == "working")
+                .all()
+            )
+
+            terminated_count = 0
+            for agent in agents:
+                agent.status = "terminated"
+                agent.current_task_id = None  # Clear stale reference
+                terminated_count += 1
+                # Kill tmux session
+                if agent.tmux_session_name:
+                    try:
+                        import subprocess
+
+                        subprocess.run(
+                            ["tmux", "kill-session", "-t", agent.tmux_session_name],
+                            capture_output=True,
+                            timeout=5,
+                        )
+                    except Exception:
+                        pass
+
+            # Mark assigned tasks as failed
+            tasks = (
+                session.query(Task)
+                .filter_by(workflow_id=workflow_id)
+                .filter(
+                    Task.status.in_(["assigned", "in_progress", "queued", "pending"])
+                )
+                .all()
+            )
+
+            for task in tasks:
+                task.status = "failed"
+                task.failure_reason = "Workflow stopped by user"
+                task.completed_at = datetime.utcnow()
+
+            # Update workflow status
+            workflow.status = "failed"
+
+            session.commit()
+
+            return {
+                "success": True,
+                "message": f"Workflow stopped. Terminated {terminated_count} agents, failed {len(tasks)} tasks.",
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            session.rollback()
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            session.close()
+
     async def reset_phase(
         self, phase_id: str, target_status: str, force: bool = False
     ) -> Dict[str, Any]:
@@ -2787,439 +2867,6 @@ class FrontendAPI:
 
 
 # Create the API instance (will be initialized in server.py)
+
 frontend_api = None
 
-
-def create_frontend_routes(
-    db_manager: DatabaseManager,
-    agent_manager: AgentManager,
-    phase_manager: PhaseManager = None,
-):
-    """Create frontend API routes."""
-    global frontend_api
-    frontend_api = FrontendAPI(db_manager, agent_manager, phase_manager)
-
-    @router.get("/dashboard/stats")
-    async def get_dashboard_stats(project_id: Optional[str] = None):
-        """Get dashboard statistics."""
-        return await frontend_api.get_dashboard_stats(project_id)
-
-    @router.get("/tasks")
-    async def get_tasks(
-        skip: int = Query(0, ge=0),
-        limit: int = Query(50, ge=1, le=10000),
-        status: Optional[str] = None,
-        workflow_id: Optional[str] = None,
-        project_id: Optional[str] = None,
-    ):
-        """Get tasks with pagination."""
-        return await frontend_api.get_tasks(skip, limit, status, workflow_id, project_id)
-
-    @router.get("/agents")
-    async def get_agents(project_id: Optional[str] = None):
-        """Get all agents."""
-        return await frontend_api.get_agents(project_id)
-
-    @router.get("/agents/{agent_id}/output")
-    async def get_agent_output(agent_id: str, lines: int = Query(2000, ge=10, le=5000)):
-        """Get agent's tmux output."""
-        return await frontend_api.get_agent_output(agent_id, lines)
-
-    @router.get("/memories")
-    async def get_memories(
-        skip: int = Query(0, ge=0),
-        limit: int = Query(50, ge=1, le=10000),
-        memory_type: Optional[str] = None,
-        search: Optional[str] = None,
-    ):
-        """Get memories with pagination and search."""
-        return await frontend_api.get_memories(skip, limit, memory_type, search)
-
-    @router.get("/graph")
-    async def get_graph_data(workflow_id: Optional[str] = None):
-        """Get graph visualization data."""
-        return await frontend_api.get_graph_data(workflow_id=workflow_id)
-
-    @router.get("/workflow")
-    async def get_workflow():
-        """Get current workflow information."""
-        return await frontend_api.get_workflow_info()
-
-    @router.get("/phases")
-    async def get_phases(workflow_id: Optional[str] = None):
-        """Get all phases with metrics."""
-        return await frontend_api.get_phases(workflow_id)
-
-    @router.get("/workflow-definitions/{definition_id}/phases")
-    async def get_definition_phases(definition_id: str):
-        """Get phase definitions from a workflow definition."""
-        import json as json_mod
-
-        from src.core.database import WorkflowDefinition
-
-        session = frontend_api.db_manager.get_session()
-        try:
-            wf_def = (
-                session.query(WorkflowDefinition).filter_by(id=definition_id).first()
-            )
-            if not wf_def:
-                raise HTTPException(
-                    status_code=404, detail="Workflow definition not found"
-                )
-            phases = wf_def.phases_config
-            # Handle double-encoded JSON strings
-            if isinstance(phases, str):
-                try:
-                    phases = json_mod.loads(phases)
-                except (json_mod.JSONDecodeError, TypeError):
-                    phases = []
-            if not isinstance(phases, list):
-                phases = []
-            return {"phases": phases}
-        finally:
-            session.close()
-
-    @router.get("/phases/{phase_id}/yaml")
-    async def get_phase_yaml(phase_id: str):
-        """Get detailed phase configuration."""
-        return await frontend_api.get_phase_details(phase_id)
-
-    @router.get("/tasks/{task_id}")
-    async def get_task(task_id: str):
-        """Get a single task by ID."""
-        return await frontend_api.get_task(task_id)
-
-    @router.get("/tasks/{task_id}/full-details")
-    async def get_task_full_details(task_id: str):
-        """Get comprehensive task details including prompts and relationships."""
-        return await frontend_api.get_task_full_details(task_id)
-
-    @router.get("/guardian-analyses/{agent_id}")
-    async def get_guardian_analyses(
-        agent_id: str, limit: int = Query(50, ge=1, le=200)
-    ):
-        """Get guardian analyses for a specific agent."""
-        return await frontend_api.get_guardian_analyses(agent_id, limit)
-
-    @router.get("/conductor-analyses")
-    async def get_conductor_analyses(limit: int = Query(20, ge=1, le=100)):
-        """Get conductor analyses for system overview."""
-        return await frontend_api.get_conductor_analyses(limit)
-
-    @router.get("/conductor-analyses/latest")
-    async def get_latest_conductor_analysis():
-        """Get the most recent conductor analysis."""
-        return await frontend_api.get_latest_conductor_analysis()
-
-    @router.get("/steering-interventions")
-    async def get_steering_interventions(
-        agent_id: Optional[str] = None, limit: int = Query(50, ge=1, le=200)
-    ):
-        """Get steering interventions, optionally filtered by agent."""
-        return await frontend_api.get_steering_interventions(agent_id, limit)
-
-    @router.get("/system-overview")
-    async def get_system_overview(workflow_id: Optional[str] = None):
-        """Get comprehensive system overview data."""
-        return await frontend_api.get_system_overview(workflow_id)
-
-    @router.get("/results")
-    async def get_results(
-        scope: str = Query("all", regex="^(all|workflow|task)$"),
-        status: Optional[str] = Query(None),
-        workflow_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        search: Optional[str] = None,
-        date_from: Optional[str] = None,
-        date_to: Optional[str] = None,
-    ):
-        """Get aggregated results for workflows and tasks."""
-        return await frontend_api.get_results(
-            scope=scope,
-            status=status,
-            workflow_id=workflow_id,
-            agent_id=agent_id,
-            search=search,
-            date_from=date_from,
-            date_to=date_to,
-        )
-
-    @router.get("/results/{result_id}/content")
-    async def get_result_content(result_id: str):
-        """Get markdown content for a specific result."""
-        return await frontend_api.get_result_content(result_id)
-
-    @router.get("/results/{result_id}/validation")
-    async def get_result_validation(result_id: str):
-        """Get validation details for a specific result."""
-        return await frontend_api.get_result_validation(result_id)
-
-    @router.get("/results/{result_id}/extra-files/{file_index}")
-    async def get_extra_file_content(result_id: str, file_index: int):
-        """Get content of a specific extra file for a result."""
-        return await frontend_api.get_extra_file_content(result_id, file_index)
-
-    @router.get("/results/{result_id}/download")
-    async def download_result_markdown(result_id: str):
-        """Download the markdown file for a specific result."""
-        file_path = await frontend_api.download_result_markdown(result_id)
-        filename = os.path.basename(file_path)
-        return FileResponse(
-            path=file_path, media_type="text/markdown", filename=filename
-        )
-
-    @router.get("/results/{result_id}/validation/download")
-    async def download_validation_report(result_id: str):
-        """Download the validation report markdown file for a specific result."""
-        file_path = await frontend_api.download_validation_report(result_id)
-        filename = os.path.basename(file_path)
-        return FileResponse(
-            path=file_path, media_type="text/markdown", filename=filename
-        )
-
-    @router.get("/blocked-tasks")
-    async def get_blocked_tasks(project_id: Optional[str] = None):
-        """Get all blocked tasks with blocker information."""
-        return await frontend_api.get_blocked_tasks(project_id)
-
-    @router.get("/blocked-tasks/{task_id}/blockers")
-    async def get_task_blocker_details(task_id: str):
-        """Get detailed blocker information for a specific task."""
-        return await frontend_api.get_task_blocker_details(task_id)
-
-    @router.post("/sync-blocking-status")
-    async def sync_blocking_status():
-        """Manually trigger sync of task blocking status."""
-        return await frontend_api.sync_blocking_status()
-
-    @router.post("/workflows/{workflow_id}/stop")
-    async def stop_workflow(workflow_id: str):
-        """Stop a running workflow and terminate its agents."""
-        from datetime import datetime
-
-        from src.core.database import Agent, Task, Workflow
-
-        session = frontend_api.db_manager.get_session()
-        try:
-            workflow = session.query(Workflow).filter_by(id=workflow_id).first()
-            if not workflow:
-                raise HTTPException(
-                    status_code=404, detail=f"Workflow {workflow_id} not found"
-                )
-
-            if workflow.status != "active":
-                raise HTTPException(
-                    status_code=400, detail=f"Workflow is {workflow.status}, not active"
-                )
-
-            # Terminate all active agents for this workflow (agents link via tasks)
-            agents = (
-                session.query(Agent)
-                .join(Task, Agent.current_task_id == Task.id)
-                .filter(Task.workflow_id == workflow_id, Agent.status == "working")
-                .all()
-            )
-
-            terminated_count = 0
-            for agent in agents:
-                agent.status = "terminated"
-                agent.current_task_id = None  # Clear stale reference
-                terminated_count += 1
-                # Kill tmux session
-                if agent.tmux_session_name:
-                    try:
-                        import subprocess
-
-                        subprocess.run(
-                            ["tmux", "kill-session", "-t", agent.tmux_session_name],
-                            capture_output=True,
-                            timeout=5,
-                        )
-                    except Exception:
-                        pass
-
-            # Mark assigned tasks as failed
-            tasks = (
-                session.query(Task)
-                .filter_by(workflow_id=workflow_id)
-                .filter(
-                    Task.status.in_(["assigned", "in_progress", "queued", "pending"])
-                )
-                .all()
-            )
-
-            for task in tasks:
-                task.status = "failed"
-                task.failure_reason = "Workflow stopped by user"
-                task.completed_at = datetime.utcnow()
-
-            # Update workflow status
-            workflow.status = "failed"
-
-            session.commit()
-
-            return {
-                "success": True,
-                "message": f"Workflow stopped. Terminated {terminated_count} agents, failed {len(tasks)} tasks.",
-            }
-        except HTTPException:
-            raise
-        except Exception as e:
-            session.rollback()
-            raise HTTPException(status_code=500, detail=str(e))
-        finally:
-            session.close()
-
-    # ── Phase Prompt Editor Endpoints ──────────────────────────────────
-
-    @router.patch("/phases/{phase_id}")
-    async def update_phase(phase_id: str, updates: Dict[str, Any]):
-        """Partial update of phase definition fields."""
-        return await frontend_api.update_phase(phase_id, updates)
-
-    @router.post("/phases/{phase_id}/reset")
-    async def reset_phase(phase_id: str, body: Dict[str, Any]):
-        """Reset phase execution status."""
-        target_status = body.get("target_status")
-        force = body.get("force", False)
-        if not target_status:
-            raise HTTPException(status_code=400, detail="target_status is required")
-        return await frontend_api.reset_phase(phase_id, target_status, force)
-
-    @router.get("/phases/{phase_id}/agents")
-    async def get_phase_agents(phase_id: str):
-        """List agents working in this phase."""
-        return await frontend_api.get_phase_agents(phase_id)
-
-    @router.get("/phases/{phase_id}/prompt/versions")
-    async def get_phase_prompt_versions(phase_id: str):
-        """List prompt versions for a phase."""
-        return await frontend_api.get_phase_prompt_versions(phase_id)
-
-    @router.get("/phases/{phase_id}/prompt/versions/{version}")
-    async def get_phase_prompt_version(phase_id: str, version: int):
-        """Get a specific prompt version's content."""
-        return await frontend_api.get_phase_prompt_version(phase_id, version)
-
-    @router.post("/phases/{phase_id}/prompt/versions")
-    async def create_phase_prompt_version(phase_id: str, body: Dict[str, Any]):
-        """Create a new prompt version."""
-        return await frontend_api.create_phase_prompt_version(phase_id, body)
-
-    @router.post("/phases/{phase_id}/prompt/versions/{version}/publish")
-    async def publish_phase_prompt_version(phase_id: str, version: int):
-        """Publish a draft version as active."""
-        return await frontend_api.publish_phase_prompt_version(phase_id, version)
-
-    @router.post("/phases/{phase_id}/prompt/versions/{version}/restore")
-    async def restore_phase_prompt_version(phase_id: str, version: int):
-        """Restore an older version as a new active version."""
-        return await frontend_api.restore_phase_prompt_version(phase_id, version)
-
-    @router.get("/phases/{phase_id}/prompt/preview")
-    async def get_phase_prompt_preview(
-        phase_id: str, variables: Optional[str] = Query(None)
-    ):
-        """Render a preview of the assembled prompt (from DB)."""
-        import json
-
-        try:
-            var_dict = json.loads(variables) if variables else None
-        except (json.JSONDecodeError, TypeError):
-            raise HTTPException(
-                status_code=400, detail="Invalid JSON in variables parameter"
-            )
-        return await frontend_api.get_phase_prompt_preview(phase_id, var_dict)
-
-    @router.post("/phases/{phase_id}/prompt/preview")
-    async def post_phase_prompt_preview(phase_id: str, body: Dict[str, Any]):
-        """Render a preview of the assembled prompt with draft content."""
-        try:
-            from src.core.database import DatabaseManager, Phase
-            from src.prompts.assembler import PromptAssembler
-
-            db_manager = DatabaseManager("hephaestus.db")
-            with db_manager.get_session() as session:
-                phase = session.query(Phase).filter_by(id=phase_id).first()
-                if not phase:
-                    raise HTTPException(status_code=404, detail="Phase not found")
-
-                all_phases = (
-                    session.query(Phase)
-                    .filter_by(workflow_id=phase.workflow_id)
-                    .order_by(Phase.order)
-                    .all()
-                )
-                phases_list = [
-                    {
-                        "order": p.order,
-                        "name": p.name,
-                        "description": p.description,
-                        "done_definitions": p.done_definitions or [],
-                        "outputs": p.outputs,
-                    }
-                    for p in all_phases
-                ]
-
-            assembler = PromptAssembler(
-                phase_description=body.get("description", phase.description or ""),
-                done_definitions=body.get(
-                    "done_definitions", phase.done_definitions or []
-                ),
-                additional_notes=body.get("additional_notes", phase.additional_notes),
-                outputs=body.get("outputs", phase.outputs),
-                next_steps=body.get("next_steps", phase.next_steps),
-                working_directory=phase.working_directory,
-                phase_order=phase.order,
-                phase_name=phase.name,
-            )
-            result = assembler.render(
-                variables=body.get("variables", {}),
-                all_phases=phases_list,
-            )
-            return {
-                "system_prompt": result.system_prompt,
-                "user_prompt": result.user_prompt,
-                "variables_used": result.variables_used,
-                "variables_missing": result.variables_missing,
-                "warnings": result.warnings,
-            }
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @router.get("/phases/{phase_id}/prompt/diff")
-    async def get_phase_prompt_diff(
-        phase_id: str, v1: int = Query(...), v2: int = Query(...)
-    ):
-        """Get diff between two prompt versions."""
-        return await frontend_api.get_phase_prompt_diff(phase_id, v1, v2)
-
-    @router.get("/tasks/{task_id}/prompt")
-    async def get_task_prompt(task_id: str):
-        """Get the assembled prompt for a task (with overrides applied)."""
-        from src.prompts.assembler import assemble_task_prompt
-
-        result = assemble_task_prompt(task_id)
-        return {
-            "system_prompt": result.system_prompt,
-            "user_prompt": result.user_prompt,
-        }
-
-    @router.get("/tasks/{task_id}/prompt/overrides")
-    async def get_task_prompt_overrides(task_id: str):
-        """Get prompt overrides for a task."""
-        return await frontend_api.get_task_prompt_overrides(task_id)
-
-    @router.put("/tasks/{task_id}/prompt/overrides")
-    async def set_task_prompt_overrides(task_id: str, body: Dict[str, Any]):
-        """Set prompt overrides for a task."""
-        return await frontend_api.set_task_prompt_overrides(task_id, body)
-
-    @router.delete("/tasks/{task_id}/prompt/overrides")
-    async def clear_task_prompt_overrides(task_id: str):
-        """Clear prompt overrides for a task."""
-        return await frontend_api.clear_task_prompt_overrides(task_id)
-
-    return router

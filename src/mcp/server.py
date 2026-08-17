@@ -37,7 +37,7 @@ from src.core.database import (
 from src.core.simple_config import get_config
 from src.core.worktree_manager import WorktreeManager
 from src.mcp.agents_api import router as agents_router
-from src.mcp.api import create_frontend_routes
+from src.mcp.frontend import create_frontend_routes
 from src.mcp.memory_api import (
     SaveMemoryRequest,
     SearchMemoryRequest,
