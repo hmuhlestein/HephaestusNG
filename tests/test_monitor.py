@@ -657,7 +657,7 @@ class TestDetectUnconfirmedTaskCompletion:
         agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
         self._mock_session_with_task(mock_db, "in_progress")
-        make_monitoring_loop._auto_restart_agent = AsyncMock()
+        make_monitoring_loop._auto_restart.restart_agent = AsyncMock()
 
         threshold = make_monitoring_loop.UNCONFIRMED_COMPLETION_ESCALATE_AFTER
         for i in range(threshold):
@@ -668,14 +668,14 @@ class TestDetectUnconfirmedTaskCompletion:
 
         # Exactly `threshold` nudges sent, no restart yet.
         assert mock_agent_manager.send_message_to_agent.call_count == threshold
-        make_monitoring_loop._auto_restart_agent.assert_not_called()
+        make_monitoring_loop._auto_restart.restart_agent.assert_not_called()
 
         # One more crosses the threshold -- restart, not another nudge.
         result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
 
         assert result is True
         assert mock_agent_manager.send_message_to_agent.call_count == threshold
-        make_monitoring_loop._auto_restart_agent.assert_called_once_with(agent)
+        make_monitoring_loop._auto_restart.restart_agent.assert_called_once_with(agent)
 
     @pytest.mark.asyncio
     async def test_escalation_count_resets_for_a_different_task(
@@ -690,7 +690,7 @@ class TestDetectUnconfirmedTaskCompletion:
         agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
         mock_agent_manager.send_message_to_agent.reset_mock()
-        make_monitoring_loop._auto_restart_agent = AsyncMock()
+        make_monitoring_loop._auto_restart.restart_agent = AsyncMock()
 
         threshold = make_monitoring_loop.UNCONFIRMED_COMPLETION_ESCALATE_AFTER
         self._mock_session_with_task(mock_db, "in_progress", task_id="t1")
@@ -706,7 +706,7 @@ class TestDetectUnconfirmedTaskCompletion:
         result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
 
         assert result is True
-        make_monitoring_loop._auto_restart_agent.assert_not_called()
+        make_monitoring_loop._auto_restart.restart_agent.assert_not_called()
         assert mock_agent_manager.send_message_to_agent.call_count == threshold + 1
 
 
@@ -2347,7 +2347,7 @@ class TestSessionLimitPause:
         # which the last-resort fallback tier below would treat as a real,
         # different model and use it -- silently defeating "no fallback"
         # unless explicitly nulled out.
-        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
             mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
 
             # Unlike the frozen/stuck detection elsewhere in this function,
@@ -2443,7 +2443,7 @@ class TestSessionLimitPause:
         workflow = Mock(status="active", paused_by=None, paused_at=None)
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
-        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
             mock_cfg.return_value = Mock(
                 default_fallback_cli_tool="pi",
                 default_fallback_cli_model="openrouter/xiaomi/mimo-v2.5-pro",
@@ -2548,7 +2548,7 @@ class TestSessionLimitPause:
         workflow = Mock(status="active", paused_by=None, paused_at=None)
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
-        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
             mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
             await make_monitoring_loop._mechanical_recovery_for_agent(agent)
             await make_monitoring_loop._mechanical_recovery_for_agent(agent)
@@ -2687,7 +2687,7 @@ class TestDetectConnectionErrors:
         mock_session_scope, session = self._session_with(task, phase=None)
         mock_db.session_scope = mock_session_scope
 
-        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
             mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
             result = await make_monitoring_loop._detect_connection_errors(agent)
 
@@ -2709,7 +2709,7 @@ class TestDetectConnectionErrors:
         mock_session_scope, session = self._session_with(task, phase=None)
         mock_db.session_scope = mock_session_scope
 
-        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
             mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
             result = await make_monitoring_loop._detect_connection_errors(agent)
 
