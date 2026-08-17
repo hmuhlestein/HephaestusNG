@@ -373,6 +373,15 @@ class CLIAgentInterface(ABC):
         """
         return text
 
+    def get_launch_rejection_patterns(self) -> List[str]:
+        """Regex fragments (ORed together) indicating THIS CLI's own launch
+        command was rejected and control fell back to a bare shell -- e.g. an
+        invalid --model flag, a missing dependency, a first-run confirmation
+        gate.  The generic "binary not found" cases are already covered by
+        the base default; override to ADD this CLI's own launch-time error
+        wording, not replace the base list."""
+        return [r"command not found", r"No such file or directory"]
+
     # ── Health / stuck checks (shared) ───────────────────────────────────
 
     def is_healthy(self, output: str) -> bool:
@@ -608,6 +617,11 @@ class ClaudeCodeAgent(CLIAgentInterface):
             r"Failed to connect",
             r"Maximum retries exceeded",
         ]
+
+    def get_launch_rejection_patterns(self) -> List[str]:
+        """Add Claude Code's own first-run confirmation gate wording to the
+        base generic launch-rejection patterns (see base class docstring)."""
+        return super().get_launch_rejection_patterns() + [r"Bypass Permissions mode"]
 
     def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
         # Same one-line `/model <name>` syntax already confirmed working
@@ -1052,6 +1066,11 @@ class PiAgent(CLIAgentInterface):
             r"authentication failed",
             r"invalid API key",
         ]
+
+    def get_launch_rejection_patterns(self) -> List[str]:
+        """Add pi's own model-not-found wording to the base generic
+        launch-rejection patterns (see base class docstring)."""
+        return super().get_launch_rejection_patterns() + [r"model.{0,60}not found"]
 
     def recovery_keystrokes(self) -> List[str]:
         # pi (mimo) can fall into a thought loop that never exits; Esc interrupts the
