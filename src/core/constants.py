@@ -14,7 +14,7 @@ CONTEXT_DIR_NAME = ".hephaestus"
 WORKTREES_SUBDIR = ".worktrees"
 
 # Marks a Task.raw_description as synthetic monitor-created diagnostic work
-# (see src.monitoring.monitor._create_diagnostic_agent) that must never count
+# (see src.monitoring.diagnostic_agent.WorkflowStuckDiagnostics.create_diagnostic_agent) that must never count
 # toward phase/workflow completion checks -- an orphaned diagnostic task left
 # "pending" after its agent died would otherwise permanently block whichever
 # completion check didn't know to exclude it. Centralized here after this
