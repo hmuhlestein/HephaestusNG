@@ -1,5 +1,6 @@
 """Control-loop engine: goto/retry/continue state machine, arbitration, phase-task creation."""
 
+import asyncio
 import json
 import logging
 import threading as _threading
@@ -3186,3 +3187,241 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: "OrchestratorLogger")
         except Exception as e:
             logger.warning(f"[RESUME] Failed to restart task {task_id[:8]}: {e}")
     return restarted
+
+
+async def fire_spec_gate_if_ready(session, task) -> None:
+    """When a gated phase's last task completes, fire the phase-completion
+    gate immediately instead of waiting for the monitor's next poll.
+
+    The orchestrator's _advance_phases only fires when the next phase is
+    still pending — if it's already in_progress, the gate would be
+    missed without this.
+
+    build_phase_output may run pytest (Enhancement 1: independent test
+    verification), which can block for up to several minutes. This method
+    is async so it can offload that work to a thread pool executor rather
+    than blocking the event loop.
+
+    Migrated from src.services.task_completion_service.TaskCompletionService
+    per Phase 1b decomposition plan (design_docs/phase_1b_decomposition.md
+    section 4.4).
+    """
+    from src.core.log_context import set_log_context
+
+    phase = session.query(Phase).filter_by(id=task.phase_id).first()
+    if not phase or phase.name not in GATED_PHASES:
+        return
+
+    incomplete = session.query(Task).filter_by(phase_id=phase.id).filter(Task.status.in_(["pending", "assigned", "in_progress", "failed"])).count()
+    if incomplete != 0:
+        return
+
+    set_log_context(task=task.id, phase=phase.name, workflow=task.workflow_id or "")
+
+    # Phase complete — fire the gate now
+    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+    if not (wf and wf.working_directory):
+        return
+
+    # Claim this phase's transition before doing the slow work below
+    # (build_phase_output can run pytest for minutes, and
+    # mark_phase_complete's own evaluate() call can be an LLM call).
+    # _case_in_progress_complete's periodic-sweep path (orchestrator.py)
+    # already takes this same claim before calling mark_phase_complete
+    # -- but this synchronous path (fired straight from
+    # update_task_status) never did, so the sweep's claim check never
+    # actually excluded it: while this path was mid-evaluation, a
+    # concurrent sweep tick saw no claim held, took it itself, and
+    # re-evaluated the same phase completion a second time.
+    # mark_phase_complete's execution.status == "completed" idempotency
+    # guard doesn't catch this either -- _handle_evaluation_goto resets
+    # that SAME status back to "pending" as part of its own
+    # stale-execution reset (the phase being closed is always included,
+    # by design, since it needs a fresh cycle for its next run) before
+    # a second caller's status check ever runs. Observed live:
+    # architecture_design still "in_progress" while three design_review
+    # tasks were created back to back off the same evaluation cycle.
+    if not _claim_phase_task_creation(session, phase.id):
+        logger.info(f"[SPEC-GATE] {phase.name}: transition already being evaluated by another caller — skipping")
+        return
+
+    import functools
+    from pathlib import Path
+
+    try:
+        # build_phase_output may run pytest (Enhancement 1: independent
+        # test verification). Run it in a thread pool executor so the
+        # async event loop is not blocked by a potentially multi-minute
+        # subprocess call.
+        loop = asyncio.get_event_loop()
+        phase_output = await loop.run_in_executor(
+            None,
+            functools.partial(build_phase_output, phase.name, Path(wf.working_directory)),
+        )
+        logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
+        pm = PhaseManager(DatabaseManager(None))
+        pm.workflow_id = task.workflow_id
+        result = pm.mark_phase_complete(
+            phase.id,
+            "Phase completed (spec gate fired from update_task_status)",
+            phase_output=phase_output,
+        )
+    finally:
+        # Release only the claim -- not via _release_phase_task_
+        # creation_claim, which also flips status to "in_progress" and
+        # stamps started_at. That's correct for its own "claimed to
+        # create a NEW task" use case but wrong here: mark_phase_complete
+        # has already left this phase's execution in whatever state the
+        # evaluation decided (e.g. "pending", reset by
+        # _handle_evaluation_goto for its next cycle), and flipping it
+        # back to "in_progress" would corrupt that.
+        session.query(PhaseExecution).filter_by(phase_id=phase.id).update(
+            {"task_creation_claimed_at": None}, synchronize_session=False
+        )
+        session.commit()
+    if result.get("action") == "already_completed":
+        logger.info(f"[SPEC-GATE] {phase.name}: already completed by another caller")
+    elif result.get("action") == "arbitrate":
+        # Regression: this branch didn't exist -- mark_phase_complete's
+        # own evaluate() call already incremented total_gotos and
+        # logged "[ARBITRATE] ... requesting LLM arbitration" as a
+        # side effect of being called at all, but nothing here ever
+        # invoked _trigger_arbitration (the thing that actually spawns
+        # a capped arbitration agent and, past the cap, fails the
+        # workflow instead of looping forever). Every other action
+        # this function checks for was handled; "arbitrate" silently
+        # fell through to no-op. Observed live: this path fires once
+        # per task completion (unlike _fire_phase_transition's sweep,
+        # which DOES handle "arbitrate" correctly), so a phase stuck
+        # needing arbitration re-hit this exact leak on every
+        # completion -- 1100+ times over ~30 hours on one workflow,
+        # total_gotos climbing the whole time, zero arbitration tasks
+        # ever actually created.
+        logger.warning(f"[SPEC-GATE] {phase.name}: arbitration needed")
+        reason = result.get("reason") or f"{phase.name} exhausted its retry budget"
+
+        await loop.run_in_executor(
+            None,
+            functools.partial(
+                _trigger_arbitration,
+                task.workflow_id,
+                result.get("target_phase_id"),
+                phase.name,
+                reason,
+                logger,
+            ),
+        )
+    elif result.get("action") == "goto" and result.get("target_phase_id"):
+        logger.info(f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)")
+        # task.action/action_target_phase already set by
+        # mark_phase_complete's own _tag_completing_task -- only
+        # has_results is this caller's own responsibility.
+        task.has_results = True
+        session.commit()
+
+        # mark_phase_complete only decides the goto and closes THIS
+        # phase's execution -- it deliberately doesn't create the
+        # target phase's task itself (that's _fire_phase_transition's
+        # job, mirrored here). Without this, the target phase's
+        # PhaseExecution stays "completed" from its own earlier,
+        # unrelated pass, so _advance_phases's background sweep never
+        # sees it as needing new work -- it just keeps marching
+        # forward by phase order from the highest completed phase and
+        # picks the next PENDING phase instead, silently skipping the
+        # goto entirely. Observed live: an adversarial_review gate
+        # found 4 BLOCKER findings and decided "GOTO development", but
+        # the pipeline proceeded straight to security_review with the
+        # blockers never addressed.
+        metadata = result.get("metadata") or {}
+        spec_gate = metadata.get("spec_gate", {})
+        feedback = spec_gate.get("reason") or result.get("reason") or None
+
+        # Same fix as _fire_phase_transition's identical block in
+        # orchestrator.py: a "result_missing" gate reason only means
+        # the file read came up empty at this evaluation instant, not
+        # that the agent didn't do the work -- if it left a real
+        # completion_notes summary, that's a more accurate account of
+        # what actually happened and the next phase's corrective task
+        # should see that instead of a "missing" message that
+        # contradicts the real work already done. `task` here is
+        # already the completing task itself (this function runs from
+        # its own update_task_status call), so no extra lookup needed.
+        if spec_gate.get("result_missing") and task.completion_notes:
+            feedback = task.completion_notes
+
+        # Reset stale phase executions at/after the target phase.
+        # Same fix as _handle_evaluation_goto in phase_manager.py:
+        # without this, phases after the target keep their "completed"
+        # status from a prior pass and get re-evaluated without running.
+        target_order = session.query(Phase.order).filter_by(id=result["target_phase_id"]).scalar()
+        if target_order is not None:
+            stale = (
+                session.query(PhaseExecution)
+                .join(Phase, PhaseExecution.phase_id == Phase.id)
+                .filter(
+                    Phase.workflow_id == task.workflow_id,
+                    Phase.order >= target_order,
+                    # Excludes THIS phase's own execution -- mark_phase_
+                    # complete (via _handle_evaluation_goto) already
+                    # closed it "completed" one call up, and this
+                    # phase's own order is always >= its own goto
+                    # target's order, so without this exclusion this
+                    # duplicate reset (see 084edcf's identical fix to
+                    # _handle_evaluation_goto's own copy of this query)
+                    # immediately flipped that same "completed" mark
+                    # back to "pending", defeating mark_phase_complete's
+                    # idempotency guard for this synchronous spec-gate
+                    # path specifically -- the sweep-side goto path
+                    # doesn't run this block at all.
+                    PhaseExecution.phase_id != phase.id,
+                    PhaseExecution.status.in_(["in_progress", "completed"]),
+                )
+                .all()
+            )
+            for s in stale:
+                s.status = "pending"
+                s.completed_at = None
+                s.task_creation_claimed_at = None
+            if stale:
+                session.commit()
+
+        await loop.run_in_executor(
+            None,
+            functools.partial(
+                _create_phase_task,
+                task.workflow_id,
+                result["target_phase_id"],
+                result.get("target_phase"),
+                "goto",
+                logger,
+                feedback=feedback,
+                source_phase_name=phase.name,
+            ),
+        )
+    elif result.get("action") == "continue":
+        logger.info(f"[SPEC-GATE] {phase.name}: PASSED (score >= 0.7)")
+        # _start_next_phase (called by mark_phase_complete's
+        # _advance_or_complete_with_phase_info) flips the next phase's
+        # PhaseExecution to "in_progress" but does NOT create its Task.
+        # The sweep's _advance_phases would pick that up on its next
+        # tick via Case 0b (in_progress with no tasks) or Case 1
+        # (completed + pending successor), but if a concurrent sweep
+        # tick already iterated and acted on a stale view it won't
+        # re-read the snapshot. Same as the goto path above (which
+        # always calls _create_phase_task directly): create the task
+        # here so the spec gate doesn't depend on a lucky sweep tick.
+        target_phase_id = result.get("target_phase_id")
+        target_phase_name = result.get("target_phase")
+        if target_phase_id:
+            await loop.run_in_executor(
+                None,
+                functools.partial(
+                    _create_phase_task,
+                    task.workflow_id,
+                    target_phase_id,
+                    target_phase_name,
+                    "continue",
+                    logger,
+                    source_phase_name=phase.name,
+                ),
+            )
