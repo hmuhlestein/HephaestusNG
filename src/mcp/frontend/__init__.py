@@ -4,9 +4,9 @@ from fastapi import APIRouter
 
 from src.mcp.frontend import _shared
 from src.mcp.frontend.agent_routes import router as agent_router
-from src.mcp.frontend.task_routes import router as task_router
-from src.mcp.frontend.phase_routes import router as phase_router
 from src.mcp.frontend.dashboard_routes import router as dashboard_router
+from src.mcp.frontend.phase_routes import router as phase_router
+from src.mcp.frontend.task_routes import router as task_router
 
 router = APIRouter(prefix="/api", tags=["Frontend API"])
 

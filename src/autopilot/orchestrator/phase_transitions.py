@@ -7,9 +7,20 @@ import threading as _threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-
+from src.autopilot.orchestrator.engine_client import (
+    create_agent_for_task_direct,
+    get_tasks,
+    increment_task_retry_count,
+    update_task_status,
+)
+from src.autopilot.orchestrator.queue import (
+    _assess_run_health,
+)
+from src.autopilot.orchestrator.worktree_integration import (
+    _run_ash_scan,
+)
 from src.autopilot.spec import GATED_PHASES, build_phase_output
 from src.core.constants import (
     CONTEXT_DIR_NAME,
@@ -27,21 +38,6 @@ from src.core.database import (
 )
 from src.core.simple_config import get_config
 from src.phases import PhaseManager
-
-from src.autopilot.orchestrator.engine_client import (
-    create_agent_for_task_direct,
-    get_tasks,
-    increment_task_retry_count,
-    update_task_status,
-)
-from src.autopilot.orchestrator.queue import (
-    _assess_run_health,
-)
-from src.autopilot.orchestrator.worktree_integration import (
-    _run_ash_scan,
-)
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -345,8 +341,9 @@ def _retry_exhausted_paused_workflows(logger: "OrchestratorLogger") -> int:
       human has to look at it at that point, same as the credits scenario
       would if it turned out to actually be permanently broken code instead.
     """
-    from src.autopilot.orchestrator import _get_paused_workflow_max_retry_cycles, _get_paused_workflow_retry_cooldown_seconds
     from sqlalchemy import or_
+
+    from src.autopilot.orchestrator import _get_paused_workflow_max_retry_cycles, _get_paused_workflow_retry_cooldown_seconds
 
     max_cycles = _get_paused_workflow_max_retry_cycles()
     cutoff = datetime.utcnow() - timedelta(seconds=_get_paused_workflow_retry_cooldown_seconds())
@@ -376,7 +373,12 @@ def _retry_exhausted_paused_workflows(logger: "OrchestratorLogger") -> int:
             # failed or pending tasks in in_progress phases (conditions may have changed)
             if wf.paused_by == "system-exhausted":
                 in_progress_phase_ids = {
-                    pid for (pid,) in db.query(PhaseExecution.phase_id).join(Phase, PhaseExecution.phase_id == Phase.id).filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress").all()
+                    pid for (pid,) in db.query(PhaseExecution.phase_id).join(
+                        Phase, PhaseExecution.phase_id == Phase.id
+                    ).filter(
+                        Phase.workflow_id == wf.id,
+                        PhaseExecution.status == "in_progress",
+                    ).all()
                 }
                 # Check for failed OR pending tasks (pending with no agent = stuck)
                 stuck_tasks = db.query(Task).filter(

@@ -14,8 +14,6 @@ What is pinned:
       both-absent -> restart_wd None WITHOUT raising (silent-None)
 """
 
-import asyncio
-from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,7 +26,6 @@ from src.core.database import (
     Workflow,
 )
 from src.interfaces.cli_interface import LaunchResult
-
 
 # ── fixtures ──────────────────────────────────────────────────────────────
 
@@ -600,7 +597,7 @@ class TestRestartGapClosings:
                 return_value=mock_term_info
             )
 
-            result = await restart_agent_manager.restart_agent(agent_id, "Test")
+            await restart_agent_manager.restart_agent(agent_id, "Test")
 
         # _check_termination_race was called
         restart_agent_manager._check_termination_race.assert_called_once()
@@ -652,7 +649,7 @@ class TestRestartGapClosings:
                 side_effect=Exception("CLI failed to start")
             )
 
-            result = await restart_agent_manager.restart_agent(agent_id, "Test")
+            await restart_agent_manager.restart_agent(agent_id, "Test")
 
         restart_agent_manager._detect_launch_failure.assert_called_once()
         restart_agent_manager._send_initial_prompt_with_retry.assert_not_called()

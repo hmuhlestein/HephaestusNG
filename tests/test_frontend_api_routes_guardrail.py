@@ -5,11 +5,9 @@ exact {(method, path)} set from the doc §4.1 tables. The set is hardcoded,
 not computed, so a missing or extra route fails immediately.
 """
 
-import pytest
 from unittest.mock import MagicMock
 
-from src.mcp.frontend import router, create_frontend_routes
-
+from src.mcp.frontend import create_frontend_routes, router
 
 # ── 42-route baseline (hardcoded from doc §4.1 cluster tables) ────────────
 EXPECTED_ROUTES = {

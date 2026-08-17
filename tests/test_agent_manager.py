@@ -15,8 +15,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.interfaces.cli_interface import CodexAgent, LaunchResult
-
 from src.core.database import (
     Agent,
     AgentLog,
@@ -26,6 +24,7 @@ from src.core.database import (
     Task,
     Workflow,
 )
+from src.interfaces.cli_interface import CodexAgent, LaunchResult
 
 
 @pytest.fixture

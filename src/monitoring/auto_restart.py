@@ -12,10 +12,8 @@ critical invariant (see AGENTS.md). Logged for Phase 3; DO NOT FIX here.
 """
 
 import logging
-from datetime import datetime
-from typing import Any, Dict
 
-from src.core.database import Agent, Task
+from src.core.database import Agent
 
 logger = logging.getLogger(__name__)
 

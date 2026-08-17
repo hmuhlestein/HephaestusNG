@@ -7,7 +7,6 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
 
 from src.mcp.frontend import _shared
 

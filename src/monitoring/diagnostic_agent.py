@@ -531,7 +531,6 @@ class WorkflowStuckDiagnostics:
         Returns:
             Formatted diagnostic prompt
         """
-        from pathlib import Path
 
         # Load template
         template_path = (

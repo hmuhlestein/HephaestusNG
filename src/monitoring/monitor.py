@@ -4,31 +4,26 @@ import asyncio
 import logging
 import re
 import time
-from datetime import datetime, timedelta
-from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from src.agents.manager import AgentManager
-from src.core.constants import CONTEXT_DIR_NAME, HEPHAESTUS_LOGS_DIR, WORKTREES_SUBDIR
+from src.core.constants import HEPHAESTUS_LOGS_DIR
 from src.core.database import (
     Agent,
     AgentLog,
     ConductorAnalysis,
     DatabaseManager,
     DetectedDuplicate,
-    GuardianAnalysis,
     Task,
-    Workflow,
 )
 from src.core.simple_config import get_config
-from src.interfaces import LLMProviderInterface, get_cli_agent
+from src.interfaces import LLMProviderInterface
 from src.memory.rag import RAGSystem
 from src.monitoring.conductor import Conductor
 from src.monitoring.guardian import Guardian
 from src.monitoring.trajectory_context import TrajectoryContext
 from src.phases import PhaseManager
-from src.prompts.loader import get_monitor_nudge
 
 logger = logging.getLogger(__name__)
 
@@ -229,10 +224,10 @@ class MonitoringLoop:
         # cluster of methods formerly inlined in MonitoringLoop; delegator
         # stubs below forward the old underscored names for test compat.
         from src.monitoring.auto_restart import AutoRestart
-        from src.monitoring.mechanical_recovery import MechanicalRecoveryDetector
+        from src.monitoring.diagnostic_agent import WorkflowStuckDiagnostics
         from src.monitoring.guardian_dispatch import GuardianDispatcher
         from src.monitoring.health_audit import SystemHealthAuditor
-        from src.monitoring.diagnostic_agent import WorkflowStuckDiagnostics
+        from src.monitoring.mechanical_recovery import MechanicalRecoveryDetector
 
         self._auto_restart = AutoRestart(db_manager, agent_manager, self.guardian)
         self._mechanical_recovery = MechanicalRecoveryDetector(

@@ -1,6 +1,5 @@
 """Tests for IntelligentMonitor — pure helpers and low-dependency methods."""
 
-import asyncio
 import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, Mock, patch

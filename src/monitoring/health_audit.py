@@ -9,9 +9,8 @@ See docs/SOLID_OO_REVIEW.md and design_docs/phase_1b_decomposition.md §4.3.
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
-from src.core.database import Agent, Task
 from src.prompts.loader import get_monitor_nudge
 
 logger = logging.getLogger(__name__)
@@ -64,7 +63,7 @@ class SystemHealthAuditor:
         # slow tool call rather than truly stuck.
         try:
             session = self.db_manager.get_session()
-            from src.core.database import Agent, Task
+            from src.core.database import Agent, Task, Workflow
 
             idle_minutes = timedelta(minutes=self.config.stuck_detection_minutes)
             idle_cutoff = datetime.utcnow() - idle_minutes
@@ -185,9 +184,10 @@ class SystemHealthAuditor:
                         # Fire spec gate for gated phases so phase execution
                         # is properly marked as completed
                         try:
+                            from pathlib import Path as _Path
+
                             from src.autopilot.spec import GATED_PHASES, build_phase_output
                             from src.core.database import Phase as _Phase
-                            from pathlib import Path as _Path
                             _phase = session.query(_Phase).filter_by(id=task.phase_id).first() if task.phase_id else None
                             if _phase and _phase.name in GATED_PHASES:
                                 _wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
@@ -195,7 +195,7 @@ class SystemHealthAuditor:
                                     phase_output = build_phase_output(_phase.name, _Path(_wf.working_directory), skip_independent_verification=True)
                                     from src.core.database import DatabaseManager as _DbMgr
                                     from src.phases import PhaseManager
-                                    pm = PhaseManager(_DbMgr())
+                                    pm = PhaseManager(_DbMgr(None))
                                     pm.workflow_id = task.workflow_id
                                     pm.mark_phase_complete(_phase.id, "Phase completed (monitor promoted stuck task)", phase_output=phase_output)
                         except Exception as e:
