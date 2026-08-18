@@ -104,45 +104,71 @@ def increment_task_retry_count(task_id: str) -> int:
         return 0
 
 
-def terminate_agent_direct(agent_id: str) -> bool:
-    """Terminate agent directly in database (H-2 fix).
+def terminate_agent(
+    agent_id: str,
+    *,
+    kill_tmux: bool = False,
+    reason: str = "",
+    session=None,
+) -> bool:
+    """Terminate agent: set the three-field invariant and reset stray tasks.
 
-    Also resets any Task still pointing at this agent -- mirroring the
-    safety net AgentManager.terminate_agent() already has for its own ~15
-    call sites (src/agents/manager.py, "closing the gap at the shared
-    primitive instead of requiring every... call site to remember it").
-    This is a SEPARATE termination primitive (direct DB write, no tmux
-    kill, used by this file's own agent-cleanup call sites) that never
-    got the same treatment: a Task left "assigned"/"in_progress" pointing
-    at a now-terminated agent is indistinguishable from one whose agent
-    is still genuinely working, until an unrelated periodic sweep
-    (attempt_recovery's stale-assigned-task cleanup) eventually notices
-    the mismatch and fails the task with a generic "terminated
-    unexpectedly" reason instead of resetting it for a clean retry.
+    This is the single shared primitive for agent termination. Every raw
+    ``agent.status = "terminated"`` write site must call this instead of
+    hand-rolling the invariant — the bug class it closes has independently
+    recurred eight times in this codebase's history.
+
+    Ordering: resets stray tasks BEFORE flipping the agent row, not after.
+    Two independent live incidents (91699b1, 92caa82) trace the same race:
+    if the DB write commits before the task reset, a dying agent's own
+    in-flight completion call can land in the gap, get rejected as coming
+    from a terminated agent, and permanently lose real completed work.
+
+    session: pass an existing SQLAlchemy session to participate in the
+    caller's transaction (no auto-commit). Omit to create a standalone
+    session that auto-commits.
+
+    kill_tmux: reserved for future use — full tmux teardown (WIP commit,
+    transcript capture, SIGINT/SIGKILL) is handled by Terminator.terminate_agent
+    via AgentManager. This function always does the DB invariant.
     """
+
+    def _do_terminate(s):
+        agent = s.query(Agent).filter_by(id=agent_id).first()
+        if not agent:
+            return False
+
+        # 1. Reset stray tasks FIRST (before flipping agent row).
+        stray_tasks = (
+            s.query(Task)
+            .filter_by(assigned_agent_id=agent_id)
+            .filter(Task.status.in_(["assigned", "in_progress", "pending"]))
+            .all()
+        )
+        for stray in stray_tasks:
+            stray.status = "pending"
+            stray.assigned_agent_id = None
+
+        # 2. Set the three-field invariant.
+        agent.status = "terminated"
+        agent.current_task_id = None
+        agent.terminated_at = datetime.utcnow()
+        return True
+
     try:
-        with get_db() as session:
-            agent = session.query(Agent).filter_by(id=agent_id).first()
-            if agent:
-                agent.status = "terminated"
-                agent.current_task_id = None  # Clear stale reference
-                agent.terminated_at = datetime.utcnow()
-
-                stray_tasks = (
-                    session.query(Task)
-                    .filter_by(assigned_agent_id=agent_id)
-                    .filter(Task.status.in_(["assigned", "in_progress", "pending"]))
-                    .all()
-                )
-                for stray in stray_tasks:
-                    stray.status = "pending"
-                    stray.assigned_agent_id = None
-
-                return True
-        return False
+        if session is not None:
+            return _do_terminate(session)
+        with get_db() as s:
+            result = _do_terminate(s)
+            s.commit()
+            return result
     except Exception as e:
-        logger.debug(f"[terminate_agent_direct] Failed: {e}")
+        logger.debug(f"[terminate_agent] Failed for {agent_id[:8] if agent_id else '?'}: {e}")
         return False
+
+
+# Backward-compatible alias for existing callers.
+terminate_agent_direct = terminate_agent
 
 
 def pause_workflow_direct(workflow_id: str) -> bool:

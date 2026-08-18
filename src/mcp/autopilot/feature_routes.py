@@ -265,8 +265,9 @@ async def pause_feature(feature_id: str):
                 agent = db.query(Agent).filter_by(id=task.assigned_agent_id).first()
                 if agent and agent.status in ("working", "starting", "idle"):
                     agent.status = "terminated"
-                    agent.current_task_id = None  # Clear stale reference
+                    agent.current_task_id = None
                     agent.terminated_at = datetime.utcnow()
+                    # Invariant: all three fields together (see terminate_agent).
             task.status = "blocked"
 
         wf.status = "paused"

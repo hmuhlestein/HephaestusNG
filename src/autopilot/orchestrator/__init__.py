@@ -75,7 +75,7 @@ import os
 from src.autopilot.orchestrator.engine_client import pause_workflow_direct
 from src.autopilot.orchestrator.engine_client import peek_agent_output
 from src.autopilot.orchestrator.queue import pick_next_design
-from src.autopilot.orchestrator.engine_client import terminate_agent_direct
+from src.autopilot.orchestrator.engine_client import terminate_agent, terminate_agent_direct
 import threading
 import time
 
@@ -2816,8 +2816,9 @@ def _register_orchestrator_agent(log_dir: Path, cli_tool: str, logger: Orchestra
                 # Check if tmux_session_name is already taken
                 existing = session.query(Agent).filter_by(tmux_session_name="orchestrator").first()
                 if existing:
+                    # Invariant: all three fields together (see terminate_agent).
                     existing.status = "terminated"
-                    existing.current_task_id = None  # Clear stale reference
+                    existing.current_task_id = None
                     existing.terminated_at = datetime.utcnow()
                     # tmux_session_name has a UNIQUE constraint -- marking
                     # the old row "terminated" alone doesn't free the value

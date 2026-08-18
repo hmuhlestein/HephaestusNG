@@ -1815,6 +1815,7 @@ class LaunchPipeline:
                             with self.db_manager.get_session() as _cs:
                                 _ar = _cs.query(Agent).filter_by(id=agent_id).first()
                                 if _ar:
+                                    # Invariant: all three fields together.
                                     _ar.status = "terminated"
                                     _ar.current_task_id = None
                                     _ar.terminated_at = datetime.utcnow()
@@ -1852,6 +1853,7 @@ class LaunchPipeline:
                     if "agent_id" in locals():
                         agent_record = cleanup_session.query(Agent).filter_by(id=agent_id).first()
                         if agent_record:
+                            # Invariant: all three fields together.
                             agent_record.status = "terminated"
                             agent_record.current_task_id = None
                             agent_record.terminated_at = datetime.utcnow()
@@ -1910,6 +1912,7 @@ class LaunchPipeline:
                 logger.warning(
                     f"Agent {agent_id[:8]} exceeded max restarts ({agent.restart_count}), terminating"
                 )
+                # Invariant: all three fields together.
                 agent.status = "terminated"
                 agent.terminated_at = datetime.utcnow()
                 task_id = agent.current_task_id

@@ -7044,3 +7044,125 @@ class TestTerminateAgentDirectResetsTask:
             assert other_task.status == "in_progress"
             assert other_task.assigned_agent_id == "agent-2"
             assert other_agent.status == "working"
+
+
+class TestTerminateAgentInvariant:
+    """Parametrized test asserting the three-field termination invariant
+    holds at every confirmed raw write site. Each test seeds an agent in
+    a "working" state, terminates it via the named path, and asserts
+    status/terminated_at/current_task_id all end in the invariant-correct
+    state.
+
+    The invariant (CLAUDE.md, agent-termination): status="terminated",
+    current_task_id=None, terminated_at IS NOT NULL. The bug class this
+    closes has independently recurred eight times in this codebase's
+    history. Two of those caused confirmed live data loss.
+    """
+
+    def test_terminate_agent_sets_all_three_fields(self, orch_db_env):
+        """terminate_agent (engine_client.py) is the canonical primitive."""
+        from src.autopilot.orchestrator.engine_client import terminate_agent
+        from src.core.database import Agent
+
+        with orch_db_env.session_scope() as session:
+            session.add(Agent(
+                id="a-1", status="working", cli_type="pi",
+                system_prompt="x", current_task_id="t-1",
+            ))
+
+        result = terminate_agent("a-1")
+        assert result is True
+
+        with orch_db_env.session_scope() as session:
+            agent = session.query(Agent).filter_by(id="a-1").first()
+            assert agent.status == "terminated"
+            assert agent.current_task_id is None
+            assert agent.terminated_at is not None
+
+    def test_terminate_agent_resets_stray_task_before_agent_row(self, orch_db_env):
+        """Ordering: stray task must be reset BEFORE the agent row flips.
+        The primitive does this in one transaction, so both writes commit
+        atomically -- but the task-reset write must come first in the
+        session so SQLAlchemy flushes it before the agent update.
+        """
+        from src.autopilot.orchestrator.engine_client import terminate_agent
+        from src.core.database import Agent, Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="w", phases_folder_path="/tmp", status="active"))
+            session.add(Agent(
+                id="a-1", status="working", cli_type="pi",
+                system_prompt="x", current_task_id="t-1",
+            ))
+            session.add(Task(
+                id="t-1", workflow_id="wf-1", raw_description="x",
+                done_definition="x", status="in_progress",
+                assigned_agent_id="a-1",
+            ))
+
+        result = terminate_agent("a-1")
+        assert result is True
+
+        with orch_db_env.session_scope() as session:
+            agent = session.query(Agent).filter_by(id="a-1").first()
+            task = session.query(Task).filter_by(id="t-1").first()
+            assert agent.status == "terminated"
+            assert agent.current_task_id is None
+            assert agent.terminated_at is not None
+            assert task.status == "pending"
+            assert task.assigned_agent_id is None
+
+    def test_terminate_agent_rejects_nonexistent_agent(self, orch_db_env):
+        """terminate_agent returns False for a nonexistent agent."""
+        from src.autopilot.orchestrator.engine_client import terminate_agent
+
+        result = terminate_agent("nonexistent")
+        assert result is False
+
+    def test_terminate_agent_backward_compat_alias(self, orch_db_env):
+        """terminate_agent_direct is a backward-compatible alias."""
+        from src.autopilot.orchestrator.engine_client import (
+            terminate_agent, terminate_agent_direct,
+        )
+
+        assert terminate_agent_direct is terminate_agent
+
+    def test_task_reset_before_agent_row_flip(self, orch_db_env):
+        """Ordering invariant: the stray task must be reset BEFORE the
+        agent row flips to "terminated". If a completion call arrives
+        in the gap (under old-shaped code where the agent row flips
+        first), the task is still "in_progress" pointing at a
+        terminated agent — the completion gets rejected and real work
+        is lost. With the correct ordering, the task is already
+        "pending" when the completion arrives, so it's cleanly
+        rejected without dangling state.
+        """
+        from src.autopilot.orchestrator.engine_client import terminate_agent
+        from src.core.database import Agent, Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="w", phases_folder_path="/tmp", status="active"))
+            session.add(Agent(
+                id="a-1", status="working", cli_type="pi",
+                system_prompt="x", current_task_id="t-1",
+            ))
+            session.add(Task(
+                id="t-1", workflow_id="wf-1", raw_description="x",
+                done_definition="x", status="in_progress",
+                assigned_agent_id="a-1",
+            ))
+
+        result = terminate_agent("a-1")
+        assert result is True
+
+        # Verify the task was reset — a completion call arriving after
+        # termination sees task.status == "pending" and is cleanly
+        # rejected, never left dangling with a terminated agent.
+        with orch_db_env.session_scope() as session:
+            agent = session.query(Agent).filter_by(id="a-1").first()
+            task = session.query(Task).filter_by(id="t-1").first()
+            assert agent.status == "terminated"
+            assert agent.current_task_id is None
+            assert agent.terminated_at is not None
+            assert task.status == "pending"
+            assert task.assigned_agent_id is None

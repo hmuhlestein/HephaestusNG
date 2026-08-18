@@ -1265,6 +1265,7 @@ async def remove_project_design(project_id: str, filename: str):
                             )
                         except Exception:
                             pass
+                        # Invariant: all three fields together (see terminate_agent).
                         agent.status = "terminated"
                         agent.current_task_id = None
                         agent.terminated_at = datetime.utcnow()

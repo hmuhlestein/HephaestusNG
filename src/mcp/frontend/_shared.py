@@ -13,6 +13,7 @@ from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import joinedload
 
 from src.agents.manager import AgentManager
+from src.autopilot.orchestrator.engine_client import terminate_agent
 from src.core.database import (
     Agent,
     AgentLog,
@@ -2133,16 +2134,16 @@ class FrontendAPI:
 
             terminated_count = 0
             for agent in agents:
-                agent.status = "terminated"
-                agent.current_task_id = None  # Clear stale reference
-                terminated_count += 1
+                _tmux_name = agent.tmux_session_name
+                if terminate_agent(agent.id, session=session):
+                    terminated_count += 1
                 # Kill tmux session
-                if agent.tmux_session_name:
+                if _tmux_name:
                     try:
                         import subprocess
 
                         subprocess.run(
-                            ["tmux", "kill-session", "-t", agent.tmux_session_name],
+                            ["tmux", "kill-session", "-t", _tmux_name],
                             capture_output=True,
                             timeout=5,
                         )
@@ -2233,7 +2234,8 @@ class FrontendAPI:
                         # Terminate via tmux kill-session (non-blocking)
                         import subprocess
 
-                        if agent.tmux_session_name:
+                        _tmux_name = agent.tmux_session_name
+                        if _tmux_name:
                             await loop.run_in_executor(
                                 None,
                                 functools.partial(
@@ -2242,15 +2244,14 @@ class FrontendAPI:
                                         "tmux",
                                         "kill-session",
                                         "-t",
-                                        agent.tmux_session_name,
+                                        _tmux_name,
                                     ],
                                     timeout=5,
                                     capture_output=True,
                                 ),
                             )
-                        agent.status = "terminated"
-                        agent.current_task_id = None  # Clear stale reference
-                        terminated_count += 1
+                        if terminate_agent(agent.id, session=session):
+                            terminated_count += 1
                     except Exception as e:
                         logger.warning(f"Failed to terminate agent {agent.id}: {e}")
 
