@@ -15,11 +15,10 @@ from src.core.constants import (
     CONTEXT_DIR_NAME,
     PHASE0_DEFINITION_IDS,
 )
+from src.mcp.autopilot import _shared
 
 # Import authentication function from server module
-
 from src.mcp.autopilot._shared import FeatureDetail, FeatureSummary, _cached, _extract_pr_url, _feature_status, _get_effective_features_dir, _invalidate, _read_json, _safe_path, _store
-from src.mcp.autopilot import _shared
 
 logger = logging.getLogger(__name__)
 
@@ -169,15 +168,15 @@ def _scan_features() -> List[Dict[str, Any]]:
     if cached is not None:
         return cached
 
-    from src.core.status_derivation import derive_feature_status
     from src.core.database import DatabaseManager
+    from src.core.status_derivation import derive_feature_status
 
     features = []
     try:
         db_manager = DatabaseManager(None)
         session = db_manager.get_session()
         try:
-            from src.core.database import Feature, Workflow, AutopilotProject
+            from src.core.database import AutopilotProject, Feature, Workflow
             db_features = session.query(Feature).order_by(Feature.created_at.desc()).all()
             for f in db_features:
                 status = f.status
@@ -625,10 +624,10 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                     logger.warning(f"[REVIEW] Failed to merge PR: {e}")
 
             # Check if all tasks are done — if so, mark as completed
-            from src.core.database import Task as _Task
             from src.autopilot.spec import DIAGNOSTIC_TASK_PREFIX
-            from src.core.database import PhaseExecution as _PhaseExecution
             from src.core.database import Phase as _Phase
+            from src.core.database import PhaseExecution as _PhaseExecution
+            from src.core.database import Task as _Task
             all_tasks = db.query(_Task).filter(
                 _Task.workflow_id == wf.id,
                 ~_Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%")
@@ -698,8 +697,9 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 # Load feedback prompt template from YAML
                 feedback_prompt = f"## Human Review Feedback\n\n{req.feedback.strip()}\n\nRead the feature report for context: .hephaestus/feature_report.html\n\nAddress all feedback items and make the necessary code changes."
                 try:
-                    import yaml as _yaml
                     from pathlib import Path as _Path
+
+                    import yaml as _yaml
                     prompt_file = _Path(__file__).parent.parent.parent / "config" / "prompts" / "review_feedback.yaml"
                     if prompt_file.exists():
                         with open(prompt_file) as f:
