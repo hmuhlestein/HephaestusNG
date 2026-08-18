@@ -343,3 +343,70 @@ class TestCleanupNeverTouchesMainRepo:
         assert Path(temp_repo.working_dir).exists()
         assert (Path(temp_repo.working_dir) / ".git").exists()
         assert temp_repo.head.commit.message.strip() == "Initial commit"
+
+
+class TestMergeSharedBranch:
+    """Characterization tests for merge_shared_branch — the single merge
+    primitive for all worktree cleanup paths. These tests verify the
+    current behavior BEFORE any strategy change, so the conflict-resolution
+    decision is provably a decision, not an accident.
+    """
+
+    def test_merges_clean_branch(self, temp_repo, db_manager):
+        """A branch with no conflicts merges successfully."""
+        wt_mgr = WorktreeManager(db_manager=db_manager)
+        wt_mgr.reload(Path(temp_repo.working_dir))
+
+        # Create a branch with a clean commit.
+        temp_repo.git.checkout("-b", "agent-clean")
+        (Path(temp_repo.working_dir) / "clean.txt").write_text("clean")
+        temp_repo.git.add("clean.txt")
+        temp_repo.git.commit("-m", "Add clean.txt")
+        temp_repo.git.checkout("main")
+
+        result = wt_mgr.merge_shared_branch("agent-clean")
+
+        assert result["action"] == "merged"
+        assert result["branch"] == "agent-clean"
+        assert (Path(temp_repo.working_dir) / "clean.txt").exists()
+
+    def test_preserves_branch_on_conflict(self, temp_repo, db_manager):
+        """A branch with conflicts is preserved, not force-deleted."""
+        wt_mgr = WorktreeManager(db_manager=db_manager)
+        wt_mgr.reload(Path(temp_repo.working_dir))
+
+        # Create a shared file on main.
+        shared = Path(temp_repo.working_dir) / "shared.txt"
+        shared.write_text("original")
+        temp_repo.git.add("shared.txt")
+        temp_repo.git.commit("-m", "Add shared.txt")
+
+        # Create branch from initial commit, modify shared file.
+        temp_repo.git.checkout("-b", "agent-conflict")
+        shared.write_text("branch version")
+        temp_repo.git.add("shared.txt")
+        temp_repo.git.commit("-m", "Modify shared.txt on branch")
+
+        # Go back to main and make conflicting change.
+        temp_repo.git.checkout("main")
+        shared.write_text("main version")
+        temp_repo.git.add("shared.txt")
+        temp_repo.git.commit("-m", "Modify shared.txt on main")
+
+        result = wt_mgr.merge_shared_branch("agent-conflict")
+
+        assert result["action"] == "preserved"
+        assert result["branch"] == "agent-conflict"
+        # Branch must still exist (not force-deleted).
+        branch_names = [b.name for b in temp_repo.branches]
+        assert "agent-conflict" in branch_names
+
+    def test_skips_nonexistent_branch(self, temp_repo, db_manager):
+        """A nonexistent branch is skipped."""
+        wt_mgr = WorktreeManager(db_manager=db_manager)
+        wt_mgr.reload(Path(temp_repo.working_dir))
+
+        result = wt_mgr.merge_shared_branch("nonexistent-branch")
+
+        assert result["action"] == "skipped"
+        assert result["branch"] == "nonexistent-branch"

@@ -922,6 +922,49 @@ class WorktreeManager:
         """
         return self.cleanup_worktree(agent_id, delete_branch=True)
 
+    def merge_shared_branch(
+        self,
+        branch_name: str,
+        *,
+        message: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Merge a branch into the base branch, abort-and-preserve on conflict.
+
+        This is the single merge primitive for all worktree cleanup paths.
+        On conflict: abort the merge and preserve the branch for manual
+        resolution — never auto-resolve (newest-file-wins is too risky for
+        design-level merges) and never force-delete.
+
+        Returns {"action": "merged", "branch": branch_name} on success,
+        {"action": "preserved", "branch": branch_name} on conflict,
+        or {"action": "skipped", "branch": branch_name} if the branch
+        doesn't exist.
+        """
+        try:
+            self.main_repo.git.rev_parse("--verify", branch_name)
+        except GitCommandError:
+            return {"action": "skipped", "branch": branch_name}
+
+        msg = message or f"[Cleanup] Merged {branch_name}"
+        try:
+            self.main_repo.git.merge(
+                branch_name, no_ff=True, m=msg
+            )
+            return {"action": "merged", "branch": branch_name}
+        except GitCommandError as e:
+            if "CONFLICT" in str(e):
+                logger.warning(
+                    f"[WORKTREE] Merge conflict on {branch_name} -> "
+                    f"{self.config.base_branch}, aborting -- branch preserved "
+                    f"for manual merge/PR"
+                )
+                try:
+                    self.main_repo.git.merge("--abort")
+                except GitCommandError:
+                    pass
+                return {"action": "preserved", "branch": branch_name}
+            raise
+
     def cleanup_all_stale_branches(self) -> Dict[str, Any]:
         """Clean up worktrees and branches from terminated/stale agents.
 
@@ -1088,45 +1131,23 @@ class WorktreeManager:
             ]
 
             def _merge_and_delete(branch_name: str, agent_id: Optional[str]) -> None:
-                try:
-                    self.main_repo.git.rev_parse("--verify", branch_name)
-                except GitCommandError:
-                    cleaned.append(branch_name)
-                    return
-                try:
-                    self.main_repo.git.merge(
-                        branch_name, no_ff=True, m=f"[Cleanup] Merged {branch_name}"
-                    )
+                result = self.merge_shared_branch(branch_name)
+                action = result["action"]
+                if action == "merged":
                     merged.append(branch_name)
-                except GitCommandError as e:
-                    if "CONFLICT" in str(e) and agent_id:
-                        self._resolve_conflicts(agent_id, session, self.main_repo)
-                        self.main_repo.git.commit(
-                            "-m",
-                            f"[Cleanup] Resolved conflicts merging {branch_name}",
-                            "--no-verify",
-                        )
-                        merged.append(branch_name)
-                    else:
-                        try:
-                            self.main_repo.git.merge("--abort")
-                        except GitCommandError:
-                            pass
-                        try:
-                            self.main_repo.git.branch("-D", branch_name)
-                            cleaned.append(branch_name)
-                            logger.info(
-                                f"[WORKTREE] Force-deleted unmergeable branch {branch_name}"
-                            )
-                        except GitCommandError:
-                            failed.append(branch_name)
-                        return
-                try:
-                    self.main_repo.git.branch("-D", branch_name)
-                    if branch_name not in cleaned:
+                    # Delete the branch after successful merge.
+                    try:
+                        self.main_repo.git.branch("-D", branch_name)
                         cleaned.append(branch_name)
-                except GitCommandError:
+                    except GitCommandError:
+                        failed.append(branch_name)
+                elif action == "preserved":
+                    # Conflict — branch preserved for manual resolution.
+                    # Do NOT delete it.
                     failed.append(branch_name)
+                else:
+                    # Branch doesn't exist.
+                    cleaned.append(branch_name)
 
             for record in records:
                 _merge_and_delete(record.branch_name, record.agent_id)
