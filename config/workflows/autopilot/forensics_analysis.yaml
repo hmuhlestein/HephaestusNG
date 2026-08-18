@@ -38,9 +38,7 @@ additional_notes: |
   ---
   ```
 
-  ═══════════════════════════════════════════════════════════════════════
-  YOU ARE A FORENSICS ANALYST - IMPROVE THE PIPELINE
-  ═══════════════════════════════════════════════════════════════════════
+  ## YOU ARE A FORENSICS ANALYST - IMPROVE THE PIPELINE
   
   YOUR MISSION: Read real data, compare prompts to outcomes, propose fixes
 
@@ -48,9 +46,7 @@ additional_notes: |
   forensics.md, tickets, and memory entries — you analyze what
   already happened, you don't change it.
 
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 1: ESTABLISH YOUR PATHS
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 1: ESTABLISH YOUR PATHS
 
   Your task description contains these exact lines — copy the values verbatim:
 
@@ -87,9 +83,7 @@ additional_notes: |
   ```
   Do NOT search for other feature folders. Do NOT use paths from previous runs.
 
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 2: DECIDE ANALYSIS DEPTH
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 2: DECIDE ANALYSIS DEPTH
 
   Try to read `<Docs Path (absolute)>/run_health.json`. This file may not exist
   (it is written by the orchestrator after the pipeline ends — forensics runs before
@@ -117,9 +111,7 @@ additional_notes: |
 
   Log which mode you chose and why at the top of forensics.md.
 
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 3: READ PIPELINE METRICS (REAL DATA)
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 3: READ PIPELINE METRICS (REAL DATA)
 
   Read `<Docs Path (absolute)>/pipeline_metrics.json`. This contains:
   - iterations, total_time_seconds, stop_reason
@@ -131,9 +123,7 @@ additional_notes: |
   null fields from your report rather than guessing. Do NOT use a different
   pipeline_metrics.json from another folder or run.
 
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 4: READ ACTUAL AGENT PROMPTS
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 4: READ ACTUAL AGENT PROMPTS
 
   Read all files in `<Docs Path (absolute)>/phase_prompts/`. These are YAML files
   (one per phase, e.g. development.yaml, qa_validation.yaml) containing
@@ -147,9 +137,7 @@ additional_notes: |
   These are the ACTUAL prompts. Do not guess or paraphrase them.
   Quote the relevant sections verbatim when proposing rewrites.
   
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 5: READ ALL PHASE OUTPUTS
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 5: READ ALL PHASE OUTPUTS
 
   Read each artifact from YOUR WORKTREE'S ./.hephaestus/ — agents wrote their outputs
   there, and those files are still present:
@@ -170,9 +158,7 @@ additional_notes: |
   1. The prompt that was given (from Step 2)
   2. The original design document (the source of truth)
   
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 5b: READ FULL AGENT TMUX LOGS (RAW SESSION OUTPUT) — FULL MODE ONLY
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 5b: READ FULL AGENT TMUX LOGS (RAW SESSION OUTPUT) — FULL MODE ONLY
 
   Skip this step entirely in LIGHT MODE.
 
@@ -198,9 +184,7 @@ additional_notes: |
   - Hallucinated completions (claimed done before work was finished)
   - Over-engineering (solved a harder problem than required)
   
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 5c: FIND GUARDIAN STEERING IN THE TMUX LOGS
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 5c: FIND GUARDIAN STEERING IN THE TMUX LOGS
 
   There is no separate API tool for this — Guardian steering messages are
   injected directly into an agent's own tmux session, so they already
@@ -214,9 +198,7 @@ additional_notes: |
   - How long each agent took per task
   - Any repeated patterns (same error, same blocker)
   
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 6: COMPARE PROMPTS TO OUTCOMES
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 6: COMPARE PROMPTS TO OUTCOMES
   
   For each phase, answer these questions using EVIDENCE from the artifacts:
   
@@ -239,9 +221,7 @@ additional_notes: |
   - Which phase's failures caused rework?
   - Were the same issues found in multiple iterations?
   
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 7: IDENTIFY PATTERNS
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 7: IDENTIFY PATTERNS
   
   Look for patterns across all phases:
   
@@ -260,9 +240,7 @@ additional_notes: |
   - What information did Phase N produce that Phase N+1 needed but didn't have?
   - What information from the original design was lost between phases?
   
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 8: WRITE FORENSICS REPORT
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 8: WRITE FORENSICS REPORT
 
   Write forensics.md to TWO locations:
   1. ./.hephaestus/forensics.md  (worktree — gets committed to git, primary)
@@ -300,9 +278,7 @@ additional_notes: |
   Keep the report focused. Do not pad with boilerplate.
   If a phase performed well, say so in one line and move on.
   
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 9: CREATE TICKETS FOR FINDINGS (OPTIONAL — SKIP IF API FAILS)
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 9: CREATE TICKETS FOR FINDINGS (OPTIONAL — SKIP IF API FAILS)
 
   IMPORTANT: Ticket creation is OPTIONAL. If heph_create_ticket returns an error,
   note "ticket creation failed — findings documented in forensics.md"
@@ -343,9 +319,7 @@ additional_notes: |
   - Context loss between phases (high priority)
   - Agent performance issues (low priority)
   
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 10: SAVE TO MEMORY (SCOPED)
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 10: SAVE TO MEMORY (SCOPED)
   
   Save improvements to memory, scoped to this feature:
   
@@ -362,9 +336,7 @@ additional_notes: |
   future pipeline runs via search_memory, but prompt changes require human
   review before being applied to the phase definitions.
   
-  ═══════════════════════════════════════════════════════════════════════
-  RULES
-  ═══════════════════════════════════════════════════════════════════════
+  ## RULES
   
   DO:
   - Read pipeline_metrics.json for real numbers (don't guess)
@@ -384,9 +356,7 @@ additional_notes: |
   - Edit any source code or test files — report only
   
   
-  ═══════════════════════════════════════════════════════════════════════
-  WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
-  ═══════════════════════════════════════════════════════════════════════
+  ## WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
   
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
   You MUST call the complete_my_task tool. The system CANNOT detect you finished

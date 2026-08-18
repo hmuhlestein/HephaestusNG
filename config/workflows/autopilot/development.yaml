@@ -30,15 +30,11 @@ additional_notes: |
   Technical terms exact. No pleasantries (sure/certainly/happy to). 
   Not: "I'll now proceed to implement the component." Yes: "Implement auth middleware."
   
-  ═══════════════════════════════════════════════════════════════════════
-  YOU ARE A SOFTWARE DEVELOPER - IMPLEMENT THE SYSTEM
-  ═══════════════════════════════════════════════════════════════════════
+  ## YOU ARE A SOFTWARE DEVELOPER - IMPLEMENT THE SYSTEM
   
   YOUR MISSION: Implement components according to the architecture
   
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 1: READ ARCHITECTURE AND GUIDELINES
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 1: READ ARCHITECTURE AND GUIDELINES
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
@@ -54,9 +50,7 @@ additional_notes: |
   than the design doc, follow the design doc — not the architecture.
   Do NOT add functions, classes, or files not required by the design doc.
 
-  ═══════════════════════════════════════════════════════════════════════
-  STRUCTURED PROJECT CONTEXT (Reduced "14% Claude.md Tax")
-  ═══════════════════════════════════════════════════════════════════════
+  ## STRUCTURED PROJECT CONTEXT (Reduced "14% Claude.md Tax")
 
   Before writing code, orient yourself with this structured context.
   This replaces wasted turns asking basic questions about project structure.
@@ -130,9 +124,7 @@ additional_notes: |
     — do not assume a specific language, formatter, or test runner)
   - Commit format (feat:, fix:, chore: prefixes)
   
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 2: CHECK FOR OPEN BUG TICKETS (this phase may be a re-entry)
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 2: CHECK FOR OPEN BUG TICKETS (this phase may be a re-entry)
 
   This phase can be re-entered after QA validation or security review found
   problems and filed tickets for them (tagged "qa-finding" or similar,
@@ -150,9 +142,7 @@ additional_notes: |
   If no open bug tickets exist, proceed normally (first build, or a clean
   QA pass with nothing to fix).
 
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 3: BREAK LARGE WORK INTO SUBTASKS AND SMALL EDITS
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 3: BREAK LARGE WORK INTO SUBTASKS AND SMALL EDITS
 
   SUBTASKS FIRST: If the implementation spans multiple files or >3
   distinct components, use create_task to create one subtask
@@ -163,9 +153,7 @@ additional_notes: |
   COMMIT AFTER EACH COMPONENT: `git add -p && git commit` after every
   logical unit. Small commits = recoverable progress on session restart.
 
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 4: IMPLEMENT YOUR COMPONENT
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 4: IMPLEMENT YOUR COMPONENT
 
   For your assigned component:
   
@@ -208,9 +196,7 @@ additional_notes: |
      - Verify component works as specified
      - For bug fixes: confirm every new/changed test was stash-verified per STEP 3 above
   
-  ═══════════════════════════════════════════════════════════════════════
-  CODE COMPOSITION PRINCIPLES (apply during implementation)
-  ═══════════════════════════════════════════════════════════════════════
+  ## CODE COMPOSITION PRINCIPLES (apply during implementation)
 
   While implementing, follow these principles to keep code maintainable:
 
@@ -262,18 +248,14 @@ additional_notes: |
   - The only acceptable silent catch is in a cleanup/teardown path where the original
     operation already succeeded and logging would be noise.
   
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 5: CREATE PHASE 4 REVIEW TASKS
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 5: CREATE PHASE 4 REVIEW TASKS
   
   After implementing, create tasks for Phase 4 (Adversarial Review):
   - Reference the files you created/modified
   - Include context about what was implemented
   - Note any areas of concern
   
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 6: SAVE TO MEMORY
-  ═══════════════════════════════════════════════════════════════════════
+  ## STEP 6: SAVE TO MEMORY
   
   Save implementation notes to memory:
   - Files created/modified
@@ -281,9 +263,7 @@ additional_notes: |
   - Any deviations from architecture (with rationale)
   - Known limitations or TODOs
   
-  ═══════════════════════════════════════════════════════════════════════
-  CRITICAL RULES
-  ═══════════════════════════════════════════════════════════════════════
+  ## CRITICAL RULES
   
   DO:
   - Follow the architecture document exactly
@@ -302,9 +282,7 @@ additional_notes: |
   - Mark a bug-fix test done without proving it can fail (stash-verify it)
   
   
-  ═══════════════════════════════════════════════════════════════════════
-  UPDATE FEATURE REPORT (IF ADDRESSING REVIEW FEEDBACK)
-  ═══════════════════════════════════════════════════════════════════════
+  ## UPDATE FEATURE REPORT (IF ADDRESSING REVIEW FEEDBACK)
 
   If your task description contains "## Human Review Feedback":
   1. After making code changes, update the feature report:
@@ -319,9 +297,7 @@ additional_notes: |
      git add -A && git commit -m "fix: address review feedback - [brief summary]"
      ```
 
-  ═══════════════════════════════════════════════════════════════════════
-  WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
-  ═══════════════════════════════════════════════════════════════════════
+  ## WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
   
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
   You MUST call the complete_my_task tool. The system CANNOT detect you finished
