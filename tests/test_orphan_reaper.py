@@ -84,7 +84,7 @@ class TestOrphanSessionReaper:
         reaper.agent_manager.tmux_server.sessions = [orphan_session]
 
         # Set last_check_time to bypass grace period
-        reaper.last_check_time = datetime.now() - timedelta(seconds=200)
+        reaper.last_check_time = datetime.utcnow() - timedelta(seconds=200)
 
         # Mock DB session with no active agents
         mock_db_session = MagicMock()
@@ -121,7 +121,7 @@ class TestOrphanSessionReaper:
         reaper.agent_manager.tmux_server.sessions = [active_session]
 
         # Set last_check_time to bypass grace period
-        reaper.last_check_time = datetime.now() - timedelta(seconds=200)
+        reaper.last_check_time = datetime.utcnow() - timedelta(seconds=200)
 
         # Mock DB: agent exists with matching session name
         mock_agent = MagicMock()
@@ -224,7 +224,7 @@ class TestOrphanSessionReaper:
         reaper.agent_manager.tmux_server.sessions = [new_session]
 
         # Set last_check_time very recently (within grace period)
-        reaper.last_check_time = datetime.now() - timedelta(seconds=10)
+        reaper.last_check_time = datetime.utcnow() - timedelta(seconds=10)
 
         # Mock DB: no active agents
         mock_db_session = MagicMock()
@@ -252,6 +252,67 @@ class TestOrphanSessionReaper:
         new_session.kill_session.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_grace_period_uses_utc_not_local_time(self, reaper, monkeypatch):
+        """The grace-period clock must be UTC throughout, not the host's
+        local time -- CLAUDE.md's utc-only invariant, and the exact bug
+        class this reaper's own inline comment documents (west of UTC, a
+        local-time cutoff compared against a UTC timestamp silently never
+        matches). Simulate a host where local time is wildly different from
+        UTC (not just offset by a few hours) and confirm the grace-period
+        decision still follows datetime.utcnow(), not datetime.now()."""
+        from src.monitoring import orphan_reaper as orphan_reaper_module
+
+        fixed_utc_now = datetime(2026, 1, 1, 12, 0, 10)
+
+        class _FakeDatetime:
+            @staticmethod
+            def utcnow():
+                return fixed_utc_now
+
+            @staticmethod
+            def now():
+                # A "local" clock wildly different from UTC. If the source
+                # used this instead of utcnow(), time_since_last_check would
+                # be computed against the wrong epoch entirely.
+                return datetime(2000, 1, 1, 0, 0, 0)
+
+        monkeypatch.setattr(orphan_reaper_module, "datetime", _FakeDatetime)
+
+        # 10 seconds before fixed_utc_now -- well within GRACE_PERIOD_SECONDS
+        # (120s) if and only if the reaper compares against utcnow().
+        reaper.last_check_time = fixed_utc_now - timedelta(seconds=10)
+
+        new_session = MagicMock()
+        new_session.name = "agent-new-utc-check"
+        reaper.agent_manager.tmux_server.sessions = [new_session]
+
+        mock_db_session = MagicMock()
+        reaper.db_manager.get_session.return_value = mock_db_session
+
+        agent_query = MagicMock()
+        agent_query.filter.return_value.all.return_value = []
+        wf_query = MagicMock()
+        wf_query.filter.return_value.all.return_value = []
+
+        def query_side_effect(model):
+            from src.core.database import Agent, Workflow
+            if model == Agent:
+                return agent_query
+            elif model == Workflow:
+                return wf_query
+            return MagicMock()
+
+        mock_db_session.query.side_effect = query_side_effect
+
+        await reaper.cleanup_orphaned_tmux_sessions()
+
+        # Still within the (UTC-computed) grace period -- must not be killed.
+        # If the source regressed to datetime.now(), time_since_last_check
+        # would be ~26 years, blowing past the grace period, and this
+        # assertion would fail.
+        new_session.kill_session.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_terminates_agent_with_inactive_workflow(self, reaper):
         """Agents whose workflow is no longer active should be terminated."""
         # Agent session in tmux and in DB
@@ -260,7 +321,7 @@ class TestOrphanSessionReaper:
         reaper.agent_manager.tmux_server.sessions = [mock_tmux_sess]
 
         # Set last_check_time to bypass grace period
-        reaper.last_check_time = datetime.now() - timedelta(seconds=200)
+        reaper.last_check_time = datetime.utcnow() - timedelta(seconds=200)
 
         # Mock agent with task in completed workflow
         mock_agent = MagicMock()
@@ -382,7 +443,7 @@ class TestActiveAgentStatusFilter:
         mock_tmux_sess = MagicMock()
         mock_tmux_sess.name = "agent-test-123"
         reaper_obj.agent_manager.tmux_server.sessions = [mock_tmux_sess]
-        reaper_obj.last_check_time = datetime.now() - timedelta(seconds=200)
+        reaper_obj.last_check_time = datetime.utcnow() - timedelta(seconds=200)
 
         await reaper_obj.cleanup_orphaned_tmux_sessions()
 
@@ -418,7 +479,7 @@ class TestOrphanReapFlushesCleanTranscript:
             side_effect=lambda: call_order.append("kill")
         )
         reaper.agent_manager.tmux_server.sessions = [orphan_session]
-        reaper.last_check_time = datetime.now() - timedelta(seconds=200)
+        reaper.last_check_time = datetime.utcnow() - timedelta(seconds=200)
 
         mock_db_session = MagicMock()
         reaper.db_manager.get_session.return_value = mock_db_session

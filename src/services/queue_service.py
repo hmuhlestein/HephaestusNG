@@ -377,7 +377,7 @@ class QueueService:
                         or_(
                             and_(Task.priority_boosted, new_task.priority_boosted),
                             and_(
-                                not Task.priority_boosted, not new_task.priority_boosted
+                                Task.priority_boosted.is_(False), not new_task.priority_boosted
                             ),
                         ),
                         priority_order > new_priority_value,
@@ -387,7 +387,7 @@ class QueueService:
                         or_(
                             and_(Task.priority_boosted, new_task.priority_boosted),
                             and_(
-                                not Task.priority_boosted, not new_task.priority_boosted
+                                Task.priority_boosted.is_(False), not new_task.priority_boosted
                             ),
                         ),
                         priority_order == new_priority_value,

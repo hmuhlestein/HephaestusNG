@@ -772,13 +772,22 @@ class WorktreeManager:
             session.close()
 
     def get_agent_branch_path(self, agent_id: str) -> Optional[str]:
-        """Get the working directory (worktree path) for an agent."""
+        """Get the working directory (worktree path) for an agent.
+
+        Returns None, not the main repo path, when no AgentBranch record
+        exists -- fail loudly, don't silently redirect a caller into the
+        main project repository (matching create_agent_for_task's own
+        convention). Every caller of this method already treats a falsy
+        return as "no path found" (a truthy main-repo path used to satisfy
+        those checks by accident, letting e.g. restart_agent silently
+        relaunch an agent into the main repo instead of failing).
+        """
         session = self.db_manager.get_session()
         try:
             record = self._agent_record(session, agent_id)
             if record and record.worktree_path:
                 return record.worktree_path
-            return str(self._project_root)
+            return None
         finally:
             session.close()
 
