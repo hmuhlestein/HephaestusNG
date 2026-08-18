@@ -781,12 +781,15 @@ async def _resume_interrupted_workflows(
                         (task.completion_notes or "")
                         + "\n[auto-recovered: git work had already landed before the agent's completion call was lost]"
                     ).strip()
-                    # The task was just marked "done" above, so the
-                    # primitive's stray-task sweep correctly leaves it
-                    # alone -- it only reclaims assigned/in_progress/
-                    # pending rows.
                     from src.autopilot.orchestrator.engine_client import terminate_agent
 
+                    # flush first: sessions are autoflush=False, so the
+                    # "done" write above is invisible to terminate_agent's
+                    # stray-task query until it hits the DB. Without this
+                    # the query still sees "in_progress", matches, and
+                    # resets the task to "pending" -- clobbering the
+                    # completion this recovery path exists to record.
+                    session.flush()
                     terminate_agent(agent.id, session=session)
                     session.commit()
                     resumed += 1

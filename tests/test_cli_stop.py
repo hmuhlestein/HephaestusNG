@@ -44,13 +44,20 @@ def _quiet_service_loop():
 
 
 def _fake_lsof_run(pid_str="12345"):
-    """subprocess.run stand-in: the initial unfiltered `lsof -ti :port`
-    reports `pid_str` bound; `pgrep` calls (the orphan sweep) report
-    nothing."""
+    """subprocess.run stand-in for BOTH modules that shell out here.
+
+    get_port_listeners (src/cli/utils/ports.py) runs `lsof` and then `ps`
+    to filter listeners by command name, so the `ps` reply must be
+    "<pid> <comm>" pairs or nothing survives the filter and the whole
+    port-cleanup block is skipped. `pgrep` (stop.py's orphan sweep)
+    reports nothing.
+    """
 
     def fake_run(cmd, **kwargs):
         if cmd[0] == "pgrep":
             return MagicMock(stdout="")
+        if cmd[0] == "ps":
+            return MagicMock(stdout=f"{pid_str} python\n")
         return MagicMock(stdout=f"{pid_str}\n")
 
     return fake_run
@@ -75,6 +82,8 @@ class TestPortCleanupWaitsForProcessExit:
         p1, p2 = _quiet_service_loop()
         with patch(
             "src.cli.commands.stop.subprocess.run", side_effect=_fake_lsof_run()
+        ), patch(
+            "src.cli.utils.ports.subprocess.run", side_effect=_fake_lsof_run()
         ), patch("src.cli.commands.stop.os.kill") as mock_kill, patch(
             "src.cli.commands.stop.time.sleep"
         ), patch(
@@ -95,6 +104,8 @@ class TestPortCleanupWaitsForProcessExit:
         p1, p2 = _quiet_service_loop()
         with patch(
             "src.cli.commands.stop.subprocess.run", side_effect=_fake_lsof_run()
+        ), patch(
+            "src.cli.utils.ports.subprocess.run", side_effect=_fake_lsof_run()
         ), patch("src.cli.commands.stop.os.kill") as mock_kill, patch(
             "src.cli.commands.stop.time.sleep"
         ), patch(

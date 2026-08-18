@@ -516,10 +516,25 @@ class TestAutopilotCommand:
         assert result == 1
 
     def test_pipeline_status_when_not_running(self, args, capsys):
+        """An unreachable backend is a failed command: exit 1, like every
+        other error path in pipeline_status (non-200, unresolvable
+        project). The mock matters as much as the assertion -- without it
+        this test made a real request to args.api_base and passed or
+        failed on whether anything happened to be listening there.
+        """
+        from unittest.mock import patch
+
+        import requests as _requests
+
         from src.cli.commands.autopilot import pipeline_status
 
-        result = pipeline_status(args)
-        assert result == 0
+        with patch(
+            "requests.get", side_effect=_requests.exceptions.ConnectionError("refused")
+        ):
+            result = pipeline_status(args)
+
+        assert result == 1
+        assert "Backend not running" in capsys.readouterr().out
 
 
 # ─── Memory Command Tests ──────────────────────────────────────────

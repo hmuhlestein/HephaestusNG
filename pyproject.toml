@@ -76,7 +76,9 @@ ignore = ["E501"]  # line length enforced by black/formatter
 "src/cli/*" = ["T20"]   # CLI tools print to stdout intentionally
 "tests/*" = ["T20"]     # tests print debug output
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-asyncio_mode = "auto"
-addopts = "-p no:libtmux"
+# pytest config lives in pytest.ini, NOT here. A pytest.ini in the same tree
+# shadows [tool.pytest.ini_options] entirely -- pytest reads one or the other,
+# never both. This section previously duplicated testpaths/asyncio_mode/addopts
+# and was silently dead: asyncio_mode never applied, so unmarked `async def
+# test_*` functions were collected as ordinary functions and failed. Keep the
+# settings in pytest.ini; do not re-add them here.

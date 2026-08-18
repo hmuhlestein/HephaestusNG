@@ -115,6 +115,25 @@ These four are **Phase 1b** — sequenced after §3.1 proves the scripted-extrac
 
 **Significant bug found and fixed during the `autopilot_api.py` split review, 2026-08-16, not previously documented anywhere in this plan: `DatabaseManager()` called with no arguments silently bypasses `HEPHAESTUS_TEST_DB` test-database isolation.** `DatabaseManager.__init__`'s default parameter is the literal string `"hephaestus.db"`, not `None` — the `HEPHAESTUS_TEST_DB` env-var check only fires when a caller explicitly passes `None`, unlike the correctly-written `get_db()` context manager (`database_path: Optional[str] = None`), which every other part of the codebase relies on for test isolation. A bare `DatabaseManager()` call under test silently reads/writes the real, live, self-hosted production database instead of an isolated test DB — confirmed as the direct cause of `tests/test_autopilot_api.py::TestFeatures::test_empty_features`/`test_list_features` failing (33 real feature records leaking into what should have been an empty test). **Confirmed pre-existing** (present in the original `autopilot_api.py` at HEAD before the split, not introduced by it) and **systemic**: found at 16 total call sites once the codebase was swept for the same pattern — `feature_routes.py`, `control_routes.py` (×2), `queue_routes.py` (the 4 in the new API package), plus `auth_middleware.py`, `auth_api.py`, `spec.py` (×2), `orchestrator/__init__.py` (×2), `phase_transitions.py` (×4, all `PhaseManager(DatabaseManager())` — the same core control-loop file §3.1's Exception 2 covers), and `task_blocking_service.py`. **All 16 fixed to `DatabaseManager(None)`, commits `df8ce2b`/`105589c`** — targeted tests for every touched subsystem pass, no regressions (confirmed via `git stash` for tests with pre-existing, unrelated failures). Left here as a permanent record, not a Phase 3 item, since it's already fixed — but worth remembering as a pattern: any *future* `DatabaseManager()` call site (new code, or code this plan's later phases touch) must use `DatabaseManager(None)` for test-DB isolation to work, and this is exactly the kind of masked bug a decomposition's file-split review can surface that a normal code-read wouldn't (the real DB happened to have the right schema, so nothing crashed — it just silently touched production data).
 
+### 3.4 Phase 1c — `src/mcp/server.py`, the god-object this plan never named
+
+**Added 2026-08-18, from `design_docs/phase1_phase2_gap_audit_findings.md` finding 16.** §3.3's closing criterion — "every god-object this plan named across both `backend_module_decomposition.md` and Phase 1b is now decomposed" — is true as written. The gap is in the naming, not the decomposing: it walks a checklist drawn before `src/mcp/server.py` became the largest module in the repository.
+
+`server.py` is **6,052 lines** — larger than `src/mcp/api.py` (3,225) and larger than `src/mcp/autopilot_api.py` (5,724), both of which this plan declared god-objects worth splitting. Measured across the refactor it did not shrink (5,752 → 5,787 from `df8ce2b` to `origin/main`). Phase 1 decomposed everything around it. It owns startup, shutdown, the background queue processor, the phase-advancement sweep, agent authentication, the entire MCP protocol surface, and the OAuth server.
+
+**Full execution plan: `design_docs/phase_1c_server_decomposition.md`** — exhaustive symbol-to-module mapping across nine modules, written to the same standard as `backend_module_decomposition.md`. Two hazards specific to this file are called out there and summarized here:
+
+- **A duplicated rate-limit subsystem shadowed by definition order.** `_rate_limit_store`, `RATE_LIMIT_WINDOW`, `RATE_LIMIT_MAX` and `_check_rate_limit` are each defined twice (L1363-1378 and L3867-3886). The first `_check_rate_limit` has no lock and **zero callers**; the three live OAuth call sites all sit after the second definition and therefore bind the thread-safe copy. It is correct today by definition order alone. Splitting the file puts the two copies in different modules and makes thread safety depend on which one a route imports. Delete the first block as step 0, before any extraction.
+- **Two god-functions inside the god-file.** `create_task` (601 lines) and `update_task_status` (423 lines) are each larger than three of the four modules the `api.py` split produced. Moving them verbatim reproduces that split's outcome. They get the `create_agent_for_task` treatment from §3.2 — decomposed into named steps *as part of* the move.
+
+**A size criterion this plan has lacked until now, and should apply retroactively.** Phase 1b's `api.py` split met its stated goal (route clustering — all 42 routes correctly distributed across four thin route modules) while moving the implementation wholesale into a single 2,872-line `FrontendAPI` class in `_shared.py`. That is larger than `MonitoringLoop` (~2,050 lines), which this same plan flagged as a god-object needing decomposition. Phase 1c's exit criteria therefore include **no module over ~800 lines** — a split that relocates mass has not decomposed anything, and without an explicit threshold that outcome reads as success.
+
+**Sequencing: after Phase 2 completes, before Phase 4.** Same rationale Phase 1 gave for preceding Phase 2 (decomposition makes duplication visible), inverted by circumstance: re-splitting a file whose consolidations are still landing means touching the same lines twice. Phase 4's deletions should run against the decomposed layout, not the flat file.
+
+**Highest risk, stated plainly: 70 `src.mcp.server` references across 20 test files.** Findings 15 and 17 record that Phase 1b's decompositions broke tests in exactly this way — stubs left pointing at a delegate the real path no longer calls — and that a red baseline hid it for weeks. A stale `@patch(...)` string raises no `ImportError`, and a mock that never fires produces no error at all, so every one of the 70 is a migration site that must be verified by running the file, not by grepping.
+
+---
+
 ---
 
 ## 4. Phase 2 — Consolidate duplicated primitives (deduplicate)
@@ -361,6 +380,12 @@ Phase 1 (decompose) ── zero behavior change for 6 of 8 orchestrator modules
    │                                does NOT start "already absorbed."
    │  3.2  src/mcp/api.py / create_agent_for_task / MonitoringLoop /
    │       task_completion_service.py — pure moves, no exceptions here
+   │  3.4  Phase 1c: src/mcp/server.py (6,052 lines — the largest module
+   │       in the repo, never named by the original scope). Sequenced
+   │       AFTER Phase 2, before Phase 4 — see below. Adds the size
+   │       criterion Phase 1 lacked: no module over ~800 lines, so a
+   │       split cannot "succeed" by relocating mass the way api.py's
+   │       did (2,872-line _shared.py).
    ▼
 Phase 2 (deduplicate) ── status verified against shipped code 2026-08-18
    │  4.1 DONE (4d6010f): three-way staleness-fallback merged into
@@ -401,10 +426,22 @@ Phase 3 (fix issues) ── regression test red→green per bug, Tier 1 before T
    │   wiring pass, for the same "fix the live bug narrowly, then remove the
    │   need for hand-syncing" reason.)
    ▼
+Phase 1c (decompose server.py) ── runs here, after Phase 2's consolidations
+   │  land and before Phase 4's deletions, so the deletions run against the
+   │  decomposed layout. Full plan: design_docs/phase_1c_server_decomposition.md
+   │  Step 0 is deleting the duplicated rate-limit block (L1363-1378), whose
+   │  correctness currently depends on definition order alone.
+   ▼
 Phase 4 (streamline: delete dead code) ── can interleave with Phase 2/3 once
    │  each deletion's zero-caller status is confirmed against post-Phase-1 code;
-   │  now includes _archive_and_cleanup and merge_to_main/cleanup_worktree,
-   │  moved here from §4.4 once that item's consolidation confirms them dead
+   │  now includes _archive_and_cleanup and merge_to_main, moved here from
+   │  §4.4. CORRECTED 2026-08-18 (finding 13): cleanup_worktree is NOT dead
+   │  and must not be deleted — it is reached via discard_agent, which
+   │  launch_pipeline.py:1851 calls on the agent-creation failure path.
+   │  merge_to_main is dead in production (only merge_to_parent reaches it,
+   │  and that has zero production callers); _archive_and_cleanup is dead in
+   │  production but has live tests that must be removed in the same commit.
+   │  Re-derive reachability per target at deletion time.
    ▼
 Phase 5 / §7 (adjacent, out of scope) ── resume architecture_review.md's own
       remaining Tier 2/3 items, or human_input_intervention_system.md, once
@@ -427,6 +464,7 @@ Phases 1 → 2 → 3 have a hard ordering dependency (each makes the next phase'
 | §3.1 `worktree_integration.py` exception | M | The safety-guard fix changes real removal behavior for the shared-worktree path (the common case in production) — a mistake here has a wider blast radius than a pure move | Medium — isolated to one module's commit(s), but "revert" doesn't undo any worktree already force-removed under the old bypass before the fix landed; this is a forward-fix risk, not a rollback risk |
 | §3.1 `phase_transitions.py` exception | XL | The single highest-risk item in this entire plan — it touches the actual phase-transition control loop (goto/retry/arbitration) that the majority of this repo's historical `fix:` commits are about, and does so while also consolidating three duplicated-primitive clusters in the same commits | Medium — still one-commit-per-sub-primitive per principle #2 (don't collapse the claim consolidation, the arbitration-dispatch merge, and the retry-unification into one commit just because they're in the same module); revert whichever sub-commit regresses, not the whole module |
 | §3.2 (api.py / `create_agent_for_task` / `MonitoringLoop` / `task_completion_service.py`) | L each | Same class of risk as the pure-move modules in §3.1 — lower than `phase_transitions.py` since these are genuinely closer to zero-behavior-change | High — one module, one commit, same revert story |
+| §3.4 Phase 1c (`src/mcp/server.py`, 6,052 lines) | XL | **Test-reference breakage, not code breakage.** 70 `src.mcp.server` references across 20 test files must each be re-pointed; a stale `@patch(...)` string raises no `ImportError` and a mock that never fires produces no error at all, so this fails silently and stays failed (findings 15/17 record exactly this outcome from Phase 1b). Second risk: splitting the duplicated rate-limit block (L1363-1378 vs L3867-3886) across modules, where correctness currently depends on definition order alone — delete the unlocked copy as step 0. Third: reproducing `api.py`'s outcome by relocating mass into a new `_shared.py`, which the ~800-line-per-module exit criterion exists to prevent. | Per-module commits as in §3.1; each module revertible in isolation. Establish the full-suite baseline at the parent commit BEFORE starting — a change this wide cannot be validated by targeted runs (finding 12). |
 | §4.1-4.8, §4.11 (Phase 2 primitives, incl. the new pause-state primitive and scope audit) | M each | A consolidated primitive with a subtly wrong edge case now affects *every* caller at once, instead of one caller having a bug — this is the trade this whole plan is making (more blast radius per bug, far fewer total bugs) and is exactly why each item requires its characterization test to go red→green, not just "looks right" | Medium — revert the primitive's commit; every caller that migrated to it in a *separate* commit (per principle #2) reverts independently and falls back to its old, individually-buggy-but-isolated behavior |
 | §4.9 declared-output path/schema resolver | XL | The largest single Phase 2 item — merges four previously-independent "search more places"/schema-tolerance clusters into one resolver touching every gated phase's completion path | Medium — same sub-commit discipline as `phase_transitions.py` (§3.1 XL row); land per-phase schema migrations as separate commits, not one big-bang switch |
 | §4.10 MCP tool-name registry | S | Low — a naming-convention consolidation with no state-machine coupling; worst case is a tool briefly unreachable under one alias, caught immediately by any smoke run | High — single commit, trivial revert |
