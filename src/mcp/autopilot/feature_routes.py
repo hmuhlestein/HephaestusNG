@@ -108,6 +108,12 @@ async def get_workflow_feature_report(workflow_id: str):
     if working_directory:
         candidate = Path(working_directory) / CONTEXT_DIR_NAME / "doc_review" / "feature_report.html"
         if not candidate.is_file():
+            # feature_review's own subdirectory (Phase 0's decomposition
+            # synopsis, not doc_review's) -- checked before the flat
+            # fallback below since it's this phase's one sanctioned
+            # location, same convention every other gated phase uses.
+            candidate = Path(working_directory) / CONTEXT_DIR_NAME / "feature_review" / "feature_report.html"
+        if not candidate.is_file():
             candidate = Path(working_directory) / CONTEXT_DIR_NAME / "feature_report.html"
         if not candidate.is_file():
             candidate = Path(working_directory) / "docs" / "doc_review" / "feature_report.html"
@@ -130,10 +136,11 @@ async def get_workflow_feature_report(workflow_id: str):
 
 @router.get("/workflows/{workflow_id}/decomposition_review")
 async def get_workflow_decomposition_review(workflow_id: str):
-    """Serve feature_review's adversarial review.md for a Phase 0 workflow.
+    """Serve feature_review's adversarial feature_review.md for a Phase 0
+    workflow.
 
     Same live-worktree-then-designs_folder fallback chain as
-    get_workflow_feature_report, since review.md is copied to
+    get_workflow_feature_report, since feature_review.md is copied to
     designs_folder by run_phase0 alongside feature_report.html.
     """
     from src.core.database import AutopilotDesign, Workflow, get_db
@@ -150,18 +157,26 @@ async def get_workflow_decomposition_review(workflow_id: str):
 
     review_path = None
     if working_directory:
-        candidate = Path(working_directory) / CONTEXT_DIR_NAME / "review.md"
+        candidate = Path(working_directory) / CONTEXT_DIR_NAME / "feature_review" / "feature_review.md"
+        if not candidate.is_file():
+            # TEMPORARY (Phase 2 §4.9 follow-up) -- an in-flight Phase 0
+            # run started before feature_review's report moved here may
+            # still be writing to the old flat .hephaestus/review.md.
+            # Remove once no such run can still be active.
+            candidate = Path(working_directory) / CONTEXT_DIR_NAME / "review.md"
         if candidate.is_file():
             review_path = candidate
 
     if review_path is None and phase0_designs_folder:
-        candidate = Path(phase0_designs_folder) / "review.md"
+        candidate = Path(phase0_designs_folder) / "feature_review.md"
+        if not candidate.is_file():
+            candidate = Path(phase0_designs_folder) / "review.md"
         if candidate.is_file():
             review_path = candidate
 
     if review_path is None:
         raise HTTPException(404, "Review not found")
-    return {"name": "review.md", "content": review_path.read_text(errors="replace")}
+    return {"name": review_path.name, "content": review_path.read_text(errors="replace")}
 
 def _scan_features() -> List[Dict[str, Any]]:
     cached = _cached("features", ttl=30.0)
@@ -476,8 +491,9 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
         # phases the normal way (the workflow already reached "completed"
         # before pausing for review; run_single_workflow's own phase-by-phase
         # loop, which would otherwise sequence this, already returned).
-        # Skipping the review.md/feature_report.html rewrite would leave the
-        # review modal showing the pre-redo synopsis and findings forever.
+        # Skipping the feature_review.md/feature_report.html rewrite would
+        # leave the review modal showing the pre-redo synopsis and findings
+        # forever.
         feedback_prompt = (
             f"## Human Review Feedback\n\n{req.feedback.strip()}\n\n"
             "Re-decompose the design taking the above feedback into account. "
@@ -485,7 +501,8 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
             "Then, in this same task, perform the adversarial feature-review pass "
             "yourself: compare the revised decomposition against the design document "
             "the same way the feature_review phase does, and rewrite "
-            ".hephaestus/review.md and .hephaestus/feature_report.html so both "
+            ".hephaestus/feature_review/feature_review.md and "
+            ".hephaestus/feature_review/feature_report.html so both "
             "reflect the revised decomposition -- they are what the human reviewer "
             "sees next, and must not be left describing the old decomposition."
         )
@@ -544,7 +561,7 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
                 phase_id=arch_phase.id,
                 raw_description=feedback_prompt,
                 enriched_description=None,
-                done_definition="Feature decomposition revised per human feedback, review.md and feature_report.html rewritten to match",
+                done_definition="Feature decomposition revised per human feedback, feature_review.md and feature_report.html rewritten to match",
                 status="pending",
                 priority="high",
             )

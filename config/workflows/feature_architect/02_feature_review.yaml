@@ -23,11 +23,11 @@ done_definitions:
   - "depends_on graph checked for cycles and unnecessary coupling"
   - "All BLOCKER and FIX findings documented with the exact design section and recommended fix"
   - "DEFER issues documented"
-  - "review.md created with a YAML frontmatter block (blocker_count/fix_count/defer_count, gate input) followed by the BLOCKER/FIX/DEFER findings"
+  - "feature_review.md created with a YAML frontmatter block (blocker_count/fix_count/defer_count, gate input) followed by the BLOCKER/FIX/DEFER findings"
   - "feature_report.html written to Artifacts Path"
   - "Task marked as done"
 outputs:
-  - "review.md"
+  - "feature_review.md"
   - "feature_report.html"
 next_steps:
   - "On any BLOCKER or FIX finding, the engine sends this report back to the Feature Architect for re-decomposition"
@@ -105,13 +105,17 @@ additional_notes: |
   STEP 4: WRITE THE REPORT
   ═══════════════════════════════════════════════════════════════════════
 
-  Write review.md to ./.hephaestus/ (the same directory
-  everything you read in Step 1 already lives in — design.md, features.json,
-  scope.md) — NOT ./docs/. This report is internal orchestration input for
-  the Feature Architect's next attempt, not a project deliverable, so it
-  belongs alongside Feature Architect's own outputs, not in the project's
-  docs/. This is your ONLY output besides the result JSON below — do not
-  edit features.json or any scope.md.
+  Write feature_review.md to ./.hephaestus/feature_review/ (create that
+  subdirectory if missing) — NOT ./docs/, NOT flat ./.hephaestus/. Every
+  other gated phase in this pipeline writes its report to its own
+  ./.hephaestus/<phase_name>/ subdirectory; this phase follows the same
+  convention now, and feature_review.md is a distinct filename from
+  architectural_review's review.md so the two are never ambiguous. This
+  report is internal orchestration input for the Feature Architect's next
+  attempt, not a project deliverable, so it belongs alongside Feature
+  Architect's own outputs, not in the project's docs/. This is your ONLY
+  output besides the result JSON below — do not edit features.json or any
+  scope.md.
 
   # Feature Review Report
 
@@ -148,11 +152,11 @@ additional_notes: |
   [What the decomposition got right]
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: PREPEND STRUCTURED RESULT TO review.md (NOT OPTIONAL)
+  STEP 5: PREPEND STRUCTURED RESULT TO feature_review.md (NOT OPTIONAL)
   ═══════════════════════════════════════════════════════════════════════
 
-  review.md is ONE file: a YAML frontmatter block followed
-  by the full report above, written to ./.hephaestus/review.md
+  feature_review.md is ONE file: a YAML frontmatter block followed
+  by the full report above, written to ./.hephaestus/feature_review/feature_review.md
   — NOT ./docs/, same reason as Step 4. The frontmatter is what drives the
   pipeline: if ANY BLOCKER or FIX is found, the pipeline sends the FULL
   report straight back to the Feature Architect as its next task — without
@@ -184,7 +188,8 @@ additional_notes: |
   reviewing the decomposition (review mode) needs to see the CURRENT state
   of the plan, including one that's about to be sent back for
   re-decomposition. Self-contained HTML (inline styles, no external deps),
-  written to ./.hephaestus/feature_report.html (NOT ./docs/).
+  written to ./.hephaestus/feature_review/feature_report.html (NOT ./docs/)
+  — same subdirectory as feature_review.md above.
 
   Title tag and top-of-page heading must both start with the actual
   project name (this gets read out of context later, same reasoning as
@@ -202,11 +207,11 @@ additional_notes: |
   2. Feature list — for each feature in features.json: name, one-paragraph
      scope, files it owns, its depends_on, execution mode (parallel/sequential)
   3. Coverage — the same design-requirement → owning-feature map from your
-     review.md, so a human can see nothing was dropped without reading the
-     full report
-  4. Findings summary — condensed BLOCKER/FIX/DEFER list from review.md
-     (title + one-line evidence each; full detail stays in review.md, not
-     duplicated in full here)
+     feature_review.md, so a human can see nothing was dropped without
+     reading the full report
+  4. Findings summary — condensed BLOCKER/FIX/DEFER list from
+     feature_review.md (title + one-line evidence each; full detail stays
+     in feature_review.md, not duplicated in full here)
 
   Target 100-200 lines — shorter than doc_review's report, since this
   documents a plan, not a completed implementation.

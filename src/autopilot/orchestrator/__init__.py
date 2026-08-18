@@ -373,7 +373,15 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
         {
             "id": request_id,
             "reason": reason,
-            "timestamp": datetime.now().isoformat(),
+            # utcnow: intervention_routes._find_first_non_stale_input_request
+            # parses this back, sees tzinfo is None, and ASSUMES UTC
+            # (ts.replace(tzinfo=timezone.utc)) before comparing against
+            # datetime.now(timezone.utc). A local-time stamp here is
+            # therefore misread by the host's UTC offset: west of UTC the
+            # request looks hours older than it is and is deleted as stale
+            # (threshold 1h) before the human ever sees the prompt; east of
+            # UTC the age goes negative and it is never cleaned up.
+            "timestamp": datetime.utcnow().isoformat(),
             "options": ["c", "s", "q"],
             "labels": {"c": "Continue", "s": "Skip design", "q": "Quit pipeline"},
             "timeout_seconds": timeout,
@@ -1644,16 +1652,32 @@ def run_phase0(
         # goto ever fired, so the report text never got embedded in a
         # corrective task's description either) leaves no audit trail at
         # all of what the reviewer actually checked and confirmed was fine.
-        review_src = features_json_path.parent / "review.md"
+        # feature_review writes to its own .hephaestus/feature_review/
+        # subdirectory (Phase 2 §4.9 follow-up), the same convention every
+        # other gated phase uses.
+        feature_review_dir = features_json_path.parent / "feature_review"
+        review_src = feature_review_dir / "feature_review.md"
+        if not review_src.exists():
+            # TEMPORARY (Phase 2 §4.9 follow-up) -- an in-flight Phase 0
+            # run started before the normalization may still be writing
+            # to the old flat .hephaestus/review.md. Remove once no such
+            # run can still be active.
+            legacy_review_src = features_json_path.parent / "review.md"
+            if legacy_review_src.exists():
+                review_src = legacy_review_src
         if review_src.exists():
             shutil.copy2(review_src, designs_folder / review_src.name)
 
         # Copy feature_review's HTML decomposition synopsis out too, same
-        # reason and same durability requirement as review.md above -- this
-        # is what get_workflow_feature_report serves for the "Feature
-        # Architect" row's report button, and what a human needs to
-        # actually look at during the review-mode pause below.
-        synopsis_src = features_json_path.parent / "feature_report.html"
+        # reason and same durability requirement as feature_review.md above
+        # -- this is what get_workflow_feature_report serves for the
+        # "Feature Architect" row's report button, and what a human needs
+        # to actually look at during the review-mode pause below.
+        synopsis_src = feature_review_dir / "feature_report.html"
+        if not synopsis_src.exists():
+            legacy_synopsis_src = features_json_path.parent / "feature_report.html"
+            if legacy_synopsis_src.exists():
+                synopsis_src = legacy_synopsis_src
         if synopsis_src.exists():
             shutil.copy2(synopsis_src, designs_folder / synopsis_src.name)
 
@@ -1975,10 +1999,25 @@ def finalize_phase0_workflow(
             scope_dest.parent.mkdir(parents=True, exist_ok=True)
             if scope_src.exists() and scope_src != scope_dest:
                 shutil.copy2(scope_src, scope_dest)
-    review_src = features_json_path.parent / "review.md"
+    # feature_review writes to its own .hephaestus/feature_review/
+    # subdirectory (Phase 2 §4.9 follow-up), same as the mirrored copy in
+    # run_phase0 above.
+    feature_review_dir = features_json_path.parent / "feature_review"
+    review_src = feature_review_dir / "feature_review.md"
+    if not review_src.exists():
+        # TEMPORARY (Phase 2 §4.9 follow-up) -- see the matching fallback
+        # in run_phase0 above. Remove once no in-flight run predating the
+        # normalization can still be active.
+        legacy_review_src = features_json_path.parent / "review.md"
+        if legacy_review_src.exists():
+            review_src = legacy_review_src
     if review_src.exists() and review_src != designs_folder / review_src.name:
         shutil.copy2(review_src, designs_folder / review_src.name)
-    synopsis_src = features_json_path.parent / "feature_report.html"
+    synopsis_src = feature_review_dir / "feature_report.html"
+    if not synopsis_src.exists():
+        legacy_synopsis_src = features_json_path.parent / "feature_report.html"
+        if legacy_synopsis_src.exists():
+            synopsis_src = legacy_synopsis_src
     if synopsis_src.exists() and synopsis_src != designs_folder / synopsis_src.name:
         shutil.copy2(synopsis_src, designs_folder / synopsis_src.name)
 
@@ -2705,7 +2744,11 @@ def run_single_design(
     """Three-stage coordinator: Phase 0 → per-feature pipelines → design aggregate."""
     project_path.mkdir(parents=True, exist_ok=True)
     design_entry.project_path = project_path
-    design_entry.started_at = datetime.now().isoformat()
+    # utcnow: paired with completed_at below to compute elapsed time.
+    # Both use the same clock so the subtraction is self-consistent, but
+    # local time jumps an hour at a DST boundary and a design run can span
+    # one -- which would silently add or remove 3600s from total_time.
+    design_entry.started_at = datetime.utcnow().isoformat()
 
     logger.info("=" * 70)
     logger.info(f"PROCESSING DESIGN: {design_entry.name}")
@@ -2737,7 +2780,7 @@ def run_single_design(
     # ── Stage 3: Design aggregate ──
     status, report = run_design_aggregate(design_entry, feature_results, designs_folder, logger)
 
-    design_entry.completed_at = datetime.now().isoformat()
+    design_entry.completed_at = datetime.utcnow().isoformat()
 
     # Note: Phase 0 and feature worktrees are cleaned up by their own finally blocks
     # inside run_phase0() and _run_one_feature(). No additional cleanup needed here.

@@ -448,7 +448,8 @@ class TestRunPhase0Tiers:
         (worktree / ".hephaestus" / "features.json").write_text(
             json.dumps(features_json_content)
         )
-        (worktree / ".hephaestus" / "review.md").write_text(
+        (worktree / ".hephaestus" / "feature_review").mkdir(parents=True)
+        (worktree / ".hephaestus" / "feature_review" / "feature_review.md").write_text(
             "---\ntype: feature_review_result\nblocker_count: 0\nfix_count: 0\ndefer_count: 0\n---\n\n"
             "# Feature Review Report\n\nClean pass."
         )
@@ -485,7 +486,7 @@ class TestRunPhase0Tiers:
                 logger=MagicMock(),
             )
 
-        assert (designs_folder / "review.md").read_text() == (
+        assert (designs_folder / "feature_review.md").read_text() == (
             "---\ntype: feature_review_result\nblocker_count: 0\nfix_count: 0\ndefer_count: 0\n---\n\n"
             "# Feature Review Report\n\nClean pass."
         )
@@ -494,8 +495,8 @@ class TestRunPhase0Tiers:
         self, db_manager, design, tmp_path
     ):
         """feature_review's HTML decomposition synopsis needs the same
-        durability copy as review.md -- otherwise it's gone the moment
-        _cleanup_worktree removes the (git-excluded) worktree."""
+        durability copy as feature_review.md -- otherwise it's gone the
+        moment _cleanup_worktree removes the (git-excluded) worktree."""
         from src.autopilot.orchestrator import run_phase0
 
         design_entry = self._make_design_entry(design, tmp_path)
@@ -518,7 +519,8 @@ class TestRunPhase0Tiers:
                 }
             )
         )
-        (worktree / ".hephaestus" / "feature_report.html").write_text(
+        (worktree / ".hephaestus" / "feature_review").mkdir(parents=True)
+        (worktree / ".hephaestus" / "feature_review" / "feature_report.html").write_text(
             "<html><title>Test Project: Feature Decomposition</title></html>"
         )
 

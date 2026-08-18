@@ -365,6 +365,21 @@ class TestConsumeGateArtifacts:
     def test_missing_files_return_empty(self, tmp_path):
         assert S.consume_gate_artifacts("adversarial_review", tmp_path) == []
 
+    def test_deletes_old_name_alias_too(self, tmp_path):
+        """read_okf_report now resolves an old-name alias when scoring
+        (Phase 2 §4.9 follow-up) -- this function's own docstring requires
+        mirroring its candidate order exactly, alias included, or a stale
+        aliased file it doesn't know to delete resurrects the exact
+        stale-result loop this function exists to prevent."""
+        sub = tmp_path / ".hephaestus" / "qa_validation"
+        sub.mkdir(parents=True)
+        (sub / "qa_report.md").write_text("# stale aliased report")
+
+        deleted = S.consume_gate_artifacts("qa_validation", tmp_path)
+
+        assert len(deleted) == 1
+        assert not (sub / "qa_report.md").exists()
+
     def test_every_mapped_artifact_gets_consumed(self, tmp_path):
         """Guardrail: for each mapped phase, writing then consuming its
         artifacts must leave the gate scorer with nothing stale to read --
@@ -442,7 +457,7 @@ class TestValidateGateResultSchema:
 
     def test_accepts_the_documented_qa_schema(self):
         result = {
-            "type": "qa_validation_result",
+            "type": "qa_validation",
             "failed_tests": 0,
             "passed_tests": 1410,
             "total_tests": 1410,
@@ -464,7 +479,7 @@ class TestValidateGateResultSchema:
         """Any one of the required keys is enough -- doesn't demand all of
         them, just evidence the agent used the right schema shape."""
         assert S.validate_gate_result_schema(
-            "qa_validation", {"type": "qa_validation_result", "critical_issues": 2}
+            "qa_validation", {"type": "qa_validation", "critical_issues": 2}
         ) is None
 
     def test_scope_review_accepts_documented_nested_variant(self):
@@ -473,7 +488,7 @@ class TestValidateGateResultSchema:
         tolerates."""
         assert S.validate_gate_result_schema(
             "scope_review",
-            {"type": "scope_review_result", "scope_review": {"verdict": "PASS"}},
+            {"type": "scope_review", "scope_review": {"verdict": "PASS"}},
         ) is None
 
     def test_architectural_review_rejects_missing_blocker_count(self):
@@ -616,6 +631,185 @@ class TestReviewFindingsHistory:
         assert len(history[0]["summary"]) == 500
 
 
+class TestResolveDeclaredOutputPath:
+    """Phase 2 §4.9: resolve_declared_output_path is the single search
+    verify_output_artifact and verify_output_survived_commit now both
+    call, replacing a byte-identical duplicated search loop in each
+    (src/services/task_completion/verification.py's own module docstring
+    flagged this duplication as deliberate, pending this consolidation).
+    """
+
+    def test_finds_current_name_in_phase_subdirectory(self, tmp_path):
+        sub = tmp_path / ".hephaestus" / "qa_validation"
+        sub.mkdir(parents=True)
+        (sub / "qa.md").write_text("content")
+        found = S.resolve_declared_output_path(str(tmp_path), "qa_validation", "qa.md")
+        assert found == sub / "qa.md"
+
+    def test_falls_back_to_old_name_alias(self, tmp_path):
+        sub = tmp_path / ".hephaestus" / "qa_validation"
+        sub.mkdir(parents=True)
+        (sub / "qa_report.md").write_text("content")
+        found = S.resolve_declared_output_path(str(tmp_path), "qa_validation", "qa.md")
+        assert found == sub / "qa_report.md"
+
+    def test_phase_subdirectory_wins_over_worktree_root(self, tmp_path):
+        (tmp_path / ".hephaestus" / "qa_validation").mkdir(parents=True)
+        (tmp_path / ".hephaestus" / "qa_validation" / "qa.md").write_text("right one")
+        (tmp_path / "qa.md").write_text("wrong one")
+        found = S.resolve_declared_output_path(str(tmp_path), "qa_validation", "qa.md")
+        assert found == tmp_path / ".hephaestus" / "qa_validation" / "qa.md"
+
+    def test_does_not_check_docs_directory(self, tmp_path):
+        """docs/ was removed as a candidate (Phase 2 §4.9 follow-up):
+        every gated phase's prompt explicitly forbids writing there, and
+        read_okf_report (the search that actually SCORES a report) never
+        accepted it either -- accepting it here only let a report pass
+        this existence check before silently failing later, invisibly, at
+        actual gate evaluation. See
+        TestOutputPathResolutionAgreesWithScoringPathResolution below."""
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "qa.md").write_text("content")
+        assert S.resolve_declared_output_path(str(tmp_path), "qa_validation", "qa.md") is None
+
+    def test_does_not_check_flat_hephaestus_for_a_phase_scoped_gated_phase(self, tmp_path):
+        """Same bug class as docs/, found on a further re-check: flat
+        .hephaestus/<name> (no phase subfolder) was read_okf_report's
+        scoring-time location for feature_review only (its old
+        GATE_RESULT_SUBDIR override, since normalized away), not for a
+        phase-scoped gated phase like qa_validation -- accepting it here
+        for qa_validation let a report placed only at .hephaestus/qa.md
+        pass this existence check and then silently score as "no report"
+        (confirmed live via build_phase_output before this fix)."""
+        (tmp_path / ".hephaestus").mkdir()
+        (tmp_path / ".hephaestus" / "qa.md").write_text("content")
+        assert S.resolve_declared_output_path(str(tmp_path), "qa_validation", "qa.md") is None
+
+    def test_feature_review_now_uses_the_phase_subdirectory_like_every_other_gated_phase(self, tmp_path):
+        """feature_review used to be the one gated phase with a
+        GATE_RESULT_SUBDIR override (flat .hephaestus/review.md, also
+        colliding in name with architectural_review's own review.md) --
+        normalized onto the standard .hephaestus/<phase_name>/ convention
+        and a unique filename (Phase 2 §4.9 follow-up). Flat .hephaestus/
+        must no longer be accepted for it, same as every other gated phase."""
+        (tmp_path / ".hephaestus").mkdir()
+        (tmp_path / ".hephaestus" / "feature_review.md").write_text("content")
+        assert S.resolve_declared_output_path(str(tmp_path), "feature_review", "feature_review.md") is None
+
+        sub = tmp_path / ".hephaestus" / "feature_review"
+        sub.mkdir()
+        (sub / "feature_review.md").write_text("content")
+        found = S.resolve_declared_output_path(str(tmp_path), "feature_review", "feature_review.md")
+        assert found == sub / "feature_review.md"
+
+    def test_still_checks_flat_hephaestus_for_a_non_gated_phase(self, tmp_path):
+        """A non-gated phase (e.g. Feature Architect) is never scored via
+        build_phase_output/read_okf_report at all, so there's no
+        scoring-mismatch risk to guard against -- this candidate stays."""
+        (tmp_path / ".hephaestus").mkdir()
+        (tmp_path / ".hephaestus" / "features.json").write_text("content")
+        found = S.resolve_declared_output_path(str(tmp_path), "feature_architect", "features.json")
+        assert found == tmp_path / ".hephaestus" / "features.json"
+
+    def test_returns_none_when_nowhere_found(self, tmp_path):
+        assert S.resolve_declared_output_path(str(tmp_path), "qa_validation", "qa.md") is None
+
+
+class TestFeatureReviewLegacyLocationFallback:
+    """TEMPORARY (Phase 2 §4.9 follow-up) -- an in-flight Phase 0 run
+    started before feature_review's report moved from flat
+    .hephaestus/review.md to .hephaestus/feature_review/feature_review.md
+    may still be writing to the old location. Checked as a fallback,
+    everywhere the report is read or cleaned up, only when the new
+    location comes up empty -- flagged for removal once no such run can
+    still be active, not a permanent second convention."""
+
+    def test_existence_check_falls_back_to_legacy_location(self, tmp_path):
+        (tmp_path / ".hephaestus").mkdir()
+        (tmp_path / ".hephaestus" / "review.md").write_text("legacy content")
+        found = S.resolve_declared_output_path(str(tmp_path), "feature_review", "feature_review.md")
+        assert found == tmp_path / ".hephaestus" / "review.md"
+
+    def test_existence_check_prefers_new_location_when_both_exist(self, tmp_path):
+        sub = tmp_path / ".hephaestus" / "feature_review"
+        sub.mkdir(parents=True)
+        (sub / "feature_review.md").write_text("new content")
+        (tmp_path / ".hephaestus" / "review.md").write_text("legacy content")
+        found = S.resolve_declared_output_path(str(tmp_path), "feature_review", "feature_review.md")
+        assert found == sub / "feature_review.md"
+
+    def test_scoring_falls_back_to_legacy_location(self, tmp_path):
+        (tmp_path / ".hephaestus").mkdir()
+        (tmp_path / ".hephaestus" / "review.md").write_text(_okf(
+            "type: feature_review_result\nblocker_count: 0\nfix_count: 0\ndefer_count: 0"
+        ))
+        result = S.build_phase_output("feature_review", tmp_path)
+        assert result["spec_gate"]["band"] == "pass"
+
+    def test_consume_gate_artifacts_deletes_legacy_location_too(self, tmp_path):
+        """Must actually delete the legacy file, not just read it -- an
+        unconsumed stale legacy report would otherwise keep resurrecting
+        the exact goto-loop bug this function exists to prevent, across
+        every retry of an in-flight run still writing to it."""
+        (tmp_path / ".hephaestus").mkdir()
+        (tmp_path / ".hephaestus" / "review.md").write_text("legacy content")
+
+        deleted = S.consume_gate_artifacts("feature_review", tmp_path)
+
+        assert len(deleted) == 1
+        assert not (tmp_path / ".hephaestus" / "review.md").exists()
+
+
+class TestOutputPathResolutionAgreesWithScoringPathResolution:
+    """Phase 2 §4.9 follow-up: resolve_declared_output_path (existence
+    check, used by verify_output_artifact/verify_output_survived_commit)
+    and read_okf_report (actual scoring, used by build_phase_output and
+    verify_gate_result_schema) used to disagree on where a report counts
+    as "found" -- the existence check also accepted docs/ and old-name
+    aliases that the scorer never did, so a report written only to one of
+    those passed both task-completion hard floors and then silently
+    mis-scored as "no report" once the gate actually evaluated it, on a
+    phase that was genuinely, validly completed.
+
+    Closed from both directions rather than picking one: docs/ was
+    dropped from the existence check (every gated phase's prompt
+    explicitly forbids writing there, so nothing was ever going to
+    succeed via that path anyway -- rejecting it immediately, with a
+    clear message while the completing agent still has context, beats a
+    confusing async failure downstream). Old-name aliases were instead
+    added to the scorer's search (a small, fixed lookup, not a directory
+    scan, so it doesn't reintroduce the stale-file risk read_okf_report's
+    own docstring warns about) -- an aliased report is legitimate content
+    under an old name, not a forbidden location, so making it actually
+    score correctly was the more useful fix than rejecting it too.
+    """
+
+    def test_docs_only_report_is_rejected_by_existence_check(self, tmp_path):
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "qa.md").write_text(_okf(
+            "type: qa_validation\nfailed_tests: 0\npassed_tests: 5\n"
+            "total_tests: 5\ncritical_issues: 0"
+        ))
+        assert S.resolve_declared_output_path(str(tmp_path), "qa_validation", "qa.md") is None
+
+    def test_old_name_alias_now_scores_correctly(self, tmp_path):
+        """The other half of the fix: an aliased report must actually
+        score, not just pass the existence check."""
+        sub = tmp_path / ".hephaestus" / "qa_validation"
+        sub.mkdir(parents=True)
+        (sub / "qa_report.md").write_text(_okf(
+            "type: qa_validation\nfailed_tests: 0\npassed_tests: 5\n"
+            "total_tests: 5\ncritical_issues: 0"
+        ))
+
+        found = S.resolve_declared_output_path(str(tmp_path), "qa_validation", "qa.md")
+        assert found == sub / "qa_report.md"
+
+        out = S.build_phase_output("qa_validation", tmp_path, spec=dict(S.DEFAULT_SPEC))
+        assert out["score"] >= S._PASS_FLOOR
+        assert "result_missing" not in out["spec_gate"]
+
+
 class TestSyntheticCleanResult:
     """Regression: _cap_out_review_phase writes this result for a phase
     that hit its max_review_runs cap, so the gate's own scorer lets the
@@ -659,13 +853,42 @@ class TestSyntheticCleanResult:
         score, meta = S.score_adversarial_review(result)
         assert score >= S._PASS_FLOOR
 
+    def test_design_review_result_scores_a_clean_pass(self):
+        result = S.synthetic_clean_result("design_review", run_count=5)
+        score, meta = S.score_design_review(result)
+        assert meta["band"] == "pass"
+
+    def test_feature_review_result_scores_a_clean_pass(self):
+        """feature_review is the one gated phase whose documented `type:`
+        isn't the bare phase name (see GATE_RESULT_TYPE_OVERRIDE) -- the
+        scorer itself doesn't read `type` at all, so this only proves the
+        blocker_count/fix_count shape passes; validate_gate_result_schema's
+        own type-string agreement is covered separately."""
+        result = S.synthetic_clean_result("feature_review", run_count=5)
+        score, meta = S.score_feature_review(result)
+        assert meta["band"] == "pass"
+
     def test_every_result_records_capped_metadata(self):
         for phase_name in (
-            "qa_validation", "product_validation", "scope_review", "architectural_review",
+            "qa_validation", "product_validation", "scope_review", "design_review",
+            "architectural_review", "adversarial_review", "feature_review",
         ):
             result = S.synthetic_clean_result(phase_name, run_count=7)
             assert result["capped"] is True
             assert result["capped_after_runs"] == 7
+
+    def test_every_result_type_matches_validate_gate_result_schema(self):
+        """The plan's own §4.9 verification target: _cap_out_review_phase's
+        synthetic result must pass validate_gate_result_schema for every
+        gated phase, not just score cleanly -- these were found to
+        disagree (synthetic_clean_result unconditionally appended
+        "_result" to the type, validate_gate_result_schema unconditionally
+        expected the bare phase name) until GATE_RESULT_TYPE_OVERRIDE
+        unified them onto one source of truth."""
+        for phase_name in S.GATE_RESULT_REQUIRED_KEYS:
+            result = S.synthetic_clean_result(phase_name, run_count=3)
+            error = S.validate_gate_result_schema(phase_name, result)
+            assert error is None, f"{phase_name}: {error}"
 
 
 if __name__ == "__main__":

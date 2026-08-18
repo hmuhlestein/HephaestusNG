@@ -151,6 +151,111 @@ def get_phase_required_files(phase: Any, workflow_id: Optional[str] = None) -> l
     return _extract_declared_files(getattr(phase, "outputs", None))
 
 
+# A declared output's current documented filename, mapped to the older name
+# some phases used before the OKF (docs.md/summary.md/etc.) convention --
+# both are accepted so an agent (or a report written before the rename)
+# still resolves. Single source of truth: this used to be defined
+# byte-identically in two places in src/services/task_completion/
+# verification.py (verify_output_artifact and verify_output_survived_commit),
+# a duplication that module's own docstring flagged as deliberate pending
+# this consolidation (Phase 2 §4.9).
+OUTPUT_NAME_ALIASES: Dict[str, str] = {
+    "docs.md": "doc_review_report.md",
+    "summary.md": "code_summary.md",
+    "security.md": "security_report.md",
+    "review.md": "architectural_review_report.md",
+    "adversarial.md": "adversarial_review_report.md",
+    "qa.md": "qa_report.md",
+    "validation.md": "product_validation.md",
+    "requirements.md": "requirements_analysis.md",
+    "scope.md": "scope_review_result.md",
+    "forensics.md": "forensics_report.md",
+}
+
+
+def resolve_declared_output_path(
+    working_directory: str, phase_name: str, declared_output: str
+) -> Optional[Path]:
+    """Find where a phase's declared output file actually landed in its
+    worktree, trying every sanctioned location and old-name alias in the
+    same order verify_output_artifact/verify_output_survived_commit have
+    always searched. Returns the first candidate that exists, or None.
+
+    Search order (first match wins, current name checked before its old
+    alias at each location):
+      1. .hephaestus/<phase_name>/<name> -- the one sanctioned location
+         each gated phase's own CRITICAL PATH RULE tells it to write to,
+         checked first rather than guessed at.
+      2. <working_directory>/<name>
+      3. .hephaestus/<name> (flat, no phase subfolder) -- ONLY for a
+         non-gated phase (e.g. Phase 0's Feature Architect writes internal
+         orchestration artifacts here directly), or a gated phase whose
+         own GATE_RESULT_SUBDIR override IS this flat location (none,
+         currently -- see that dict's own comment). For every gated phase
+         this candidate is skipped: read_okf_report -- the search that
+         actually SCORES a report -- only ever checks
+         .hephaestus/<phase_name>/ and the worktree root for those phases,
+         never flat .hephaestus/, so accepting a flat-.hephaestus/ report
+         as "found" here produced exactly the same class of bug as the
+         docs/ case below: passes this existence check, then silently
+         mis-scores as "no report" at actual gate evaluation (Phase 2
+         §4.9, confirmed live: build_phase_output returned
+         result_missing=True for a qa.md placed only at flat
+         .hephaestus/qa.md, which this function used to accept).
+         feature_review was the one gated phase this used to matter for
+         (a flat .hephaestus/review.md that also collided in name with
+         architectural_review's own review.md) until normalized onto this
+         same .hephaestus/<phase_name>/ convention.
+
+    Deliberately does NOT check docs/<name> (Phase 2 §4.9): every gated
+    phase's own prompt explicitly forbids writing there ("Write ALL
+    reports to Artifacts Path (.hephaestus/) -- NOT the project root, NOT
+    ./docs/"), and read_okf_report never accepted it either. Same
+    reasoning as candidate 3 above -- rejecting it immediately here, with
+    a clear "missing" message while the completing agent still has
+    context to fix it, beats a confusing async failure downstream, and
+    makes this function agree with what scoring will actually accept.
+
+    Does not check the feature-gallery archive or git history -- those are
+    separate fallback layers only one of this function's two callers uses
+    (see verify_output_artifact's feature_dir search and
+    verify_output_survived_commit's git-history search respectively);
+    kept out of this shared function rather than forced to fit both.
+    """
+    base = Path(working_directory)
+    old_name = OUTPUT_NAME_ALIASES.get(declared_output)
+    names_to_check = [declared_output] + ([old_name] if old_name else [])
+    # See candidate 3's docstring paragraph above -- flat .hephaestus/ is
+    # only a real scoring-time location for a non-gated phase, or a gated
+    # phase whose GATE_RESULT_SUBDIR override IS that flat location (none
+    # currently -- kept for a future phase that might genuinely need it).
+    include_flat_hephaestus = (
+        phase_name not in GATED_PHASES
+        or GATE_RESULT_SUBDIR.get(phase_name) == CONTEXT_DIR_NAME
+    )
+    for name in names_to_check:
+        candidates = [
+            base / CONTEXT_DIR_NAME / phase_name / name,
+            base / name,
+        ]
+        if include_flat_hephaestus:
+            candidates.append(base / CONTEXT_DIR_NAME / name)
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+    if phase_name == "feature_review" and declared_output == "feature_review.md":
+        # TEMPORARY (Phase 2 §4.9 follow-up) -- see
+        # _feature_review_legacy_report's own docstring. An in-flight
+        # Phase 0 run started before the normalization may still be
+        # writing to the old flat .hephaestus/review.md; without this the
+        # existence check would reject it as "missing" before the report
+        # ever reaches scoring.
+        legacy = base / CONTEXT_DIR_NAME / "review.md"
+        if legacy.exists():
+            return legacy
+    return None
+
+
 # Per-workflow-definition caches for the two loaders below, keyed by
 # Workflow.definition_id. A workflow.yaml's required_output/optional_phases
 # don't change during the process's lifetime, so caching is safe -- but it
@@ -1101,7 +1206,7 @@ def score_feature_review(
     result: Optional[Dict[str, Any]],
     report_text: Optional[str] = None,
 ) -> Tuple[float, Dict[str, Any]]:
-    """Score a review.md by BLOCKER/FIX/DEFER counts.
+    """Score a feature_review.md by BLOCKER/FIX/DEFER counts.
 
     02_feature_review.yaml's report classifies findings as BLOCKER (feature
     decomposition contradicts or omits part of the design), FIX (scope
@@ -1119,10 +1224,10 @@ def score_feature_review(
         # forgot) to also emit the structured JSON -- don't discard real
         # findings just because the JSON is missing.
         reason = (
-            f"no review.md frontmatter found, but a report was "
+            f"no feature_review.md frontmatter found, but a report was "
             f"written:\n\n{report_text}"
             if report_text
-            else "no review.md found"
+            else "no feature_review.md found"
         )
         return 0.4, {
             "gate": "feature_review",
@@ -1162,8 +1267,9 @@ def read_okf_report(
     Does NOT iterate worktrees (too slow for per-turn calls).
 
     subdir: if given, this phase's real (sole, not a fallback) output
-    location is working_directory/subdir/filename. Reads ONLY from that
-    path; does not try other locations.
+    location is working_directory/subdir/filename (or its old-name alias,
+    see below). Reads ONLY that one location; does not try other
+    directories.
 
     phase_name: each gated phase's task description tells it the ONE
     sanctioned subdirectory of .hephaestus/ to write to --
@@ -1175,17 +1281,28 @@ def read_okf_report(
     The project root remains as a fallback location for older agent
     behavior.
 
+    At each location, `filename`'s old-name alias (OUTPUT_NAME_ALIASES,
+    the same table resolve_declared_output_path checks) is tried too --
+    a small, fixed lookup, not a directory scan, so it doesn't reintroduce
+    the stale-file risk above; without it, a report written under its old
+    name passed verify_output_artifact's existence check (which does
+    resolve aliases) but silently scored as "no report" here, since the
+    two functions used to disagree on this (Phase 2 §4.9).
+
     Returns (frontmatter, body) -- either or both None if the file is
     missing or has no parseable frontmatter block (see okf_markdown.read_okf).
     """
     base = Path(working_directory)
+    old_name = OUTPUT_NAME_ALIASES.get(filename)
+    names = [filename] + ([old_name] if old_name else [])
     if subdir is not None:
-        candidates = (base / subdir / filename,)
+        candidates = [base / subdir / name for name in names]
     else:
         candidates = []
-        if phase_name:
-            candidates.append(base / ".hephaestus" / phase_name / filename)
-        candidates += [base / filename]
+        for name in names:
+            if phase_name:
+                candidates.append(base / ".hephaestus" / phase_name / name)
+            candidates.append(base / name)
     for candidate in candidates:
         if candidate.exists():
             parsed = read_okf(candidate)
@@ -1204,17 +1321,20 @@ GATE_RESULT_ARTIFACTS: Dict[str, Tuple[str, ...]] = {
     "adversarial_review": ("adversarial.md",),
     "qa_validation": ("qa.md",),
     "product_validation": ("validation.md",),
-    "feature_review": ("review.md",),
+    "feature_review": ("feature_review.md",),
 }
 
-# Override for the (rare) gated phase whose result lives somewhere other
-# than docs/<file> or <root>/<file> -- feature_review writes to the
-# git-excluded .hephaestus/ dir, like its sibling Feature Architect, since
-# Phase 0's artifacts are internal orchestration state rather than a
-# git-tracked deliverable (see read_okf_report's own subdir parameter).
-GATE_RESULT_SUBDIR: Dict[str, str] = {
-    "feature_review": CONTEXT_DIR_NAME,
-}
+# Override for a gated phase whose result lives somewhere other than
+# .hephaestus/<phase_name>/<file> or <root>/<file> -- currently unused.
+# feature_review used to be the one exception (a flat .hephaestus/review.md,
+# colliding in name with architectural_review's own review.md) until
+# normalized onto the same .hephaestus/<phase_name>/ convention and
+# feature_review.md's unique filename (Phase 2 §4.9 follow-up). Kept as
+# infrastructure for read_okf_report's/consume_gate_artifacts's subdir
+# parameter, in case a future gated phase genuinely needs a non-standard
+# location -- not speculative, just not deleting a general mechanism for
+# the sake of the one entry that used it.
+GATE_RESULT_SUBDIR: Dict[str, str] = {}
 
 
 def synthetic_clean_result(phase_name: str, run_count: int) -> Dict[str, Any]:
@@ -1236,9 +1356,10 @@ def synthetic_clean_result(phase_name: str, run_count: int) -> Dict[str, Any]:
     than not capping at all would have.
     """
     # type: matches validate_gate_result_schema's expected `type` for this
-    # phase -- without it this synthetic result would fail the very check
-    # a real agent's report has to pass.
-    base = {"type": f"{phase_name}_result", "capped": True, "capped_after_runs": run_count}
+    # phase (GATE_RESULT_TYPE_OVERRIDE, the same source of truth) -- without
+    # it this synthetic result would fail the very check a real agent's
+    # report has to pass.
+    base = {"type": expected_gate_result_type(phase_name), "capped": True, "capped_after_runs": run_count}
     if phase_name == "qa_validation":
         return {
             **base,
@@ -1283,24 +1404,33 @@ def consume_gate_artifacts(phase_name: str, working_directory: Any) -> list:
     deleted = []
     base = Path(working_directory)
     subdir = GATE_RESULT_SUBDIR.get(phase_name)
-    candidates_for = (
-        (lambda f: (base / subdir / f,))
-        if subdir
-        else (lambda f: (base / f,))
-    )
     for filename in GATE_RESULT_ARTIFACTS.get(phase_name, ()):
         # .hephaestus/<phase_name>/ is the one sanctioned subdirectory name
         # this phase's own CRITICAL PATH RULE tells it to use, checked
         # first -- not a search: iterating every subdirectory of
         # .hephaestus/ risked deleting a DIFFERENT feature's (or an earlier
         # retry pass's) still-needed result file. Must mirror
-        # read_okf_report's candidate order exactly -- that's what actually
-        # decides which file the gate reads, so a stale file this function
-        # doesn't know to delete resurrects the exact stale-result loop
-        # this function exists to prevent.
-        candidates = (
-            [base / ".hephaestus" / phase_name / filename] if not subdir else []
-        ) + list(candidates_for(filename))
+        # read_okf_report's candidate order exactly, including its old-name
+        # alias -- that's what actually decides which file the gate reads,
+        # so a stale file this function doesn't know to delete resurrects
+        # the exact stale-result loop this function exists to prevent.
+        old_name = OUTPUT_NAME_ALIASES.get(filename)
+        names = [filename] + ([old_name] if old_name else [])
+        if subdir:
+            candidates = [base / subdir / name for name in names]
+        else:
+            candidates = []
+            for name in names:
+                candidates.append(base / ".hephaestus" / phase_name / name)
+                candidates.append(base / name)
+        if phase_name == "feature_review":
+            # TEMPORARY (Phase 2 §4.9 follow-up) -- see
+            # _feature_review_legacy_report's own docstring. Must also be
+            # cleaned up here, not just read as a fallback: an unconsumed
+            # stale legacy file would otherwise keep resurrecting the
+            # exact goto-loop bug this function exists to prevent, across
+            # every retry of an in-flight run still writing to it.
+            candidates.append(base / CONTEXT_DIR_NAME / "review.md")
         for candidate in candidates:
             if candidate.exists():
                 try:
@@ -1344,6 +1474,30 @@ GATE_RESULT_REQUIRED_KEYS: Dict[str, Tuple[str, ...]] = {
     "feature_review": ("blocker_count",),
 }
 
+# The documented frontmatter `type:` value for each gated phase, per its
+# own workflow.yaml prompt -- six of seven document the bare phase name
+# (e.g. qa_validation.yaml's own written example: `type: qa_validation`),
+# but feature_review.yaml documents `type: feature_review_result`, an
+# inconsistency baked into the prompts themselves, not a typo in one
+# call site. Single source of truth for both validate_gate_result_schema
+# (below) and synthetic_clean_result -- before this, they disagreed with
+# each other (synthetic_clean_result unconditionally appended "_result",
+# validate_gate_result_schema unconditionally used the bare name), so
+# _cap_out_review_phase's own synthetic "clean pass" would have failed
+# this exact check for every phase except feature_review had anything
+# ever re-validated it -- the same type:-field-mismatch bug class Phase 2
+# §4.9 was written to close (see docs/AUTOPILOT_REFACTOR_PLAN.md §4.9).
+GATE_RESULT_TYPE_OVERRIDE: Dict[str, str] = {
+    "feature_review": "feature_review_result",
+}
+
+
+def expected_gate_result_type(phase_name: str) -> str:
+    """The documented frontmatter `type:` value a gated phase's report
+    must declare -- see GATE_RESULT_TYPE_OVERRIDE for why this isn't
+    always just the bare phase name."""
+    return GATE_RESULT_TYPE_OVERRIDE.get(phase_name, phase_name)
+
 
 def validate_gate_result_schema(
     phase_name: str, result: Optional[Dict[str, Any]]
@@ -1367,7 +1521,7 @@ def validate_gate_result_schema(
     required = GATE_RESULT_REQUIRED_KEYS.get(phase_name)
     if not required or result is None:
         return None
-    expected_type = phase_name
+    expected_type = expected_gate_result_type(phase_name)
     actual_type = result.get("type")
     if actual_type != expected_type:
         return (
@@ -1388,6 +1542,24 @@ def validate_gate_result_schema(
         "issues, e.g. blocker/critical-issue counts reading as 0 when they "
         "weren't actually checked)."
     )
+
+
+# TEMPORARY (Phase 2 §4.9 follow-up) -- feature_review's report moved from
+# flat .hephaestus/review.md to .hephaestus/feature_review/feature_review.md
+# so it stops colliding in name with architectural_review's own review.md
+# and matches every other gated phase's .hephaestus/<phase_name>/
+# convention. A Phase 0 run already in flight when this change lands may
+# still be writing to the old location, so it's checked as a fallback
+# wherever feature_review's report gets read or cleaned up.
+#
+# DELETE THIS FUNCTION AND ITS CALLERS' FALLBACK BRANCHES once no run
+# started before the normalization can still be active (Phase 0 runs are
+# one-shot and short-lived, so this should be safe to remove soon --
+# there's deliberately no long-term compatibility guarantee here).
+def _feature_review_legacy_report(
+    working_directory: Any,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    return read_okf_report(working_directory, "review.md", subdir=CONTEXT_DIR_NAME)
 
 
 def build_phase_output(
@@ -1434,12 +1606,13 @@ def build_phase_output(
         wd = None if skip_independent_verification else working_directory
         score, meta = score_qa(result, spec, working_directory=wd)
     elif phase_name == "feature_review":
-        # .hephaestus/, not docs/ -- matches Feature Architect (the phase it
-        # reviews), whose own outputs already live there. Phase 0 artifacts
-        # are internal orchestration state, never a git-tracked deliverable.
+        # .hephaestus/feature_review/, not docs/ -- the same convention
+        # every other gated phase uses (Phase 2 §4.9 follow-up).
         result, report_text = read_okf_report(
-            working_directory, "review.md", subdir=CONTEXT_DIR_NAME
+            working_directory, "feature_review.md", phase_name=phase_name
         )
+        if result is None:
+            result, report_text = _feature_review_legacy_report(working_directory)
         score, meta = score_feature_review(result, report_text=report_text)
     else:  # product_validation
         result, report_text = read_okf_report(
