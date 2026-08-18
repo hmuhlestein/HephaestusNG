@@ -62,7 +62,7 @@ def _resolve_project_id_by_path(project_path, api_base):
     import requests
 
     try:
-        resp = requests.get(f"{api_base}/api/projects", timeout=5)
+        resp = requests.get(f"{api_base}/api/autopilot/projects", timeout=5)
         if resp.status_code != 200:
             return None
         resolved = str(Path(project_path).resolve())

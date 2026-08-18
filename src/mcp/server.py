@@ -862,10 +862,7 @@ async def startup_event():
     )
     app.include_router(autopilot_router)
 
-    # Add project management routes
-    from src.mcp.projects_api import router as projects_router
 
-    app.include_router(projects_router)
 
     # Note: tickets_router (M-1: extracted from server.py) is included at
     # module level above, not here — TestClient(app) used without the

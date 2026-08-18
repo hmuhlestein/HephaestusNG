@@ -98,7 +98,7 @@ class TestPipelineStatus:
 
     def test_project_path_scopes_status_to_resolved_id(self):
         def fake_get(url, **kwargs):
-            if url.endswith("/api/projects"):
+            if url.endswith("/api/autopilot/projects"):
                 return MagicMock(status_code=200, json=lambda: PROJECTS)
             return MagicMock(status_code=200, json=lambda: {"running": True})
 
