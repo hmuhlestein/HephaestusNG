@@ -325,6 +325,7 @@ class ServerState:
         self.rag_system = RAGSystem(
             vector_store=self.vector_store,
             llm_provider=self.llm_provider,
+            embedding_provider=getattr(self, 'embedding_service', None),
         )
 
         # Initialize result validator service
@@ -340,8 +341,12 @@ class ServerState:
         if config.task_dedup_enabled:
             try:
                 from src.memory.embedding_factory import create_embedding_provider
+                from src.services.ticket_search_service import TicketSearchService
 
                 self.embedding_service = create_embedding_provider()
+                # Share the same embedding provider instance with TicketSearchService
+                # instead of letting it create its own separate model load.
+                TicketSearchService._embedding_provider = self.embedding_service
                 self.task_similarity_service = TaskSimilarityService(self.db_manager, self.embedding_service)
                 logger.info("Task deduplication service initialized (embedding via configurable provider)")
             except Exception as e:

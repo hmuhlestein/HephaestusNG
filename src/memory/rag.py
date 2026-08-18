@@ -17,15 +17,27 @@ class RAGSystem:
         self,
         vector_store: VectorStoreManager,
         llm_provider: LLMProviderInterface,
+        embedding_provider: Optional["EmbeddingProvider"] = None,
     ):
         """Initialize RAG system.
 
         Args:
             vector_store: Vector store manager
-            llm_provider: LLM provider for embeddings
+            llm_provider: LLM provider (unused if embedding_provider is passed)
+            embedding_provider: Embedding provider from embedding_factory.
+                If None, falls back to llm_provider.generate_embedding
+                (deprecated — dimension mismatch risk with TurboVecStore).
         """
         self.vector_store = vector_store
         self.llm_provider = llm_provider
+        if embedding_provider is not None:
+            self._embedding_provider = embedding_provider
+        else:
+            from src.memory.embedding_factory import create_embedding_provider
+            try:
+                self._embedding_provider = create_embedding_provider()
+            except Exception:
+                self._embedding_provider = None
 
     async def retrieve_for_task(
         self,
@@ -47,7 +59,7 @@ class RAGSystem:
 
         try:
             # Generate embedding for the task description
-            query_embedding = await self.llm_provider.generate_embedding(
+            query_embedding = await self._embedding_provider.generate_embedding(
                 task_description
             )
 
@@ -99,7 +111,7 @@ class RAGSystem:
         """
         try:
             # Generate embedding
-            embedding = await self.llm_provider.generate_embedding(task_description)
+            embedding = await self._embedding_provider.generate_embedding(task_description)
 
             # Search in task_completions collection
             results = await self.vector_store.search(
@@ -130,7 +142,7 @@ class RAGSystem:
         """
         try:
             # Generate embedding
-            embedding = await self.llm_provider.generate_embedding(error_description)
+            embedding = await self._embedding_provider.generate_embedding(error_description)
 
             # Search in error_solutions collection
             results = await self.vector_store.search(
@@ -162,7 +174,7 @@ class RAGSystem:
         """
         try:
             # Generate embedding
-            embedding = await self.llm_provider.generate_embedding(query)
+            embedding = await self._embedding_provider.generate_embedding(query)
 
             # Search in domain_knowledge collection
             results = await self.vector_store.search(
@@ -331,7 +343,7 @@ class MemoryIngestion:
 
             for i, chunk in enumerate(chunks):
                 # Generate embedding
-                embedding = await self.llm_provider.generate_embedding(chunk)
+                embedding = await self._embedding_provider.generate_embedding(chunk)
 
                 # Store in vector database
                 memory_id = f"{file_path}_{i}"
