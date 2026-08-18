@@ -401,7 +401,7 @@ async def get_agent_children(
         raise HTTPException(403, "Can only view your own children")
     from src.services.agent_communication import AgentCommunicationService
 
-    comm = AgentCommunicationService(server_state.db_manager)
+    comm = AgentCommunicationService(server_state.db_manager, server_state.agent_manager)
     children = comm.get_children(agent_id)
     return {"children": children, "count": len(children)}
 
@@ -416,7 +416,7 @@ async def get_children_status(
         raise HTTPException(403, "Can only view your own children")
     from src.services.agent_communication import AgentCommunicationService
 
-    comm = AgentCommunicationService(server_state.db_manager)
+    comm = AgentCommunicationService(server_state.db_manager, server_state.agent_manager)
     summary = comm.get_children_status_summary(agent_id)
     return summary
 
@@ -434,7 +434,7 @@ async def get_child_logs(
         raise HTTPException(403, "Can only view your own children's logs")
     from src.services.agent_communication import AgentCommunicationService
 
-    comm = AgentCommunicationService(server_state.db_manager)
+    comm = AgentCommunicationService(server_state.db_manager, server_state.agent_manager)
     logs = comm.get_child_logs(agent_id, child_id, lines=lines)
     if logs is None:
         raise HTTPException(404, "Child not found or access denied")
@@ -454,14 +454,14 @@ async def send_message_to_child(
         raise HTTPException(403, "Can only message your own children")
     from src.services.agent_communication import AgentCommunicationService
 
-    comm = AgentCommunicationService(server_state.db_manager)
+    comm = AgentCommunicationService(server_state.db_manager, server_state.agent_manager)
 
     body = await request.json()
     message = body.get("message", "")
     if not message:
         raise HTTPException(400, "Message is required")
 
-    success = comm.send_message_to_child(agent_id, child_id, message)
+    success = await comm.send_message_to_child(agent_id, child_id, message)
     if not success:
         raise HTTPException(
             400, "Failed to send message - child not found or access denied"
@@ -482,7 +482,7 @@ async def nudge_child_agent(
         raise HTTPException(403, "Can only nudge your own children")
     from src.services.agent_communication import AgentCommunicationService
 
-    comm = AgentCommunicationService(server_state.db_manager)
+    comm = AgentCommunicationService(server_state.db_manager, server_state.agent_manager)
 
     body = (
         await request.json()
@@ -491,7 +491,7 @@ async def nudge_child_agent(
     )
     reason = body.get("reason", "No progress detected")
 
-    success = comm.nudge_child(agent_id, child_id, reason)
+    success = await comm.nudge_child(agent_id, child_id, reason)
     if not success:
         raise HTTPException(400, "Failed to nudge - child not found or access denied")
     return {"nudged": True}
@@ -509,7 +509,7 @@ async def monitor_and_nudge_stuck_children(
         raise HTTPException(403, "Can only monitor your own children")
     from src.services.agent_communication import AgentCommunicationService
 
-    comm = AgentCommunicationService(server_state.db_manager)
+    comm = AgentCommunicationService(server_state.db_manager, server_state.agent_manager)
 
     body = (
         await request.json()
@@ -518,7 +518,7 @@ async def monitor_and_nudge_stuck_children(
     )
     threshold = body.get("stuck_threshold_seconds", 300)
 
-    nudged = comm.monitor_and_nudge_stuck_children(agent_id, threshold)
+    nudged = await comm.monitor_and_nudge_stuck_children(agent_id, threshold)
     return {"nudged_count": len(nudged), "nudged_agents": nudged}
 
 
