@@ -8,7 +8,7 @@ import time
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from fastapi import (
     Body,
@@ -39,10 +39,16 @@ from src.core.worktree_manager import WorktreeManager
 from src.mcp.agents_api import router as agents_router
 from src.mcp.frontend import create_frontend_routes
 from src.mcp.memory_api import (
+    GiveValidationReviewRequest,
     SaveMemoryRequest,
     SearchMemoryRequest,
+    SubmitResultRequest,
+    SubmitResultValidationRequest,
+    give_validation_review,
     save_memory,
     search_memory,
+    submit_result,
+    submit_result_validation,
 )
 from src.mcp.memory_api import (
     router as memory_router,
@@ -4193,321 +4199,24 @@ async def root():
 # MCP Protocol endpoints
 @app.get("/tools")
 async def list_tools():
-    """List available MCP tools."""
-    return {
-        "tools": [
-            {
-                "name": "create_task",
-                "description": "Create a new task for an autonomous agent",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "task_description": {
-                            "type": "string",
-                            "description": "Description of the task",
-                        },
-                        "done_definition": {
-                            "type": "string",
-                            "description": "What constitutes completion",
-                        },
-                        "workflow_id": {
-                            "type": "string",
-                            "description": "ID of the workflow execution this task belongs to (REQUIRED)",
-                        },
-                        "phase_id": {
-                            "type": "string",
-                            "description": "Phase ID for workflow-based tasks (REQUIRED)",
-                        },
-                        "priority": {
-                            "type": "string",
-                            "enum": ["low", "medium", "high"],
-                        },
-                        "ticket_id": {
-                            "type": "string",
-                            "description": "Associated ticket ID",
-                        },
-                        "depends_on": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "List of task IDs that must complete before this one. OMIT or set null for sequential execution (one at a time). Set to [] for immediate parallel execution. Set to [task_id, ...] to wait for specific tasks.",
-                        },
-                        "parallel_group": {
-                            "type": "string",
-                            "description": "Tasks in same group can run in parallel. Different groups are sequential.",
-                        },
-                        "max_concurrent": {
-                            "type": "integer",
-                            "description": "Max agents working on this task simultaneously (default: 1)",
-                        },
-                        "context": {
-                            "type": "string",
-                            "description": "Additional context for the agent (e.g., design document content, requirements summary)",
-                        },
-                    },
-                    "required": [
-                        "task_description",
-                        "done_definition",
-                        "workflow_id",
-                        "phase_id",
-                    ],
-                },
-            },
-            {
-                "name": "save_memory",
-                "description": "Save a memory to the knowledge base",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "content": {"type": "string"},
-                        "memory_type": {"type": "string"},
-                        "tags": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["content", "memory_type"],
-                },
-            },
-            {
-                "name": "search_memory",
-                "description": "Search the knowledge base for relevant memories using semantic search",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query to find relevant memories",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum number of results (default: 10)",
-                        },
-                        "memory_type": {
-                            "type": "string",
-                            "description": "Filter by memory type (e.g., decision, discovery, learning)",
-                        },
-                        "project_id": {
-                            "type": "string",
-                            "description": "Filter by project ID (auto-detected from agent if not set)",
-                        },
-                    },
-                    "required": ["query"],
-                },
-            },
-            {
-                "name": "get_task_status",
-                "description": "Get status of tasks, optionally filtered by agent_id or workflow_id",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "status": {"type": "string", "description": "Filter by task status (pending, assigned, in_progress, done, failed)", "default": "all"},
-                        "agent_id": {"type": "string", "description": "Filter tasks assigned to this agent"},
-                        "workflow_id": {"type": "string", "description": "Filter tasks belonging to this workflow"},
-                    },
-                },
-            },
-            {
-                "name": "update_task_status",
-                "description": "Update the status of a task (done, failed, etc.)",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "task_id": {
-                            "type": "string",
-                            "description": "ID of the task to update",
-                        },
-                        "status": {
-                            "type": "string",
-                            "enum": ["done", "failed", "in_progress", "blocked"],
-                            "description": "New status for the task",
-                        },
-                        "summary": {
-                            "type": "string",
-                            "description": "Summary of what was done or why it failed",
-                            "default": "",
-                        },
-                        "failure_reason": {
-                            "type": "string",
-                            "description": "Reason for failure (if status is failed)",
-                            "default": "",
-                        },
-                        "key_learnings": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Key learnings to save as memories",
-                        },
-                        "metadata": {
-                            "type": "object",
-                            "description": "Optional structured data (e.g. verdict, issue counts) — folded into summary",
-                        },
-                    },
-                    "required": ["task_id", "status"],
-                },
-            },
-            {
-                "name": "complete_my_task",
-                "description": (
-                    "Mark YOUR OWN currently-assigned task done or failed -- "
-                    "no task_id needed, the server already knows which task "
-                    "you're working on. Use this instead of "
-                    "heph_update_task_status for the normal case of finishing "
-                    "your own work; heph_update_task_status still exists for the "
-                    "rare case of updating a task that isn't your current one."
-                ),
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {
-                            "type": "string",
-                            "description": "Your agent ID",
-                        },
-                        "status": {
-                            "type": "string",
-                            "enum": ["done", "failed", "in_progress", "blocked"],
-                            "description": "New status for your current task",
-                        },
-                        "summary": {
-                            "type": "string",
-                            "description": "Summary of what was done or why it failed",
-                            "default": "",
-                        },
-                        "failure_reason": {
-                            "type": "string",
-                            "description": "Reason for failure (if status is failed)",
-                            "default": "",
-                        },
-                        "key_learnings": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Key learnings to save as memories",
-                        },
-                        "metadata": {
-                            "type": "object",
-                            "description": "Optional structured data (e.g. verdict, issue counts) — folded into summary",
-                        },
-                    },
-                    "required": ["agent_id", "status"],
-                },
-            },
-            {
-                "name": "create_ticket",
-                "description": "Create a new ticket in the Kanban board",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string", "description": "Ticket title"},
-                        "description": {
-                            "type": "string",
-                            "description": "Detailed description",
-                        },
-                        "ticket_type": {
-                            "type": "string",
-                            "enum": ["bug", "feature", "improvement", "task", "spike"],
-                            "description": "Type of ticket",
-                        },
-                        "priority": {
-                            "type": "string",
-                            "enum": ["low", "medium", "high", "critical"],
-                            "description": "Priority level",
-                        },
-                        "tags": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Tags for categorization",
-                        },
-                        "blocked_by_ticket_ids": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "IDs of blocking tickets",
-                        },
-                        "agent_id": {
-                            "type": "string",
-                            "description": "Agent ID creating this ticket",
-                        },
-                        "task_id": {
-                            "type": "string",
-                            "description": "Task ID this ticket relates to",
-                        },
-                        "phase_id": {
-                            "type": "string",
-                            "description": "Phase ID where this ticket was created",
-                        },
-                    },
-                    "required": ["title", "description", "ticket_type", "priority"],
-                },
-            },
-            {
-                "name": "search_tickets",
-                "description": "Search for existing tickets by title or tags",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query for title",
-                        },
-                        "tags": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Filter by tags",
-                        },
-                        "status": {"type": "string", "description": "Filter by status"},
-                    },
-                    "required": [],
-                },
-            },
-            {
-                "name": "update_ticket_status",
-                "description": "Update the status of a ticket",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "ticket_id": {"type": "string", "description": "Ticket ID"},
-                        "new_status": {
-                            "type": "string",
-                            "description": "New status value",
-                        },
-                    },
-                    "required": ["ticket_id", "new_status"],
-                },
-            },
-            {
-                "name": "broadcast_message",
-                "description": "Send a message to ALL active agents",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "message": {
-                            "type": "string",
-                            "description": "Message content to broadcast",
-                        },
-                        "sender_id": {
-                            "type": "string",
-                            "description": "Sender agent ID",
-                        },
-                    },
-                    "required": ["message"],
-                },
-            },
-            {
-                "name": "send_message",
-                "description": "Send a direct message to a specific agent",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {
-                            "type": "string",
-                            "description": "Target agent ID",
-                        },
-                        "message": {
-                            "type": "string",
-                            "description": "Message content",
-                        },
-                        "sender_id": {
-                            "type": "string",
-                            "description": "Sender agent ID",
-                        },
-                    },
-                    "required": ["agent_id", "message"],
-                },
-            },
+    """List available MCP tools.
+
+    Core (non-devtools) tool entries are generated from MCP_TOOL_REGISTRY
+    (defined further down, after their handlers) rather than hand-written
+    here -- see MCPToolSpec's docstring for why (Phase 2 §4.10). devtools_*
+    entries are still hand-written below; only their "required" list is
+    unduplicated (Phase 2 §4.10), the rest of the standing hand-maintained
+    duplication for those 15 tools is left for a follow-up.
+    """
+    core_tools = [
+        {
+            "name": t.name,
+            "description": t.description,
+            "input_schema": t.input_schema,
+        }
+        for t in MCP_TOOL_REGISTRY
+    ]
+    devtools_tools = [
             {
                 "name": "devtools_connect",
                 "description": "Connect to Chrome DevTools Protocol for browser automation",
@@ -4773,8 +4482,16 @@ async def list_tools():
                     "required": ["session_id"],
                 },
             },
-        ]
-    }
+    ]
+    # "required" above is hand-typed to keep each entry's shape readable
+    # inline, but it must agree with _DEVTOOLS_TOOLS' own required_args --
+    # the actual argument-presence check _handle_devtools_tool enforces at
+    # dispatch time -- so it's overwritten from that one source of truth
+    # here rather than trusted to stay in sync by hand (Phase 2 §4.10).
+    for entry in devtools_tools:
+        required_args, _handler = _DEVTOOLS_TOOLS[entry["name"]]
+        entry["input_schema"]["required"] = required_args
+    return {"tools": core_tools + devtools_tools}
 
 
 # ==================== WORKFLOW MANAGEMENT ENDPOINTS ====================
@@ -5493,25 +5210,563 @@ async def _tool_complete_my_task(arguments: Dict[str, Any]):
     return await update_task_status(request, agent_id=agent_id)
 
 
-# Registry for non-devtools MCP tools: name -> async handler(arguments).
-# Replaces a 9-branch if/elif chain (SOLID review 1.5) — a new tool is added
-# by defining one handler and registering it here, instead of editing this
-# dispatch chain (devtools_* tools have their own registry in
-# _handle_devtools_tool/_DEVTOOLS_TOOLS since they share a different shape:
-# a browser-session precondition and per-tool required-args).
-_MCP_TOOLS: Dict[str, Any] = {
-            "create_task": _tool_create_task,
-    "save_memory": _tool_save_memory,
-    "search_memory": _tool_search_memory,
-    "get_task_status": _tool_get_task_status,
-    "update_task_status": _tool_update_task_status,
-    "complete_my_task": _tool_complete_my_task,
-    "create_ticket": _tool_create_ticket,
-    "search_tickets": _tool_search_tickets,
-    "update_ticket_status": _tool_update_ticket_status,
-    "broadcast_message": _tool_broadcast_message,
-    "send_message": _tool_send_message,
-}
+async def _tool_submit_result(arguments: Dict[str, Any]):
+    """Bridges the MCP tool call to POST /submit_result -- registered so
+    heph_submit_result(agent_id=..., ...) (system_prompts.yaml's own
+    documented call shape) actually resolves instead of 400ing with
+    "Unknown tool: submit_result" (Phase 2 §4.10). agent_id is a real
+    argument here, not a header, since MCP tool calls have no HTTP
+    header to extract it from -- same reasoning as _tool_complete_my_task
+    reading agent_id out of `arguments` before calling update_task_status.
+    """
+    agent_id = arguments.get("agent_id")
+    markdown_file_path = arguments.get("markdown_file_path")
+    explanation = arguments.get("explanation")
+    if not agent_id or not markdown_file_path or not explanation:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_id, markdown_file_path, and explanation are required",
+        )
+    return await submit_result(
+        SubmitResultRequest(
+            markdown_file_path=markdown_file_path,
+            explanation=explanation,
+            evidence=arguments.get("evidence"),
+            extra_files=arguments.get("extra_files"),
+        ),
+        agent_id=agent_id,
+    )
+
+
+async def _tool_submit_result_validation(arguments: Dict[str, Any]):
+    """Bridges the MCP tool call to POST /submit_result_validation --
+    registered so heph_submit_result_validation (validator_agent.py's own
+    documented call shape) actually resolves instead of 400ing with
+    "Unknown tool: submit_result_validation" (Phase 2 §4.10). No agent_id
+    argument needed: the route derives the validator agent internally
+    from the WorkflowResult's own linked validator record.
+    """
+    result_id = arguments.get("result_id")
+    feedback = arguments.get("feedback")
+    validation_passed = arguments.get("validation_passed")
+    if not result_id or feedback is None or validation_passed is None:
+        raise HTTPException(
+            status_code=400,
+            detail="result_id, validation_passed, and feedback are required",
+        )
+    return await submit_result_validation(
+        SubmitResultValidationRequest(
+            result_id=result_id,
+            validation_passed=validation_passed,
+            feedback=feedback,
+            evidence=arguments.get("evidence", []),
+        )
+    )
+
+
+async def _tool_give_validation_review(arguments: Dict[str, Any]):
+    """Bridges the MCP tool call to POST /give_validation_review --
+    registered so heph_give_validation_review (validator_agent.py's own
+    documented call shape, for a TASK validator, distinct from
+    heph_submit_result_validation's RESULT validator) actually resolves
+    instead of 400ing with "Unknown tool: give_validation_review" (Phase 2
+    §4.10 -- found alongside the other two while auditing every heph_
+    reference across the codebase, not just config/prompts/**/*.yaml).
+    agent_id is a real argument here, same reasoning as the other two
+    submit_* wrappers above.
+    """
+    agent_id = arguments.get("agent_id")
+    task_id = arguments.get("task_id")
+    feedback = arguments.get("feedback")
+    validation_passed = arguments.get("validation_passed")
+    if not agent_id or not task_id or feedback is None or validation_passed is None:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_id, task_id, validation_passed, and feedback are required",
+        )
+    return await give_validation_review(
+        GiveValidationReviewRequest(
+            task_id=task_id,
+            validator_agent_id=arguments.get("validator_agent_id", agent_id),
+            validation_passed=validation_passed,
+            feedback=feedback,
+            evidence=arguments.get("evidence", []),
+            recommendations=arguments.get("recommendations", []),
+        ),
+        agent_id=agent_id,
+    )
+
+
+class MCPToolSpec(NamedTuple):
+    """One non-devtools MCP tool's complete declaration: name, the schema
+    /tools advertises to agents, and the handler /tools/execute dispatches
+    to. Single source of truth for both (Phase 2 §4.10) -- before this,
+    the name/description/input_schema lived in list_tools()'s hand-written
+    JSON while the name/handler pairing lived separately in _MCP_TOOLS,
+    with nothing enforcing the two ever agreed. Six historical commits
+    (bede479, ef438e8, 8e4105d, d50ebd8, e44689c, 137f12b) each patched
+    exactly one of these surfaces (plus the third, agent-facing-prompt
+    surface -- see MCP_TOOL_NAMES below) after it was caught drifting from
+    the others.
+    """
+
+    name: str
+    description: str
+    input_schema: Dict[str, Any]
+    handler: Any
+
+
+# Registry for non-devtools MCP tools. Generates both list_tools()'s /tools
+# response and _MCP_TOOLS' dispatch dict (below) from one declaration per
+# tool -- replaces a 9-branch if/elif dispatch chain (SOLID review 1.5) and,
+# as of Phase 2 §4.10, the separate hand-maintained /tools JSON block too.
+# devtools_* tools have their own registry, _DEVTOOLS_TOOLS (further down),
+# since they share a different shape (a browser-session precondition,
+# per-tool required-args instead of a full JSON Schema) -- list_tools()
+# still advertises them, deriving their "required" list from that same
+# registry rather than hand-typing it a second time (the one piece of that
+# duplication cheap enough to close without restructuring their dispatch).
+MCP_TOOL_REGISTRY: List[MCPToolSpec] = [
+    MCPToolSpec(
+        name="create_task",
+        description="Create a new task for an autonomous agent",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_description": {
+                    "type": "string",
+                    "description": "Description of the task",
+                },
+                "done_definition": {
+                    "type": "string",
+                    "description": "What constitutes completion",
+                },
+                "workflow_id": {
+                    "type": "string",
+                    "description": "ID of the workflow execution this task belongs to (REQUIRED)",
+                },
+                "phase_id": {
+                    "type": "string",
+                    "description": "Phase ID for workflow-based tasks (REQUIRED)",
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"],
+                },
+                "ticket_id": {
+                    "type": "string",
+                    "description": "Associated ticket ID",
+                },
+                "depends_on": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of task IDs that must complete before this one. OMIT or set null for sequential execution (one at a time). Set to [] for immediate parallel execution. Set to [task_id, ...] to wait for specific tasks.",
+                },
+                "parallel_group": {
+                    "type": "string",
+                    "description": "Tasks in same group can run in parallel. Different groups are sequential.",
+                },
+                "max_concurrent": {
+                    "type": "integer",
+                    "description": "Max agents working on this task simultaneously (default: 1)",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Additional context for the agent (e.g., design document content, requirements summary)",
+                },
+            },
+            "required": [
+                "task_description",
+                "done_definition",
+                "workflow_id",
+                "phase_id",
+            ],
+        },
+        handler=_tool_create_task,
+    ),
+    MCPToolSpec(
+        name="save_memory",
+        description="Save a memory to the knowledge base",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "content": {"type": "string"},
+                "memory_type": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["content", "memory_type"],
+        },
+        handler=_tool_save_memory,
+    ),
+    MCPToolSpec(
+        name="search_memory",
+        description="Search the knowledge base for relevant memories using semantic search",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query to find relevant memories",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results (default: 10)",
+                },
+                "memory_type": {
+                    "type": "string",
+                    "description": "Filter by memory type (e.g., decision, discovery, learning)",
+                },
+                "project_id": {
+                    "type": "string",
+                    "description": "Filter by project ID (auto-detected from agent if not set)",
+                },
+            },
+            "required": ["query"],
+        },
+        handler=_tool_search_memory,
+    ),
+    MCPToolSpec(
+        name="get_task_status",
+        description="Get status of tasks, optionally filtered by agent_id or workflow_id",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "description": "Filter by task status (pending, assigned, in_progress, done, failed)", "default": "all"},
+                "agent_id": {"type": "string", "description": "Filter tasks assigned to this agent"},
+                "workflow_id": {"type": "string", "description": "Filter tasks belonging to this workflow"},
+            },
+        },
+        handler=_tool_get_task_status,
+    ),
+    MCPToolSpec(
+        name="update_task_status",
+        description="Update the status of a task (done, failed, etc.)",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "ID of the task to update",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["done", "failed", "in_progress", "blocked"],
+                    "description": "New status for the task",
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Summary of what was done or why it failed",
+                    "default": "",
+                },
+                "failure_reason": {
+                    "type": "string",
+                    "description": "Reason for failure (if status is failed)",
+                    "default": "",
+                },
+                "key_learnings": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Key learnings to save as memories",
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Optional structured data (e.g. verdict, issue counts) — folded into summary",
+                },
+            },
+            "required": ["task_id", "status"],
+        },
+        handler=_tool_update_task_status,
+    ),
+    MCPToolSpec(
+        name="complete_my_task",
+        description=(
+            "Mark YOUR OWN currently-assigned task done or failed -- "
+            "no task_id needed, the server already knows which task "
+            "you're working on. Use this instead of "
+            "heph_update_task_status for the normal case of finishing "
+            "your own work; heph_update_task_status still exists for the "
+            "rare case of updating a task that isn't your current one."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "Your agent ID",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["done", "failed", "in_progress", "blocked"],
+                    "description": "New status for your current task",
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Summary of what was done or why it failed",
+                    "default": "",
+                },
+                "failure_reason": {
+                    "type": "string",
+                    "description": "Reason for failure (if status is failed)",
+                    "default": "",
+                },
+                "key_learnings": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Key learnings to save as memories",
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Optional structured data (e.g. verdict, issue counts) — folded into summary",
+                },
+            },
+            "required": ["agent_id", "status"],
+        },
+        handler=_tool_complete_my_task,
+    ),
+    MCPToolSpec(
+        name="create_ticket",
+        description="Create a new ticket in the Kanban board",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Ticket title"},
+                "description": {
+                    "type": "string",
+                    "description": "Detailed description",
+                },
+                "ticket_type": {
+                    "type": "string",
+                    "enum": ["bug", "feature", "improvement", "task", "spike"],
+                    "description": "Type of ticket",
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"],
+                    "description": "Priority level",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Tags for categorization",
+                },
+                "blocked_by_ticket_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "IDs of blocking tickets",
+                },
+                "agent_id": {
+                    "type": "string",
+                    "description": "Agent ID creating this ticket",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID this ticket relates to",
+                },
+                "phase_id": {
+                    "type": "string",
+                    "description": "Phase ID where this ticket was created",
+                },
+            },
+            "required": ["title", "description", "ticket_type", "priority"],
+        },
+        handler=_tool_create_ticket,
+    ),
+    MCPToolSpec(
+        name="search_tickets",
+        description="Search for existing tickets by title or tags",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query for title",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Filter by tags",
+                },
+                "status": {"type": "string", "description": "Filter by status"},
+            },
+            "required": [],
+        },
+        handler=_tool_search_tickets,
+    ),
+    MCPToolSpec(
+        name="update_ticket_status",
+        description="Update the status of a ticket",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "ticket_id": {"type": "string", "description": "Ticket ID"},
+                "new_status": {
+                    "type": "string",
+                    "description": "New status value",
+                },
+            },
+            "required": ["ticket_id", "new_status"],
+        },
+        handler=_tool_update_ticket_status,
+    ),
+    MCPToolSpec(
+        name="broadcast_message",
+        description="Send a message to ALL active agents",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "Message content to broadcast",
+                },
+                "sender_id": {
+                    "type": "string",
+                    "description": "Sender agent ID",
+                },
+            },
+            "required": ["message"],
+        },
+        handler=_tool_broadcast_message,
+    ),
+    MCPToolSpec(
+        name="send_message",
+        description="Send a direct message to a specific agent",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "Target agent ID",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Message content",
+                },
+                "sender_id": {
+                    "type": "string",
+                    "description": "Sender agent ID",
+                },
+            },
+            "required": ["agent_id", "message"],
+        },
+        handler=_tool_send_message,
+    ),
+    MCPToolSpec(
+        name="submit_result",
+        description=(
+            "Submit your finished workflow result for validation. Bridges "
+            "to the same /submit_result endpoint the SDK's direct-HTTP path "
+            "uses; agent_id is passed explicitly here since MCP tool calls "
+            "carry no HTTP header."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "Your agent ID",
+                },
+                "markdown_file_path": {
+                    "type": "string",
+                    "description": "Path to markdown file with result evidence",
+                },
+                "explanation": {
+                    "type": "string",
+                    "description": "Brief explanation of what was accomplished",
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of evidence supporting completion",
+                },
+                "extra_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of additional file paths (e.g., patches, reproduction scripts) for validators",
+                },
+            },
+            "required": ["agent_id", "markdown_file_path", "explanation"],
+        },
+        handler=_tool_submit_result,
+    ),
+    MCPToolSpec(
+        name="submit_result_validation",
+        description="Submit a validator agent's pass/fail review of a submitted workflow result",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "result_id": {
+                    "type": "string",
+                    "description": "ID of result being validated",
+                },
+                "validation_passed": {
+                    "type": "boolean",
+                    "description": "Whether validation passed",
+                },
+                "feedback": {
+                    "type": "string",
+                    "description": "Detailed validation feedback",
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Evidence supporting decision",
+                },
+            },
+            "required": ["result_id", "validation_passed", "feedback"],
+        },
+        handler=_tool_submit_result_validation,
+    ),
+    MCPToolSpec(
+        name="give_validation_review",
+        description=(
+            "Submit a TASK validator's pass/fail review (distinct from "
+            "submit_result_validation, which is for a workflow RESULT "
+            "validator). Only callable by an agent whose agent_type is "
+            "'validator'."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "Your (the validator's) agent ID",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "ID of task being validated",
+                },
+                "validator_agent_id": {
+                    "type": "string",
+                    "description": "ID of validator agent (defaults to agent_id if omitted)",
+                },
+                "validation_passed": {
+                    "type": "boolean",
+                    "description": "Whether validation passed",
+                },
+                "feedback": {
+                    "type": "string",
+                    "description": "Detailed feedback",
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Evidence supporting decision",
+                },
+                "recommendations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Follow-up task recommendations",
+                },
+            },
+            "required": ["agent_id", "task_id", "validation_passed", "feedback"],
+        },
+        handler=_tool_give_validation_review,
+    ),
+]
+
+# Derived from MCP_TOOL_REGISTRY, not hand-maintained -- see MCPToolSpec's
+# own docstring for why this used to be a second, independent declaration.
+_MCP_TOOLS: Dict[str, Any] = {t.name: t.handler for t in MCP_TOOL_REGISTRY}
 
 
 @app.post("/tools/execute")
@@ -5653,6 +5908,13 @@ _DEVTOOLS_TOOLS: Dict[str, tuple] = {
     "devtools_get_cookies": ([], _devtools_get_cookies),
     "devtools_close": ([], _devtools_close),
 }
+
+# Every MCP tool name this server actually recognizes -- core + devtools --
+# the single source the config/prompts, config/workflows drift check
+# (Phase 2 §4.10; see tests/test_mcp_tool_registry.py) validates against.
+MCP_TOOL_NAMES: frozenset = frozenset(
+    {t.name for t in MCP_TOOL_REGISTRY} | set(_DEVTOOLS_TOOLS.keys())
+)
 
 
 async def _handle_devtools_tool(tool_name: str, arguments: Dict[str, Any]):
