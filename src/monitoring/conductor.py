@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Dict, List
 
 from src.agents.manager import AgentManager
-from src.core.database import Agent, AgentLog, DatabaseManager
+from src.core.database import Agent, AgentLog, DatabaseManager, Task
 from src.prompts.loader import get_prompt
 
 logger = logging.getLogger(__name__)
@@ -305,7 +305,6 @@ class Conductor:
                 # Skip agents whose task is already done
                 session = self.db_manager.get_session()
                 try:
-                    from src.core.database import Agent, Task
                     agent = session.query(Agent).filter_by(id=agent_id).first()
                     if agent and agent.current_task_id:
                         task = session.query(Task).filter_by(id=agent.current_task_id).first()
