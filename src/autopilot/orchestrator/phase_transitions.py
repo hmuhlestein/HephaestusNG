@@ -51,6 +51,92 @@ POLL_INTERVAL = 15
 CLAIM_STALE_TIMEOUT_SECONDS = 480  # 8 minutes -- must stay shorter than
 
 
+def _clear_stale_task_creation_claim(db, phase_id: str, *, repair_status: bool = True) -> bool:
+    """Clear a stale task_creation_claimed_at on a single phase.
+
+    If repair_status is True and the phase's execution is still
+    "pending" or "completed", also flips it to "in_progress" and
+    backfills started_at from the phase's latest task -- matching
+    _release_stale_task_creation_claims's sweep behavior, so every
+    caller that clears a stale claim also repairs the execution state
+    that a held claim silently blocks.
+
+    Returns True if a stale claim was found and cleared, False otherwise.
+    """
+    stale_cutoff = datetime.utcnow() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
+    cleared = (
+        db.query(PhaseExecution)
+        .filter(
+            PhaseExecution.phase_id == phase_id,
+            PhaseExecution.task_creation_claimed_at.isnot(None),
+            PhaseExecution.task_creation_claimed_at < stale_cutoff,
+        )
+        .update({"task_creation_claimed_at": None}, synchronize_session=False)
+    )
+    if cleared and repair_status:
+        execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+        if execution and execution.status in ("pending", "completed"):
+            latest_task = (
+                db.query(Task)
+                .filter_by(phase_id=phase_id)
+                .order_by(Task.created_at.desc())
+                .first()
+            )
+            if latest_task:
+                execution.status = "in_progress"
+                execution.started_at = execution.started_at or latest_task.created_at
+    if cleared:
+        db.commit()
+    return bool(cleared)
+
+
+def reset_stale_executions_on_goto(
+    db,
+    workflow_id: str,
+    target_phase_order: int,
+    *,
+    exclude_phase_id: str,
+) -> int:
+    """Reset PhaseExecution rows at or after a goto target to "pending".
+
+    On a goto/rewind, phases after the target retain stale
+    "in_progress"/"completed" status from a prior pass.  Without
+    resetting them, a later re-entry finds its execution already
+    "completed" and re-evaluates without running.
+
+    Excludes the source phase's own execution (the one that just fired
+    the goto) — its "completed" mark from mark_phase_complete must
+    survive so the idempotency guard ("if execution.status == completed:
+    skip") works on the next evaluation.
+
+    Also clears task_creation_claimed_at and started_at so the phase's
+    next cycle starts clean — a stale started_at makes every later
+    cycle-scoped query (Task.created_at >= started_at) exclude the
+    phase's own freshly-created task, silently stalling it forever.
+
+    Returns the number of rows reset.
+    """
+    stale = (
+        db.query(PhaseExecution)
+        .join(Phase, PhaseExecution.phase_id == Phase.id)
+        .filter(
+            Phase.workflow_id == workflow_id,
+            Phase.order >= target_phase_order,
+            PhaseExecution.phase_id != exclude_phase_id,
+            PhaseExecution.status.in_(["in_progress", "completed"]),
+        )
+        .all()
+    )
+    for s in stale:
+        s.status = "pending"
+        s.completed_at = None
+        s.task_creation_claimed_at = None
+        s.started_at = None
+    if stale:
+        db.commit()
+    return len(stale)
+
+
 _advance_phases_locks: Dict[str, "_threading.Lock"] = {}
 
 
@@ -649,18 +735,7 @@ def _release_stale_task_creation_claims(db, workflow_id: str, logger: "Orchestra
         logger.warning(
             f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: task_creation_claimed_at held with no release -- clearing stale claim ({'task exists' if latest_task else 'no task yet'})"
         )
-        if latest_task and execution.status in ("pending", "completed"):
-            execution.status = "in_progress"
-            # Backfill from the task that actually started this cycle, not
-            # "now" -- _fire_phase_transition's done_count/incomplete
-            # queries scope to Task.created_at >= started_at to ignore
-            # older cycles' completions, so a "now" value here (this repair
-            # can run long after the task was created) would wrongly
-            # exclude that same task from its own cycle.
-            execution.started_at = execution.started_at or latest_task.created_at
-        execution.task_creation_claimed_at = None
-    if stale_executions:
-        db.commit()
+        _clear_stale_task_creation_claim(db, execution.phase_id, repair_status=True)
 
 
 def _release_pending_phases_with_done_tasks(db, workflow_id: str, logger: "OrchestratorLogger") -> None:
@@ -1341,8 +1416,10 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                     max_retry_count = wf_def.get("orchestrator", {}).get("max_task_retries", 5)
                 except Exception:
                     max_retry_count = 5
-                _limit_failure = lambda r: "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
-                _stuck_failure = lambda r: "task stuck" in (r or "").lower()
+                def _limit_failure(r):
+                    return "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
+                def _stuck_failure(r):
+                    return "task stuck" in (r or "").lower()
                 retryable_tasks = [
                     t for t in failed_tasks
                     if (t.retry_count or 0) < max_retry_count
@@ -1516,8 +1593,10 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
         # Orphaned tasks (never dispatched), session/spend limit failures,
         # and stuck-task failures are not agent faults -- they should always
         # be retryable. Session limit failures will use the fallback model on retry.
-        _limit_failure = lambda r: "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
-        _stuck_failure = lambda r: "task stuck" in (r or "").lower()
+        def _limit_failure(r):
+            return "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
+        def _stuck_failure(r):
+            return "task stuck" in (r or "").lower()
         retryable_tasks = [
             t for t in failed_tasks
             if (t.retry_count or 0) < max_retry_count
@@ -2399,13 +2478,29 @@ def _resolve_arbitration_outcome(
     target_phase_name = result.get("target_phase")
     action = result.get("action")
     if target_phase_id and action in ("continue", "goto", "retry"):
+        # Mirror _fire_phase_transition's feedback-derivation: prefer
+        # the gate's own specific finding over the static reason, and
+        # substitute completion_notes when the gate reason is
+        # "result_missing" (the file read came up empty at this
+        # evaluation instant -- says nothing about whether the agent
+        # actually did the work).
+        metadata = result.get("metadata") or {}
+        spec_gate = metadata.get("spec_gate", {})
+        feedback = spec_gate.get("reason") or result.get("reason") or None
+        if spec_gate.get("result_missing"):
+            with get_db() as db:
+                completing_task = db.query(Task).filter(
+                    Task.phase_id == phase_id, Task.status == "done"
+                ).order_by(Task.completed_at.desc()).first()
+            if completing_task and completing_task.completion_notes:
+                feedback = completing_task.completion_notes
         dispatched = _create_phase_task(
             workflow_id,
             target_phase_id,
             target_phase_name,
             action,
             logger,
-            feedback=result.get("reason"),
+            feedback=feedback,
             source_phase_name=phase_name,
         )
         if not dispatched:
@@ -2551,18 +2646,8 @@ def _create_phase_task(
                 # it and take a fresh one, exactly what
                 # _release_stale_task_creation_claims would have done to it
                 # anyway had it reached this phase first.
-                stale_cutoff = datetime.utcnow() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
-                cleared = (
-                    _claim_db.query(PhaseExecution)
-                    .filter(
-                        PhaseExecution.phase_id == phase_id,
-                        PhaseExecution.task_creation_claimed_at.isnot(None),
-                        PhaseExecution.task_creation_claimed_at < stale_cutoff,
-                    )
-                    .update({"task_creation_claimed_at": None}, synchronize_session=False)
-                )
-                _claim_db.commit()
-                if not cleared or not _claim_phase_task_creation(_claim_db, phase_id):
+                was_stale = _clear_stale_task_creation_claim(_claim_db, phase_id, repair_status=True)
+                if not was_stale or not _claim_phase_task_creation(_claim_db, phase_id):
                     logger.info(f"[PHASE-TASK] {phase_name} task creation already claimed by another caller -- skipping")
                     return False
         own_claim = True
@@ -2893,18 +2978,8 @@ def _create_corrective_task(
 
     with get_db() as _claim_db:
         if not _claim_phase_task_creation(_claim_db, phase_id):
-            stale_cutoff = datetime.utcnow() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
-            cleared = (
-                _claim_db.query(PhaseExecution)
-                .filter(
-                    PhaseExecution.phase_id == phase_id,
-                    PhaseExecution.task_creation_claimed_at.isnot(None),
-                    PhaseExecution.task_creation_claimed_at < stale_cutoff,
-                )
-                .update({"task_creation_claimed_at": None}, synchronize_session=False)
-            )
-            _claim_db.commit()
-            if not cleared or not _claim_phase_task_creation(_claim_db, phase_id):
+            was_stale = _clear_stale_task_creation_claim(_claim_db, phase_id, repair_status=True)
+            if not was_stale or not _claim_phase_task_creation(_claim_db, phase_id):
                 logger.info(f"[CORRECTIVE-TASK] {phase_name} task creation already claimed by another caller -- skipping")
                 return None
 
@@ -3277,10 +3352,7 @@ async def fire_spec_gate_if_ready(session, task) -> None:
         # evaluation decided (e.g. "pending", reset by
         # _handle_evaluation_goto for its next cycle), and flipping it
         # back to "in_progress" would corrupt that.
-        session.query(PhaseExecution).filter_by(phase_id=phase.id).update(
-            {"task_creation_claimed_at": None}, synchronize_session=False
-        )
-        session.commit()
+        _clear_stale_task_creation_claim(session, phase.id, repair_status=False)
     if result.get("action") == "already_completed":
         logger.info(f"[SPEC-GATE] {phase.name}: already completed by another caller")
     elif result.get("action") == "arbitrate":
@@ -3357,35 +3429,10 @@ async def fire_spec_gate_if_ready(session, task) -> None:
         # status from a prior pass and get re-evaluated without running.
         target_order = session.query(Phase.order).filter_by(id=result["target_phase_id"]).scalar()
         if target_order is not None:
-            stale = (
-                session.query(PhaseExecution)
-                .join(Phase, PhaseExecution.phase_id == Phase.id)
-                .filter(
-                    Phase.workflow_id == task.workflow_id,
-                    Phase.order >= target_order,
-                    # Excludes THIS phase's own execution -- mark_phase_
-                    # complete (via _handle_evaluation_goto) already
-                    # closed it "completed" one call up, and this
-                    # phase's own order is always >= its own goto
-                    # target's order, so without this exclusion this
-                    # duplicate reset (see 084edcf's identical fix to
-                    # _handle_evaluation_goto's own copy of this query)
-                    # immediately flipped that same "completed" mark
-                    # back to "pending", defeating mark_phase_complete's
-                    # idempotency guard for this synchronous spec-gate
-                    # path specifically -- the sweep-side goto path
-                    # doesn't run this block at all.
-                    PhaseExecution.phase_id != phase.id,
-                    PhaseExecution.status.in_(["in_progress", "completed"]),
-                )
-                .all()
+            reset_stale_executions_on_goto(
+                session, task.workflow_id, target_order,
+                exclude_phase_id=phase.id,
             )
-            for s in stale:
-                s.status = "pending"
-                s.completed_at = None
-                s.task_creation_claimed_at = None
-            if stale:
-                session.commit()
 
         await loop.run_in_executor(
             None,

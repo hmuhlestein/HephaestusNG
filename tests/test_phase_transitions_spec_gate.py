@@ -234,3 +234,70 @@ class TestFireSpecGateIfReadyGoto:
         assert args[1] == "phase-adv"
         assert args[2] == "adversarial_review"
         assert "GOTO limit exceeded" in args[3]
+
+    @pytest.mark.asyncio
+    async def test_goto_never_resets_its_own_firing_phase_execution(self, gate_db, tmp_path):
+        """Characterization: a goto must not re-reset the firing phase's
+        own just-closed PhaseExecution row. mark_phase_complete closes it
+        "completed" before returning -- the stale-execution reset must
+        exclude it or the idempotency guard ("if execution.status ==
+        completed: skip") is defeated on the next evaluation."""
+        from src.autopilot.orchestrator.phase_transitions import reset_stale_executions_on_goto
+        from src.core.database import PhaseExecution
+
+        self._seed(gate_db, tmp_path)
+        # Seed's PhaseExecution for phase-adv is "in_progress"; set it
+        # to "completed" to simulate mark_phase_complete having just
+        # closed it. Add a "completed" execution for the target phase.
+        with gate_db.session_scope() as session:
+            adv_exec = session.query(PhaseExecution).filter_by(phase_id="phase-adv").first()
+            adv_exec.status = "completed"
+            session.add(PhaseExecution(
+                id="exec-dev", phase_id="phase-dev", workflow_execution_id="wf-1",
+                status="completed",
+            ))
+
+        # Fire the goto-reset targeting development (order 4).
+        with gate_db.session_scope() as session:
+            n = reset_stale_executions_on_goto(
+                session, "wf-1", 4, exclude_phase_id="phase-adv",
+            )
+
+        # The firing phase's execution must still be "completed" --
+        # the goto-reset must not have touched it.
+        with gate_db.session_scope() as session:
+            adv_exec = session.query(PhaseExecution).filter_by(phase_id="phase-adv").first()
+            assert adv_exec.status == "completed"
+            # The target phase's execution must be reset to "pending".
+            dev_exec = session.query(PhaseExecution).filter_by(phase_id="phase-dev").first()
+            assert dev_exec.status == "pending"
+
+    @pytest.mark.asyncio
+    async def test_goto_resets_phase_at_target_order(self, gate_db, tmp_path):
+        """Characterization: a goto resets phases at OR after the target
+        order, not just strictly between target and source. A phase at
+        the target's own order (the target itself) must be reset if its
+        execution was "completed" from a prior pass."""
+        from src.autopilot.orchestrator.phase_transitions import reset_stale_executions_on_goto
+        from src.core.database import PhaseExecution
+
+        self._seed(gate_db, tmp_path)
+        with gate_db.session_scope() as session:
+            adv_exec = session.query(PhaseExecution).filter_by(phase_id="phase-adv").first()
+            adv_exec.status = "completed"
+            session.add(PhaseExecution(
+                id="exec-dev", phase_id="phase-dev", workflow_execution_id="wf-1",
+                status="completed",
+            ))
+
+        # Fire the goto-reset targeting development (order 4).
+        with gate_db.session_scope() as session:
+            n = reset_stale_executions_on_goto(
+                session, "wf-1", 4, exclude_phase_id="phase-adv",
+            )
+
+        # The target phase's execution must be reset to "pending".
+        with gate_db.session_scope() as session:
+            dev_exec = session.query(PhaseExecution).filter_by(phase_id="phase-dev").first()
+            assert dev_exec.status == "pending"
+            assert n >= 1
