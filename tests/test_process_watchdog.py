@@ -18,6 +18,26 @@ from unittest.mock import MagicMock, patch
 from src.cli.commands.start import ProcessWatchdog
 
 
+def _lsof_then_ps(pids_stdout, comm="python"):
+    """subprocess.run stand-in for get_port_listeners' two-step lookup.
+
+    ports.py runs `lsof` to find LISTENers and then `ps -o pid=,comm=` to
+    filter them by command name (so a VS Code Remote SSH `node` proxy on
+    the same port is never killed). A single canned return value answers
+    both calls with lsof-shaped output, and the `ps` reply then parses to
+    zero "<pid> <comm>" pairs -- so every PID is filtered out and the
+    function under test sees an empty list.
+    """
+    pids = [p for p in pids_stdout.strip().split("\n") if p.strip()]
+
+    def fake_run(cmd, **kwargs):
+        if cmd and cmd[0] == "ps":
+            return MagicMock(stdout="".join(f"{p} {comm}\n" for p in pids))
+        return MagicMock(stdout=pids_stdout)
+
+    return fake_run
+
+
 class TestCheckDuplicatePortListeners:
     def test_single_listener_does_nothing(self):
         watchdog = ProcessWatchdog()
@@ -44,7 +64,7 @@ class TestCheckDuplicatePortListeners:
         with patch("subprocess.run") as mock_run, patch(
             "src.cli.commands.start.read_pid", return_value=111
         ), patch("os.kill") as mock_kill:
-            mock_run.return_value = MagicMock(stdout="111\n222\n")
+            mock_run.side_effect = _lsof_then_ps("111\n222\n")
             watchdog.check_duplicate_port_listeners(8300)
 
         mock_kill.assert_called_once()
@@ -60,7 +80,7 @@ class TestCheckDuplicatePortListeners:
         with patch("subprocess.run") as mock_run, patch(
             "src.cli.commands.start.read_pid", return_value=999
         ), patch("os.kill") as mock_kill:
-            mock_run.return_value = MagicMock(stdout="111\n222\n")
+            mock_run.side_effect = _lsof_then_ps("111\n222\n")
             watchdog.check_duplicate_port_listeners(8300)
 
         mock_kill.assert_called_once()
@@ -100,7 +120,7 @@ class TestCheckDuplicatePortListeners:
         with patch("subprocess.run") as mock_run, patch(
             "src.cli.commands.start.read_pid", return_value=111
         ), patch("os.kill", side_effect=kill_side_effect) as mock_kill:
-            mock_run.return_value = MagicMock(stdout="111\n222\n333\n")
+            mock_run.side_effect = _lsof_then_ps("111\n222\n333\n")
             watchdog.check_duplicate_port_listeners(8300)
 
         killed_pids = {call[0][0] for call in mock_kill.call_args_list}

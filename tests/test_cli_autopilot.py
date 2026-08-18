@@ -15,8 +15,13 @@ from unittest.mock import MagicMock, patch
 from src.cli.commands import autopilot as autopilot_cli
 
 
+# cli/main.py builds this as f"http://{args.host}:{args.port}" before
+# dispatching, so every command function can rely on it being present.
+API_BASE = "http://127.0.0.1:9999"
+
+
 def _args(**overrides):
-    base = {"project_path": None, "json": False}
+    base = {"project_path": None, "json": False, "api_base": API_BASE}
     base.update(overrides)
     return SimpleNamespace(**base)
 
@@ -30,15 +35,15 @@ PROJECTS = [
 class TestResolveProjectIdByPath:
     def test_finds_matching_project(self):
         with patch("requests.get", return_value=MagicMock(status_code=200, json=lambda: PROJECTS)):
-            assert autopilot_cli._resolve_project_id_by_path("/tmp/proj-b") == "proj-b"
+            assert autopilot_cli._resolve_project_id_by_path("/tmp/proj-b", API_BASE) == "proj-b"
 
     def test_returns_none_when_no_match(self):
         with patch("requests.get", return_value=MagicMock(status_code=200, json=lambda: PROJECTS)):
-            assert autopilot_cli._resolve_project_id_by_path("/tmp/proj-c") is None
+            assert autopilot_cli._resolve_project_id_by_path("/tmp/proj-c", API_BASE) is None
 
     def test_returns_none_when_backend_unreachable(self):
         with patch("requests.get", side_effect=Exception("connection refused")):
-            assert autopilot_cli._resolve_project_id_by_path("/tmp/proj-a") is None
+            assert autopilot_cli._resolve_project_id_by_path("/tmp/proj-a", API_BASE) is None
 
 
 class TestStopPipeline:

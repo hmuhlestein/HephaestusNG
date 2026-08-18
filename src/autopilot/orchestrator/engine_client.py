@@ -128,6 +128,14 @@ def terminate_agent(
     caller's transaction (no auto-commit). Omit to create a standalone
     session that auto-commits.
 
+    CAUTION when passing a session: this project's sessions are
+    autoflush=False, so the stray-task query below reads the DATABASE, not
+    your uncommitted in-memory changes. If you have already set a task to a
+    terminal state (done/failed) without flushing, that write is invisible
+    here -- the task still looks in_progress, matches, and gets reset to
+    "pending", silently clobbering it. Either call session.flush() first, or
+    set the task's terminal state AFTER this returns.
+
     kill_tmux: reserved for future use — full tmux teardown (WIP commit,
     transcript capture, SIGINT/SIGKILL) is handled by Terminator.terminate_agent
     via AgentManager. This function always does the DB invariant.

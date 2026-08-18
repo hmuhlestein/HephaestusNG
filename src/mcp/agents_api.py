@@ -402,7 +402,9 @@ async def get_agent_children(
     from src.services.agent_communication import AgentCommunicationService
 
     comm = AgentCommunicationService(server_state.db_manager, server_state.agent_manager)
-    children = comm.get_children(agent_id)
+    # to_thread: get_children does blocking DB I/O, and this is an async
+    # route -- calling it inline stalls the whole event loop.
+    children = await asyncio.to_thread(comm.get_children, agent_id)
     return {"children": children, "count": len(children)}
 
 
@@ -417,7 +419,8 @@ async def get_children_status(
     from src.services.agent_communication import AgentCommunicationService
 
     comm = AgentCommunicationService(server_state.db_manager, server_state.agent_manager)
-    summary = comm.get_children_status_summary(agent_id)
+    # to_thread: blocking DB reads plus tmux pane inspection per child.
+    summary = await asyncio.to_thread(comm.get_children_status_summary, agent_id)
     return summary
 
 
@@ -435,7 +438,11 @@ async def get_child_logs(
     from src.services.agent_communication import AgentCommunicationService
 
     comm = AgentCommunicationService(server_state.db_manager, server_state.agent_manager)
-    logs = comm.get_child_logs(agent_id, child_id, lines=lines)
+    # to_thread: this shells out to `tmux capture-pane` over up to 2000
+    # lines of scrollback -- by far the worst of the three to run inline.
+    logs = await asyncio.to_thread(
+        comm.get_child_logs, agent_id, child_id, lines
+    )
     if logs is None:
         raise HTTPException(404, "Child not found or access denied")
     return {"logs": logs}

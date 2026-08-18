@@ -143,21 +143,32 @@ async def requeue_design(request: dict):
     paused_count = 0
     try:
         with get_db() as db:
-            # Find autopilot workflows that are active
-            active_workflows = (
-                db.query(Workflow)
-                .filter(
-                    Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
-                    Workflow.status.in_(["active", "running"]),
-                )
-                .all()
+            # Scoped to the requesting project, mirroring rerun_design's
+            # own scoping (9cb947c). Without it this endpoint terminates
+            # agents and pauses workflows for ANY project whose design
+            # document happens to share this filename -- and design
+            # filenames repeat across projects constantly (design.md,
+            # feature.md, a doc copied between repos). Same incident shape
+            # 9cb947c was root-caused from: a healthy, unrelated agent
+            # killed mid-review by another design's queue action.
+            wf_query = db.query(Workflow).filter(
+                Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
+                Workflow.status.in_(["active", "running"]),
             )
+            if req_project_id:
+                wf_query = wf_query.filter(Workflow.project_id == req_project_id)
+            active_workflows = wf_query.all()
 
             for wf in active_workflows:
                 if wf.launch_params:
                     params = json.loads(wf.launch_params) if isinstance(wf.launch_params, str) else wf.launch_params
                     design_doc = params.get("design_document", "")
-                    if filename in str(design_doc):
+                    # Basename equality, not `filename in design_doc`: the
+                    # substring form also matches any design whose name
+                    # merely contains this one (requeuing "api.md" hit
+                    # "legacy-api.md"). 533de2a hit the same class of
+                    # false match with a prefix compare on project dirs.
+                    if design_doc and Path(str(design_doc)).name == filename:
                         # Terminate agents for this workflow
                         task_ids = [
                             t.id
@@ -224,7 +235,6 @@ async def requeue_design(request: dict):
 async def rerun_design(request: dict):
     """Rerun a design: stop everything, move to front, start pipeline."""
     import signal
-    import time
     from pathlib import Path
 
     from src.core.database import (
@@ -296,15 +306,20 @@ async def rerun_design(request: dict):
             pid = int(pid_file.read_text().strip())
             try:
                 os.kill(pid, signal.SIGTERM)
+                # await asyncio.sleep, not time.sleep: this is an async
+                # route, and the loop below blocked the entire event loop
+                # for up to 5s (plus 0.5s after SIGKILL) on every rerun --
+                # freezing dashboard reads, agent check-ins, and task
+                # completions server-wide for the duration.
                 for _ in range(10):
-                    time.sleep(0.5)
+                    await asyncio.sleep(0.5)
                     try:
                         os.kill(pid, 0)  # Check if alive
                     except ProcessLookupError:
                         break
                 try:
                     os.kill(pid, signal.SIGKILL)
-                    time.sleep(0.5)  # Give OS time to clean up
+                    await asyncio.sleep(0.5)  # Give OS time to clean up
                 except ProcessLookupError:
                     pass
             except ProcessLookupError:

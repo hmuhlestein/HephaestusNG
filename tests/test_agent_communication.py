@@ -531,7 +531,10 @@ class TestAgentCommunicationServiceMigration:
             ))
 
         import asyncio
-        result = asyncio.get_event_loop().run_until_complete(
+        # asyncio.run, not get_event_loop().run_until_complete: from
+        # Python 3.12 get_event_loop() no longer creates a loop when none
+        # is running, so in a sync test it raises RuntimeError outright.
+        result = asyncio.run(
             comm_service.send_message_to_child("parent-1", "child-1", "hello")
         )
         assert result is False
@@ -549,7 +552,10 @@ class TestAgentCommunicationServiceMigration:
             ))
 
         import asyncio
-        result = asyncio.get_event_loop().run_until_complete(
+        # asyncio.run, not get_event_loop().run_until_complete: from
+        # Python 3.12 get_event_loop() no longer creates a loop when none
+        # is running, so in a sync test it raises RuntimeError outright.
+        result = asyncio.run(
             comm_service.send_message_to_child("parent-1", "stranger-1", "hello")
         )
         assert result is False
@@ -590,7 +596,10 @@ class TestAgentCommunicationServiceMigration:
         # nudge_child calls send_message_to_child, which needs agent_manager
         # to actually deliver. Without it, it returns False.
         import asyncio
-        result = asyncio.get_event_loop().run_until_complete(
+        # asyncio.run, not get_event_loop().run_until_complete: from
+        # Python 3.12 get_event_loop() no longer creates a loop when none
+        # is running, so in a sync test it raises RuntimeError outright.
+        result = asyncio.run(
             comm_service.nudge_child("parent-1", "child-1", "test reason")
         )
         assert result is False

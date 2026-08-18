@@ -97,7 +97,11 @@ async def test_agent_and_task_cleanup_on_prompt_delivery_failure(
     )
 
     # Mock _send_initial_prompt_with_retry to always fail
-    agent_manager._send_initial_prompt_with_retry = AsyncMock(
+    # Patch the collaborator, not the delegate: create_agent_for_task runs
+    # inside LaunchPipeline and calls its own _send_initial_prompt_with_retry
+    # (launch_pipeline.py:771), so stubbing the AgentManager attribute never
+    # intercepts (Phase 1b decomposition).
+    agent_manager._launch._send_initial_prompt_with_retry = AsyncMock(
         side_effect=Exception(
             "Failed to deliver initial prompt to agent test-agent after 3 attempts"
         )
@@ -111,6 +115,11 @@ async def test_agent_and_task_cleanup_on_prompt_delivery_failure(
     mock_task_record = Mock(spec=Task)
     mock_task_record.id = task.id
     mock_task_record.status = "pending"
+    # Must be explicit: the post-launch reassignment guard aborts when
+    # assigned_agent_id is truthy and != this agent's id, and an
+    # unconfigured Mock attribute is truthy -- so the launch bailed out
+    # before prompt delivery and the failure under test never happened.
+    mock_task_record.assigned_agent_id = None
 
     # Single session that supports `with` and handles all query patterns:
     #   - Guard: .query(Agent).filter(...).first() → None (no existing agent)
@@ -119,6 +128,11 @@ async def test_agent_and_task_cleanup_on_prompt_delivery_failure(
     mock_query = Mock()
     mock_query.filter_by = Mock(return_value=mock_query)
     mock_query.filter = Mock(return_value=mock_query)
+    # terminate_agent's stray-task sweep calls .filter(...).all(); an
+    # unconfigured Mock is not iterable, and the cleanup path swallows
+    # that as "Failed to update database during cleanup" -- leaving the
+    # task at its old status instead of the "failed" this test asserts.
+    mock_query.all = Mock(return_value=[])
     mock_query.first = Mock(side_effect=[None, mock_agent_record, mock_task_record, mock_agent_record, mock_task_record])
 
     mock_session = Mock()
@@ -190,7 +204,11 @@ async def test_cleanup_handles_database_errors_gracefully(
     )
 
     # Mock _send_initial_prompt_with_retry to always fail
-    agent_manager._send_initial_prompt_with_retry = AsyncMock(
+    # Patch the collaborator, not the delegate: create_agent_for_task runs
+    # inside LaunchPipeline and calls its own _send_initial_prompt_with_retry
+    # (launch_pipeline.py:771), so stubbing the AgentManager attribute never
+    # intercepts (Phase 1b decomposition).
+    agent_manager._launch._send_initial_prompt_with_retry = AsyncMock(
         side_effect=Exception(
             "Failed to deliver initial prompt to agent test-agent after 3 attempts"
         )
@@ -204,6 +222,11 @@ async def test_cleanup_handles_database_errors_gracefully(
     mock_task_record = Mock(spec=Task)
     mock_task_record.id = task.id
     mock_task_record.status = "pending"
+    # Must be explicit: the post-launch reassignment guard aborts when
+    # assigned_agent_id is truthy and != this agent's id, and an
+    # unconfigured Mock attribute is truthy -- so the launch bailed out
+    # before prompt delivery and the failure under test never happened.
+    mock_task_record.assigned_agent_id = None
 
     # Guard session: returns None (no existing agent for this task)
     guard_query = Mock()
@@ -217,6 +240,12 @@ async def test_cleanup_handles_database_errors_gracefully(
     # Main session for agent/task lookups
     mock_query = Mock()
     mock_query.filter_by = Mock(return_value=mock_query)
+    mock_query.filter = Mock(return_value=mock_query)
+    # terminate_agent's stray-task sweep calls .filter(...).all(); an
+    # unconfigured Mock is not iterable, and the cleanup path swallows
+    # that as "Failed to update database during cleanup" -- leaving the
+    # task at its old status instead of the "failed" this test asserts.
+    mock_query.all = Mock(return_value=[])
     mock_query.first = Mock(return_value=mock_task_record)
     mock_session = Mock()
     mock_session.__enter__ = Mock(return_value=mock_session)
@@ -227,9 +256,21 @@ async def test_cleanup_handles_database_errors_gracefully(
     mock_session.close = Mock()
     mock_session.query = Mock(return_value=mock_query)
 
-    # Mock database: guard succeeds, main session works, cleanup fails
+    # Mock database: guards succeed, main session works, cleanup fails.
+    # This list is positional, so every get_session() call in the path must
+    # be accounted for -- Phase 2 §4.3 added the phase-sibling guard's own
+    # session (launch_pipeline.py:1561), which without an entry here shifted
+    # everything down one and raised the cleanup error before the launch had
+    # even happened, so no tmux session existed to kill.
+    sibling_guard_session = Mock()
+    sibling_guard_session.__enter__ = Mock(return_value=sibling_guard_session)
+    sibling_guard_session.__exit__ = Mock(return_value=False)
+    sibling_guard_session.query = Mock(return_value=guard_query)
+    sibling_guard_session.close = Mock()
+
     mock_db_manager.get_session.side_effect = [
-        guard_session,  # Guard call (no existing agent)
+        guard_session,  # duplicate-active-agent guard
+        sibling_guard_session,  # phase-sibling guard (§4.3)
         mock_session,  # Main session (agent creation + prompt delivery)
         Exception("Database connection error"),  # Cleanup fails
     ]
@@ -273,7 +314,11 @@ async def test_cleanup_handles_tmux_kill_errors_gracefully(
     )
 
     # Mock _send_initial_prompt_with_retry to always fail
-    agent_manager._send_initial_prompt_with_retry = AsyncMock(
+    # Patch the collaborator, not the delegate: create_agent_for_task runs
+    # inside LaunchPipeline and calls its own _send_initial_prompt_with_retry
+    # (launch_pipeline.py:771), so stubbing the AgentManager attribute never
+    # intercepts (Phase 1b decomposition).
+    agent_manager._launch._send_initial_prompt_with_retry = AsyncMock(
         side_effect=Exception(
             "Failed to deliver initial prompt to agent test-agent after 3 attempts"
         )
@@ -304,9 +349,20 @@ async def test_cleanup_handles_tmux_kill_errors_gracefully(
     mock_task_record = Mock(spec=Task)
     mock_task_record.id = task.id
     mock_task_record.status = "pending"
+    # Must be explicit: the post-launch reassignment guard aborts when
+    # assigned_agent_id is truthy and != this agent's id, and an
+    # unconfigured Mock attribute is truthy -- so the launch bailed out
+    # before prompt delivery and the failure under test never happened.
+    mock_task_record.assigned_agent_id = None
 
     mock_query = Mock()
     mock_query.filter_by = Mock(return_value=mock_query)
+    mock_query.filter = Mock(return_value=mock_query)
+    # terminate_agent's stray-task sweep calls .filter(...).all(); an
+    # unconfigured Mock is not iterable, and the cleanup path swallows
+    # that as "Failed to update database during cleanup" -- leaving the
+    # task at its old status instead of the "failed" this test asserts.
+    mock_query.all = Mock(return_value=[])
     mock_query.first = Mock(return_value=mock_task_record)
     mock_session = Mock()
     mock_session.__enter__ = Mock(return_value=mock_session)

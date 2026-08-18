@@ -83,9 +83,11 @@ class TestIsDesignFullyComplete:
 
     @patch("src.autopilot.orchestrator.queue.get_workflow_status")
     @patch("src.autopilot.orchestrator.queue.get_tasks")
-    def test_incomplete_when_pending_tasks(self, mock_tasks, mock_wf_status):
+    @patch("src.core.status_derivation.derive_workflow_status")
+    def test_incomplete_when_pending_tasks(self, mock_derive, mock_tasks, mock_wf_status):
         """Design is not complete when tasks are pending."""
         mock_wf_status.return_value = {"status": "active"}
+        mock_derive.return_value = "active"
 
         mock_tasks.side_effect = lambda status=None, workflow_id=None: {
             "pending": [{"id": "task-1", "status": "pending"}],
@@ -103,11 +105,13 @@ class TestIsDesignFullyComplete:
     @patch("src.autopilot.orchestrator.queue.get_workflow_status")
     @patch("src.autopilot.orchestrator.queue.get_tasks")
     @patch("src.autopilot.orchestrator.queue.get_agents")
+    @patch("src.core.status_derivation.derive_workflow_status")
     def test_incomplete_when_agents_active(
-        self, mock_agents, mock_tasks, mock_wf_status
+        self, mock_derive, mock_agents, mock_tasks, mock_wf_status
     ):
         """Design is not complete when agents are still running."""
         mock_wf_status.return_value = {"status": "active"}
+        mock_derive.return_value = "active"
 
         done_tasks = [{"id": f"task-{i}", "status": "done"} for i in range(10)]
         mock_tasks.side_effect = lambda status=None, workflow_id=None: {
@@ -129,11 +133,13 @@ class TestIsDesignFullyComplete:
     @patch("src.autopilot.orchestrator.queue.get_tasks")
     @patch("src.autopilot.orchestrator.queue.get_agents")
     @patch("subprocess.run")
+    @patch("src.core.status_derivation.derive_workflow_status")
     def test_incomplete_when_branches_unmerged(
-        self, mock_subprocess, mock_agents, mock_tasks, mock_wf_status
+        self, mock_derive, mock_subprocess, mock_agents, mock_tasks, mock_wf_status
     ):
         """Design is not complete when agent branches exist."""
         mock_wf_status.return_value = {"status": "active"}
+        mock_derive.return_value = "active"
 
         done_tasks = [{"id": f"task-{i}", "status": "done"} for i in range(10)]
         mock_tasks.side_effect = lambda status=None, workflow_id=None: {
@@ -158,9 +164,11 @@ class TestIsDesignFullyComplete:
 
     @patch("src.autopilot.orchestrator.queue.get_workflow_status")
     @patch("src.autopilot.orchestrator.queue.get_tasks")
-    def test_incomplete_when_tasks_failed(self, mock_tasks, mock_wf_status):
+    @patch("src.core.status_derivation.derive_workflow_status")
+    def test_incomplete_when_tasks_failed(self, mock_derive, mock_tasks, mock_wf_status):
         """Design is not complete when tasks have failed."""
         mock_wf_status.return_value = {"status": "active"}
+        mock_derive.return_value = "active"
 
         mock_tasks.side_effect = lambda status=None, workflow_id=None: {
             "pending": [],

@@ -181,7 +181,11 @@ async def test_send_initial_prompt_with_retry_success_first_attempt(
     initial_message = "Test initial message\nTask ID: test-task-456"
 
     # Mock verification to succeed on first attempt
-    agent_manager._verify_prompt_delivery = AsyncMock(return_value=True)
+    # Patch the collaborator, not the delegate: AgentManager._verify_
+    # prompt_delivery just forwards to LaunchPipeline, and the retry
+    # loop calls LaunchPipeline's own copy -- so stubbing the manager
+    # attribute never intercepts anything (Phase 1b decomposition).
+    agent_manager._launch._verify_prompt_delivery = AsyncMock(return_value=True)
 
     # Should not raise an exception
     await agent_manager._send_initial_prompt_with_retry(
@@ -200,7 +204,7 @@ async def test_send_initial_prompt_with_retry_success_first_attempt(
     mock_cli_agent.format_message.assert_called_once_with(initial_message)
 
     # Verify verification was called once
-    agent_manager._verify_prompt_delivery.assert_called_once()
+    agent_manager._launch._verify_prompt_delivery.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -213,7 +217,11 @@ async def test_send_initial_prompt_with_retry_success_second_attempt(
     initial_message = "Test initial message\nTask ID: test-task-456"
 
     # Mock verification to fail first, then succeed
-    agent_manager._verify_prompt_delivery = AsyncMock(side_effect=[False, True])
+    # Patch the collaborator, not the delegate: AgentManager._verify_
+    # prompt_delivery just forwards to LaunchPipeline, and the retry
+    # loop calls LaunchPipeline's own copy -- so stubbing the manager
+    # attribute never intercepts anything (Phase 1b decomposition).
+    agent_manager._launch._verify_prompt_delivery = AsyncMock(side_effect=[False, True])
 
     # Should not raise an exception
     await agent_manager._send_initial_prompt_with_retry(
@@ -232,7 +240,7 @@ async def test_send_initial_prompt_with_retry_success_second_attempt(
     assert mock_cli_agent.format_message.call_count == 2  # Called twice
 
     # Verify verification was called twice
-    assert agent_manager._verify_prompt_delivery.call_count == 2
+    assert agent_manager._launch._verify_prompt_delivery.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -245,7 +253,11 @@ async def test_send_initial_prompt_with_retry_success_third_attempt(
     initial_message = "Test initial message\nTask ID: test-task-456"
 
     # Mock verification to fail twice, then succeed on third attempt
-    agent_manager._verify_prompt_delivery = AsyncMock(side_effect=[False, False, True])
+    # Patch the collaborator, not the delegate: AgentManager._verify_
+    # prompt_delivery just forwards to LaunchPipeline, and the retry
+    # loop calls LaunchPipeline's own copy -- so stubbing the manager
+    # attribute never intercepts anything (Phase 1b decomposition).
+    agent_manager._launch._verify_prompt_delivery = AsyncMock(side_effect=[False, False, True])
 
     # Should not raise an exception
     await agent_manager._send_initial_prompt_with_retry(
@@ -264,7 +276,7 @@ async def test_send_initial_prompt_with_retry_success_third_attempt(
     assert mock_cli_agent.format_message.call_count == 3  # Called three times
 
     # Verify verification was called three times
-    assert agent_manager._verify_prompt_delivery.call_count == 3
+    assert agent_manager._launch._verify_prompt_delivery.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -277,7 +289,11 @@ async def test_send_initial_prompt_with_retry_all_retries_fail(
     initial_message = "Test initial message\nTask ID: test-task-456"
 
     # Mock verification to always fail
-    agent_manager._verify_prompt_delivery = AsyncMock(return_value=False)
+    # Patch the collaborator, not the delegate: AgentManager._verify_
+    # prompt_delivery just forwards to LaunchPipeline, and the retry
+    # loop calls LaunchPipeline's own copy -- so stubbing the manager
+    # attribute never intercepts anything (Phase 1b decomposition).
+    agent_manager._launch._verify_prompt_delivery = AsyncMock(return_value=False)
 
     # Should raise an exception after all retries
     with pytest.raises(Exception) as exc_info:
@@ -302,7 +318,7 @@ async def test_send_initial_prompt_with_retry_all_retries_fail(
     assert mock_cli_agent.format_message.call_count == 3
 
     # Verify verification was called three times
-    assert agent_manager._verify_prompt_delivery.call_count == 3
+    assert agent_manager._launch._verify_prompt_delivery.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -315,7 +331,11 @@ async def test_send_initial_prompt_with_retry_custom_max_retries(
     initial_message = "Test initial message\nTask ID: test-task-456"
 
     # Mock verification to always fail
-    agent_manager._verify_prompt_delivery = AsyncMock(return_value=False)
+    # Patch the collaborator, not the delegate: AgentManager._verify_
+    # prompt_delivery just forwards to LaunchPipeline, and the retry
+    # loop calls LaunchPipeline's own copy -- so stubbing the manager
+    # attribute never intercepts anything (Phase 1b decomposition).
+    agent_manager._launch._verify_prompt_delivery = AsyncMock(return_value=False)
 
     # Should fail after 5 retries (custom value)
     with pytest.raises(Exception) as exc_info:
@@ -337,7 +357,7 @@ async def test_send_initial_prompt_with_retry_custom_max_retries(
     assert mock_pane.send_keys.call_count == 10  # 5 attempts × 2 calls each
 
     # Verify verification was called 5 times
-    assert agent_manager._verify_prompt_delivery.call_count == 5
+    assert agent_manager._launch._verify_prompt_delivery.call_count == 5
 
 
 @pytest.mark.asyncio
