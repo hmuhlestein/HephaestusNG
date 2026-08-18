@@ -3277,11 +3277,81 @@ class TestStopPipelineDeactivatesProject:
 
 
 class TestRouterAggregation:
-    def test_all_63_routes_survived_the_split(self):
-        """The aggregator must expose the same 63 routes the pre-split
-        autopilot_api module had (backend_module_decomposition.md §6) —
-        guards against include_router() wiring silently dropping a route
-        (the failure mode the GET /status gap in §3.2 describes)."""
+    # Every route the pre-split autopilot_api module exposed
+    # (backend_module_decomposition.md §6). Pinned as a set rather than a
+    # count: a bare count assertion goes red the first time a route is
+    # legitimately added (it did — three multi-project activation routes
+    # took it from 63 to 66), and a permanently-red guardrail stops
+    # guarding anything. A subset check keeps catching the failure mode
+    # this actually exists for -- include_router() wiring silently
+    # dropping a route -- while staying green as the surface grows.
+    PRE_SPLIT_ROUTES = frozenset({
+        ("POST", "/api/autopilot/cleanup-branches"),
+        ("POST", "/api/autopilot/cost-entries"),
+        ("POST", "/api/autopilot/designs/add"),
+        ("GET", "/api/autopilot/designs/{design_id}/costs"),
+        ("GET", "/api/autopilot/feature-records/{feature_id}/docs"),
+        ("GET", "/api/autopilot/feature-records/{feature_id}/docs/{doc_name}"),
+        ("GET", "/api/autopilot/feature-records/{feature_id}/report"),
+        ("GET", "/api/autopilot/features"),
+        ("DELETE", "/api/autopilot/features/{feature_id}"),
+        ("GET", "/api/autopilot/features/{feature_id}"),
+        ("GET", "/api/autopilot/features/{feature_id}/costs"),
+        ("GET", "/api/autopilot/features/{feature_id}/docs/{doc_name}"),
+        ("GET", "/api/autopilot/features/{feature_id}/download"),
+        ("GET", "/api/autopilot/features/{feature_id}/logs"),
+        ("GET", "/api/autopilot/features/{feature_id}/logs/{log_name}"),
+        ("POST", "/api/autopilot/features/{feature_id}/pause"),
+        ("GET", "/api/autopilot/features/{feature_id}/report"),
+        ("POST", "/api/autopilot/features/{feature_id}/resume"),
+        ("POST", "/api/autopilot/features/{feature_id}/review"),
+        ("GET", "/api/autopilot/health"),
+        ("GET", "/api/autopilot/input"),
+        ("POST", "/api/autopilot/input"),
+        ("DELETE", "/api/autopilot/input/{request_id}"),
+        ("GET", "/api/autopilot/logs"),
+        ("GET", "/api/autopilot/messages"),
+        ("POST", "/api/autopilot/messages/archive"),
+        ("GET", "/api/autopilot/messages/archived"),
+        ("POST", "/api/autopilot/messages/cleanup-archives"),
+        ("POST", "/api/autopilot/messages/unarchive"),
+        ("POST", "/api/autopilot/messages/unarchive-all"),
+        ("GET", "/api/autopilot/projects"),
+        ("POST", "/api/autopilot/projects"),
+        ("DELETE", "/api/autopilot/projects/{project_id}"),
+        ("GET", "/api/autopilot/projects/{project_id}"),
+        ("PUT", "/api/autopilot/projects/{project_id}"),
+        ("GET", "/api/autopilot/projects/{project_id}/browse"),
+        ("GET", "/api/autopilot/projects/{project_id}/browse/content"),
+        ("GET", "/api/autopilot/projects/{project_id}/costs"),
+        ("GET", "/api/autopilot/projects/{project_id}/designs"),
+        ("POST", "/api/autopilot/projects/{project_id}/designs"),
+        ("POST", "/api/autopilot/projects/{project_id}/designs/reload"),
+        ("PUT", "/api/autopilot/projects/{project_id}/designs/reorder"),
+        ("DELETE", "/api/autopilot/projects/{project_id}/designs/{filename}"),
+        ("GET", "/api/autopilot/projects/{project_id}/designs/{filename}/content"),
+        ("GET", "/api/autopilot/projects/{project_id}/designs/{filename}/status"),
+        ("PATCH", "/api/autopilot/projects/{project_id}/review-mode"),
+        ("POST", "/api/autopilot/projects/{project_id}/sync"),
+        ("GET", "/api/autopilot/queue"),
+        ("POST", "/api/autopilot/queue"),
+        ("POST", "/api/autopilot/queue/reorder"),
+        ("POST", "/api/autopilot/queue/repair"),
+        ("GET", "/api/autopilot/queue/repair/{repair_id}"),
+        ("POST", "/api/autopilot/queue/requeue"),
+        ("POST", "/api/autopilot/queue/rerun"),
+        ("DELETE", "/api/autopilot/queue/{filename}"),
+        ("GET", "/api/autopilot/queue/{filename}/content"),
+        ("POST", "/api/autopilot/start"),
+        ("GET", "/api/autopilot/status"),
+        ("POST", "/api/autopilot/stop"),
+        ("GET", "/api/autopilot/tasks/{task_id}/costs"),
+        ("GET", "/api/autopilot/workflows/{workflow_id}/costs"),
+        ("GET", "/api/autopilot/workflows/{workflow_id}/decomposition_review"),
+        ("GET", "/api/autopilot/workflows/{workflow_id}/feature_report"),
+    })
+
+    def test_no_pre_split_route_was_dropped(self):
         from src.mcp.autopilot import router
 
         def _flatten(routes):
@@ -3296,7 +3366,14 @@ class TestRouterAggregation:
             return out
 
         flat = _flatten(router.routes)
-        assert len(flat) == 63, f"expected 63 routes, got {len(flat)}"
+        current = {
+            (method, r.path)
+            for r in flat
+            for method in (getattr(r, "methods", None) or set())
+        }
+        missing = self.PRE_SPLIT_ROUTES - current
+        assert not missing, f"routes lost since the split: {sorted(missing)}"
+
         paths = {r.path for r in flat}
         for critical in (
             "/api/autopilot/status",
