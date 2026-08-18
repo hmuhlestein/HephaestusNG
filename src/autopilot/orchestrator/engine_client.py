@@ -163,7 +163,10 @@ def terminate_agent(
             s.commit()
             return result
     except Exception as e:
-        logger.debug(f"[terminate_agent] Failed for {agent_id[:8] if agent_id else '?'}: {e}")
+        logger.error(
+            f"[terminate_agent] Failed for {agent_id[:8] if agent_id else '?'}: {e}",
+            exc_info=True,
+        )
         return False
 
 
@@ -171,20 +174,147 @@ def terminate_agent(
 terminate_agent_direct = terminate_agent
 
 
-def pause_workflow_direct(workflow_id: str) -> bool:
-    """Pause workflow directly in database (H-2 fix)."""
+def pause_workflow(
+    workflow_id: str,
+    *,
+    reason: str,
+    cascade_to_feature: bool = True,
+    status_reason: Optional[str] = None,
+    session=None,
+) -> bool:
+    """Pause workflow: set the status/paused_by/paused_at invariant together.
+
+    This is the single shared primitive for workflow pause writes -- the
+    pause-state sibling to terminate_agent. Every raw ``wf.status =
+    "paused"`` write site must call this instead of hand-rolling the
+    triad -- the gap has independently recurred at multiple call sites:
+    9aa2a19 fixed pause_workflow_direct never setting paused_by/paused_at;
+    22178b1 fixed pause_project_workflows never syncing Feature.status.
+    Neither fix built a shared primitive, so the same two gaps kept
+    reappearing at other call sites never touched by those commits (found
+    at this handoff: stop_workflow, pause_feature, _pause_feature_for_review
+    and _pause_phase0_for_review all omitted paused_at; queue_routes'
+    requeue/rerun pause omitted paused_by entirely, which silently defeats
+    _try_auto_resume_paused_workflow's paused_by-based guard since it
+    treats "no paused_by" as eligible for auto-resume the same as a
+    "system" pause).
+
+    reason: 'user', 'budget', 'review', or 'system' -- stored verbatim as
+    paused_by.
+
+    cascade_to_feature: when True (default), also sets status="paused" on
+    every Feature linked to this workflow -- otherwise derive_feature_status
+    has no branch mapping "workflow paused" to "feature paused" (its only
+    PAUSED-preserving check is feature.status already being PAUSED), so
+    the feature keeps showing "Active" in the UI even though nothing is
+    working on it. Pass False when the caller already owns a specific
+    feature's status write (e.g. pause_feature only touches the one
+    feature it was called for, not every feature sharing this workflow_id).
+
+    session: pass an existing SQLAlchemy session to participate in the
+    caller's transaction (no auto-commit). Omit to create a standalone
+    session that auto-commits.
+    """
+
+    def _do_pause(s):
+        wf = s.query(Workflow).filter_by(id=workflow_id).first()
+        if not wf:
+            return False
+        wf.status = "paused"
+        wf.paused_by = reason
+        wf.paused_at = datetime.utcnow()
+        if status_reason is not None:
+            wf.status_reason = status_reason
+        if cascade_to_feature:
+            from src.core.database import Feature
+            for feature in s.query(Feature).filter_by(workflow_id=workflow_id).all():
+                feature.status = "paused"
+        return True
+
     try:
-        with get_db() as session:
-            wf = session.query(Workflow).filter_by(id=workflow_id).first()
-            if wf:
-                wf.status = "paused"
-                wf.paused_by = "user"
-                wf.paused_at = datetime.utcnow()
-                return True
-        return False
+        if session is not None:
+            return _do_pause(session)
+        with get_db() as s:
+            result = _do_pause(s)
+            s.commit()
+            return result
     except Exception as e:
-        logger.debug(f"[pause_workflow_direct] Failed: {e}")
+        logger.error(
+            f"[pause_workflow] Failed for {workflow_id[:8] if workflow_id else '?'}: {e}",
+            exc_info=True,
+        )
         return False
+
+
+def resume_workflow(
+    workflow_id: str,
+    *,
+    force: bool = False,
+    cascade_to_feature: bool = True,
+    session=None,
+) -> bool:
+    """Resume a paused workflow: clear the pause invariant together.
+
+    Pairs with pause_workflow. Narrows on paused_by per a333616's fix:
+    "system" pauses are a heuristic give-up (not operator intent) and are
+    eligible to resume without force; "user", "budget", "review", and the
+    permanent "system-exhausted" give-up state require force=True. Without
+    force, resuming a workflow not currently paused, or paused for a
+    reason this call isn't allowed to override, is a no-op returning
+    False -- callers that need to unconditionally resume (an explicit
+    Resume-button click) must pass force=True.
+
+    cascade_to_feature: when True (default), also resumes any linked
+    Feature currently showing status="paused" back to "active" -- the
+    resume-side mirror of pause_workflow's cascade, so a workflow this
+    primitive paused-and-cascaded doesn't leave its feature stuck showing
+    "Paused" after the workflow itself resumes.
+
+    session: see pause_workflow.
+    """
+
+    def _do_resume(s):
+        wf = s.query(Workflow).filter_by(id=workflow_id).first()
+        if not wf or wf.status != "paused":
+            return False
+        if not force and wf.paused_by not in (None, "system"):
+            return False
+        wf.status = "active"
+        wf.paused_by = None
+        wf.paused_at = None
+        wf.status_reason = None
+        if cascade_to_feature:
+            from src.core.database import Feature
+            for feature in (
+                s.query(Feature)
+                .filter_by(workflow_id=workflow_id, status="paused")
+                .all()
+            ):
+                feature.status = "active"
+        return True
+
+    try:
+        if session is not None:
+            return _do_resume(session)
+        with get_db() as s:
+            result = _do_resume(s)
+            s.commit()
+            return result
+    except Exception as e:
+        logger.error(
+            f"[resume_workflow] Failed for {workflow_id[:8] if workflow_id else '?'}: {e}",
+            exc_info=True,
+        )
+        return False
+
+
+def pause_workflow_direct(workflow_id: str) -> bool:
+    """Pause workflow directly in database (H-2 fix).
+
+    Thin wrapper over pause_workflow for existing callers -- see that
+    function for the shared invariant this closes.
+    """
+    return pause_workflow(workflow_id, reason="user")
 
 
 def complete_workflow_direct(workflow_id: str) -> bool:
@@ -242,7 +372,7 @@ def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids:
         Number of workflows paused.
     """
     from src.core.constants import DESIGN_WORKFLOW_DEFINITION_IDS
-    from src.core.database import Agent, Feature, Task
+    from src.core.database import Agent, Task
 
     if definition_ids is None:
         definition_ids = DESIGN_WORKFLOW_DEFINITION_IDS
@@ -260,27 +390,23 @@ def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids:
     paused_count = 0
     workflow_ids = []
     for wf in active_workflows:
-        wf.status = "paused"
-        wf.paused_by = paused_by
-        wf.paused_at = datetime.utcnow()
-        if paused_by == "budget":
-            wf.status_reason = "Budget limit reached"
-        elif paused_by == "user":
-            wf.status_reason = None
+        # cascade_to_feature=True closes the same gap 22178b1 patched here
+        # specifically (see pause_workflow's docstring) -- kept inline
+        # rather than deferred to a loop below so each workflow's pause and
+        # its feature's pause land in the same primitive call.
+        pause_workflow(wf.id, reason=paused_by, session=db)
+        # pause_workflow's status_reason param only sets a value, it never
+        # clears one (None means "leave whatever's there alone", so other
+        # callers that don't care about status_reason don't blow away a
+        # legitimate existing one) -- this call site needs an explicit
+        # clear on a user pause, e.g. a stale "Budget limit reached" left
+        # over from an earlier budget pause that got user-overridden, so
+        # it's set directly here instead.
+        wf.status_reason = "Budget limit reached" if paused_by == "budget" else None
         paused_count += 1
         workflow_ids.append(wf.id)
 
     if paused_count > 0:
-        # Mirrors the per-feature pause endpoint (autopilot_api.py's
-        # pause_feature), which sets feature.status="paused" directly --
-        # without this, derive_feature_status (status_derivation.py) has no
-        # branch that maps "workflow paused" to "feature paused" (its only
-        # PAUSED-preserving check is feature.status already being PAUSED),
-        # so every feature under a workflow this function pauses keeps
-        # showing "Active" in the UI even though nothing is working on it.
-        for feature in db.query(Feature).filter(Feature.workflow_id.in_(workflow_ids)).all():
-            feature.status = "paused"
-
         agents_to_terminate = (
             db.query(Agent)
             .join(Task, Agent.current_task_id == Task.id)

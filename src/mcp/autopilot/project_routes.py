@@ -611,12 +611,16 @@ async def update_project(
                 )
                 .all()
             )
-            for wf in budget_paused:
-                wf.paused_by = None
-                wf.status = "active"
-                wf.status_reason = None
-                wf.paused_at = None
             if budget_paused:
+                from src.autopilot.orchestrator.engine_client import resume_workflow
+                for wf in budget_paused:
+                    # force=True: raising/clearing the cost limit is an
+                    # explicit override of the budget pause, same as this
+                    # endpoint's pre-existing unconditional clear.
+                    # cascade_to_feature=False preserves this endpoint's
+                    # existing behavior exactly -- it has never touched
+                    # Feature.status here.
+                    resume_workflow(wf.id, force=True, cascade_to_feature=False, session=db)
                 db.flush()
                 logger.info(f"Cleared budget pause on {len(budget_paused)} workflow(s) for project {project_id[:8]}")
 

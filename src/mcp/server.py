@@ -653,14 +653,22 @@ async def _resume_interrupted_workflows(
         if reactivate:
             for wf in active:
                 if wf.status in ("paused", "failed"):
-                    wf.status = "active"
-                    wf.paused_by = None
-                    # A manual/on-demand recovery starts a fresh attempt.  If
-                    # the exhausted-retry reason is left behind, status
-                    # derivation and the phase manager can immediately treat
-                    # the reactivated workflow as paused again, even though
-                    # its failed tasks were reset and re-dispatched.
-                    wf.status_reason = None
+                    if wf.status == "paused":
+                        # cascade_to_feature=False: the Feature handling a
+                        # few lines below already covers both "paused" and
+                        # "failed" features uniformly for this function --
+                        # a second, narrower cascade here would be redundant.
+                        from src.autopilot.orchestrator.engine_client import resume_workflow
+                        resume_workflow(wf.id, force=True, cascade_to_feature=False, session=session)
+                    else:
+                        wf.status = "active"
+                        wf.paused_by = None
+                        # A manual/on-demand recovery starts a fresh attempt.  If
+                        # the exhausted-retry reason is left behind, status
+                        # derivation and the phase manager can immediately treat
+                        # the reactivated workflow as paused again, even though
+                        # its failed tasks were reset and re-dispatched.
+                        wf.status_reason = None
                     # A workflow that failed by exhausting max_total_gotos
                     # (or the arbitration cap that follows it) needs a
                     # genuinely fresh budget, not just a status flip -- the
@@ -3556,7 +3564,17 @@ async def restart_task_endpoint(
                 from src.core.database import PhaseExecution, Workflow
 
                 wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
-                if wf and wf.status != "active":
+                if wf and wf.status == "paused":
+                    # A restartable task can be "blocked" -- exactly what
+                    # pause_feature sets on a paused workflow's in-flight
+                    # tasks -- so this is reachable on a genuinely paused
+                    # workflow, not just a "completed" one. A bare
+                    # wf.status = "active" here would leave paused_by/
+                    # paused_at stale, the same bug class as this item's
+                    # other resume-side fixes.
+                    from src.autopilot.orchestrator.engine_client import resume_workflow
+                    resume_workflow(task.workflow_id, force=True, session=session)
+                elif wf and wf.status != "active":
                     wf.status = "active"
                 if task.phase_id:
                     execution = session.query(PhaseExecution).filter_by(phase_id=task.phase_id).first()
@@ -5073,15 +5091,16 @@ async def stop_workflow(workflow_id: str, request: Request):
                 t.status = "pending"
                 t.assigned_agent_id = None
 
-        workflow.status = "paused"
-        # Marks this as a deliberate user pause so the background sweep's
-        # _try_auto_resume_paused_workflow (orchestrator.py) leaves it alone
-        # instead of silently reactivating it the moment it next sees a done
-        # task sitting in an in-progress phase -- a state pausing itself
-        # commonly produces. Without this, a user pause could get reverted
-        # within one sweep tick (~20s), repeatedly, until whatever made the
-        # phase look "stalled" happened to resolve on its own.
-        workflow.paused_by = "user"
+        # Sets status/paused_by/paused_at together (and cascades to any
+        # linked Feature) so the background sweep's
+        # _try_auto_resume_paused_workflow leaves this alone instead of
+        # silently reactivating it the moment it next sees a done task
+        # sitting in an in-progress phase -- a state pausing itself
+        # commonly produces. Without paused_by set, a user pause could get
+        # reverted within one sweep tick (~20s), repeatedly, until whatever
+        # made the phase look "stalled" happened to resolve on its own.
+        from src.autopilot.orchestrator.engine_client import pause_workflow
+        pause_workflow(workflow_id, reason="user", session=session)
         session.commit()
 
         return {
@@ -5098,6 +5117,7 @@ async def resume_workflow(workflow_id: str, request: Request):
     """Resume a paused workflow."""
     session = server_state.db_manager.get_session()
     try:
+        from src.autopilot.orchestrator.engine_client import resume_workflow as _resume_workflow_primitive
         from src.core.database import Workflow
 
         workflow = session.query(Workflow).filter_by(id=workflow_id).first()
@@ -5106,9 +5126,11 @@ async def resume_workflow(workflow_id: str, request: Request):
         if workflow.status != "paused":
             return {"status": workflow.status, "message": "Not paused"}
 
-        workflow.status = "active"
-        workflow.paused_by = None
-        workflow.status_reason = None
+        # force=True: an explicit Resume-button click overrides any pause
+        # reason, matching this endpoint's pre-existing unconditional
+        # behavior (unlike the self-heal sweep, which must not override a
+        # deliberate pause -- see resume_workflow's docstring).
+        _resume_workflow_primitive(workflow_id, force=True, session=session)
         session.commit()
         return {"status": "active", "workflow_id": workflow_id}
     finally:
