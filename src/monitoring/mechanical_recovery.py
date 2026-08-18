@@ -246,12 +246,8 @@ class MechanicalRecoveryDetector:
                                         f"created for task {stuck_task.id[:8]}"
                                     )
                                     if stuck_task.workflow_id:
-                                        _wf = session.query(Workflow).filter_by(id=stuck_task.workflow_id).first()
-                                        if _wf and _wf.status == "paused" and _wf.paused_by == "system":
-                                            _wf.status = "active"
-                                            _wf.paused_by = None
-                                            _wf.status_reason = None
-                                            _wf.paused_at = None
+                                        from src.autopilot.orchestrator.engine_client import resume_workflow
+                                        resume_workflow(stuck_task.workflow_id, session=session)
                                 except Exception as fallback_err:
                                     logger.error(f"[SESSION-LIMIT] Fallback agent creation failed: {fallback_err}")
                                     stuck_task.status = "failed"
@@ -267,10 +263,13 @@ class MechanicalRecoveryDetector:
                             elif stuck_task.workflow_id:
                                 workflow = session.query(Workflow).filter_by(id=stuck_task.workflow_id).first()
                                 if workflow and workflow.status != "paused":
-                                    workflow.status = "paused"
-                                    workflow.paused_by = "system"
-                                    workflow.status_reason = f"CLI {limit_kind} hit ({agent.cli_type}), no fallback configured"
-                                    workflow.paused_at = datetime.utcnow()
+                                    from src.autopilot.orchestrator.engine_client import pause_workflow
+                                    pause_workflow(
+                                        stuck_task.workflow_id,
+                                        reason="system",
+                                        status_reason=f"CLI {limit_kind} hit ({agent.cli_type}), no fallback configured",
+                                        session=session,
+                                    )
                         if stuck_task:
                             self.log_agent_event(
                                 agent.id, "session_limit_terminated",
@@ -1493,16 +1492,8 @@ class MechanicalRecoveryDetector:
                         # system-pause left by an earlier no-fallback event
                         # now that a fallback dispatch has actually succeeded.
                         if stuck_task.workflow_id:
-                            _wf = (
-                                session.query(Workflow)
-                                .filter_by(id=stuck_task.workflow_id)
-                                .first()
-                            )
-                            if _wf and _wf.status == "paused" and _wf.paused_by == "system":
-                                _wf.status = "active"
-                                _wf.paused_by = None
-                                _wf.status_reason = None
-                                _wf.paused_at = None
+                            from src.autopilot.orchestrator.engine_client import resume_workflow
+                            if resume_workflow(stuck_task.workflow_id, session=session):
                                 logger.info(
                                     f"[CONNECTION-ERROR] Cleared stale pause on "
                                     f"workflow {stuck_task.workflow_id[:8]}"
@@ -1701,13 +1692,16 @@ class MechanicalRecoveryDetector:
                     session.query(Workflow).filter_by(id=task.workflow_id).first()
                 )
                 if workflow and workflow.status != "paused":
-                    workflow.status = "paused"
-                    workflow.paused_by = "system"
-                    workflow.status_reason = (
-                        "OpenRouter credit exhaustion (402) — reload credits at "
-                        "openrouter.ai, will auto-resume on its own retry cooldown"
+                    from src.autopilot.orchestrator.engine_client import pause_workflow
+                    pause_workflow(
+                        task.workflow_id,
+                        reason="system",
+                        status_reason=(
+                            "OpenRouter credit exhaustion (402) — reload credits at "
+                            "openrouter.ai, will auto-resume on its own retry cooldown"
+                        ),
+                        session=session,
                     )
-                    workflow.paused_at = datetime.utcnow()
 
             await self.agent_manager.terminate_agent(agent.id)
             return True

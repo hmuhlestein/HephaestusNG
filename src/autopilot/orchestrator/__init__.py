@@ -1760,8 +1760,10 @@ def _pause_feature_for_review(feature_id: str, logger: "OrchestratorLogger") -> 
                     return
                 wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
                 if wf and wf.paused_by != "review" and wf.status != "failed":
-                    wf.status = "paused"
-                    wf.paused_by = "review"
+                    from src.autopilot.orchestrator.engine_client import pause_workflow
+                    # cascade_to_feature=False: this function already owns
+                    # the write for `feat` specifically, below.
+                    pause_workflow(wf.id, reason="review", cascade_to_feature=False, session=db)
                     feat.status = "paused"
                     db.commit()
                     logger.info(f"[REVIEW] Feature {feature_id} paused for review")
@@ -1850,8 +1852,10 @@ def _pause_phase0_for_review(workflow_id: str, logger: "OrchestratorLogger") -> 
             # status's identical reasoning. Only "failed" is excluded: a
             # workflow that didn't actually finish has nothing to review.
             if wf and wf.paused_by != "review" and wf.status != "failed":
-                wf.status = "paused"
-                wf.paused_by = "review"
+                from src.autopilot.orchestrator.engine_client import pause_workflow
+                # No Feature row to cascade to at this point -- see this
+                # function's own docstring.
+                pause_workflow(wf.id, reason="review", cascade_to_feature=False, session=db)
                 db.commit()
                 logger.info(f"[REVIEW] Phase 0 workflow {workflow_id[:8]} paused for review")
     except Exception as e:

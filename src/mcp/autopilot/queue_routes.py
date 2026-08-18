@@ -198,8 +198,15 @@ async def requeue_design(request: dict):
                                 t.status = "pending"
                                 t.assigned_agent_id = None
 
-                        # Pause the workflow
-                        wf.status = "paused"
+                        # Pause the workflow. Without paused_by set, the
+                        # self-heal sweep's _try_auto_resume_paused_workflow
+                        # treats "no paused_by" the same as a "system" pause
+                        # (both are eligible for auto-resume) -- a requeue
+                        # pause could silently get reverted within one
+                        # sweep tick the moment a done task shows up in the
+                        # workflow's in-progress phase.
+                        from src.autopilot.orchestrator.engine_client import pause_workflow
+                        pause_workflow(wf.id, reason="user", session=db)
                         paused_count += 1
 
             db.commit()
@@ -366,8 +373,13 @@ async def rerun_design(request: dict):
                         agent.current_task_id = None
                         agent.terminated_at = datetime.utcnow()
 
+                from src.autopilot.orchestrator.engine_client import pause_workflow
                 for wf in db.query(Workflow).filter(Workflow.id.in_(design_wf_ids), Workflow.status.in_(["active", "running"])).all():
-                    wf.status = "paused"
+                    # These rows are deleted moments later (Step 2b below),
+                    # so this pause is short-lived -- migrated for
+                    # consistency with the requeue path above, not because
+                    # the auto-resume race is a practical concern here.
+                    pause_workflow(wf.id, reason="user", session=db)
 
             db.commit()
     except Exception as e:

@@ -293,7 +293,21 @@ def _get_or_create_project_id(project_path: str) -> str:
         # it. Leave it paused instead; the next successful activation
         # (this function running again with room under the cap) resumes it.
         if proj.is_active:
-            resumed = db.query(Workflow).filter(Workflow.project_id == proj.id, Workflow.paused_by == "user").update({Workflow.status: "active", Workflow.paused_by: None})
+            from src.autopilot.orchestrator.engine_client import resume_workflow
+
+            user_paused = (
+                db.query(Workflow)
+                .filter(Workflow.project_id == proj.id, Workflow.paused_by == "user")
+                .all()
+            )
+            # force=True: an explicit project re-activation overrides the
+            # user pause, same as this function's pre-existing
+            # unconditional clear -- looped per-row (rather than the
+            # previous bulk .update()) so paused_at/status_reason clear
+            # too (the previous bulk update left paused_at stale,
+            # contradicting that column's own documented invariant) and
+            # any linked Feature resumes along with its workflow.
+            resumed = sum(1 for wf in user_paused if resume_workflow(wf.id, force=True, session=db))
             if resumed:
                 logger.info(f"Resumed {resumed} user-paused workflow(s) for '{proj.name}'")
 

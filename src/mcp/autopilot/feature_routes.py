@@ -269,12 +269,17 @@ async def pause_feature(feature_id: str):
                     # Invariant: all three fields together (see terminate_agent).
             task.status = "blocked"
 
-        wf.status = "paused"
+        # cascade_to_feature=False: this endpoint already owns the write
+        # for the one feature it was called with, below -- a workflow-wide
+        # cascade would be redundant here (and, in the unlikely event
+        # multiple features share this workflow_id, would incorrectly
+        # pause features this endpoint wasn't asked to touch).
+        from src.autopilot.orchestrator.engine_client import pause_workflow
         # Same marker /autopilot/stop sets -- without it, the self-heal
         # sweep's _try_auto_resume_paused_workflow silently un-pauses this
         # feature again within one sweep tick (~20-30s), the same bug the
         # pipeline-level pause button had.
-        wf.paused_by = "user"
+        pause_workflow(feature.workflow_id, reason="user", cascade_to_feature=False, session=db)
         feature.status = "paused"
         db.commit()
         return {
@@ -300,8 +305,18 @@ async def resume_feature(feature_id: str):
         if not wf:
             raise HTTPException(status_code=404, detail="Workflow not found")
 
-        # Resume workflow if paused or failed
-        if wf.status in ("paused", "failed"):
+        # Resume workflow if paused or failed. "paused" goes through the
+        # shared primitive (force=True: an explicit Resume click overrides
+        # any pause reason, same as the pipeline-level resume endpoint) --
+        # cascade_to_feature=False since this endpoint always sets
+        # feature.status="active" itself, below, regardless of which
+        # feature(s) share this workflow_id. "failed" isn't a pause state
+        # at all, so it stays a direct write rather than going through a
+        # pause-focused primitive.
+        if wf.status == "paused":
+            from src.autopilot.orchestrator.engine_client import resume_workflow as _resume_workflow_primitive
+            _resume_workflow_primitive(workflow_id, force=True, cascade_to_feature=False, session=db)
+        elif wf.status == "failed":
             wf.status = "active"
             wf.paused_by = None
             # Clear a stale arbitration/pause reason -- otherwise it lingers
@@ -427,8 +442,10 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
                         status_code=409,
                         detail="A requested-changes redo is still in progress — wait for it to finish before approving.",
                     )
-            wf.status = "active"
-            wf.paused_by = None
+            # No Feature row to cascade to at this point -- Phase 0 is what
+            # creates them, same as _pause_phase0_for_review's own reasoning.
+            from src.autopilot.orchestrator.engine_client import resume_workflow
+            resume_workflow(workflow_id, force=True, cascade_to_feature=False, session=db)
             db.commit()
             _invalidate("status")
 
@@ -587,8 +604,10 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
         if req.action == "approve":
             # Clear the review pause — orchestrator's _wait_for_review_clearance
             # polls paused_by; setting it to None unblocks the loop.
-            wf.status = "active"
-            wf.paused_by = None
+            # cascade_to_feature=False: this endpoint already owns the
+            # write for `feature` specifically, below.
+            from src.autopilot.orchestrator.engine_client import resume_workflow
+            resume_workflow(feature.workflow_id, force=True, cascade_to_feature=False, session=db)
             # Restore Feature.status to "active" so derive_feature_status
             # doesn't short-circuit on "paused" forever after approval.
             feature.status = "active"

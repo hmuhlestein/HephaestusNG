@@ -678,9 +678,13 @@ def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: "Orchestr
             done_task = db.query(Task).filter_by(phase_id=phase.id, status="done").first()
             if done_task:
                 logger.info(f"[PHASE-ADVANCE] Auto-resuming paused workflow — {phase.name} has done task {done_task.id[:8]}")
-                wf.status = "active"
-                wf.paused_by = None
-                wf.status_reason = None
+                from src.autopilot.orchestrator.engine_client import resume_workflow
+
+                # force=False: the narrowing check above already confirmed
+                # paused_by is None or "system", which resume_workflow's
+                # own default narrowing accepts -- redundant but keeps this
+                # call correct even if the check above is ever loosened.
+                resume_workflow(workflow_id, session=db)
                 db.commit()
                 break
 
@@ -1133,10 +1137,14 @@ def _pause_for_manual_handoff(db, workflow_id: str, phase_name: str, logger: "Or
     """
     wf = db.query(Workflow).filter_by(id=workflow_id).first()
     if wf and wf.status != "paused":
-        wf.status = "paused"
-        wf.paused_by = "review"
-        wf.status_reason = f"{phase_name} is manual-only; human approval is required"
-        wf.paused_at = datetime.utcnow()
+        from src.autopilot.orchestrator.engine_client import pause_workflow
+
+        pause_workflow(
+            workflow_id,
+            reason="review",
+            status_reason=f"{phase_name} is manual-only; human approval is required",
+            session=db,
+        )
         db.commit()
     logger.info(f"[PHASE-ADVANCE] {phase_name} is manual-only; pausing for human hand-off")
 
@@ -1630,10 +1638,14 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                 return None
             workflow = db.query(Workflow).filter_by(id=phase.workflow_id).first()
             if workflow and workflow.status != "paused":
-                workflow.status = "paused"
-                workflow.paused_by = "system"
-                workflow.status_reason = f"{phase.name}: exhausted retries -- {reason_text}"
-                workflow.paused_at = datetime.utcnow()
+                from src.autopilot.orchestrator.engine_client import pause_workflow
+
+                pause_workflow(
+                    phase.workflow_id,
+                    reason="system",
+                    status_reason=f"{phase.name}: exhausted retries -- {reason_text}",
+                    session=db,
+                )
                 db.commit()
             return None
 
@@ -3192,7 +3204,14 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: "OrchestratorLogger")
             pause_reason = wf.paused_by
             logger.info(f"[RESUME-STUCK] Workflow {workflow_id[:8]} is {pause_reason}-paused — skipping")
             return 0
-        if wf.status in ("paused", "failed"):
+        if wf.status == "paused":
+            # Reached only when paused_by is already None (the guard above
+            # returned early otherwise) -- force=True is safe here and
+            # keeps this call correct even if that guard is ever loosened.
+            from src.autopilot.orchestrator.engine_client import resume_workflow
+
+            resume_workflow(workflow_id, force=True, session=db)
+        elif wf.status == "failed":
             wf.status = "active"
 
         candidates = (

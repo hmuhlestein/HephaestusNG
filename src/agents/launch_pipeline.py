@@ -1890,14 +1890,17 @@ class LaunchPipeline:
                             from src.core.database import Workflow as _Workflow
                             workflow_record = cleanup_session.query(_Workflow).filter_by(id=task_record.workflow_id).first()
                             if workflow_record and workflow_record.status != "paused":
-                                workflow_record.status = "paused"
-                                workflow_record.paused_by = "system"
-                                workflow_record.status_reason = (
-                                    f"CLI session limit hit ({cli_type}), no working "
-                                    "fallback -- will auto-resume on its own retry "
-                                    "cooldown once the limit resets"
+                                from src.autopilot.orchestrator.engine_client import pause_workflow
+                                pause_workflow(
+                                    task_record.workflow_id,
+                                    reason="system",
+                                    status_reason=(
+                                        f"CLI session limit hit ({cli_type}), no working "
+                                        "fallback -- will auto-resume on its own retry "
+                                        "cooldown once the limit resets"
+                                    ),
+                                    session=cleanup_session,
                                 )
-                                workflow_record.paused_at = datetime.utcnow()
                                 logger.warning(
                                     f"[SESSION-LIMIT] Pausing workflow "
                                     f"{task_record.workflow_id[:8]} -- {cli_type} "
