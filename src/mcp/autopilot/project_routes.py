@@ -41,6 +41,33 @@ router = APIRouter()
 
 _ORDINAL_RE = re.compile(r"^(\d+)[-_]")
 
+
+def _apply_active_project(proj):
+    """Apply project path to runtime config.
+
+    Updates config immediately (fast). The WorktreeManager will
+    reload lazily when next used, not during the API call.
+    """
+    from src.core.simple_config import get_config
+
+    config = get_config()
+    new_path = Path(proj.base_dir)
+
+    # Validate path exists and is a git repo (fast check — just look for .git)
+    if not new_path.exists() or not new_path.is_dir():
+        raise ValueError(
+            f"Cannot activate project — path does not exist: {new_path}"
+        )
+    if not (new_path / ".git").exists():
+        raise ValueError(
+            f"Cannot activate project — not a git repository: {new_path}"
+        )
+
+    # Update config immediately — no git reload here
+    config.main_repo_path = new_path
+    config.project_root = new_path
+
+
 def _design_id(project_id: str, filename: str) -> str:
     """Generate a stable, deterministic ID for a design document."""
     h = hashlib.sha256(f"{project_id}:{filename}".encode()).hexdigest()[:12]
@@ -403,6 +430,115 @@ async def create_project(
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
         )
 
+
+@router.get("/projects/active", response_model=List[ProjectItem])
+async def get_active_projects():
+    """List every currently-active project (0 to max_concurrent_projects).
+
+    Was Optional[ProjectItem] (a single project via .first()) before
+    multi-project concurrency -- now that more than one project can be
+    active at once, returning only one would silently hide the rest.
+    """
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
+
+    with get_db() as db:
+        projects = db.query(AutopilotProject).filter_by(is_active=True).all()
+        result = []
+        for proj in projects:
+            count = db.query(AutopilotDesign).filter_by(project_id=proj.id).count()
+            result.append(
+                ProjectItem(
+                    id=proj.id,
+                    name=proj.name,
+                    base_dir=proj.base_dir,
+                    is_default=proj.is_default,
+                    is_active=True,
+                    design_count=count,
+                    created_at=proj.created_at.isoformat() if proj.created_at else "",
+                    updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+                )
+            )
+        return result
+
+
+@router.post("/projects/{project_id}/activate", response_model=ProjectItem)
+async def activate_project(project_id: str):
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
+    from src.core.simple_config import get_config
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).filter_by(id=project_id).first()
+        if not proj:
+            raise HTTPException(404, f"Project not found: {project_id}")
+
+        # Cap the number of simultaneously-active projects at
+        # max_concurrent_projects instead of exclusively clearing every
+        # other project -- mirrors AutopilotServiceRegistry.can_start's
+        # "already occupies a slot" exemption (src/autopilot/service.py)
+        # for re-activating an already-active project.
+        if not proj.is_active:
+            active_projects = (
+                db.query(AutopilotProject).filter_by(is_active=True).all()
+            )
+            max_concurrent = get_config().max_concurrent_projects
+            if len(active_projects) >= max_concurrent:
+                names = ", ".join(p.name for p in active_projects)
+                raise HTTPException(
+                    409,
+                    f"Max concurrent projects ({max_concurrent}) reached: "
+                    f"{names}. Stop one before starting another.",
+                )
+            proj.is_active = True
+        db.flush()
+
+        # Apply to runtime config
+        from types import SimpleNamespace
+        _apply_active_project(SimpleNamespace(base_dir=proj.base_dir))
+
+        count = db.query(AutopilotDesign).filter_by(project_id=proj.id).count()
+
+        logger.info(f"Activated project: {proj.name} ({proj.base_dir})")
+
+        return ProjectItem(
+            id=proj.id,
+            name=proj.name,
+            base_dir=proj.base_dir,
+            is_default=proj.is_default,
+            is_active=True,
+            design_count=count,
+            created_at=proj.created_at.isoformat() if proj.created_at else "",
+            updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+        )
+
+
+@router.post("/projects/{project_id}/deactivate", response_model=ProjectItem)
+async def deactivate_project(project_id: str):
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).filter_by(id=project_id).first()
+        if not proj:
+            raise HTTPException(404, f"Project not found: {project_id}")
+
+        proj.is_active = False
+        db.flush()
+
+        count = db.query(AutopilotDesign).filter_by(project_id=proj.id).count()
+
+        logger.info(f"Deactivated project: {proj.name} ({proj.base_dir})")
+
+        return ProjectItem(
+            id=proj.id,
+            name=proj.name,
+            base_dir=proj.base_dir,
+            is_default=proj.is_default,
+            is_active=False,
+            design_count=count,
+            created_at=proj.created_at.isoformat() if proj.created_at else "",
+            updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+        )
+
+
 @router.get("/projects/{project_id}", response_model=ProjectItem)
 async def get_project(project_id: str):
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
@@ -539,8 +675,6 @@ async def delete_project(
     if replacement_base_dir:
         try:
             from types import SimpleNamespace
-
-            from src.mcp.projects_api import _apply_active_project
 
             # Pass a plain object, not the ORM instance — its session is
             # already closed here, so touching an attribute on it would
@@ -1953,3 +2087,6 @@ async def get_project_design_status(project_id: str, filename: str):
             "features": features,
             "cost_total_usd": sum(f["cost_total_usd"] for f in features),
         }
+
+
+

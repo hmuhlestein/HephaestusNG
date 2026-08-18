@@ -1,4 +1,4 @@
-"""Tests for src/mcp/projects_api.py -- is_active cap enforcement.
+"""Tests for project_routes.py -- is_active cap enforcement.
 
 Part of the multi-project concurrency fix: AutopilotProject.is_active is no
 longer exclusive (clear-all-others-then-set-one) -- it's capped at
@@ -18,14 +18,14 @@ from src.core.database import AutopilotProject
 
 @pytest.fixture
 def client(db_manager, monkeypatch, tmp_path):
-    from src.mcp import projects_api
+    from src.mcp.autopilot import project_routes
 
     monkeypatch.setattr(
-        projects_api, "_apply_active_project", lambda proj: None
+        project_routes, "_apply_active_project", lambda proj: None
     )
 
     app = FastAPI()
-    app.include_router(projects_api.router)
+    app.include_router(project_routes.router)
     return TestClient(app)
 
 
@@ -57,7 +57,7 @@ class TestActivateCap:
         with patch(
             "src.core.simple_config.get_config", return_value=_mock_config(2)
         ):
-            resp = client.post("/api/projects/proj-c/activate")
+            resp = client.post("/projects/proj-c/activate")
 
         assert resp.status_code == 409
         assert "Max concurrent projects (2) reached" in resp.json()["detail"]
@@ -69,7 +69,7 @@ class TestActivateCap:
         with patch(
             "src.core.simple_config.get_config", return_value=_mock_config(2)
         ):
-            resp = client.post("/api/projects/proj-b/activate")
+            resp = client.post("/projects/proj-b/activate")
 
         assert resp.status_code == 200
         assert resp.json()["is_active"] is True
@@ -93,7 +93,7 @@ class TestActivateCap:
         with patch(
             "src.core.simple_config.get_config", return_value=_mock_config(2)
         ):
-            resp = client.post("/api/projects/proj-a/activate")
+            resp = client.post("/projects/proj-a/activate")
 
         assert resp.status_code == 200
         assert resp.json()["is_active"] is True
@@ -106,21 +106,21 @@ class TestActivateCap:
         with patch(
             "src.core.simple_config.get_config", return_value=_mock_config(2)
         ):
-            deactivate_resp = client.post("/api/projects/proj-a/deactivate")
+            deactivate_resp = client.post("/projects/proj-a/deactivate")
             assert deactivate_resp.status_code == 200
             assert deactivate_resp.json()["is_active"] is False
 
-            resp = client.post("/api/projects/proj-c/activate")
+            resp = client.post("/projects/proj-c/activate")
 
         assert resp.status_code == 200
         assert resp.json()["is_active"] is True
 
     def test_activate_returns_404_for_unknown_project(self, client):
-        resp = client.post("/api/projects/does-not-exist/activate")
+        resp = client.post("/projects/does-not-exist/activate")
         assert resp.status_code == 404
 
     def test_deactivate_returns_404_for_unknown_project(self, client):
-        resp = client.post("/api/projects/does-not-exist/deactivate")
+        resp = client.post("/projects/does-not-exist/deactivate")
         assert resp.status_code == 404
 
 
@@ -134,7 +134,7 @@ class TestGetActiveProjects:
         _make_project(db_manager, tmp_path, "proj-b", is_active=True)
         _make_project(db_manager, tmp_path, "proj-c", is_active=False)
 
-        resp = client.get("/api/projects/active")
+        resp = client.get("/projects/active")
 
         assert resp.status_code == 200
         ids = {p["id"] for p in resp.json()}
@@ -143,7 +143,7 @@ class TestGetActiveProjects:
     def test_empty_list_when_none_active(self, client, db_manager, tmp_path):
         _make_project(db_manager, tmp_path, "proj-a", is_active=False)
 
-        resp = client.get("/api/projects/active")
+        resp = client.get("/projects/active")
 
         assert resp.status_code == 200
         assert resp.json() == []

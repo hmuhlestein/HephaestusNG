@@ -55,7 +55,7 @@ def register(subparsers):
 
 
 def list_projects(args):
-    projects = api_get(args, "/api/projects")
+    projects = api_get(args, "/api/autopilot/projects")
     if projects is None:
         return 1
 
@@ -93,7 +93,7 @@ def create_project(args):
     # Try API first
     result = api_post(
         args,
-        "/api/projects",
+        "/api/autopilot/projects",
         {
             "name": args.name,
             "base_dir": resolved,
@@ -188,7 +188,7 @@ def activate_project(args):
     if not project_id:
         return 1
 
-    result = api_post(args, f"/api/projects/{project_id}/activate", {})
+    result = api_post(args, f"/api/autopilot/projects/{project_id}/activate", {})
     if result is None:
         print("Error: Backend not running. Start it with 'heph start' first.")
         return 1
@@ -205,7 +205,7 @@ def deactivate_project(args):
     if not project_id:
         return 1
 
-    result = api_post(args, f"/api/projects/{project_id}/deactivate", {})
+    result = api_post(args, f"/api/autopilot/projects/{project_id}/deactivate", {})
     if result is None:
         print("Error: Backend not running. Start it with 'heph start' first.")
         return 1
@@ -218,7 +218,7 @@ def deactivate_project(args):
 
 
 def current_project(args):
-    result = api_get(args, "/api/projects/active")
+    result = api_get(args, "/api/autopilot/projects/active")
     if result is None:
         return 1
     if isinstance(result, dict) and "error" in result:
@@ -248,7 +248,7 @@ def delete_project(args):
 
     if not args.force:
         # Get project info first
-        info = api_get(args, "/api/projects")
+        info = api_get(args, "/api/autopilot/projects")
         proj = next((p for p in (info or []) if p["id"] == project_id), None)
         name = proj["name"] if proj else project_id
         confirm = input(f"Delete project '{name}'? [y/N] ")
@@ -256,7 +256,7 @@ def delete_project(args):
             print("Cancelled.")
             return 0
 
-    result = api_delete(args, f"/api/projects/{project_id}")
+    result = api_delete(args, f"/api/autopilot/projects/{project_id}")
     if result is None:
         return 1
 
@@ -266,7 +266,7 @@ def delete_project(args):
 
 def _resolve_project_id(args, identifier: str) -> str:
     """Resolve a project ID from an ID or name."""
-    projects = api_get(args, "/api/projects")
+    projects = api_get(args, "/api/autopilot/projects")
     if projects is None:
         return None
 

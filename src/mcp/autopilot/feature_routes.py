@@ -623,27 +623,13 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 except Exception as e:
                     logger.warning(f"[REVIEW] Failed to merge PR: {e}")
 
-            # Check if all tasks are done — if so, mark as completed
-            from src.autopilot.spec import DIAGNOSTIC_TASK_PREFIX
-            from src.core.database import Phase as _Phase
-            from src.core.database import PhaseExecution as _PhaseExecution
-            from src.core.database import Task as _Task
-            all_tasks = db.query(_Task).filter(
-                _Task.workflow_id == wf.id,
-                ~_Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%")
-            ).all()
-            # Check all tasks are done AND all phases are completed (or
-            # legitimately skipped -- see derive_feature_status's matching
-            # fix for why excluding "skipped" here disagreed with the
-            # workflow-level derivation and caused this same feature to
-            # flap back to "active" on the next self-heal poll).
-            all_phases_done = db.query(_PhaseExecution).join(
-                _Phase, _PhaseExecution.phase_id == _Phase.id
-            ).filter(
-                _Phase.workflow_id == wf.id,
-                _PhaseExecution.status.notin_(["completed", "skipped"])
-            ).count() == 0
-            if all_tasks and all(t.status == "done" for t in all_tasks) and all_phases_done:
+            # Check if all tasks are done — use derive_workflow_status
+            # instead of hand-rolling this check. The "all tasks done ≠
+            # all phases done" mistake has recurred independently at
+            # least four times in this codebase's history.
+            from src.core.status_derivation import derive_workflow_status
+            derived = derive_workflow_status(db, wf.id, write_back=False)
+            if derived == "completed":
                 wf.status = "completed"
                 feature.status = "completed"
                 db.commit()

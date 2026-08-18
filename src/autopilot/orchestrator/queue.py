@@ -54,12 +54,24 @@ def is_design_fully_complete(workflow_id: str, logger: "OrchestratorLogger") -> 
         (is_complete, reason) tuple
     """
     # Check workflow status — if the server already marked it completed, trust that.
+    # Also use derive_workflow_status for the "all tasks done ≠ all phases done"
+    # check — this mistake has recurred independently at least four times.
     wf = get_workflow_status(workflow_id)
     wf_status = wf.get("status", "")
     if wf_status == "completed":
         return True, "Workflow status: completed"
     if wf_status not in ("active", "running", "paused"):
         return False, f"Workflow status: {wf_status}"
+
+    # Use derive_workflow_status to check if the workflow is actually done.
+    # This replaces a hand-rolled "all tasks done + all phases completed"
+    # check that was missing the phase-completeness gate.
+    from src.core.status_derivation import derive_workflow_status
+    from src.core.database import get_db
+    with get_db() as db:
+        derived = derive_workflow_status(db, workflow_id, write_back=False)
+    if derived == "completed":
+        return True, "All tasks done and all phases completed (derived)"
 
     # Check task statuses
     pending = get_tasks(status="pending", workflow_id=workflow_id)
