@@ -1393,6 +1393,8 @@ async def remove_project_design(project_id: str, filename: str):
                 tasks = db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()
                 task_ids = [t.id for t in tasks]
                 if task_ids:
+                    from src.autopilot.orchestrator.engine_client import terminate_agent
+
                     agents = db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
                     for agent in agents:
                         try:
@@ -1403,10 +1405,7 @@ async def remove_project_design(project_id: str, filename: str):
                             )
                         except Exception:
                             pass
-                        # Invariant: all three fields together (see terminate_agent).
-                        agent.status = "terminated"
-                        agent.current_task_id = None
-                        agent.terminated_at = datetime.utcnow()
+                        terminate_agent(agent.id, session=db)
 
                 # Delete dependent records (order matters for FK constraints)
                 if task_ids:

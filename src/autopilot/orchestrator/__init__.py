@@ -2820,10 +2820,7 @@ def _register_orchestrator_agent(log_dir: Path, cli_tool: str, logger: Orchestra
                 # Check if tmux_session_name is already taken
                 existing = session.query(Agent).filter_by(tmux_session_name="orchestrator").first()
                 if existing:
-                    # Invariant: all three fields together (see terminate_agent).
-                    existing.status = "terminated"
-                    existing.current_task_id = None
-                    existing.terminated_at = datetime.utcnow()
+                    terminate_agent(existing.id, session=session)
                     # tmux_session_name has a UNIQUE constraint -- marking
                     # the old row "terminated" alone doesn't free the value
                     # "orchestrator" up, so the commit below still collides

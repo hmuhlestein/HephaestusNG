@@ -1834,14 +1834,17 @@ class LaunchPipeline:
                             pass
                     if "agent_id" in locals():
                         try:
+                            from src.autopilot.orchestrator.engine_client import (
+                                terminate_agent,
+                            )
+
                             with self.db_manager.get_session() as _cs:
-                                _ar = _cs.query(Agent).filter_by(id=agent_id).first()
-                                if _ar:
-                                    # Invariant: all three fields together.
-                                    _ar.status = "terminated"
-                                    _ar.current_task_id = None
-                                    _ar.terminated_at = datetime.utcnow()
-                                    _cs.commit()
+                                # Also releases the task back to "pending"
+                                # with no agent, which is the state the
+                                # fallback create_agent_for_task below
+                                # expects to claim it from.
+                                terminate_agent(agent_id, session=_cs)
+                                _cs.commit()
                         except Exception:
                             pass
                         try:
@@ -1873,12 +1876,11 @@ class LaunchPipeline:
                 cleanup_session = self.db_manager.get_session()
                 try:
                     if "agent_id" in locals():
-                        agent_record = cleanup_session.query(Agent).filter_by(id=agent_id).first()
-                        if agent_record:
-                            # Invariant: all three fields together.
-                            agent_record.status = "terminated"
-                            agent_record.current_task_id = None
-                            agent_record.terminated_at = datetime.utcnow()
+                        from src.autopilot.orchestrator.engine_client import (
+                            terminate_agent,
+                        )
+
+                        if terminate_agent(agent_id, session=cleanup_session):
                             logger.info(f"Marked agent {agent_id} as terminated")
                     task_record = cleanup_session.query(Task).filter_by(id=task.id).first()
                     if task_record:
@@ -1937,11 +1939,12 @@ class LaunchPipeline:
                 logger.warning(
                     f"Agent {agent_id[:8]} exceeded max restarts ({agent.restart_count}), terminating"
                 )
-                # Invariant: all three fields together.
-                agent.status = "terminated"
-                agent.terminated_at = datetime.utcnow()
+                # Capture the task before terminating -- the primitive
+                # clears current_task_id as part of the invariant.
                 task_id = agent.current_task_id
-                agent.current_task_id = None
+                from src.autopilot.orchestrator.engine_client import terminate_agent
+
+                terminate_agent(agent.id, session=session)
                 session.commit()
                 task = session.query(Task).filter_by(id=task_id).first()
                 if task and task.status not in ("done", "failed"):

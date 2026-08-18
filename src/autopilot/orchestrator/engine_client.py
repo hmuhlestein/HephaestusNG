@@ -155,9 +155,16 @@ def terminate_agent(
         agent.terminated_at = datetime.utcnow()
         return True
 
+    # A caller-supplied session means the caller owns the transaction, so
+    # errors must propagate: swallowing here would hand back False into a
+    # transaction the caller goes on to commit, leaving the invariant
+    # half-applied with nothing raised anywhere. Only the standalone path
+    # below, which owns its own transaction and can cleanly abandon it,
+    # degrades to a logged False.
+    if session is not None:
+        return _do_terminate(session)
+
     try:
-        if session is not None:
-            return _do_terminate(session)
         with get_db() as s:
             result = _do_terminate(s)
             s.commit()
@@ -226,14 +233,39 @@ def pause_workflow(
         if status_reason is not None:
             wf.status_reason = status_reason
         if cascade_to_feature:
-            from src.core.database import Feature
-            for feature in s.query(Feature).filter_by(workflow_id=workflow_id).all():
-                feature.status = "paused"
+            from src.core.database import Feature, FeatureStatus
+
+            # Only pause work that is actually still in flight. A feature
+            # in a terminal state has nothing left to pause, and pausing
+            # it is not recoverable: derive_feature_status returns early
+            # on PAUSED (it is the one status it never re-derives), so
+            # nothing ever repairs the row, and resume_workflow's mirror
+            # cascade sends every paused feature to "active" -- turning a
+            # completed feature into live-looking work. This is ce0c4a7's
+            # bug class ("re-paused an already-approved feature"), which
+            # this primitive exists to make unrepresentable.
+            cascadable = (FeatureStatus.PENDING, FeatureStatus.ACTIVE)
+            for feature in (
+                s.query(Feature)
+                .filter(
+                    Feature.workflow_id == workflow_id,
+                    Feature.status.in_(cascadable),
+                )
+                .all()
+            ):
+                feature.status = FeatureStatus.PAUSED
         return True
 
+    # A caller-supplied session means the caller owns the transaction, so
+    # errors must propagate: swallowing here would hand back False into a
+    # transaction the caller goes on to commit, leaving the invariant
+    # half-applied with nothing raised anywhere. Only the standalone path
+    # below, which owns its own transaction and can cleanly abandon it,
+    # degrades to a logged False.
+    if session is not None:
+        return _do_pause(session)
+
     try:
-        if session is not None:
-            return _do_pause(session)
         with get_db() as s:
             result = _do_pause(s)
             s.commit()
@@ -284,18 +316,26 @@ def resume_workflow(
         wf.paused_at = None
         wf.status_reason = None
         if cascade_to_feature:
-            from src.core.database import Feature
+            from src.core.database import Feature, FeatureStatus
+
             for feature in (
                 s.query(Feature)
-                .filter_by(workflow_id=workflow_id, status="paused")
+                .filter_by(workflow_id=workflow_id, status=FeatureStatus.PAUSED)
                 .all()
             ):
-                feature.status = "active"
+                feature.status = FeatureStatus.ACTIVE
         return True
 
+    # A caller-supplied session means the caller owns the transaction, so
+    # errors must propagate: swallowing here would hand back False into a
+    # transaction the caller goes on to commit, leaving the invariant
+    # half-applied with nothing raised anywhere. Only the standalone path
+    # below, which owns its own transaction and can cleanly abandon it,
+    # degrades to a logged False.
+    if session is not None:
+        return _do_resume(session)
+
     try:
-        if session is not None:
-            return _do_resume(session)
         with get_db() as s:
             result = _do_resume(s)
             s.commit()
@@ -417,9 +457,7 @@ def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids:
             .all()
         )
         for agent in agents_to_terminate:
-            agent.status = "terminated"
-            agent.terminated_at = datetime.utcnow()
-            agent.current_task_id = None
+            terminate_agent(agent.id, session=db)
             logger.info(f"[PAUSE] Terminated agent {agent.id[:8]}")
 
         tasks_to_reset = (
