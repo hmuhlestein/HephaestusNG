@@ -2830,8 +2830,14 @@ class TestCleanupOrphanedSessions:
         db_session.query.return_value.filter.return_value.first.return_value = None
         mock_db.get_session.return_value = db_session
 
-        # Set grace period past check on the orphan reaper
-        make_monitoring_loop._orphan_reaper.last_check_time = datetime.now() - timedelta(
+        # Set grace period past check on the orphan reaper.
+        # utcnow, not now: OrphanSessionReaper compares this against its own
+        # datetime.utcnow() clock, so a local-time value here is skewed by the
+        # host's UTC offset. West of UTC that skew happens to enlarge the
+        # delta and the test still passes; east of it the delta goes negative,
+        # the grace period triggers, and the test fails (verified: passes at
+        # UTC-6, fails at UTC+9).
+        make_monitoring_loop._orphan_reaper.last_check_time = datetime.utcnow() - timedelta(
             seconds=200
         )
 
@@ -2852,8 +2858,14 @@ class TestCleanupOrphanedSessions:
         db_session.query.return_value.filter.return_value.first.return_value = None
         mock_db.get_session.return_value = db_session
 
-        # Set grace period past check on the orphan reaper
-        make_monitoring_loop._orphan_reaper.last_check_time = datetime.now() - timedelta(
+        # Set grace period past check on the orphan reaper.
+        # utcnow, not now: OrphanSessionReaper compares this against its own
+        # datetime.utcnow() clock, so a local-time value here is skewed by the
+        # host's UTC offset. West of UTC that skew happens to enlarge the
+        # delta and the test still passes; east of it the delta goes negative,
+        # the grace period triggers, and the test fails (verified: passes at
+        # UTC-6, fails at UTC+9).
+        make_monitoring_loop._orphan_reaper.last_check_time = datetime.utcnow() - timedelta(
             seconds=200
         )
 
