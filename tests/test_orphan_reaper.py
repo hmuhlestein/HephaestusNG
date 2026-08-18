@@ -185,12 +185,17 @@ class TestOrphanSessionReaper:
 
         agent_query = MagicMock()
         agent_query.filter.return_value.all.return_value = [mock_agent]
+        agent_query.filter_by.return_value.first.return_value = mock_agent
 
         wf_query = MagicMock()
         wf_query.filter.return_value.all.return_value = []  # no active workflows
 
         task_query = MagicMock()
-        task_query.filter_by.return_value.first.return_value = mock_task
+        # terminate_agent queries stray tasks with filter_by(assigned_agent_id=...)
+        stray_query = MagicMock()
+        stray_query.filter.return_value.all.return_value = [mock_task]
+        stray_query.first.return_value = mock_task
+        task_query.filter_by.return_value = stray_query
 
         def query_side_effect(model):
             from src.core.database import Agent, Task, Workflow
@@ -279,6 +284,7 @@ class TestOrphanSessionReaper:
         # Agent query returns our agent
         agent_query = MagicMock()
         agent_query.filter.return_value.all.return_value = [mock_agent]
+        agent_query.filter_by.return_value.first.return_value = mock_agent
 
         # Workflow query returns only wf-active (not wf-old)
         wf_query = MagicMock()
@@ -286,7 +292,11 @@ class TestOrphanSessionReaper:
 
         # Task query returns task with workflow_id = wf-old
         task_query = MagicMock()
-        task_query.filter_by.return_value.first.return_value = mock_task
+        # terminate_agent queries stray tasks with filter_by(assigned_agent_id=...)
+        stray_query = MagicMock()
+        stray_query.filter.return_value.all.return_value = [mock_task]
+        stray_query.first.return_value = mock_task
+        task_query.filter_by.return_value = stray_query
 
         def query_side_effect(model):
             from src.core.database import Agent, Task, Workflow

@@ -1629,17 +1629,20 @@ class MechanicalRecoveryDetector:
                     f"'{agent.tmux_session_name}' not found -- terminating"
                 )
                 with self.db_manager.session_scope() as session:
+                    from src.autopilot.orchestrator.engine_client import terminate_agent
                     from src.core.database import Agent, Task
                     db_agent = session.query(Agent).filter_by(id=agent.id).first()
                     if db_agent:
-                        db_agent.status = "terminated"
-                        db_agent.terminated_at = datetime.utcnow()
-                    if db_agent and db_agent.current_task_id:
-                        task = session.query(Task).filter_by(id=db_agent.current_task_id).first()
-                        if task and task.status in ("in_progress", "assigned"):
-                            task.status = "failed"
-                            task.failure_reason = "Agent orphaned - tmux session not found"
-                            task.assigned_agent_id = None
+                        # Save task_id before terminate_agent clears it.
+                        _task_id = db_agent.current_task_id
+                        terminate_agent(agent.id, session=session)
+                        # Orphaned-agent-specific: mark the task as failed
+                        # (not just pending) so it's visible as an orphan.
+                        if _task_id:
+                            _task = session.query(Task).filter_by(id=_task_id).first()
+                            if _task and _task.status == "pending":
+                                _task.status = "failed"
+                                _task.failure_reason = "Agent orphaned - tmux session not found"
                 return True
         except Exception as e:
             logger.error(f"[ORPHAN] check failed for {agent.id[:8]}: {e}")

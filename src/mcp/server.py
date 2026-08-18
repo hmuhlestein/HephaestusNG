@@ -763,6 +763,7 @@ async def _resume_interrupted_workflows(
                         (task.completion_notes or "")
                         + "\n[auto-recovered: git work had already landed before the agent's completion call was lost]"
                     ).strip()
+                    # Invariant: all three fields together (see terminate_agent).
                     agent.status = "terminated"
                     agent.terminated_at = datetime.utcnow()
                     agent.current_task_id = None
@@ -5052,8 +5053,9 @@ async def stop_workflow(workflow_id: str, request: Request):
                     )
                 except Exception:
                     pass
+                # Invariant: all three fields together (see terminate_agent).
                 agent.status = "terminated"
-                agent.current_task_id = None  # Clear stale reference
+                agent.current_task_id = None
                 agent.terminated_at = datetime.utcnow()
                 terminated_count += 1
 
@@ -5168,8 +5170,9 @@ async def cancel_workflow(workflow_id: str, request: Request):
                     )
                 except Exception:
                     pass
+                # Invariant: all three fields together (see terminate_agent).
                 agent.status = "terminated"
-                agent.current_task_id = None  # Clear stale reference
+                agent.current_task_id = None
                 agent.terminated_at = datetime.utcnow()
                 terminated_count += 1
 

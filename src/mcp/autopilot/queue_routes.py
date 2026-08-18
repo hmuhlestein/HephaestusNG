@@ -179,8 +179,9 @@ async def requeue_design(request: dict):
                                 .all()
                             )
                             for agent in agents:
+                                # Invariant: all three fields together (see terminate_agent).
                                 agent.status = "terminated"
-                                agent.current_task_id = None  # Clear stale reference
+                                agent.current_task_id = None
                                 agent.terminated_at = datetime.utcnow()
 
                             # Reset the tasks those agents were working on --
@@ -360,6 +361,7 @@ async def rerun_design(request: dict):
 
                 if stuck_agent_ids:
                     for agent in db.query(Agent).filter(Agent.id.in_(stuck_agent_ids)).all():
+                        # Invariant: all three fields together (see terminate_agent).
                         agent.status = "terminated"
                         agent.current_task_id = None
                         agent.terminated_at = datetime.utcnow()

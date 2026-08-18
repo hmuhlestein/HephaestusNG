@@ -13,6 +13,7 @@ critical invariant (see AGENTS.md). Logged for Phase 3; DO NOT FIX here.
 
 import logging
 
+from src.autopilot.orchestrator.engine_client import terminate_agent
 from src.core.database import Agent
 
 logger = logging.getLogger(__name__)
@@ -94,9 +95,11 @@ class AutoRestart:
                 # Re-query the agent from this session to avoid detached object bugs
                 db_agent = session.query(Agent).filter_by(id=agent.id).first()
                 if db_agent:
-                    db_agent.status = "terminated"
-                    db_agent.current_task_id = None  # Clear stale reference
-                    db_agent.health_check_failures = 0
+                    terminate_agent(agent.id, session=session)
+                    # health_check_failures reset is auto-restart-specific.
+                    db_agent = session.query(Agent).filter_by(id=agent.id).first()
+                    if db_agent:
+                        db_agent.health_check_failures = 0
                 else:
                     logger.warning(f"Agent {agent.id} not found in DB during restart")
 
