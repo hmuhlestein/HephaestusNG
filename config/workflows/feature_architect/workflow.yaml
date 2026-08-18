@@ -64,12 +64,17 @@ workflow:
 # artifacts (Feature Architect's features.json/scope.md, feature_review's
 # report) are internal orchestration state, never a git-tracked project
 # deliverable, unlike the main autopilot pipeline's review reports
-# (architectural_review, adversarial_review) which live in docs/. The
-# spec-gate scorer's read_okf_report call for feature_review passes
-# subdir=CONTEXT_DIR_NAME explicitly to match.
+# (architectural_review, adversarial_review) which live in docs/.
+# feature_architect's features.json/scope.md stay flat in .hephaestus/ (it
+# runs first, before any per-phase convention applies); feature_review
+# writes to its own .hephaestus/feature_review/ subdirectory, the same
+# convention every other gated phase uses (Phase 2 §4.9 follow-up --
+# feature_review used to be the one phase-scoped exception, sharing a
+# flat .hephaestus/review.md that collided in name with
+# architectural_review's own review.md; normalized to close both gaps).
 required_output:
   feature_architect: features.json
-  feature_review: review.md
+  feature_review: feature_review.md
 
 launch_template:
   parameters:

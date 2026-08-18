@@ -40,7 +40,11 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
     """
     from pathlib import Path as _Path
 
-    from src.autopilot.spec import get_phase_required_files, load_optional_phases
+    from src.autopilot.spec import (
+        get_phase_required_files,
+        load_optional_phases,
+        resolve_declared_output_path,
+    )
     from src.core.constants import CONTEXT_DIR_NAME
     from src.core.database import Phase
     from src.core.simple_config import get_config
@@ -157,47 +161,9 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
         # only the "has a workflow_id but no working_directory" case
         # above is treated as an error).
         if wf and wf.working_directory:
-            # Map new file names to old names for backward compatibility
-            _old_name_map = {
-                "docs.md": "doc_review_report.md",
-                "summary.md": "code_summary.md",
-                "security.md": "security_report.md",
-                "review.md": "architectural_review_report.md",
-                "adversarial.md": "adversarial_review_report.md",
-                "qa.md": "qa_report.md",
-                "validation.md": "product_validation.md",
-                "requirements.md": "requirements_analysis.md",
-                "scope.md": "scope_review_result.md",
-                "forensics.md": "forensics_report.md",
-            }
-            old_name = _old_name_map.get(declared_output)
-            names_to_check = [declared_output] + ([old_name] if old_name else [])
-
-            for name in names_to_check:
-                if found_path:
-                    break
-                for candidate in [
-                    # .hephaestus/<phase.name>/ is the one sanctioned
-                    # subdirectory this phase's own CRITICAL PATH RULE tells
-                    # it to write to -- checked first, not guessed at:
-                    # iterating every subdirectory of .hephaestus/ risked
-                    # treating a DIFFERENT feature's (or an earlier retry
-                    # pass's) leftover file as proof this task's own agent
-                    # produced its required output.
-                    _Path(wf.working_directory) / CONTEXT_DIR_NAME / phase.name / name,
-                    _Path(wf.working_directory) / name,
-                    # Some phases (e.g. Phase 0's Feature Architect) write
-                    # their declared output to the git-excluded .hephaestus/
-                    # dir as an internal orchestration artifact rather than
-                    # a phase-scoped deliverable.
-                    _Path(wf.working_directory) / CONTEXT_DIR_NAME / name,
-                    # Also check docs/ directory — agents sometimes write
-                    # there despite instructions to use .hephaestus/
-                    _Path(wf.working_directory) / "docs" / name,
-                ]:
-                    if candidate.exists():
-                        found_path = candidate
-                        break
+            found_path = resolve_declared_output_path(
+                wf.working_directory, phase.name, declared_output
+            )
         # 2. Check feature folder
         if found_path is None and feature_dir.exists():
             for d in sorted(feature_dir.iterdir(), reverse=True):
@@ -275,6 +241,7 @@ def verify_gate_result_schema(session, task, phase=None) -> Optional[Dict[str, A
         GATE_RESULT_ARTIFACTS,
         GATE_RESULT_SUBDIR,
         GATED_PHASES,
+        _feature_review_legacy_report,
         read_okf_report,
         validate_gate_result_schema,
     )
@@ -304,6 +271,10 @@ def verify_gate_result_schema(session, task, phase=None) -> Optional[Dict[str, A
         subdir=GATE_RESULT_SUBDIR.get(phase.name),
         phase_name=phase.name,
     )
+    if result is None and phase.name == "feature_review":
+        # TEMPORARY (Phase 2 §4.9 follow-up) -- see
+        # _feature_review_legacy_report's own docstring in spec.py.
+        result, _ = _feature_review_legacy_report(wf.working_directory)
     error = validate_gate_result_schema(phase.name, result)
     if not error:
         return None
@@ -419,10 +390,11 @@ def verify_output_survived_commit(session, task, phase=None) -> Optional[Dict[st
     Returns a rejection response dict (mirroring verify_output_artifact's
     shape) if a required file is missing now, else None.
     """
-    from pathlib import Path as _Path
-
-    from src.autopilot.spec import get_phase_required_files
-    from src.core.constants import CONTEXT_DIR_NAME
+    from src.autopilot.spec import (
+        OUTPUT_NAME_ALIASES,
+        get_phase_required_files,
+        resolve_declared_output_path,
+    )
     from src.core.database import Phase, Workflow
 
     if phase is None:
@@ -440,46 +412,26 @@ def verify_output_survived_commit(session, task, phase=None) -> Optional[Dict[st
 
     missing = []
     for declared_output in required_files:
-        found = False
-        # Map new file names to old names for backward compatibility
-        _old_name_map = {
-            "docs.md": "doc_review_report.md",
-            "summary.md": "code_summary.md",
-            "security.md": "security_report.md",
-            "review.md": "architectural_review_report.md",
-            "adversarial.md": "adversarial_review_report.md",
-            "qa.md": "qa_report.md",
-            "validation.md": "product_validation.md",
-            "requirements.md": "requirements_analysis.md",
-            "scope.md": "scope_review_result.md",
-            "forensics.md": "forensics_report.md",
-        }
-        old_name = _old_name_map.get(declared_output)
-        names_to_check = [declared_output] + ([old_name] if old_name else [])
-
-        for name in names_to_check:
-            if found:
-                break
-            for candidate in [
-                _Path(wf.working_directory) / CONTEXT_DIR_NAME / phase.name / name,
-                _Path(wf.working_directory) / name,
-                _Path(wf.working_directory) / CONTEXT_DIR_NAME / name,
-                _Path(wf.working_directory) / "docs" / name,
-            ]:
-                if candidate.exists():
-                    found = True
-                    break
-            # Also check if file exists in git (already committed)
-            if not found:
+        found = resolve_declared_output_path(wf.working_directory, phase.name, declared_output) is not None
+        # Also check if the file exists in git (already committed) --
+        # resolve_declared_output_path only checks the worktree's current
+        # state, but a file already committed and then removed from the
+        # working tree by something else is still "not lost," which is
+        # this function's whole concern (catching a genuine loss, not a
+        # normal post-commit state).
+        if not found:
+            old_name = OUTPUT_NAME_ALIASES.get(declared_output)
+            for name in [declared_output] + ([old_name] if old_name else []):
                 try:
                     from git import Repo
                     repo = Repo(wf.working_directory)
-                    # Check all commits for this file
                     for commit in repo.iter_commits(paths=f"**/{name}", max_count=5):
                         found = True
                         break
                 except Exception:
                     pass
+                if found:
+                    break
         if not found:
             missing.append(declared_output)
 

@@ -521,14 +521,14 @@ class TestBuildPhaseOutput:
         a FIX-only feature review (which now also routes back, unlike those
         two) must quote its full report here too, not just a count.
 
-        Written to .hephaestus/, not docs/ -- feature_review's real output
-        location, matching its sibling Feature Architect (Phase 0 artifacts
-        are internal orchestration state, not a git-tracked deliverable)."""
-        from src.core.constants import CONTEXT_DIR_NAME
-
-        heph_dir = tmp_path / CONTEXT_DIR_NAME
-        heph_dir.mkdir()
-        (heph_dir / "review.md").write_text(_okf(
+        Written to .hephaestus/feature_review/, not docs/ -- the same
+        .hephaestus/<phase_name>/ convention every other gated phase uses
+        (Phase 2 §4.9 follow-up normalized feature_review off its old
+        flat-.hephaestus/, name-colliding-with-architectural_review's-own-
+        review.md exception)."""
+        heph_dir = tmp_path / ".hephaestus" / "feature_review"
+        heph_dir.mkdir(parents=True)
+        (heph_dir / "feature_review.md").write_text(_okf(
             "type: feature_review_result\n"
             "blocker_count: 0\n"
             "fix_count: 1\n"

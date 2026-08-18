@@ -126,6 +126,14 @@ class TestVerifyOutputArtifact:
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory=None)
+        # AgentWorktree recovery's own query chain (.join().filter().order_by().first())
+        # is a separate auto-mocked branch from the plain .filter_by().first()
+        # above -- must be pinned to None too, or its default (an
+        # auto-generated Mock whose .worktree_path is itself a Mock, not a
+        # real path string) reaches _Path(wt_record.worktree_path) and
+        # raises a TypeError instead of exercising the "recovery also
+        # failed" path this test means to assert.
+        mock_session.query.return_value.join.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
         with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]):
             result = TaskCompletionService.verify_output_artifact(
@@ -581,7 +589,7 @@ class TestVerifyGateResultSchema:
         sub.mkdir(parents=True)
         (sub / "qa.md").write_text(
             "---\n"
-            "type: qa_validation_result\n"
+            "type: qa_validation\n"
             "failed_tests: 0\n"
             "passed_tests: 1410\n"
             "critical_issues: 0\n"
@@ -616,18 +624,17 @@ class TestVerifyGateResultSchema:
         assert result is None
 
     def test_reads_feature_reviews_hephaestus_subdir(self, tmp_path):
-        """feature_review's result lives under .hephaestus/, not docs/ --
-        the schema floor must read from the same subdir build_phase_output
-        actually uses, or it would always see 'missing' and never fire."""
-        from src.core.constants import CONTEXT_DIR_NAME
-
+        """feature_review's result lives under .hephaestus/feature_review/,
+        not docs/ -- the schema floor must read from the same subdir
+        build_phase_output actually uses, or it would always see 'missing'
+        and never fire."""
         phase = Mock(name="feature_review", id="phase-1")
         phase.name = "feature_review"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
-        internal_dir = tmp_path / CONTEXT_DIR_NAME
-        internal_dir.mkdir()
-        (internal_dir / "review.md").write_text(
+        internal_dir = tmp_path / ".hephaestus" / "feature_review"
+        internal_dir.mkdir(parents=True)
+        (internal_dir / "feature_review.md").write_text(
             "---\ntype: feature_review_result\nsummary: no counts here\n---\n\n# Report"
         )
 
@@ -641,6 +648,31 @@ class TestVerifyGateResultSchema:
         )
         assert result is not None
         assert "feature_review" in result["message"]
+
+    def test_reads_feature_reviews_legacy_flat_location_as_fallback(self, tmp_path):
+        """TEMPORARY (Phase 2 §4.9 follow-up): an in-flight Phase 0 run
+        started before the normalization may still be writing to the old
+        flat .hephaestus/review.md -- checked as a fallback so it doesn't
+        get rejected as unreadable just for predating the rename."""
+        phase = Mock(name="feature_review", id="phase-1")
+        phase.name = "feature_review"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        internal_dir = tmp_path / ".hephaestus"
+        internal_dir.mkdir()
+        (internal_dir / "review.md").write_text(
+            "---\ntype: feature_review_result\nblocker_count: 0\nfix_count: 0\n---\n\n# Report"
+        )
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path), project_id=None)
+        )
+
+        result = TaskCompletionService.verify_gate_result_schema(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
 
 
 class TestVerifyNoOpenTickets:
