@@ -1563,24 +1563,14 @@ class TestRetryFailedTasks:
     def test_orphaned_task_incorrectly_capped_bug(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
-        """Characterization of a LIVE BUG, not intended behavior: this
-        function's own comments and code (`is_orphan = "Orphaned" in
-        (task.get("failure_reason") or "")`) claim orphaned tasks (never
-        dispatched) retry indefinitely, exempt from max_task_retries --
-        mirroring _maybe_retry_failed_tasks's identical, and actually
-        working, exemption (see
-        TestMaybeRetryFailedTasks.test_orphaned_task_retries_past_the_cap
-        in test_advance_phases.py).
+        """Fix verification for the orphan-retry-cap bug: orphaned tasks
+        (never dispatched, failure_reason containing 'Orphaned') now retry
+        indefinitely, exempt from max_task_retries -- matching
+        _maybe_retry_failed_tasks's identical exemption.
 
-        But `task` here comes from get_tasks() (engine_client.py), whose
-        returned dict never includes "failure_reason" at all -- so
-        task.get("failure_reason") is always None, is_orphan is always
-        False, and an orphaned task IS capped at max_task_retries just
-        like a genuine agent failure, contradicting this function's own
-        stated intent. Captured as-is (not as the intended behavior) so a
-        future fix or consolidation with _maybe_retry_failed_tasks doesn't
-        silently re-cement this gap -- flip this test's assertions once
-        get_tasks() is fixed to include failure_reason."""
+        Previously broken because get_tasks() never included
+        failure_reason in its returned dict, so is_orphan was always False.
+        Fixed by adding failure_reason to get_tasks()."""
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
         from src.core.database import Agent, Task, Workflow
@@ -1605,13 +1595,14 @@ class TestRetryFailedTasks:
 
         recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
 
-        # BUG: should be ["retried task task-orphan-past-cap"] per this
-        # function's own documented intent -- see docstring above.
-        assert recovered == []
-        mock_create_agent.assert_not_called()
+        # Fixed: orphaned tasks retry indefinitely, exempt from max_task_retries.
+        orphan_id = "task-orphan-past-cap"
+        assert recovered == [f"retried task {orphan_id[:8]}"]
+        mock_create_agent.assert_called_once()
         with orch_db_env.session_scope() as session:
             task = session.query(Task).filter_by(id="task-orphan-past-cap").first()
-            assert task.status == "failed"
+            assert task.status == "in_progress"
+            # Orphans don't increment retry_count since they aren't real failures.
             assert task.retry_count == 10
 
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct", return_value=None)

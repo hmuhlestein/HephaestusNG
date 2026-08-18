@@ -6,10 +6,13 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 import requests
 
+from src.autopilot.orchestrator.state import (
+    _workflow_belongs_to_project,
+)
 from src.core.database import (
     Agent,
     Phase,
@@ -17,12 +20,6 @@ from src.core.database import (
     Workflow,
     get_db,
 )
-
-from src.autopilot.orchestrator.state import (
-    _workflow_belongs_to_project,
-)
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     pass
@@ -314,7 +311,6 @@ def create_agent_for_task_direct(
     agent types instead of building the normal phase-task message.
     """
     from src.autopilot.orchestrator import _orchestrator_agent_id
-
     from src.core.app_context import get_app_state
     from src.core.database import Task
 
@@ -525,6 +521,7 @@ def get_tasks(status: str = None, workflow_id: str = None) -> list:
                     "started_at": t.started_at.isoformat() if t.started_at else None,
                     "completed_at": t.completed_at.isoformat() if t.completed_at else None,
                     "retry_count": t.retry_count or 0,
+                    "failure_reason": t.failure_reason,
                 }
                 for t in tasks
             ]

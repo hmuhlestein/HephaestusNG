@@ -24,6 +24,12 @@ from src.workflow_engine.orchestrator import (
 logger = logging.getLogger(__name__)
 
 
+def _reset_stale_executions_on_goto(*args, **kwargs):
+    """Lazy-import wrapper to avoid circular import."""
+    from src.autopilot.orchestrator.phase_transitions import reset_stale_executions_on_goto
+    return reset_stale_executions_on_goto(*args, **kwargs)
+
+
 def substitute_params(text: str, params: Dict[str, Any]) -> str:
     """Replace {param_name} placeholders with actual values.
 
@@ -819,37 +825,12 @@ class PhaseManager:
             return self._advance_or_complete(session, phase.id)
 
         logger.info(f"[ARBITRATE] Goto phase {target_phase.name} from {phase.name}")
-        stale = (
-            session.query(PhaseExecution)
-            .join(Phase)
-            .filter(
-                Phase.workflow_id == phase.workflow_id,
-                Phase.order >= target_phase.order,
-                # Excludes the source phase's own execution -- see the
-                # identical exclusion (and its rationale) in
-                # _handle_evaluation_goto.
-                PhaseExecution.id != execution.id,
-                PhaseExecution.status.in_(["in_progress", "completed"]),
-            )
-            .all()
+        n_reset = _reset_stale_executions_on_goto(
+            session, phase.workflow_id, target_phase.order,
+            exclude_phase_id=phase.id,
         )
-        for s in stale:
-            s.status = "pending"
-            s.completed_at = None
-            s.task_creation_claimed_at = None
-            # Same reset _handle_evaluation_retry already applies to a
-            # retried phase's own execution (started_at = None) -- without
-            # it here too, a "pending" phase can carry a started_at left
-            # over from a cycle before this goto rewound it. Every later
-            # cycle-scoped query (_case_in_progress_complete,
-            # _maybe_retry_failed_tasks) filters tasks by
-            # `Task.created_at >= execution.started_at`; a stale anchor
-            # makes the phase's own freshly-created task fall outside its
-            # own cycle window, so _advance_phases sees zero tasks for it
-            # forever and the phase never progresses again.
-            s.started_at = None
-        if stale:
-            session.commit()
+        if n_reset:
+            logger.info(f"Reset {n_reset} stale phase execution(s) at/after {target_phase.name}")
 
         self._consume_gate_artifacts_for(session, phase)
 
@@ -947,43 +928,13 @@ class PhaseManager:
             # "completed" and _case_in_progress_complete re-evaluates it
             # without running it — finding consumed artifacts and sending the
             # pipeline back with a confusing "no result.json found" message.
-            stale = (
-                session.query(PhaseExecution)
-                .join(Phase)
-                .filter(
-                    Phase.workflow_id == phase.workflow_id,
-                    Phase.order >= target_phase.order,
-                    # Excludes the SOURCE phase's own execution (just closed
-                    # "completed" two lines above by _close_execution) --
-                    # design_review's order is >= architecture_design's
-                    # (its own goto target) here, so without this exclusion
-                    # this sweep immediately reset that same "completed"
-                    # mark straight back to "pending", defeating
-                    # mark_phase_complete's idempotency guard (`if
-                    # execution.status == "completed": skip`) on the very
-                    # next evaluation. Observed live: design_review's goto
-                    # decision fired twice, 84s apart, off the same
-                    # unchanged challenge.md, creating a second redundant
-                    # architecture_design task that raced the first.
-                    PhaseExecution.id != execution.id,
-                    PhaseExecution.status.in_(["in_progress", "completed"]),
-                )
-                .all()
+            n_reset = _reset_stale_executions_on_goto(
+                session, phase.workflow_id, target_phase.order,
+                exclude_phase_id=phase.id,
             )
-            for s in stale:
-                s.status = "pending"
-                s.completed_at = None
-                s.task_creation_claimed_at = None
-                # See _handle_force_goto's identical reset for why this is
-                # needed: a stale started_at surviving the reset makes every
-                # later cycle-scoped query exclude this phase's own next
-                # task from its own cycle, silently stalling the phase
-                # forever once its cycle re-starts.
-                s.started_at = None
-            if stale:
-                session.commit()
+            if n_reset:
                 logger.info(
-                    f"Reset {len(stale)} stale phase execution(s) at/after {target_phase.name}"
+                    f"Reset {n_reset} stale phase execution(s) at/after {target_phase.name}"
                 )
 
             self._consume_gate_artifacts_for(session, phase)
