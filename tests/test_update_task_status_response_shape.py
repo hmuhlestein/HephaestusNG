@@ -268,7 +268,7 @@ class TestGateResultSchemaFloor:
         docs.mkdir(parents=True)
         (docs / "qa.md").write_text(
             "---\n"
-            "type: qa_validation_result\n"
+            "type: qa_validation\n"
             "failed_tests: 0\n"
             "passed_tests: 1410\n"
             "critical_issues: 0\n"
