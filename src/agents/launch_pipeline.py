@@ -1554,6 +1554,28 @@ class LaunchPipeline:
         if existing:
             return existing
 
+        # Phase-sibling guard: don't dispatch if the phase already has
+        # another active task. Protects against concurrent dispatch from
+        # different code paths (orchestrator sweep, HTTP route, validator
+        # spawn) targeting the same phase.
+        from src.autopilot.orchestrator.engine_client import check_phase_sibling_active
+        _guard_session = self.db_manager.get_session()
+        try:
+            phase_sibling = check_phase_sibling_active(
+                _guard_session, task.id, task.phase_id,
+                created_by_filter=False,
+            )
+            if phase_sibling is not None:
+                logger.warning(
+                    f"[create_agent_for_task] Skipping dispatch for task "
+                    f"{task.id[:8]}: phase {task.phase_id[:8]} already has active "
+                    f"task {phase_sibling.id[:8]} ({phase_sibling.status}) -- "
+                    f"avoiding duplicate agent"
+                )
+                return None
+        finally:
+            _guard_session.close()
+
         agent_id = str(uuid.uuid4())
         wt_mgr = self._scoped_worktree_manager(task.workflow_id)
         phase_config = self._resolve_phase_config(

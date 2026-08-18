@@ -152,6 +152,24 @@ async def spawn_validator_agent(
         # For result validators, we need the commit SHA to create worktree from
         # The commit_sha parameter should have been passed from submit_result
 
+        # Guard: don't dispatch if the phase already has another active task.
+        # Prevents duplicate agents when concurrent validation runs target
+        # the same phase. created_by_filter=False because validators are
+        # subtasks (created_by_agent_id = original_agent_id), not orchestrator
+        # tasks, so the orchestrator-scoped guard wouldn't catch them.
+        from src.autopilot.orchestrator.engine_client import check_phase_sibling_active
+        if validation_task.phase_id:
+            _sibling = check_phase_sibling_active(
+                session, validation_task.id, validation_task.phase_id,
+                created_by_filter=False,
+            )
+            if _sibling is not None:
+                logger.warning(
+                    f"[spawn_validator_agent] Skipping: phase {validation_task.phase_id[:8]} "
+                    f"already has active task {_sibling.id[:8]} ({_sibling.status})"
+                )
+                return _sibling.assigned_agent_id or _sibling.id
+
         # Use AgentManager to create agent properly (like normal agents)
         # Pass commit_sha to create worktree from the specific commit
         await agent_manager.create_agent_for_task(

@@ -313,6 +313,50 @@ def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids:
     return paused_count
 
 
+def check_phase_sibling_active(
+    session,
+    task_id: str,
+    phase_id: Optional[str],
+    *,
+    created_by_filter: bool = True,
+    orchestrator_agent_id: Optional[str] = None,
+) -> Optional["Task"]:
+    """Check if another active task exists on the same phase.
+
+    Returns the sibling task if found, None otherwise.
+
+    created_by_filter: if True, only consider tasks created by the
+    orchestrator (created_by_agent_id in (None, orchestrator)). This
+    prevents blocking legitimate subtasks a phase agent creates within
+    its own phase. Set to False for callers that want to block ANY
+    active task on the phase (e.g. validator spawn path).
+    """
+    if not phase_id:
+        return None
+
+    from src.core.database import Task as _Task
+
+    query = session.query(_Task).filter(
+        _Task.phase_id == phase_id,
+        _Task.id != task_id,
+        _Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+    )
+    if created_by_filter:
+        from sqlalchemy import or_
+
+        if orchestrator_agent_id is None:
+            from src.autopilot.orchestrator import _orchestrator_agent_id
+            orchestrator_agent_id = _orchestrator_agent_id
+        query = query.filter(
+            or_
+            (
+                _Task.created_by_agent_id.is_(None),
+                _Task.created_by_agent_id == orchestrator_agent_id,
+            ),
+        )
+    return query.first()
+
+
 def create_agent_for_task_direct(
     task_id: str,
     workflow_id: str,
@@ -382,30 +426,19 @@ def create_agent_for_task_direct(
             # would block dispatch of a second such subtask just because
             # the first is still active, which isn't the race this guard
             # exists for.
-            if task.phase_id:
-                from sqlalchemy import or_
-
-                phase_sibling = (
-                    session.query(Task)
-                    .filter(
-                        Task.phase_id == task.phase_id,
-                        Task.id != task_id,
-                        Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
-                        or_(
-                            Task.created_by_agent_id.is_(None),
-                            Task.created_by_agent_id == _orchestrator_agent_id,
-                        ),
-                    )
-                    .first()
+            phase_sibling = check_phase_sibling_active(
+                session, task_id, task.phase_id,
+                created_by_filter=True,
+                orchestrator_agent_id=_orchestrator_agent_id,
+            )
+            if phase_sibling is not None:
+                logger.warning(
+                    f"[create_agent_for_task_direct] Skipping dispatch for task "
+                    f"{task_id[:8]}: phase {task.phase_id[:8]} already has active "
+                    f"task {phase_sibling.id[:8]} ({phase_sibling.status}) -- "
+                    f"avoiding duplicate agent"
                 )
-                if phase_sibling is not None:
-                    logger.warning(
-                        f"[create_agent_for_task_direct] Skipping dispatch for task "
-                        f"{task_id[:8]}: phase {task.phase_id[:8]} already has active "
-                        f"task {phase_sibling.id[:8]} ({phase_sibling.status}) -- "
-                        f"avoiding duplicate agent"
-                    )
-                    return None
+                return None
 
             # Per-cli/model concurrency gate (e.g. a local model's single
             # inference slot) -- this is the orchestrator's OWN direct
