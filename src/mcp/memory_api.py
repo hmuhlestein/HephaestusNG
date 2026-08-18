@@ -850,10 +850,17 @@ async def submit_result_validation(
                     status_code=404, detail=f"Result {request.result_id} not found"
                 )
 
-            # The validator agent should be the one that currently has this result assigned
+            # The validator agent should be the one currently assigned
+            # to a task in this workflow. Scoped by workflow_id to
+            # prevent cross-wiring outcomes from concurrent validation
+            # runs across different workflows.
             validator_agent = (
                 session.query(Agent)
-                .filter(Agent.agent_type == "result_validator")
+                .join(Task, Agent.current_task_id == Task.id)
+                .filter(
+                    Agent.agent_type == "result_validator",
+                    Task.workflow_id == result.workflow_id,
+                )
                 .order_by(Agent.created_at.desc())
                 .first()
             )
