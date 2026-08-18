@@ -161,7 +161,7 @@ class TestCreateAgentForTask:
             )
 
         sentinel = RuntimeError("sentinel: reached worktree setup, past the review-mode guard")
-        with patch.object(mock_agent_manager, "_scoped_worktree_manager", side_effect=sentinel):
+        with patch.object(mock_agent_manager._launch, "_scoped_worktree_manager", side_effect=sentinel):
             with pytest.raises(RuntimeError, match="sentinel"):
                 await mock_agent_manager.create_agent_for_task(
                     task=sample_task,
@@ -194,8 +194,8 @@ class TestCreateAgentForTask:
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
@@ -324,7 +324,7 @@ class TestCreateAgentForTask:
                 task = session.query(Task).filter_by(id="task-1").first()
                 task.status = "duplicated"
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
              patch(
                  "src.agents.manager.asyncio.sleep",
                  new_callable=AsyncMock,
@@ -392,8 +392,8 @@ class TestCreateAgentForTask:
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
@@ -460,8 +460,8 @@ class TestCreateAgentForTask:
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
@@ -525,8 +525,8 @@ class TestCreateAgentForTask:
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
@@ -568,8 +568,8 @@ class TestCreateAgentForTask:
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
@@ -630,8 +630,8 @@ class TestCreateAgentForTask:
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("claude --model sonnet", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
@@ -674,8 +674,8 @@ class TestCreateAgentForTask:
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("claude --model sonnet", LaunchResult.FLAG)
             mock_cli.default_model = "sonnet"
@@ -813,10 +813,10 @@ class TestProjectScopedWorktreeManager:
         with db_manager.session_scope() as session:
             task = session.query(Task).filter_by(id="task-x").first()
             with patch(
-                "src.agents.manager.WorktreeManager",
+                "src.agents.launch_pipeline.WorktreeManager",
                 return_value=FakeScopedManager(),
-            ), patch("src.agents.manager.get_cli_agent") as mock_get_cli, patch(
-                "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
+            ), patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, patch(
+                "src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock
             ):
                 mock_cli = MagicMock()
                 mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
@@ -913,7 +913,7 @@ class TestCreateAgentForTaskFallback:
         with db_manager.session_scope() as session:
             task = session.query(Task).filter_by(id="task-fb").first()
 
-            with patch("src.agents.manager.get_cli_agent") as mock_get_cli, patch(
+            with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, patch(
                 "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
             ):
                 mock_cli = MagicMock()
@@ -922,7 +922,7 @@ class TestCreateAgentForTaskFallback:
                 mock_get_cli.return_value = mock_cli
 
                 # Primary attempt fails; fallback attempt succeeds.
-                mock_agent_manager._send_initial_prompt_with_retry = AsyncMock(
+                mock_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock(
                     side_effect=[Exception("primary CLI unavailable"), None]
                 )
 
@@ -1033,7 +1033,7 @@ class TestCreateAgentForTaskFallback:
         with db_manager.session_scope() as session:
             task = session.query(Task).filter_by(id="task-badmodel").first()
 
-            with patch("src.agents.manager.get_cli_agent") as mock_get_cli, patch(
+            with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, patch(
                 "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
             ):
                 mock_cli = MagicMock()
@@ -1047,10 +1047,10 @@ class TestCreateAgentForTaskFallback:
                     r"model.{0,60}not found",
                 ]
                 mock_get_cli.return_value = mock_cli
-                mock_agent_manager._send_initial_prompt_with_retry = AsyncMock(return_value=None)
-                mock_agent_manager._verify_instructions_file_read = AsyncMock(return_value=None)
-                mock_agent_manager._record_cli_session = AsyncMock(return_value=None)
-                mock_agent_manager._send_goal_command = AsyncMock(return_value=None)
+                mock_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock(return_value=None)
+                mock_agent_manager._launch._verify_instructions_file_read = AsyncMock(return_value=None)
+                mock_agent_manager._launch._record_cli_session = AsyncMock(return_value=None)
+                mock_agent_manager._launch._send_goal_command = AsyncMock(return_value=None)
 
                 agent = await mock_agent_manager.create_agent_for_task(
                     task=task,
@@ -1141,7 +1141,7 @@ class TestCreateAgentForTaskSessionLimitPause:
         session = db_manager.get_session()
         task = session.query(Task).filter_by(id="task-sl").first()
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, patch(
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, patch(
             "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
         ):
             mock_cli = MagicMock()
@@ -1149,7 +1149,7 @@ class TestCreateAgentForTaskSessionLimitPause:
             mock_cli.default_model = "test-model"
             mock_get_cli.return_value = mock_cli
 
-            mock_agent_manager._send_initial_prompt_with_retry = AsyncMock(
+            mock_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock(
                 side_effect=Exception(
                     "CLI session limit detected: \"you've hit your session "
                     "limit\" found in output"
@@ -1313,7 +1313,7 @@ class TestCodexTmuxLifecycle:
         cli_agent = MagicMock()
         cli_agent.record_session.side_effect = [False, True]
 
-        with patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock) as sleep:
+        with patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock) as sleep:
             await mock_agent_manager._record_cli_session(
                 cli_agent, "heph-session", "/tmp/worktree", 1.0
             )
@@ -1385,7 +1385,7 @@ class TestCodexTmuxLifecycle:
             async def short_sleep(_delay):
                 await real_sleep(0.05)
 
-            with patch("src.agents.manager.asyncio.sleep", new=short_sleep):
+            with patch("src.agents.launch_pipeline.asyncio.sleep", new=short_sleep):
                 await mock_agent_manager._send_initial_prompt_with_retry(
                     pane=pane,
                     cli_agent=cli_agent,
@@ -1460,7 +1460,7 @@ class TestSendInitialPromptSessionLimitCheck:
         cli_agent.needs_chunked_delivery = False
         cli_agent.format_message = MagicMock(return_value="formatted prompt")
 
-        with patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(Exception, match="CLI session limit detected"):
                 await mock_agent_manager._send_initial_prompt_with_retry(
                     pane=pane,
@@ -1481,7 +1481,7 @@ class TestSendInitialPromptSessionLimitCheck:
         cli_agent.needs_chunked_delivery = False
         cli_agent.format_message = MagicMock(return_value="formatted prompt")
 
-        with patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             await mock_agent_manager._send_initial_prompt_with_retry(
                 pane=pane,
                 cli_agent=cli_agent,
@@ -1505,7 +1505,7 @@ class TestSendInitialPromptSessionLimitCheck:
         cli_agent.needs_chunked_delivery = False
         cli_agent.format_message = MagicMock(return_value="formatted prompt")
 
-        with patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             await mock_agent_manager._send_initial_prompt_with_retry(
                 pane=pane,
                 cli_agent=cli_agent,

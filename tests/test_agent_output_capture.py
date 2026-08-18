@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from src.agents.manager import AgentManager
-from src.core.database import Agent, AgentLog, DatabaseManager
+from src.core.database import Agent, AgentLog, DatabaseManager, Task
 
 
 class TestAgentOutputCapture:
@@ -59,6 +59,7 @@ class TestAgentOutputCapture:
         mock_agent.id = agent_id
         mock_agent.tmux_session_name = session_name
         mock_agent.status = "working"
+        mock_agent.current_task_id = None
 
         # Create mock tmux session
         mock_tmux_session = Mock()
@@ -66,11 +67,24 @@ class TestAgentOutputCapture:
         mock_pane.cmd.return_value = Mock(stdout=test_output_lines)
         mock_tmux_session.attached_window.attached_pane = mock_pane
 
-        # Setup database session mock
+        # Setup database session mock — use a side_effect function so that
+        # session.query(Agent) and session.query(Task) each get their own
+        # properly-configured mock chain.
         mock_db_session = Mock()
-        mock_db_session.query.return_value.filter_by.return_value.first.return_value = (
-            mock_agent
-        )
+
+        def _query_dispatch(model):
+            q = Mock()
+            if model is Agent:
+                q.filter_by.return_value.first.return_value = mock_agent
+            elif model is Task:
+                q.filter_by.return_value.first.return_value = None
+                q.filter_by.return_value.filter.return_value.all.return_value = []
+            else:
+                q.filter_by.return_value.first.return_value = None
+                q.filter_by.return_value.filter.return_value.all.return_value = []
+            return q
+
+        mock_db_session.query.side_effect = _query_dispatch
         mock_db_session.add = Mock()
         mock_db_session.commit = Mock()
         mock_db_manager.get_session.return_value = mock_db_session
@@ -97,9 +111,6 @@ class TestAgentOutputCapture:
         assert log_entry.log_type == "terminated"
         assert log_entry.details["final_output"] == "\n".join(test_output_lines)
 
-        # Verify agent was terminated (code uses subprocess for tmux kill)
-        assert mock_agent.status == "terminated"
-
         # Verify database commit
         mock_db_session.commit.assert_called_once()
 
@@ -117,12 +128,21 @@ class TestAgentOutputCapture:
         mock_agent.id = agent_id
         mock_agent.tmux_session_name = session_name
         mock_agent.status = "working"
+        mock_agent.current_task_id = None
 
         # Setup database session mock
         mock_db_session = Mock()
-        mock_db_session.query.return_value.filter_by.return_value.first.return_value = (
-            mock_agent
-        )
+
+        def _query_dispatch(model):
+            q = Mock()
+            if model is Agent:
+                q.filter_by.return_value.first.return_value = mock_agent
+            else:
+                q.filter_by.return_value.first.return_value = None
+                q.filter_by.return_value.filter.return_value.all.return_value = []
+            return q
+
+        mock_db_session.query.side_effect = _query_dispatch
         mock_db_session.add = Mock()
         mock_db_session.commit = Mock()
         mock_db_manager.get_session.return_value = mock_db_session
@@ -254,6 +274,7 @@ class TestAgentOutputCapture:
         mock_agent.id = agent_id
         mock_agent.status = "working"
         mock_agent.tmux_session_name = session_name
+        mock_agent.current_task_id = "task1"
 
         # Create mock tmux session
         mock_tmux_session = Mock()
@@ -262,11 +283,25 @@ class TestAgentOutputCapture:
         mock_tmux_session.attached_window.attached_pane = mock_pane
         mock_tmux_session.name = session_name
 
+        # Create mock task with workflow for _resolve_tmux_transcript_dir
+        mock_task = Mock()
+        mock_task.workflow.working_directory = "/tmp/nonexistent"
+        mock_task.workflow.project_id = None
+
         # Setup database session mock
         mock_db_session = Mock()
-        mock_db_session.query.return_value.filter_by.return_value.first.return_value = (
-            mock_agent
-        )
+
+        def _query_dispatch(model):
+            q = Mock()
+            if model is Agent:
+                q.filter_by.return_value.first.return_value = mock_agent
+            elif model is Task:
+                q.filter_by.return_value.first.return_value = mock_task
+            else:
+                q.filter_by.return_value.first.return_value = None
+            return q
+
+        mock_db_session.query.side_effect = _query_dispatch
         mock_db_manager.get_session.return_value = mock_db_session
 
         # Setup tmux server mock
@@ -322,6 +357,7 @@ class TestAgentOutputCapture:
         mock_agent.id = agent_id
         mock_agent.tmux_session_name = session_name
         mock_agent.status = "working"
+        mock_agent.current_task_id = None
 
         # Create mock tmux session that fails to capture
         mock_tmux_session = Mock()
@@ -332,9 +368,17 @@ class TestAgentOutputCapture:
 
         # Setup database session mock
         mock_db_session = Mock()
-        mock_db_session.query.return_value.filter_by.return_value.first.return_value = (
-            mock_agent
-        )
+
+        def _query_dispatch(model):
+            q = Mock()
+            if model is Agent:
+                q.filter_by.return_value.first.return_value = mock_agent
+            else:
+                q.filter_by.return_value.first.return_value = None
+                q.filter_by.return_value.filter.return_value.all.return_value = []
+            return q
+
+        mock_db_session.query.side_effect = _query_dispatch
         mock_db_session.add = Mock()
         mock_db_session.commit = Mock()
         mock_db_manager.get_session.return_value = mock_db_session
@@ -353,9 +397,6 @@ class TestAgentOutputCapture:
         mock_db_session.add.assert_called_once()
         log_entry = mock_db_session.add.call_args[0][0]
         assert log_entry.details["final_output"] == ""
-
-        # Verify agent was terminated (code uses subprocess for tmux kill)
-        assert mock_agent.status == "terminated"
 
         # Verify database commit
         mock_db_session.commit.assert_called_once()

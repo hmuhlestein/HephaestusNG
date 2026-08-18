@@ -100,8 +100,8 @@ class TestRestartModelResolution:
         agent_id = _setup_restart_prereqs(db_manager, cli_model="openrouter/custom-model")
         restart_agent_manager.tmux_server.has_session.return_value = True
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --model openrouter/custom-model", LaunchResult.FLAG)
             mock_cli.default_model = "fallback-model"
@@ -123,8 +123,8 @@ class TestRestartModelResolution:
         restart_agent_manager.config.default_cli_tool = "pi"
         restart_agent_manager.config.cli_model = "global-pi-model"
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --model global-pi-model", LaunchResult.FLAG)
             mock_cli.default_model = "cli-agent-default"
@@ -145,8 +145,8 @@ class TestRestartModelResolution:
         restart_agent_manager.tmux_server.has_session.return_value = True
         restart_agent_manager.config.default_cli_tool = "claude"  # different from pi
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
@@ -176,8 +176,8 @@ class TestRestartSessionId:
                 "feature_id": "feat",
             }
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "test-model"
@@ -204,8 +204,8 @@ class TestRestartSessionId:
                 "feature_id": "feat",
             }
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "test-model"
@@ -225,8 +225,8 @@ class TestRestartSessionId:
             wf = session.query(Workflow).filter_by(id="wf-r").first()
             wf.launch_params = {"project_path": "/tmp/proj", "feature_id": "feat"}
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "test-model"
@@ -246,8 +246,8 @@ class TestRestartSessionId:
             wf = session.query(Workflow).filter_by(id="wf-r").first()
             wf.launch_params = {"project_path": "/tmp/proj", "feature_id": "feat"}
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "test-model"
@@ -318,8 +318,8 @@ class TestRestartSessionId:
             wf = session.query(Workflow).filter_by(id="wf-r").first()
             wf.launch_params = {"project_path": "/tmp/proj", "feature_id": "feat"}
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock), \
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock), \
              patch.object(
                  restart_agent_manager.branch_manager, "get_agent_branch_path",
                  return_value=None,
@@ -329,10 +329,10 @@ class TestRestartSessionId:
             mock_cli.default_model = "test-model"
             mock_cli.post_launch_confirmation_keys.return_value = []
             mock_get_cli.return_value = mock_cli
-            restart_agent_manager._send_initial_prompt_with_retry = AsyncMock()
+            restart_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock()
             restart_agent_manager._send_goal_command = AsyncMock()
-            restart_agent_manager._record_cli_session = AsyncMock()
-            restart_agent_manager._verify_instructions_file_read = AsyncMock()
+            restart_agent_manager._launch._record_cli_session = AsyncMock()
+            restart_agent_manager._launch._verify_instructions_file_read = AsyncMock()
 
             await restart_agent_manager.restart_agent(agent_id, "Test")
 
@@ -360,22 +360,22 @@ class TestRestartPromptDelivery:
         mock_pane = MagicMock()
         mock_pane.cmd.return_value = MagicMock(stdout=[""])
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "test-model"
             mock_cli.post_launch_confirmation_keys.return_value = []
             mock_get_cli.return_value = mock_cli
-            restart_agent_manager._send_initial_prompt_with_retry = AsyncMock()
-            restart_agent_manager._verify_instructions_file_read = AsyncMock()
-            restart_agent_manager._record_cli_session = AsyncMock()
+            restart_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock()
+            restart_agent_manager._launch._verify_instructions_file_read = AsyncMock()
+            restart_agent_manager._launch._record_cli_session = AsyncMock()
             restart_agent_manager._send_goal_command = AsyncMock()
 
             await restart_agent_manager.restart_agent(agent_id, "Stuck")
 
-        restart_agent_manager._send_initial_prompt_with_retry.assert_called_once()
-        _, call_kwargs = restart_agent_manager._send_initial_prompt_with_retry.call_args
+        restart_agent_manager._launch._send_initial_prompt_with_retry.assert_called_once()
+        _, call_kwargs = restart_agent_manager._launch._send_initial_prompt_with_retry.call_args
         assert call_kwargs["cli_type"] == "pi"
         assert call_kwargs["agent_id"] == agent_id
 
@@ -392,8 +392,8 @@ class TestRestartPromptDelivery:
         # No workflow working_directory -> restart_wd will be None
         # No agent branch path either -> both absent -> None
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock), \
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock), \
              patch.object(
                  restart_agent_manager.branch_manager, "get_agent_branch_path",
                  return_value=None,
@@ -403,13 +403,13 @@ class TestRestartPromptDelivery:
             mock_cli.default_model = "test-model"
             mock_cli.post_launch_confirmation_keys.return_value = []
             mock_get_cli.return_value = mock_cli
-            restart_agent_manager._send_initial_prompt_with_retry = AsyncMock()
+            restart_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock()
             restart_agent_manager._send_goal_command = AsyncMock()
 
             await restart_agent_manager.restart_agent(agent_id, "Stuck")
 
-        restart_agent_manager._send_initial_prompt_with_retry.assert_called_once()
-        _, call_kwargs = restart_agent_manager._send_initial_prompt_with_retry.call_args
+        restart_agent_manager._launch._send_initial_prompt_with_retry.assert_called_once()
+        _, call_kwargs = restart_agent_manager._launch._send_initial_prompt_with_retry.call_args
         # When restart_wd is None, instructions_pointer is "" and the
         # fallback delivers the raw restart_message text.
         assert call_kwargs["initial_message"] != ""
@@ -445,16 +445,16 @@ class TestRestartWorktreeResolution:
             wf = session.query(Workflow).filter_by(id="wf-r").first()
             wf.working_directory = str(wt_dir)
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "test-model"
             mock_cli.post_launch_confirmation_keys.return_value = []
             mock_get_cli.return_value = mock_cli
-            restart_agent_manager._send_initial_prompt_with_retry = AsyncMock()
-            restart_agent_manager._verify_instructions_file_read = AsyncMock()
-            restart_agent_manager._record_cli_session = AsyncMock()
+            restart_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock()
+            restart_agent_manager._launch._verify_instructions_file_read = AsyncMock()
+            restart_agent_manager._launch._record_cli_session = AsyncMock()
             restart_agent_manager._send_goal_command = AsyncMock()
 
             await restart_agent_manager.restart_agent(agent_id, "Test")
@@ -474,8 +474,8 @@ class TestRestartWorktreeResolution:
         agent_id = _setup_restart_prereqs(db_manager)
 
         # workflow.working_directory stays None (default from fixture)
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock), \
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock), \
              patch.object(
                  restart_agent_manager.branch_manager, "get_agent_branch_path",
                  return_value=None,
@@ -485,7 +485,7 @@ class TestRestartWorktreeResolution:
             mock_cli.default_model = "test-model"
             mock_cli.post_launch_confirmation_keys.return_value = []
             mock_get_cli.return_value = mock_cli
-            restart_agent_manager._send_initial_prompt_with_retry = AsyncMock()
+            restart_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock()
             restart_agent_manager._send_goal_command = AsyncMock()
 
             # Must NOT raise — the silent-None is the current behavior
@@ -521,17 +521,17 @@ class TestRestartWorktreeResolution:
             wf = session.query(Workflow).filter_by(id="wf-r").first()
             wf.working_directory = str(wt_dir)
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "test-model"
             mock_cli.post_launch_confirmation_keys.return_value = []
             mock_get_cli.return_value = mock_cli
-            restart_agent_manager._send_initial_prompt_with_retry = AsyncMock()
+            restart_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock()
             restart_agent_manager._send_goal_command = AsyncMock()
-            restart_agent_manager._record_cli_session = AsyncMock()
-            restart_agent_manager._verify_instructions_file_read = AsyncMock()
+            restart_agent_manager._launch._record_cli_session = AsyncMock()
+            restart_agent_manager._launch._verify_instructions_file_read = AsyncMock()
 
             await restart_agent_manager.restart_agent(agent_id, "Test")
 
@@ -578,31 +578,31 @@ class TestRestartGapClosings:
             wf = session.query(Workflow).filter_by(id="wf-r").first()
             wf.working_directory = str(wt_dir)
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "test-model"
             mock_cli.post_launch_confirmation_keys.return_value = []
             mock_cli.get_launch_rejection_patterns.return_value = [r"command not found"]
             mock_get_cli.return_value = mock_cli
-            restart_agent_manager._send_initial_prompt_with_retry = AsyncMock()
+            restart_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock()
             restart_agent_manager._send_goal_command = AsyncMock()
-            restart_agent_manager._record_cli_session = AsyncMock()
-            restart_agent_manager._verify_instructions_file_read = AsyncMock()
+            restart_agent_manager._launch._record_cli_session = AsyncMock()
+            restart_agent_manager._launch._verify_instructions_file_read = AsyncMock()
             # Mock _check_termination_race to simulate a detected race
             mock_term_info = MagicMock()
             mock_term_info.id = agent_id
-            restart_agent_manager._check_termination_race = AsyncMock(
+            restart_agent_manager._launch._check_termination_race = AsyncMock(
                 return_value=mock_term_info
             )
 
             await restart_agent_manager.restart_agent(agent_id, "Test")
 
         # _check_termination_race was called
-        restart_agent_manager._check_termination_race.assert_called_once()
+        restart_agent_manager._launch._check_termination_race.assert_called_once()
         # Prompt was NOT delivered because _check_termination_race aborted
-        restart_agent_manager._send_initial_prompt_with_retry.assert_not_called()
+        restart_agent_manager._launch._send_initial_prompt_with_retry.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_restart_aborts_when_launch_detected_as_failed(
@@ -630,26 +630,26 @@ class TestRestartGapClosings:
             wf = session.query(Workflow).filter_by(id="wf-r").first()
             wf.working_directory = str(wt_dir)
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
-             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
             mock_cli.default_model = "test-model"
             mock_cli.post_launch_confirmation_keys.return_value = []
             mock_get_cli.return_value = mock_cli
-            restart_agent_manager._send_initial_prompt_with_retry = AsyncMock()
+            restart_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock()
             restart_agent_manager._send_goal_command = AsyncMock()
-            restart_agent_manager._record_cli_session = AsyncMock()
-            restart_agent_manager._verify_instructions_file_read = AsyncMock()
-            restart_agent_manager._check_termination_race = AsyncMock(
+            restart_agent_manager._launch._record_cli_session = AsyncMock()
+            restart_agent_manager._launch._verify_instructions_file_read = AsyncMock()
+            restart_agent_manager._launch._check_termination_race = AsyncMock(
                 return_value=None
             )
             # _detect_launch_failure raises on launch failure
-            restart_agent_manager._detect_launch_failure = MagicMock(
+            restart_agent_manager._launch._detect_launch_failure = MagicMock(
                 side_effect=Exception("CLI failed to start")
             )
 
             await restart_agent_manager.restart_agent(agent_id, "Test")
 
-        restart_agent_manager._detect_launch_failure.assert_called_once()
-        restart_agent_manager._send_initial_prompt_with_retry.assert_not_called()
+        restart_agent_manager._launch._detect_launch_failure.assert_called_once()
+        restart_agent_manager._launch._send_initial_prompt_with_retry.assert_not_called()
