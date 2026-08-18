@@ -101,6 +101,41 @@ def test_create_agent_worktree(worktree_manager, test_db):
     worktree_manager.cleanup_worktree(agent_id)
 
 
+def test_get_agent_branch_path_returns_none_when_no_record(worktree_manager, test_db):
+    """Phase 3 Tier 1 item 7 (docs/AUTOPILOT_REFACTOR_PLAN.md): when no
+    AgentBranch record exists for an agent, get_agent_branch_path must
+    return None, not the main repo path. Pre-fix, it silently returned
+    str(self._project_root) -- a caller like restart_agent that only checks
+    truthiness (`if candidate: ...`) would accept the main repo as a valid
+    worktree and could relaunch an agent directly into it instead of
+    failing loudly."""
+    agent_id = str(uuid.uuid4())
+    # Deliberately no AgentBranch record created for this agent_id.
+    assert worktree_manager.get_agent_branch_path(agent_id) is None
+
+
+def test_get_agent_branch_path_returns_real_path_when_record_exists(
+    worktree_manager, test_db
+):
+    """Companion to the None-fallback test above -- confirms the fix didn't
+    also break the normal, working case."""
+    agent_id = str(uuid.uuid4())
+    session = test_db.get_session()
+    agent = Agent(
+        id=agent_id, system_prompt="Test agent", status="working", cli_type="test"
+    )
+    session.add(agent)
+    session.commit()
+    session.close()
+
+    result = worktree_manager.create_agent_worktree(agent_id)
+
+    path = worktree_manager.get_agent_branch_path(agent_id)
+    assert path == result["working_directory"]
+
+    worktree_manager.cleanup_worktree(agent_id)
+
+
 def test_parent_child_inheritance(worktree_manager, test_db):
     """Test that child agents inherit parent's state."""
     parent_id = str(uuid.uuid4())

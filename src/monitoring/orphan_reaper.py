@@ -135,8 +135,13 @@ class OrphanSessionReaper:
                 session.close()
 
             # Find orphaned sessions (exist in tmux but not in database)
-            # Use grace period based on last check time to avoid killing newly-created sessions
-            current_time = datetime.now()
+            # Use grace period based on last check time to avoid killing newly-created sessions.
+            # utcnow, not now: self.last_check_time is only ever set from this
+            # same variable (below), but a local-time clock here would still
+            # disagree with the utcnow() comparison already used for
+            # last_activity earlier in this method. See CLAUDE.md's
+            # utc-only invariant.
+            current_time = datetime.utcnow()
 
             # Track when we last checked - agents created since last check get grace period
             if self.last_check_time is None:

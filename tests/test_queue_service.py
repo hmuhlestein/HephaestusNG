@@ -766,6 +766,120 @@ class TestGetQueueStatus:
         assert status["at_capacity"] is True
 
 
+class TestCalculateQueuePosition:
+    """Tests for _calculate_queue_position's priority/boost tie-break logic.
+
+    Note: this method currently has zero callers anywhere in src/ (grepped
+    for `_calculate_queue_position(` outside its own definition) -- the
+    live queue-ordering code path is `_recalculate_queue_positions`, a
+    separate, correctly-implemented method using `.order_by(...desc())`
+    rather than this one's and_()/or_() boolean-negation approach. These
+    tests characterize and fix this method's own logic on its own terms
+    (Phase 3 Tier 1 item 4 of docs/AUTOPILOT_REFACTOR_PLAN.md), independent
+    of whether/when something ends up calling it.
+    """
+
+    def test_higher_priority_task_counts_as_ahead_for_non_boosted_new_task(
+        self, queue_service, db_manager
+    ):
+        """A non-boosted new medium-priority task must count an existing
+        non-boosted HIGH-priority queued task as ahead of it (and must NOT
+        count an existing non-boosted LOW-priority one) -- the ordinary,
+        overwhelmingly common case, since new tasks are essentially never
+        pre-boosted (the method's own docstring says so).
+
+        Pre-fix, this was silently broken: `not Task.priority_boosted` is a
+        Python `not` on a SQLAlchemy class attribute (always truthy), so it
+        always evaluates to the literal `False` at expression-build time --
+        not a real SQL predicate. `and_(literal False, ...)` collapses the
+        whole containing clause to always-False in the compiled SQL, which
+        made the entire priority/queued_at tie-break `or_()` branch
+        unreachable for any non-boosted new task -- ahead_count degenerated
+        to counting ONLY boosted existing tasks, completely ignoring
+        priority level. Verified by inspecting the compiled SQL directly
+        during Phase 3 Tier 1 implementation: `tasks.priority_boosted OR
+        (false OR false) AND ...`.
+        """
+        session = db_manager.get_session()
+        try:
+            high_task = Task(
+                id=str(uuid.uuid4()),
+                raw_description="High priority, queued",
+                done_definition="Done",
+                status="queued",
+                priority="high",
+                priority_boosted=False,
+                queued_at=datetime.utcnow() - timedelta(minutes=10),
+            )
+            low_task = Task(
+                id=str(uuid.uuid4()),
+                raw_description="Low priority, queued",
+                done_definition="Done",
+                status="queued",
+                priority="low",
+                priority_boosted=False,
+                queued_at=datetime.utcnow() - timedelta(minutes=10),
+            )
+            session.add_all([high_task, low_task])
+            session.commit()
+
+            new_task = Task(
+                id=str(uuid.uuid4()),
+                raw_description="New medium-priority task",
+                done_definition="Done",
+                status="queued",
+                priority="medium",
+                priority_boosted=False,
+                queued_at=datetime.utcnow(),
+            )
+
+            # Position is 1-indexed: only the high-priority task should be
+            # ahead of a new medium-priority, non-boosted task.
+            position = queue_service._calculate_queue_position(session, new_task)
+            assert position == 2, (
+                f"Expected position 2 (only the high-priority task ahead), got {position}"
+            )
+        finally:
+            session.close()
+
+    def test_boosted_existing_task_still_counts_as_ahead(self, queue_service, db_manager):
+        """The one sub-clause that was NOT dead (boosted-existing-task-is-
+        always-ahead-of-a-non-boosted-new-task) must keep working after the
+        fix -- confirms the fix didn't overcorrect and break the one
+        previously-working branch."""
+        session = db_manager.get_session()
+        try:
+            boosted_task = Task(
+                id=str(uuid.uuid4()),
+                raw_description="Boosted, queued",
+                done_definition="Done",
+                status="queued",
+                priority="low",
+                priority_boosted=True,
+                queued_at=datetime.utcnow(),
+            )
+            session.add(boosted_task)
+            session.commit()
+
+            new_task = Task(
+                id=str(uuid.uuid4()),
+                raw_description="New high-priority, non-boosted task",
+                done_definition="Done",
+                status="queued",
+                priority="high",
+                priority_boosted=False,
+                queued_at=datetime.utcnow(),
+            )
+
+            position = queue_service._calculate_queue_position(session, new_task)
+            assert position == 2, (
+                f"Expected position 2 (boosted low-priority task still ahead "
+                f"of a non-boosted high-priority one), got {position}"
+            )
+        finally:
+            session.close()
+
+
 class TestBoostTaskPriority:
     """Tests for boost_task_priority method."""
 

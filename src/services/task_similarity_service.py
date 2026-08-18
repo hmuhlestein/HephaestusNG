@@ -68,7 +68,7 @@ class TaskSimilarityService:
                     logger.info(f"Checking for duplicates within phase: {phase_id}")
                 else:
                     # If no phase_id, only check tasks without a phase
-                    query = query.filter(Task.phase_id is None)
+                    query = query.filter(Task.phase_id.is_(None))
                     logger.info("Checking for duplicates among tasks without phase")
 
                 existing_tasks = query.all()

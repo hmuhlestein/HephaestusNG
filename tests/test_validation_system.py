@@ -159,6 +159,94 @@ class TestValidatorAgent:
         assert validator_id.startswith("task-validator-")
         session.add.assert_called()
 
+    @pytest.mark.asyncio
+    async def test_spawn_validator_agent_falls_back_to_tmp_when_no_branch_path(
+        self, mock_db_manager
+    ):
+        """Phase 3 Tier 1 item 7 (docs/AUTOPILOT_REFACTOR_PLAN.md):
+        get_agent_branch_path now returns None (not the main repo path)
+        when it can't resolve a real worktree. This caller's `or "/tmp"`
+        already existed to handle exactly that -- but the one other test
+        in this class mocks get_agent_branch_path to a truthy path, so it
+        never actually exercised this fallback. Confirm it engages
+        correctly instead of silently working_directory=None-ing or
+        crashing."""
+        session = mock_db_manager.get_session()
+
+        task = Mock()
+        task.id = "task123"
+        task.assigned_agent_id = "agent123"
+        # None, not a real phase_id: check_phase_sibling_active's mock-shape
+        # requirements are orthogonal to this test's target (the working_
+        # directory fallback) and unrelated to Phase 3 Tier 1 item 7 --
+        # a truthy phase_id here hits the same pre-existing, already-
+        # confirmed-unrelated TypeError the neighboring
+        # test_spawn_validator_agent also hits (see design_docs/
+        # phase3_tier1_findings.md's Verification section).
+        task.phase_id = None
+        task.validation_iteration = 1
+        task.raw_description = "Test"
+        task.enriched_description = "Test enhanced"
+        task.done_definition = "Done"
+        task.last_validation_feedback = None
+
+        # The fixture's `session = Mock()` never actually wires
+        # session.query(Task)...first() to return this `task` object --
+        # spawn_validator_agent's own `task = session.query(Task).filter_by(
+        # id=target_id).first()` would silently get a fresh, unconfigured
+        # Mock() instead (whose .phase_id is itself an auto-generated,
+        # truthy Mock -- the same reason the neighboring
+        # test_spawn_validator_agent hits the pre-existing sibling-check
+        # TypeError). Wire it explicitly so this test exercises the actual
+        # code path with the task object constructed above.
+        def _query_side_effect(model):
+            query = Mock()
+            if model is Task:
+                query.filter_by.return_value.first.return_value = task
+            else:
+                query.filter_by.return_value.first.return_value = None
+            return query
+
+        session.query.side_effect = _query_side_effect
+
+        phase = Mock()
+        phase.validation = {"criteria": []}
+
+        mock_worktree = Mock()
+        mock_worktree.get_workspace_changes.return_value = {
+            "files_created": [],
+            "files_modified": [],
+            "files_deleted": [],
+            "detailed_diff": "",
+        }
+        # The fallback under test: no resolvable branch path.
+        mock_worktree.get_agent_branch_path.return_value = None
+
+        mock_agent_manager = AsyncMock()
+
+        with (
+            patch(
+                "src.validation.validator_agent.get_agent_results",
+                return_value="Agent did X",
+            ),
+            patch(
+                "src.monitoring.prompt_loader.prompt_loader.format_task_validation_prompt",
+                return_value="Validation prompt",
+            ) as mock_format_prompt,
+        ):
+            await spawn_validator_agent(
+                validation_type="task",
+                target_id="task123",
+                workflow_id="wf-123",
+                commit_sha="abc123",
+                db_manager=mock_db_manager,
+                branch_manager=mock_worktree,
+                agent_manager=mock_agent_manager,
+                original_agent_id="agent-123",
+            )
+
+        assert mock_format_prompt.call_args.kwargs["working_directory"] == "/tmp"
+
     def test_send_feedback_to_agent(self):
         """Test sending feedback to agent."""
         with patch("subprocess.run") as mock_run:

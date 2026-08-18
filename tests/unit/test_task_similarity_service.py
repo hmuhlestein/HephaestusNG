@@ -455,3 +455,93 @@ class TestTaskSimilarityService:
         # Should limit to 10 related tasks
         assert len(result["related_tasks"]) == 10
         assert len(result["related_tasks_details"]) == 10
+
+
+class TestPhaselessDuplicateCheckUsesRealQuery:
+    """Regression test for the phase_id=None branch of check_for_duplicates.
+
+    This class's fixtures (unlike TestTaskSimilarityService's) exercise a
+    real SQLite session, not a fully-stubbed query-chain mock. That's
+    deliberate: the bug this guards against was `Task.phase_id is None`
+    (a Python identity check on a SQLAlchemy class attribute, which is
+    never None, so the expression is always the literal `False` -- SQLAlchemy
+    compiles filter(False) to a clause that matches zero rows, always). A
+    mocked `.filter()` that just returns itself regardless of its argument
+    cannot distinguish that from a correct `.is_(None)` predicate -- only a
+    real query against real rows can prove the fix actually filters
+    anything.
+    """
+
+    @pytest.fixture
+    def real_similarity_service(self, db_manager):
+        from src.memory.embedding_factory import EmbeddingProvider
+
+        with patch("src.services.task_similarity_service.get_config") as mock_config:
+            config = Mock()
+            config.database_path = ":memory:"
+            config.task_similarity_threshold = 0.7
+            config.task_related_threshold = 0.4
+            mock_config.return_value = config
+            embedding_service = Mock(spec=EmbeddingProvider)
+            embedding_service.calculate_cosine_similarity.return_value = 0.99
+            service = TaskSimilarityService(db_manager, embedding_service)
+            return service, embedding_service
+
+    def _insert_phaseless_task(self, db_manager, task_id, description, embedding):
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id=task_id,
+                    raw_description=description,
+                    done_definition="done",
+                    status="in_progress",
+                    phase_id=None,
+                    embedding=embedding,
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_finds_duplicate_among_phaseless_tasks(
+        self, db_manager, real_similarity_service
+    ):
+        """A pre-fix `Task.phase_id is None` filter matches nothing, ever --
+        even an exact-duplicate phase-less task would be invisible to this
+        check. Confirm it's actually found now."""
+        service, _ = real_similarity_service
+        self._insert_phaseless_task(
+            db_manager, "task-phaseless-1", "Implement user authentication", [0.1] * 3072
+        )
+
+        result = await service.check_for_duplicates(
+            "Implement user authentication", [0.1] * 3072, phase_id=None
+        )
+
+        assert result["is_duplicate"] is True
+        assert result["duplicate_of"] == "task-phaseless-1"
+
+    @pytest.mark.asyncio
+    async def test_ignores_phased_tasks_when_checking_phaseless(
+        self, db_manager, real_similarity_service
+    ):
+        """A task that DOES belong to a phase must never surface as a
+        duplicate for a phase-less check -- the existing phase_id-provided
+        branch already guarantees the reverse; this is the phase_id=None
+        branch's own half of the same guarantee."""
+        service, _ = real_similarity_service
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-phase-1",
+                    raw_description="Implement user authentication",
+                    done_definition="done",
+                    status="in_progress",
+                    phase_id="phase-abc",
+                    embedding=[0.1] * 3072,
+                )
+            )
+
+        result = await service.check_for_duplicates(
+            "Implement user authentication", [0.1] * 3072, phase_id=None
+        )
+
+        assert result["is_duplicate"] is False
