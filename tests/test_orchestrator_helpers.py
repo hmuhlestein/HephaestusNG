@@ -3040,12 +3040,14 @@ class TestIsDesignFullyComplete:
     @patch("src.autopilot.orchestrator.queue.get_agents")
     @patch("src.autopilot.orchestrator.queue.get_tasks")
     @patch("src.autopilot.orchestrator.queue.get_workflow_status")
-    def test_incomplete_has_active_tasks(self, mock_wf, mock_tasks, mock_agents):
+    @patch("src.core.status_derivation.derive_workflow_status")
+    def test_incomplete_has_active_tasks(self, mock_derive, mock_wf, mock_tasks, mock_agents):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.queue import is_design_fully_complete
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_wf.return_value = {"status": "active"}
+        mock_derive.return_value = "active"
         mock_tasks.side_effect = [
             [{"id": "t1"}],  # pending
             [],  # queued
@@ -3072,12 +3074,14 @@ class TestIsDesignFullyComplete:
     @patch("src.autopilot.orchestrator.queue.get_agents")
     @patch("src.autopilot.orchestrator.queue.get_tasks")
     @patch("src.autopilot.orchestrator.queue.get_workflow_status")
-    def test_incomplete_has_failed_tasks(self, mock_wf, mock_tasks, mock_agents):
+    @patch("src.core.status_derivation.derive_workflow_status")
+    def test_incomplete_has_failed_tasks(self, mock_derive, mock_wf, mock_tasks, mock_agents):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.queue import is_design_fully_complete
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_wf.return_value = {"status": "active"}
+        mock_derive.return_value = "active"
         mock_tasks.side_effect = [
             [],  # pending
             [],  # queued
@@ -3105,12 +3109,14 @@ class TestIsDesignFullyComplete:
     @patch("src.autopilot.orchestrator.queue.get_agents")
     @patch("src.autopilot.orchestrator.queue.get_tasks")
     @patch("src.autopilot.orchestrator.queue.get_workflow_status")
-    def test_incomplete_has_active_agents(self, mock_wf, mock_tasks, mock_agents):
+    @patch("src.core.status_derivation.derive_workflow_status")
+    def test_incomplete_has_active_agents(self, mock_derive, mock_wf, mock_tasks, mock_agents):
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.queue import is_design_fully_complete
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_wf.return_value = {"status": "active"}
+        mock_derive.return_value = "active"
         mock_tasks.side_effect = [
             [],
             [],

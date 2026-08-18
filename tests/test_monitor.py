@@ -2631,6 +2631,9 @@ class TestDetectConnectionErrors:
             name = model.__name__ if hasattr(model, "__name__") else str(model)
             if name == "Task":
                 m.filter_by.return_value.filter.return_value.first.return_value = task
+                # terminate_agent's own stray-task sweep: this task was
+                # already reset above, so nothing still points at the agent.
+                m.filter_by.return_value.filter.return_value.all.return_value = []
             elif name == "Phase":
                 m.filter_by.return_value.first.return_value = phase
             elif name == "Workflow":
@@ -3256,6 +3259,9 @@ class TestAutoRestartResetsTask:
             m = Mock()
             if model is TaskModel:
                 m.filter_by.return_value.filter.return_value.first.return_value = task
+                # terminate_agent's own stray-task sweep: this task was
+                # already reset above, so nothing still points at the agent.
+                m.filter_by.return_value.filter.return_value.all.return_value = []
             elif model is AgentModel:
                 m.filter_by.return_value.first.return_value = db_agent
             else:
