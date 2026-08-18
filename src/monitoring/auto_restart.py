@@ -6,9 +6,10 @@ mechanical-recovery cluster (cluster B) and the Guardian-dispatch cluster
 (cluster C) call this logic, so it gets its own home rather than living
 on either cluster or requiring a back-reference to MonitoringLoop.
 
-Bug note: this method sets status="terminated" and clears current_task_id
-but never sets terminated_at -- a violation of the agent-termination
-critical invariant (see AGENTS.md). Logged for Phase 3; DO NOT FIX here.
+The termination invariant this module used to violate (status="terminated"
+and current_task_id cleared, but terminated_at never set) is now handled by
+engine_client.terminate_agent, the shared primitive -- Phase 2 §4.2. Do not
+re-introduce a raw Agent-row write here.
 """
 
 import logging

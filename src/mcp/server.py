@@ -321,13 +321,6 @@ class ServerState:
             phase_manager=self.phase_manager,
         )
 
-        # Initialize RAG system
-        self.rag_system = RAGSystem(
-            vector_store=self.vector_store,
-            llm_provider=self.llm_provider,
-            embedding_provider=getattr(self, 'embedding_service', None),
-        )
-
         # Initialize result validator service
         self.result_validator_service = ResultValidatorService(
             db_manager=self.db_manager,
@@ -353,6 +346,18 @@ class ServerState:
                 logger.warning(f"Task deduplication disabled — embedding provider init failed: {e}")
         else:
             logger.info("Task deduplication disabled by configuration")
+
+        # Initialize RAG system. Constructed *after* the embedding provider
+        # above so it can share that one instance -- Phase 2 §4.7's goal (a).
+        # Built earlier, self.embedding_service was still None and RAGSystem
+        # silently fell back to loading a third copy of the same model.
+        # Still None when task dedup is off; the fallback covers that, since
+        # RAG must not be disabled by a dedup toggle.
+        self.rag_system = RAGSystem(
+            vector_store=self.vector_store,
+            llm_provider=self.llm_provider,
+            embedding_provider=self.embedding_service,
+        )
 
         # Initialize queue service
         self.queue_service = QueueService(
@@ -776,10 +781,13 @@ async def _resume_interrupted_workflows(
                         (task.completion_notes or "")
                         + "\n[auto-recovered: git work had already landed before the agent's completion call was lost]"
                     ).strip()
-                    # Invariant: all three fields together (see terminate_agent).
-                    agent.status = "terminated"
-                    agent.terminated_at = datetime.utcnow()
-                    agent.current_task_id = None
+                    # The task was just marked "done" above, so the
+                    # primitive's stray-task sweep correctly leaves it
+                    # alone -- it only reclaims assigned/in_progress/
+                    # pending rows.
+                    from src.autopilot.orchestrator.engine_client import terminate_agent
+
+                    terminate_agent(agent.id, session=session)
                     session.commit()
                     resumed += 1
                     continue
@@ -5063,6 +5071,8 @@ async def stop_workflow(workflow_id: str, request: Request):
         # Find and terminate all agents working on these tasks
         terminated_count = 0
         if task_ids:
+            from src.autopilot.orchestrator.engine_client import terminate_agent
+
             agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
             for agent in agents:
                 try:
@@ -5073,10 +5083,7 @@ async def stop_workflow(workflow_id: str, request: Request):
                     )
                 except Exception:
                     pass
-                # Invariant: all three fields together (see terminate_agent).
-                agent.status = "terminated"
-                agent.current_task_id = None
-                agent.terminated_at = datetime.utcnow()
+                terminate_agent(agent.id, session=session)
                 terminated_count += 1
 
             # Reset the tasks those agents were working on -- without this,
@@ -5184,6 +5191,8 @@ async def cancel_workflow(workflow_id: str, request: Request):
         task_ids = [t.id for t in tasks]
         terminated_count = 0
         if task_ids:
+            from src.autopilot.orchestrator.engine_client import terminate_agent
+
             agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
             for agent in agents:
                 try:
@@ -5194,10 +5203,7 @@ async def cancel_workflow(workflow_id: str, request: Request):
                     )
                 except Exception:
                     pass
-                # Invariant: all three fields together (see terminate_agent).
-                agent.status = "terminated"
-                agent.current_task_id = None
-                agent.terminated_at = datetime.utcnow()
+                terminate_agent(agent.id, session=session)
                 terminated_count += 1
 
         # Mark every non-terminal task failed too -- otherwise a task whose

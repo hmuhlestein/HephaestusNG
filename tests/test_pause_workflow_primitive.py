@@ -84,6 +84,37 @@ class TestPauseWorkflowPrimitive:
             feat = session.query(Feature).filter_by(id="feat-1").first()
             assert feat.status == "paused"
 
+    # "validated" is deliberately absent: FeatureStatus.VALIDATED exists in
+    # Python but the features table's CHECK constraint rejects it, so no
+    # feature row can ever hold it (see database.py's Feature constraint).
+    @pytest.mark.parametrize("terminal", ["completed", "failed", "skipped"])
+    def test_cascade_never_pauses_a_terminal_feature(self, orch_db_env, terminal):
+        """A terminal feature must survive a workflow pause/resume cycle.
+
+        derive_feature_status returns early on PAUSED -- it is the one
+        status it never re-derives -- so a wrongly-cascaded pause is
+        never repaired, and resume's mirror cascade sends it to "active",
+        silently turning finished work back into live-looking work.
+        """
+        from src.autopilot.orchestrator.engine_client import pause_workflow, resume_workflow
+        from src.core.database import Feature
+
+        _make_workflow(orch_db_env, "wf-1")
+        _make_feature(orch_db_env, "feat-done", "wf-1", status=terminal)
+        _make_feature(orch_db_env, "feat-live", "wf-1", status="active")
+
+        pause_workflow("wf-1", reason="user")
+
+        with orch_db_env.session_scope() as session:
+            assert session.query(Feature).filter_by(id="feat-done").first().status == terminal
+            assert session.query(Feature).filter_by(id="feat-live").first().status == "paused"
+
+        resume_workflow("wf-1", force=True)
+
+        with orch_db_env.session_scope() as session:
+            assert session.query(Feature).filter_by(id="feat-done").first().status == terminal
+            assert session.query(Feature).filter_by(id="feat-live").first().status == "active"
+
     def test_cascade_can_be_disabled(self, orch_db_env):
         from src.autopilot.orchestrator.engine_client import pause_workflow
         from src.core.database import Feature

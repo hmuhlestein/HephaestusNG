@@ -170,6 +170,8 @@ async def requeue_design(request: dict):
                         ]
 
                         if task_ids:
+                            from src.autopilot.orchestrator.engine_client import terminate_agent
+
                             agents = (
                                 db.query(Agent)
                                 .filter(
@@ -179,10 +181,7 @@ async def requeue_design(request: dict):
                                 .all()
                             )
                             for agent in agents:
-                                # Invariant: all three fields together (see terminate_agent).
-                                agent.status = "terminated"
-                                agent.current_task_id = None
-                                agent.terminated_at = datetime.utcnow()
+                                terminate_agent(agent.id, session=db)
 
                             # Reset the tasks those agents were working on --
                             # without this, a task left "assigned"/"in_
@@ -367,11 +366,10 @@ async def rerun_design(request: dict):
                     t.failure_reason = None
 
                 if stuck_agent_ids:
+                    from src.autopilot.orchestrator.engine_client import terminate_agent
+
                     for agent in db.query(Agent).filter(Agent.id.in_(stuck_agent_ids)).all():
-                        # Invariant: all three fields together (see terminate_agent).
-                        agent.status = "terminated"
-                        agent.current_task_id = None
-                        agent.terminated_at = datetime.utcnow()
+                        terminate_agent(agent.id, session=db)
 
                 from src.autopilot.orchestrator.engine_client import pause_workflow
                 for wf in db.query(Workflow).filter(Workflow.id.in_(design_wf_ids), Workflow.status.in_(["active", "running"])).all():

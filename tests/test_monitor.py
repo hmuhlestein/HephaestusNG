@@ -853,6 +853,13 @@ class TestDetectCreditExhausted:
                 m.filter_by.return_value.first.return_value = task
             elif model.__name__ == "Workflow":
                 m.filter_by.return_value.first.return_value = workflow
+            elif model.__name__ == "Feature":
+                # pause_workflow cascades to any Feature linked to the
+                # workflow; these tests link none. Must be configured
+                # explicitly -- an unconfigured Mock's .all() is not
+                # iterable, and the primitive no longer swallows that.
+                m.filter.return_value.all.return_value = []
+                m.filter_by.return_value.all.return_value = []
             return m
 
         session.query.side_effect = query_side_effect
@@ -2305,6 +2312,13 @@ class TestSessionLimitPause:
                 m.filter_by.return_value.first.return_value = phase
             elif name == "Workflow":
                 m.filter_by.return_value.first.return_value = workflow
+            elif name == "Feature":
+                # pause_workflow cascades to any Feature linked to the
+                # workflow; these tests link none. Must be configured
+                # explicitly -- an unconfigured Mock's .all() is not
+                # iterable, and the primitive no longer swallows that.
+                m.filter.return_value.all.return_value = []
+                m.filter_by.return_value.all.return_value = []
             return m
 
         session.query.side_effect = query_side_effect

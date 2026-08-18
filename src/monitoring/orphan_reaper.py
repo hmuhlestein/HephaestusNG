@@ -107,9 +107,16 @@ class OrphanSessionReaper:
                             # standing invariant violation: this path set
                             # status="terminated" without ever setting
                             # terminated_at.
+                            # utcnow, not now: last_activity is stamped with
+                            # datetime.utcnow() at every write site, so a
+                            # datetime.now() cutoff compares a local-time
+                            # value against a UTC one. West of UTC that
+                            # difference is negative, so this guard matched
+                            # unconditionally and the reaper never reaped
+                            # here. See CLAUDE.md's utc-only invariant.
                             if (
                                 agent.last_activity
-                                and (datetime.now() - agent.last_activity).total_seconds()
+                                and (datetime.utcnow() - agent.last_activity).total_seconds()
                                 < 30
                             ):
                                 logger.debug(

@@ -271,39 +271,24 @@ class Terminator:
                 except Exception as e:
                     logger.debug(f"[COST-COLLECT] Failed on terminate for agent {agent_id[:8]}: {e}")
 
-            # Update agent status
-            agent.status = "terminated"
-            agent.current_task_id = None  # Clear stale reference
-            agent.terminated_at = datetime.utcnow()
+            # The DB half of termination -- the three-field invariant and
+            # the release of any Task still pointing at this agent -- is
+            # owned by engine_client.terminate_agent, so there is exactly
+            # one implementation of it (Phase 2 §4.2). This method remains
+            # the kill_tmux=True half: WIP commit, transcript capture,
+            # SIGINT/SIGKILL, and the cost collection above, which must run
+            # before the primitive clears current_task_id.
+            #
+            # The task release matters even though well-behaved callers
+            # already reset their own task first: it only fires for a
+            # caller that forgot. Observed live, a task sat "in_progress"
+            # pointing at an already-terminated agent indefinitely --
+            # current_task_id was correctly cleared on the agent side, so
+            # that half of the invariant looked satisfied, but nothing ever
+            # reset the task and no dispatch path picked it up again.
+            from src.autopilot.orchestrator.engine_client import terminate_agent
 
-            # Safety net: release any task still pointing at this
-            # now-terminated agent. Every well-behaved caller already
-            # resets its own task's status/assigned_agent_id before
-            # calling terminate_agent (e.g. the session-limit and
-            # connection-error fallback paths in monitor.py) -- by the
-            # time we get here, assigned_agent_id no longer points at
-            # this agent, so this is a no-op for them. It only fires for
-            # a caller that forgot, closing the gap at the shared
-            # primitive instead of requiring every one of terminate_agent's
-            # ~15 call sites to remember it. Observed live: a task sat
-            # "in_progress" pointing at an already-terminated agent
-            # indefinitely -- current_task_id was correctly cleared on the
-            # agent side (satisfying that half of the termination
-            # invariant) but nothing ever reset the task, so no dispatch
-            # path ever picked it up again.
-            stray_tasks = (
-                session.query(Task)
-                .filter_by(assigned_agent_id=agent_id)
-                .filter(Task.status.in_(["assigned", "in_progress", "pending"]))
-                .all()
-            )
-            for stray in stray_tasks:
-                logger.warning(
-                    f"[TERMINATE] Task {stray.id[:8]} still pointed at "
-                    f"terminated agent {agent_id[:8]} -- resetting to pending"
-                )
-                stray.status = "pending"
-                stray.assigned_agent_id = None
+            terminate_agent(agent_id, session=session)
 
             # Log termination with captured output
             log_entry = AgentLog(

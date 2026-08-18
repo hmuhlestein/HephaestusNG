@@ -259,14 +259,16 @@ async def pause_feature(feature_id: str):
             )
             .all()
         )
+        from src.autopilot.orchestrator.engine_client import terminate_agent
+
         for task in active_tasks:
             if task.assigned_agent_id:
                 agent = db.query(Agent).filter_by(id=task.assigned_agent_id).first()
                 if agent and agent.status in ("working", "starting", "idle"):
-                    agent.status = "terminated"
-                    agent.current_task_id = None
-                    agent.terminated_at = datetime.utcnow()
-                    # Invariant: all three fields together (see terminate_agent).
+                    # The primitive also clears this task's stale
+                    # assigned_agent_id, which the raw write here left
+                    # pointing at the just-terminated agent.
+                    terminate_agent(agent.id, session=db)
             task.status = "blocked"
 
         # cascade_to_feature=False: this endpoint already owns the write
