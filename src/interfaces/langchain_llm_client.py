@@ -361,9 +361,15 @@ class LangChainLLMClient:
             metadata = getattr(response, "response_metadata", {}) or {}
             usage = metadata.get("token_usage") or {}
 
-            # OpenRouter returns cost in usage.cost when usage.include=true
-            cost_data = usage.get("cost") or {}
-            cost_usd = cost_data.get("total", 0)
+            # OpenRouter returns cost in usage.cost when usage.include=true --
+            # a plain float (the total cost in USD), not a nested object.
+            # Confirmed live 2026-08-19: every real call has been hitting
+            # 'float' object has no attribute 'get' here since this method's
+            # first commit (a07e6f5) assumed usage["cost"] == {"total": ...}.
+            # Cost recording via this path has never actually written an
+            # entry for a real OpenRouter response -- the exception was
+            # always caught and only logged as a WARNING.
+            cost_usd = usage.get("cost") or 0
 
             if cost_usd > 0:
                 from src.core.cost_derivation import record_cost
