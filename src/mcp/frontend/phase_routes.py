@@ -89,7 +89,7 @@ async def post_phase_prompt_preview(phase_id: str, body: Dict[str, Any]):
         from src.core.database import DatabaseManager, Phase
         from src.prompts.assembler import PromptAssembler
 
-        db_manager = DatabaseManager("hephaestus.db")
+        db_manager = DatabaseManager(None)
         with db_manager.get_session() as session:
             phase = session.query(Phase).filter_by(id=phase_id).first()
             if not phase:

@@ -477,7 +477,7 @@ def assemble_phase_prompt(
     from src.core.database import DatabaseManager, Phase
 
     if db_manager is None:
-        db_manager = DatabaseManager("hephaestus.db")
+        db_manager = DatabaseManager(None)
     with db_manager.get_session() as session:
         phase = session.query(Phase).filter_by(id=phase_id).first()
         if not phase:
@@ -534,7 +534,7 @@ def assemble_task_prompt(
     from src.core.database import DatabaseManager, Phase, Task, TaskPromptOverride
 
     if db_manager is None:
-        db_manager = DatabaseManager("hephaestus.db")
+        db_manager = DatabaseManager(None)
     with db_manager.get_session() as session:
         task = session.query(Task).filter_by(id=task_id).first()
         if not task:

@@ -77,10 +77,25 @@ class FakeJSONRequest:
 
 @pytest.fixture
 def fake_state(db_manager):
+    """Install a fake app state, then RESTORE the previous one.
+
+    Tearing down to None instead of the prior value leaks: _app_state is a
+    module-level global in src/core/app_context.py, so every later test in
+    the session that calls get_app_state() raises "App state not
+    initialized". Measured before this fix: running this file immediately
+    before tests/test_update_task_status_ordering.py turned 11 passing
+    tests into 5 failures, and the same leak accounted for a large share of
+    the suite's order-dependent failures.
+    """
+    import src.core.app_context as app_context
+
+    previous = app_context._app_state
     state = FakeServerState(db_manager)
     set_app_state(state)
-    yield state
-    set_app_state(None)
+    try:
+        yield state
+    finally:
+        app_context._app_state = previous
 
 
 def _seed_project_workflow(db_manager, project_id="proj-a", project_name="Project A", workflow_id="wf-1"):

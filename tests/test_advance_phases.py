@@ -1197,7 +1197,12 @@ class TestCaseInProgressComplete:
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
-            execution.task_creation_claimed_at = datetime.now() - timedelta(minutes=5)
+            # utcnow, not now: the stale-claim sweep compares this against
+            # a datetime.utcnow()-derived cutoff. East of UTC a local-time
+            # stamp is still 'in the future' relative to that cutoff, so the
+            # claim never reads as stale and is never cleared (verified:
+            # passes at UTC-6, fails at UTC+9).
+            execution.task_creation_claimed_at = datetime.utcnow() - timedelta(minutes=5)
 
         with db_manager.session_scope() as session:
             phase_statuses = _get_phase_statuses(session, "wf-1")
@@ -1563,7 +1568,7 @@ class TestReleaseStaleTaskCreationClaims:
             # got flipped, because that flip is itself part of releasing
             # the claim, which never happened).
             execution.status = "pending"
-            execution.task_creation_claimed_at = datetime.now() - timedelta(
+            execution.task_creation_claimed_at = datetime.utcnow() - timedelta(
                 seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
             )
 
@@ -1587,7 +1592,7 @@ class TestReleaseStaleTaskCreationClaims:
         with db_manager.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             execution.status = "pending"
-            execution.task_creation_claimed_at = datetime.now() - timedelta(
+            execution.task_creation_claimed_at = datetime.utcnow() - timedelta(
                 seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
             )
 
@@ -1642,7 +1647,7 @@ class TestReleaseStaleTaskCreationClaims:
             # sample_workflow's fixture defaults phase-1 to "in_progress" --
             # the actual live precondition is "pending".
             execution.status = "pending"
-            execution.task_creation_claimed_at = datetime.now() - timedelta(
+            execution.task_creation_claimed_at = datetime.utcnow() - timedelta(
                 seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
             )
         mock_fire.return_value = True

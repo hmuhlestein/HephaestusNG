@@ -475,6 +475,131 @@ Two hazards found while mapping the file, both recorded there:
   `update_task_status` (423). Each is larger than three of the four modules the
   `api.py` split produced; moving them verbatim reproduces that outcome.
 
+### 17. Worktree state and DB records drift in both directions, and cleanup only sees one side
+
+Found from live evidence, not from reading the plan: seven orphaned worktrees
+sat under `.worktrees/` pinned at `5f18e46`, weeks behind main. Removing them
+required checking three things first (no uncommitted work, zero commits ahead,
+no live agent) -- all clean, so they were removed along with their seven
+fully-merged `agent-*` branches. What they revealed matters more than the
+cleanup.
+
+**Direction 1 -- git artifacts with no DB record.** All seven had **no
+`agent_worktrees` row at all**. `create_agent_worktree` does the git work
+(`git worktree add` + branch) and *then* writes the `AgentBranch` record and
+commits. Anything that throws in that window -- or a caller that rolls back --
+leaves the worktree and branch on disk with no database trace.
+
+That is unrecoverable by design, because **every cleanup path is DB-driven**.
+`cleanup_all_stale_branches` selects `AgentBranch` rows
+(`merge_status in ("active", None)`) and reconciles *branches*; it has an
+`untracked_branches` path for branches with no row, but nothing enumerates
+worktree **directories** with no row. Grepping for a directory-level sweep
+(`iterdir`, `glob("wt_*")`, `git worktree prune`) over `worktree_manager.py`
+and `src/monitoring/` returns nothing. A worktree that leaks this way is
+invisible to every reclaimer the system has, forever -- which is precisely why
+seven accumulated.
+
+**Direction 2 -- DB records with no git artifact.** 56 rows carry
+`merge_status='active'` while their `worktree_path` does not exist on disk
+(all under a different project, `/Users/hmuhlestein/code/applitnator`, with
+zero overlap with the seven removed here -- they were already stale). Against
+120 `cleaned` rows, that is a third of the table lying about live state.
+
+**Correction to an earlier draft of this finding.** I first wrote that those
+56 rows make their branches "permanently exempt from cleanup". That is wrong,
+and I caught it only by re-reading the sweep before building a fix on top of
+it. `cleanup_all_stale_branches` selects `merge_status in ("active", None)` as
+merge-and-delete *candidates* and excludes only branches currently checked out
+at a live worktree (`active_branch_names`, built from a `git worktree prune`
+plus a porcelain listing). A row whose directory is gone is therefore a
+candidate, not an exemption -- the opposite of what I claimed.
+
+The real reason all 56 persist is different and more structural: **the table is
+global, the sweep is per-repo.** `cleanup_all_stale_branches` runs against
+`self.main_repo`, while `agent_worktrees` is shared across every project this
+installation has ever run. Measured: 0 of the 56 branches exist in this
+repository, and their paths are not under it. No sweep run from this repo will
+ever reconcile them, and no sweep run from `applitnator` reconciles this
+repo's. Each project's sweep silently ignores every other project's rows.
+
+**What is consistent:** zero `agent_worktrees` rows lack a matching `agents`
+row, so the agent-to-worktree FK relationship is sound. The drift is entirely
+between the database and the filesystem, in both directions, with no
+reconciler for either.
+
+Not fixed here. The right shape is a reconciliation sweep that walks both
+sides -- directories with no row, and rows whose path is gone -- rather than
+another DB-only pass. That is a design decision about what to do with each
+class (reclaim? mark abandoned? require confirmation?), and it is adjacent to
+§4.4's consolidation and finding 13's correction about which removal helpers
+are actually live. Worth scoping before Phase 4 touches this code.
+
+### 18. Phase 3 Tier 2 freshness check (13 items)
+
+Same service the Tier 1 freshness check provided: what is already closed, so
+the next person starts from the real state rather than the plan's snapshot.
+Verified against code, not commit messages.
+
+**Already fixed -- no work needed (7):**
+
+- **10** `get_commit_diff_endpoint`'s untimed subprocesses -- all three
+  `subprocess.run` calls in `tickets_api.py` now carry `timeout=`.
+- **12** embedding/vector-store dimension mismatch -- `store_factory.py:138`
+  raises a clear `ValueError` naming both dims and the two env vars. This is
+  the startup assertion §4.7 said still didn't exist; it does now.
+- **16** `_check_circular_blocking` one-hop only -- now a BFS over the
+  `blocked_by` graph with a `visited` set, so A->B->C->A is caught.
+- **18** `spawn_validator_agent` discarding two computed values --
+  `workspace_changes` and `agent_claims` are now passed through as kwargs.
+- **20** `_retry_failed_tasks`'s orphan-retry-cap exemption as dead code --
+  live: `features.py:404` and `phase_transitions.py:1263` both write
+  `"Orphaned: ..."` reasons that the `is_orphan` check matches. **But see the
+  new gap below.**
+- **21** `_auto_restart_agent`'s raw `get_session()` -- uses `session_scope()`
+  at both sites.
+- **14** the hardcoded `DatabaseManager("hephaestus.db")` -- fixed in this
+  pass, along with two more sites the plan never found (finding 15).
+
+**Still live (4):**
+
+- **11** `stop_workflow`'s un-offloaded `subprocess.run`. The plan predicted
+  this "becomes moot once §4.2 unifies" the termination path. It did not --
+  §4.2 unified the *DB* half; the tmux-kill subprocess was never part of it.
+  `frontend/_shared.py:2145` still calls it inline while `:2242` correctly
+  wraps the identical call in `run_in_executor`.
+- **13** blocking calls in async handlers -- 3 of 18 fixed here (finding 11);
+  15 remain, sized as their own item.
+- **17** rejected/timed-out ticket approvals still hard-delete: `db.delete(ticket)`
+  plus `.delete()` on `TicketHistory`/`TicketComment`/`TicketCommit`
+  (`ticket_service.py:448-462`). No soft-delete/status path added.
+- **19** `_start_next_phase`'s terminal-vs-non-terminal conflation -- still
+  returns `Optional[Phase]` (`phase_manager.py:1414`), so "no next phase",
+  "workflow complete", and "error" remain indistinguishable to callers.
+
+**Partially fixed, and the remaining half is the security-relevant one (1):**
+
+- **15** `validate_file_path`. The traversal check was genuinely improved: it
+  now tests `".." in raw.parts` (path segments, not a raw-string substring, so
+  it no longer false-positives on `notes..final.md`), evaluates after
+  `resolve()`, and gained an optional `allowed_root` containment check. But the
+  gap the item actually names -- an **absolute** path needing no `..` at all,
+  e.g. `/etc/passwd` -- is only closed when a caller passes `allowed_root`, and
+  **no caller does**: all three sites (`workflow_result_service.py:48`, `:69`,
+  `result_service.py:46`) omit it. The function's own docstring is candid that
+  this is deliberate (no call site has a correct root available yet). So the
+  mechanism exists and is unused; the property is not enforced anywhere.
+
+**New gap found while checking item 20 -- string-matched orphan detection is
+case-sensitive.** `is_orphan` is `"Orphaned" in (task.failure_reason or "")`
+(`phase_transitions.py:224`). Two writers match it, but
+`mechanical_recovery.py:1636` writes `"Agent orphaned - tmux session not
+found"` -- lowercase -- so a task orphaned by *that* path is not exempted from
+the retry cap, while one orphaned by the other two paths is. Same
+hand-grown-string-matching class §4.9 and §4.10 are about, in a third place.
+Not fixed here: whether that path should be cap-exempt is a behavioural
+question, not a typo.
+
 ## OPEN — deliberately not fixed
 
 ### 1. Should the state primitives raise instead of returning `False`?

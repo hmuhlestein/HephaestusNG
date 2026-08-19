@@ -331,7 +331,12 @@ class TestOrphanSessionReaper:
         mock_agent.current_task_id = "task-456"
         # Outside the 30s "recently active" grace window, or the
         # termination path below is skipped.
-        mock_agent.last_activity = datetime.now() - timedelta(seconds=100)
+        # utcnow: OrphanSessionReaper compares last_activity against its own
+        # datetime.utcnow() clock. A local-time value is skewed by the host's
+        # UTC offset -- east of UTC the delta goes negative, the 30s grace
+        # window matches, and the agent is never reaped (verified: passes at
+        # UTC-6, fails at UTC+9).
+        mock_agent.last_activity = datetime.utcnow() - timedelta(seconds=100)
 
         mock_task = MagicMock()
         mock_task.workflow_id = "wf-old"
@@ -434,7 +439,9 @@ class TestActiveAgentStatusFilter:
                 current_task_id="task-1",
                 # Outside the 30s "recently active" grace window, or the
                 # termination path is skipped.
-                last_activity=datetime.now() - timedelta(seconds=100),
+                # utcnow, not now -- see the note above; production compares
+                # this against datetime.utcnow().
+                last_activity=datetime.utcnow() - timedelta(seconds=100),
             )
         )
         session.commit()
