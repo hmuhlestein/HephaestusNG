@@ -1267,6 +1267,27 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
         cycle_start = execution.started_at if execution else None
         cycle_filter = (Task.created_at >= cycle_start,) if cycle_start else ()
 
+        # A manual-only phase (git_commit_push) under review mode rejects
+        # dispatch with PermissionError every cycle -- create_agent_for_
+        # task_direct converts that into an ordinary "dispatch failed"
+        # None return, so the task never gets an agent and just sits
+        # "pending" like any other undispatched task. Without this check,
+        # the orphan-staleness sweep below has no way to tell that apart
+        # from a genuinely abandoned task: it marks it failed with the
+        # generic "Orphaned: never dispatched to an agent" reason after 1
+        # minute -- and only THEN, once failed_count > 0 lets a later pass
+        # reach _maybe_retry_failed_tasks's own manual-only check, does the
+        # workflow actually pause for review. The pause happens either
+        # way, but only as an indirect side effect of a misleading failure
+        # the operator sees first. Observed live: task 2ffbcab0 sat pending
+        # 36 minutes, then failed as "orphaned", before the workflow paused
+        # (paused_by="review") on the very next sweep tick. Checking this
+        # here, before the generic orphan detection, gives the correct
+        # pause -- and its correct reason -- immediately instead.
+        if phase.name in MANUAL_ONLY_PHASES and _manual_handoff_required(workflow_id):
+            _pause_for_manual_handoff(db, workflow_id, phase.name, logger)
+            continue
+
         orphan_cutoff = datetime.utcnow() - timedelta(minutes=1)
         stale_pending_candidates = (
             db.query(Task)

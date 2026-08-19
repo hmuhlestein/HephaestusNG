@@ -3673,3 +3673,96 @@ class TestMaybeResolveArbitration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestManualHandoffPausesBeforeOrphanSweep:
+    """Regression test: a manual-only phase (git_commit_push) under review
+    mode must pause the workflow immediately, not after the generic
+    orphan-staleness sweep mislabels its undispatched task as failed.
+
+    Found live 2026-08-19 investigating task 2ffbcab0-b07e-4aa7-8515-
+    b06d857bf48a: create_agent_for_task_direct converts git_commit_push's
+    intentional PermissionError (review mode blocks autonomous commit/
+    push) into an ordinary "dispatch failed" None return, so the task just
+    sits "pending" like any other undispatched task -- indistinguishable
+    from a genuinely abandoned one to the orphan-staleness sweep a few
+    lines below. That sweep marked it failed with the generic "Orphaned:
+    never dispatched to an agent" reason after its 1-minute cutoff, and
+    only THEN -- once failed_count > 0 let a later sweep pass reach
+    _maybe_retry_failed_tasks's own manual-only check -- did the workflow
+    actually pause for review. The pause happened either way, but the
+    operator saw a misleading "orphaned" failure first, and it took an
+    extra sweep cycle to happen. The fix checks MANUAL_ONLY_PHASES +
+    _manual_handoff_required before the orphan-staleness block, not after
+    it, in _case_in_progress_complete.
+    """
+
+    def _seed_git_commit_push_phase(self, db_manager, *, with_stale_pending_task):
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(id="wf-gcp", name="w", status="active", phases_folder_path="/tmp")
+            )
+            session.add(
+                Phase(
+                    id="phase-gcp", workflow_id="wf-gcp", name="git_commit_push", order=1,
+                    description="d", done_definitions=["done"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-gcp", phase_id="phase-gcp", workflow_execution_id="wf-gcp",
+                    status="in_progress", started_at=datetime.utcnow() - timedelta(minutes=10),
+                )
+            )
+            if with_stale_pending_task:
+                session.add(
+                    Task(
+                        id="task-gcp-1", workflow_id="wf-gcp", phase_id="phase-gcp",
+                        raw_description="r", done_definition="d", status="pending",
+                        created_at=datetime.utcnow() - timedelta(minutes=5),
+                    )
+                )
+
+    @patch("src.autopilot.orchestrator.phase_transitions._manual_handoff_required", return_value=True)
+    def test_pauses_immediately_with_no_task_yet(self, mock_required, db_manager):
+        """The phase is in_progress but hasn't even created a task yet --
+        the pause must not wait for one to exist and go stale first."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
+
+        self._seed_git_commit_push_phase(db_manager, with_stale_pending_task=False)
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-gcp")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            _case_in_progress_complete(session, "wf-gcp", in_progress, MagicMock())
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-gcp").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "review"
+
+    @patch("src.autopilot.orchestrator.phase_transitions._manual_handoff_required", return_value=True)
+    def test_a_stale_pending_task_is_not_mislabeled_orphaned(self, mock_required, db_manager):
+        """The exact live bug: a task already sitting stale-pending in this
+        phase must be left alone -- paused for review, not marked failed
+        with the generic, misleading orphan reason."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
+
+        self._seed_git_commit_push_phase(db_manager, with_stale_pending_task=True)
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-gcp")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            _case_in_progress_complete(session, "wf-gcp", in_progress, MagicMock())
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-gcp").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "review"
+
+            task = session.query(Task).filter_by(id="task-gcp-1").first()
+            assert task.status == "pending", (
+                "the task must be left untouched for the human to act on, "
+                "not failed out from under them with a misleading reason"
+            )
+            assert task.failure_reason is None
