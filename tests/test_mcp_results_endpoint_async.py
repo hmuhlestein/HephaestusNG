@@ -91,11 +91,15 @@ class TestReportResultsEndpointAsync:
         """Test result reporting with missing file."""
         from src.services.result_service import ResultService
 
+        # Under the system temp dir -- a legitimate location per
+        # validate_file_path's default allowed roots -- so this exercises
+        # the "file doesn't exist" path, not the containment check.
+        missing_path = os.path.join(tempfile.gettempdir(), "nonexistent-result-file.md")
         with pytest.raises(FileNotFoundError, match="Markdown file not found"):
             ResultService.create_result(
                 agent_id="test-agent",
                 task_id="test-task",
-                markdown_file_path="/nonexistent/file.md",
+                markdown_file_path=missing_path,
                 result_type="implementation",
                 summary="Test",
             )

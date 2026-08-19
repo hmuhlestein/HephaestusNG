@@ -1,5 +1,7 @@
 """Tests for workflow_result_service.py — static methods."""
 
+import os
+import tempfile
 from unittest.mock import Mock, patch
 
 import pytest
@@ -9,11 +11,15 @@ class TestSubmitResult:
     def test_submit_rejects_missing_file(self):
         from src.services.workflow_result_service import WorkflowResultService
 
+        # Under the system temp dir -- a legitimate location per
+        # validate_file_path's default allowed roots -- so this exercises
+        # the "file doesn't exist" path, not the containment check.
+        missing_path = os.path.join(tempfile.gettempdir(), "nonexistent-result-file.md")
         with pytest.raises(FileNotFoundError):
             WorkflowResultService.submit_result(
                 agent_id="a1",
                 workflow_id="wf1",
-                markdown_file_path="/nonexistent/file.md",
+                markdown_file_path=missing_path,
             )
 
     def test_submit_validates_path(self):

@@ -1,37 +1,64 @@
 """Validation helpers for result submission."""
 
 import os
+import tempfile
 from pathlib import Path
 
 
-def validate_file_path(file_path: str) -> None:
+def validate_file_path(file_path: str, allowed_root: "str | Path | None" = None) -> None:
     """
     Validate file path to prevent directory traversal attacks.
 
     Args:
         file_path: Path to validate
+        allowed_root: When given, the resolved path must stay within this
+            directory (resolve() + is_relative_to(), matching
+            cost_collection_service.py's session-file containment check).
+            Omitted by every current caller: neither result-submission call
+            site has a workflow/worktree root available at the point it
+            validates the path, and no single global root (e.g. the
+            server's own cwd) is correct for every legitimate result-file
+            location -- worktrees and system temp directories both need to
+            keep working. A caller that later gains a real root to check
+            against should pass it; until then this stays the same
+            traversal-substring check it always was, just phrased against
+            path segments instead of the raw string, and evaluated after
+            resolve() so a symlink can't hide a traversal.
 
     Raises:
-        ValueError: If path is invalid or contains traversal attempts
+        ValueError: If path is invalid, contains traversal attempts, or
+            (with allowed_root given) resolves outside that root.
     """
-    # Convert to Path object for safe handling
-    path = Path(file_path).resolve()
+    raw = Path(file_path)
+    resolved = raw.resolve()
 
-    # Check for path traversal attempts
-    if ".." in str(file_path):
+    # ".." as a path segment (Path.parts) in the raw, unresolved input, not
+    # a substring of the raw string: the original substring check
+    # both under- and over-matched -- it would false-positive on a
+    # filename that merely contains ".." as text (e.g. "notes..final.md"),
+    # while still missing the real gap this item exists to close: an
+    # absolute path needing no ".." at all to point somewhere unsafe
+    # (e.g. "/etc/passwd"), which resolve() + allowed_root below catches
+    # when a caller has a real root to check against.
+    if ".." in raw.parts:
         raise ValueError(
             f"Invalid file path - directory traversal detected: {file_path}"
         )
 
-    # Ensure path is absolute and normalized
-    if not path.is_absolute():
-        # Allow relative paths but validate them
-        path = Path.cwd() / path
+    roots = (
+        [Path(allowed_root).resolve()]
+        if allowed_root is not None
+        else _default_allowed_roots()
+    )
+    if roots and not any(_within(resolved, r) for r in roots):
+        raise ValueError(
+            f"Invalid file path - outside allowed directories: {file_path}"
+        )
 
     # Additional safety check
     try:
         # This will raise if path doesn't exist or is invalid
-        str(path)
+        str(resolved)
     except Exception as e:
         raise ValueError(f"Invalid file path: {file_path}") from e
 
@@ -101,3 +128,62 @@ def validate_task_ownership(db, task_id: str, agent_id: str) -> None:
             f"Task {task_id} is not assigned to agent {agent_id}. "
             f"Assigned to: {task.assigned_agent_id}"
         )
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        return path.is_relative_to(root)
+    except (OSError, ValueError):
+        return False
+
+
+def _default_allowed_roots() -> "list[Path]":
+    """Where a result file may legitimately live when no caller supplies a root.
+
+    Banning absolute paths outright is not an option: the server resolves and
+    opens this path in its OWN process, while the agent that produced it runs
+    in a worktree, so a relative path would resolve against the wrong
+    directory. Absolute IS the contract. Containment is what actually closes
+    the gap -- "/etc/passwd" needs no ".." to escape, so the segment check
+    above never sees it.
+
+    Roots are the two locations the previous docstring named as needing to
+    keep working -- the repo and its worktrees -- plus the system temp dir,
+    which is where every current caller's files actually are. Returning an
+    empty list disables the check rather than failing closed: if config cannot
+    be read at all we are in a degraded environment, and refusing every result
+    submission is a worse failure than the one being guarded against.
+    """
+    roots: "list[Path]" = []
+    config_read = False
+    try:
+        from src.core.simple_config import get_config
+
+        config = get_config()
+        config_read = True
+        for attr in ("main_repo_path", "project_root", "worktree_base_path"):
+            value = getattr(config, attr, None)
+            if value:
+                try:
+                    roots.append(Path(value).resolve())
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
+    if not config_read:
+        # Degraded environment: without config we cannot know the repo or
+        # worktree base, and rejecting every result written there would be a
+        # worse failure than the traversal this guards. Fall back to cwd so
+        # legitimate in-repo paths keep working.
+        try:
+            roots.append(Path.cwd().resolve())
+        except OSError:
+            pass
+
+    for extra in (tempfile.gettempdir(), "/private/var/folders"):
+        try:
+            roots.append(Path(extra).resolve())
+        except OSError:
+            pass
+    return roots
