@@ -418,11 +418,11 @@ Phase 2 (deduplicate) ── status verified against shipped code 2026-08-18
    │       sweep-vs-inline design choice resolved via that flag rather
    │       than defaulted; fire_spec_gate_if_ready migrated to it;
    │       GOTO-reset consolidated as reset_stale_executions_on_goto.
-   │  4.2 PARTIAL (025d1e7): primitive built with reset-before-kill
-   │       ordering, but only ~4 call sites route through it — 11 raw
-   │       sites still hand-roll the three fields. Until those migrate,
-   │       this is the "8th independent fix" the item warned against,
-   │       not a structural guarantee. REMAINING WORK.
+   │  4.2 DONE (025d1e7 + 2026-08-18 migration): primitive built with
+   │       reset-before-kill ordering; all twelve raw call sites now
+   │       route through it (`agent.status = "terminated"` written in
+   │       exactly one place, `engine_client._do_terminate`), guarded by
+   │       tests/test_termination_invariant_single_writer.py's AST sweep.
    │  4.3 DONE (ea42a5e + 697b10a) dispatch pipelines + the non-claim
    │       duplicate-dispatch guard family (the monitor.py cooldown was
    │       found already silently dropped by 7619936; manager.py's
