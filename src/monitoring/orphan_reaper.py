@@ -82,7 +82,7 @@ class OrphanSessionReaper:
                 active_workflow_ids = {
                     wf.id
                     for wf in session.query(Workflow)
-                    .filter(Workflow.status.in_(["active", "running"]))
+                    .filter(Workflow.status == "active")
                     .all()
                 }
 

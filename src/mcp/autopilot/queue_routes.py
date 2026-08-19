@@ -153,7 +153,7 @@ async def requeue_design(request: dict):
             # killed mid-review by another design's queue action.
             wf_query = db.query(Workflow).filter(
                 Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
-                Workflow.status.in_(["active", "running"]),
+                Workflow.status == "active",
             )
             if req_project_id:
                 wf_query = wf_query.filter(Workflow.project_id == req_project_id)
@@ -387,7 +387,7 @@ async def rerun_design(request: dict):
                         terminate_agent(agent.id, session=db)
 
                 from src.autopilot.orchestrator.engine_client import pause_workflow
-                for wf in db.query(Workflow).filter(Workflow.id.in_(design_wf_ids), Workflow.status.in_(["active", "running"])).all():
+                for wf in db.query(Workflow).filter(Workflow.id.in_(design_wf_ids), Workflow.status == "active").all():
                     # These rows are deleted moments later (Step 2b below),
                     # so this pause is short-lived -- migrated for
                     # consistency with the requeue path above, not because

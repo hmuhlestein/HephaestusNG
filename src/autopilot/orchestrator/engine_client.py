@@ -430,7 +430,7 @@ def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids:
         .filter(
             Workflow.project_id == project_id,
             Workflow.definition_id.in_(definition_ids),
-            Workflow.status.in_(["active", "running"]),
+            Workflow.status == "active",
         )
         .all()
     )

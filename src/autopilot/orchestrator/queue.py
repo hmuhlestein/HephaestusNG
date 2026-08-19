@@ -60,7 +60,7 @@ def is_design_fully_complete(workflow_id: str, logger: "OrchestratorLogger") -> 
     wf_status = wf.get("status", "")
     if wf_status == "completed":
         return True, "Workflow status: completed"
-    if wf_status not in ("active", "running", "paused"):
+    if wf_status not in ("active", "paused"):
         return False, f"Workflow status: {wf_status}"
 
     # Use derive_workflow_status to check if the workflow is actually done.
