@@ -127,12 +127,6 @@ def mock_llm_provider():
 
 
 @pytest.fixture
-def mock_rag_system():
-    """Create a mock RAG system."""
-    return Mock()
-
-
-@pytest.fixture
 def mock_phase_manager(temp_db):
     """Create a mock phase manager with a real workflow."""
     manager = Mock()
@@ -185,14 +179,13 @@ def mock_phase_manager(temp_db):
 
 @pytest.fixture
 def monitoring_loop(
-    temp_db, mock_agent_manager, mock_llm_provider, mock_rag_system, mock_phase_manager
+    temp_db, mock_agent_manager, mock_llm_provider, mock_phase_manager
 ):
     """Create a monitoring loop for integration testing."""
     loop = MonitoringLoop(
         db_manager=temp_db,
         agent_manager=mock_agent_manager,
         llm_provider=mock_llm_provider,
-        rag_system=mock_rag_system,
         phase_manager=mock_phase_manager,
     )
     return loop

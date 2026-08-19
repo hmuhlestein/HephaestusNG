@@ -19,7 +19,6 @@ from src.core.database import (
 )
 from src.core.simple_config import get_config
 from src.interfaces import LLMProviderInterface
-from src.memory.rag import RAGSystem
 from src.monitoring.conductor import Conductor
 from src.monitoring.guardian import Guardian
 from src.phases import PhaseManager
@@ -176,7 +175,6 @@ class MonitoringLoop:
         db_manager: DatabaseManager,
         agent_manager: AgentManager,
         llm_provider: LLMProviderInterface,
-        rag_system: RAGSystem,
         phase_manager: Optional[PhaseManager] = None,
     ):
         """Initialize monitoring loop with trajectory monitoring.
@@ -185,14 +183,12 @@ class MonitoringLoop:
             db_manager: Database manager
             agent_manager: Agent manager
             llm_provider: LLM provider
-            rag_system: RAG system
             phase_manager: Optional phase manager for workflow monitoring
         """
         self.db_manager = db_manager
         self.agent_manager = agent_manager
         self.phase_manager = phase_manager
         self.llm_provider = llm_provider
-        self.rag_system = rag_system
 
         # Initialize trajectory monitoring components
         self.guardian = Guardian(
