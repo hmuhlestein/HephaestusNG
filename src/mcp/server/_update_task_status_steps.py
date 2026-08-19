@@ -268,9 +268,24 @@ async def _complete_task_normally(
     session.commit()
 
     # Collect cost data for completed tasks (done or failed -- failed tasks
-    # still consumed LLM tokens and should be attributed)
+    # still consumed LLM tokens and should be attributed). Runs on every
+    # single task completion, reads the CLI's own transcript file, and
+    # cascades through the same synchronous task -> workflow -> feature
+    # -> design -> project cost rollup as _invoke_and_record's own cost
+    # recording (langchain_llm_client.py) -- same class of "blocks the
+    # single-threaded event loop" issue that call site was fixed for,
+    # confirmed live 2026-08-19 (intermittent /health timeouts under
+    # concurrent agent load). Offloaded here too rather than only where
+    # it was first observed, since the underlying function is identically
+    # synchronous and this call site runs even more often (every
+    # completion, not just every LLM call with a nonzero cost).
     if request.status in ("done", "failed"):
-        TaskCompletionService.collect_cost_on_completion(request.task_id)
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None, TaskCompletionService.collect_cost_on_completion, request.task_id
+        )
 
     output_lost_rejection = None
     if request.status == "done":

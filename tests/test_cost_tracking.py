@@ -967,3 +967,51 @@ class TestInvokeAndRecord:
 
         assert response is model.ainvoke.return_value
         assert any(record.levelname == "WARNING" and "Cost recording failed" in record.message for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_record_cost_runs_off_the_event_loop_thread(self, llm_client):
+        """Regression: record_cost cascades several synchronous DB writes
+        (task -> workflow -> feature -> design -> project rollup, each its
+        own round-trip -- see cost_derivation.py) and was previously called
+        directly inside this async method, blocking the single-threaded
+        event loop for the whole chain on every real LLM call. Confirmed
+        live 2026-08-19: once the cost_usd shape fix (above) let this path
+        actually run for the first time, /health -- a bare dict return with
+        zero I/O of its own -- intermittently took 2+ seconds or timed out
+        under 3 concurrently active agents, because nothing else on the
+        loop could run while this chain of writes was in progress.
+        record_cost must now run in the executor's thread pool, not the
+        event loop's own thread."""
+        import threading
+
+        model = Mock()
+        model.ainvoke = AsyncMock(
+            return_value=Mock(
+                response_metadata={
+                    "token_usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "cost": 0.001,
+                    },
+                    "model_name": "anthropic/claude-sonnet-4",
+                }
+            )
+        )
+
+        main_thread_id = threading.get_ident()
+        record_cost_thread_id = {}
+
+        def _fake_record_cost(*args, **kwargs):
+            record_cost_thread_id["id"] = threading.get_ident()
+
+        with (
+            patch("src.core.cost_derivation.record_cost", side_effect=_fake_record_cost),
+            patch("src.core.database.get_db"),
+        ):
+            await llm_client._invoke_and_record(model, ["hi"], component="task_enrichment")
+
+        assert record_cost_thread_id.get("id") is not None, "record_cost was never called"
+        assert record_cost_thread_id["id"] != main_thread_id, (
+            "record_cost ran on the event loop's own thread -- it must run "
+            "in the executor's thread pool instead"
+        )

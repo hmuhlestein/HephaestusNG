@@ -372,6 +372,8 @@ class LangChainLLMClient:
             cost_usd = usage.get("cost") or 0
 
             if cost_usd > 0:
+                import asyncio
+
                 from src.core.cost_derivation import record_cost
                 from src.core.database import get_db
 
@@ -379,21 +381,44 @@ class LangChainLLMClient:
                 output_tokens = usage.get("completion_tokens", 0)
                 token_details = usage.get("prompt_tokens_details") or {}
                 cache_read = token_details.get("cached_tokens", 0)
+                model_name = metadata.get("model_name", component)
 
-                with get_db() as db:
-                    record_cost(
-                        db=db,
-                        cost_usd=cost_usd,
-                        source="openrouter_direct",
-                        task_id=task_id,
-                        agent_id=agent_id,
-                        workflow_id=workflow_id,
-                        model=metadata.get("model_name", component),
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        cache_read_tokens=cache_read,
-                        raw_usage=usage,
-                    )
+                def _do_record_cost():
+                    # record_cost's own rollup cascades several more
+                    # synchronous writes on top of its own (task ->
+                    # workflow -> feature -> design -> project, each a
+                    # separate DB round-trip -- see cost_derivation.py).
+                    # Called directly here, that blocks the single-
+                    # threaded asyncio event loop for the whole chain on
+                    # every real LLM call -- confirmed live 2026-08-19,
+                    # the moment cost recording started actually running
+                    # (previously it silently errored before ever
+                    # reaching this far -- see the cost_usd fix above):
+                    # with 3 agents active, /health -- a bare dict return
+                    # with zero I/O of its own -- intermittently took 2+
+                    # seconds or timed out, because nothing else in the
+                    # single-threaded loop could run while this chain of
+                    # synchronous SQLite writes was in progress. Offload
+                    # to the executor, matching the same pattern phase_
+                    # transitions.py already uses for build_phase_output's
+                    # own potentially-slow synchronous work.
+                    with get_db() as db:
+                        record_cost(
+                            db=db,
+                            cost_usd=cost_usd,
+                            source="openrouter_direct",
+                            task_id=task_id,
+                            agent_id=agent_id,
+                            workflow_id=workflow_id,
+                            model=model_name,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            cache_read_tokens=cache_read,
+                            raw_usage=usage,
+                        )
+
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, _do_record_cost)
             else:
                 logger.debug(f"No cost in response metadata for {component} (cost_usd={cost_usd})")
         except Exception as e:
