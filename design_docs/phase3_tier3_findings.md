@@ -69,3 +69,13 @@ Migrating any of the 12 call sites (across `src/agents/messenger.py`, `launch_pi
 - Phase 4 (delete dead code) — the next and final phase of the plan.
 
 No commits — left in the working tree for review.
+
+## Gap-check addendum
+
+Reread this item's own prompt doc (`design_docs/phase3_tier3_prompt.md`) end to end against what was actually delivered.
+
+One real gap found and closed: **`src/phases/phase_manager.py` (item 26's comment fix) was never run against its own dedicated test file.** The prompt doc's quality bar explicitly calls for "full targeted-test verification across every touched file" — the broader combined regression run (`test_orchestrator.py`/`test_orchestrator_helpers.py`/`test_phase0_idempotency.py`/`test_task_completion_service.py`, 354 passed) exercises `PhaseManager` incidentally, but `tests/test_phase_manager.py` — a dedicated file that exists for exactly this module — was never run at all. Ran it: 70 passed. The fix is comment-only with zero behavioral surface, so this was never a likely place for a real regression, but the verification gap itself was real regardless of the outcome.
+
+Re-verified item 28's file/occurrence count independently (8 files, 12 occurrences) — matches what's documented above exactly, confirming the "don't implement" decision rests on an accurate count, not just an accurate premise.
+
+Everything else held on reread: item 22's rewrite was checked against STEP 4's actual body text, not just written to sound better; item 23's re-verified count (8, not 7) was re-confirmed again here; item 24's verification located and read the actual current content, not just searched for it; item 26 fixed only the one confirmed-stale sub-claim (plus a second stale reference in the same comment block, directly adjacent — not one of the "other two" the prompt doc said to leave alone, which are two separate locations elsewhere in the codebase); item 27a's `if __name__ == "__main__"` guard (rather than converting the script into a real pytest test) matches the verification section's own more permissive framing ("e.g. a static check, or confirming `pytest --collect-only` doesn't trigger network I/O") — a deliberate, stated implementation choice, not an oversight.
