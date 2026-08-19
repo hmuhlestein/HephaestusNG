@@ -2932,29 +2932,29 @@ def _create_phase_task(
             execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
             if execution:
                 if execution.status in ("pending", "completed"):
-                    execution.status = "in_progress"
-                    execution.started_at = datetime.utcnow()
-                # Always release the claim once the task it was guarding
-                # actually exists, regardless of the entry status. The
-                # status-gated version of this reset only fired for the
-                # pending/completed -> in_progress transition (e.g. a GOTO
-                # reactivation), but _case_in_progress_no_tasks calls
-                # _create_phase_task for phases a DIFFERENT path already
-                # flipped to "in_progress" before a task existed (e.g. the
-                # synchronous /start_workflow_execution step) -- for those,
-                # entry status is already "in_progress", the old condition
-                # never matched, and the claim taken to create this task
-                # was never released. Since the claim field is reused by
-                # _case_in_progress_complete to guard this same phase's
-                # own later completion-transition evaluation, a claim left
-                # over from task creation permanently blocked that
-                # evaluation forever ("transition already being evaluated
-                # by another caller — skipping", repeating every sweep
-                # tick with no other caller actually holding it). Observed
-                # live: a Feature Architect task finished successfully but
-                # its phase never advanced, sitting in_progress
-                # indefinitely.
-                execution.task_creation_claimed_at = None
+                    reopen_phase_execution(execution, status="in_progress", started_at="now")
+                else:
+                    # Always release the claim once the task it was guarding
+                    # actually exists, regardless of the entry status. The
+                    # status-gated version of this reset only fired for the
+                    # pending/completed -> in_progress transition (e.g. a GOTO
+                    # reactivation), but _case_in_progress_no_tasks calls
+                    # _create_phase_task for phases a DIFFERENT path already
+                    # flipped to "in_progress" before a task existed (e.g. the
+                    # synchronous /start_workflow_execution step) -- for those,
+                    # entry status is already "in_progress", the old condition
+                    # never matched, and the claim taken to create this task
+                    # was never released. Since the claim field is reused by
+                    # _case_in_progress_complete to guard this same phase's
+                    # own later completion-transition evaluation, a claim left
+                    # over from task creation permanently blocked that
+                    # evaluation forever ("transition already being evaluated
+                    # by another caller — skipping", repeating every sweep
+                    # tick with no other caller actually holding it). Observed
+                    # live: a Feature Architect task finished successfully but
+                    # its phase never advanced, sitting in_progress
+                    # indefinitely.
+                    execution.task_creation_claimed_at = None
 
             db.commit()
 
