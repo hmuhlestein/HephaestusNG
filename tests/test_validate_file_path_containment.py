@@ -80,3 +80,48 @@ def test_segment_check_does_not_false_positive_on_dots_in_a_filename():
         p = Path(d) / "notes..final.md"
         p.write_text("x")
         validate_file_path(str(p))
+
+
+def test_a_cwd_launched_server_does_not_void_the_guard(monkeypatch):
+    """config.main_repo_path/project_root both default to Path.cwd().
+
+    Launch the server from "/" or the home directory and every allowed root
+    becomes an ancestor of everything readable -- the containment check would
+    still "pass" while enforcing nothing. Those roots are dropped instead.
+    """
+    from pathlib import Path
+
+    import src.services.validation_helpers as vh
+
+    class _Cfg:
+        main_repo_path = Path("/")
+        project_root = Path.home()
+        worktree_base_path = None
+
+    monkeypatch.setattr(
+        "src.core.simple_config.get_config", lambda *a, **k: _Cfg(), raising=False
+    )
+
+    roots = vh._default_allowed_roots()
+    assert Path("/") not in roots, "filesystem root must never be a containment root"
+    assert Path.home().resolve() not in roots, "home dir must never be one either"
+
+    # And the guard still bites: a system file is refused even though the
+    # (rejected) roots would have contained it.
+    with pytest.raises(ValueError, match="outside allowed directories"):
+        vh.validate_file_path("/etc/passwd")
+
+
+@pytest.mark.parametrize(
+    "root,expected",
+    [
+        ("/", True),
+        (str(Path.home()), True),
+        (str(Path.home().parent), True),
+        ("/opt/app", False),
+    ],
+)
+def test_breadth_check_classifies_roots(root, expected):
+    from src.services.validation_helpers import _too_broad_to_contain
+
+    assert _too_broad_to_contain(Path(root).resolve()) is expected
