@@ -1819,3 +1819,152 @@ class TestLaunchPipelineOwnAttributesAfterManagerSplit:
         ]:
             missing = missing_self_refs(path, cls)
             assert not missing, f"{cls} ({path}) references self.X with no definition: {missing}"
+
+
+class TestTerminatorRunsOffTheEventLoopThread:
+    """Regression test: Terminator.terminate_agent must not block the event
+    loop. Its real work is a long synchronous chain -- several tmux/git
+    subprocess calls, a full capture-pane scrollback read, a time.sleep(1)
+    between SIGINT and SIGKILL, and collect_task_cost's own DB+file
+    cascade -- called directly with no executor anywhere in the file.
+    Confirmed live 2026-08-19, investigating intermittent multi-second
+    /health stalls under 2-3 concurrently active agents: this fires on
+    every task completion. Found via a systematic audit after three other
+    blocking call sites were fixed and the symptom persisted."""
+
+    @pytest.mark.asyncio
+    async def test_terminate_agent_offloads_the_synchronous_work(self, mock_agent_manager):
+        import threading
+
+        main_thread_id = threading.get_ident()
+        call_thread_id = {}
+
+        real_sync = mock_agent_manager._terminator._terminate_agent_sync
+
+        def _spy_sync(agent_id):
+            call_thread_id["id"] = threading.get_ident()
+            return real_sync(agent_id)
+
+        with patch.object(
+            mock_agent_manager._terminator, "_terminate_agent_sync", side_effect=_spy_sync
+        ):
+            # A nonexistent agent_id is enough: _terminate_agent_sync's own
+            # early "agent not found" return still proves it ran, and
+            # avoids needing a full tmux/git environment for this test.
+            await mock_agent_manager._terminator.terminate_agent("no-such-agent")
+
+        assert call_thread_id.get("id") is not None, "_terminate_agent_sync was never called"
+        assert call_thread_id["id"] != main_thread_id, (
+            "_terminate_agent_sync ran on the event loop's own thread -- "
+            "it must run in the executor's thread pool instead"
+        )
+
+
+class TestCreateAgentForTaskOffloadsBlockingWork:
+    """Regression test: _resolve_worktree (real git worktree creation) and
+    _prepare_launch_environment (a `codegraph status .` subprocess with a
+    30s timeout, plus tmux session creation) were both called directly
+    inside create_agent_for_task with no executor -- confirmed live
+    2026-08-19, investigating intermittent multi-second /health stalls
+    under concurrent dispatch. Found via a systematic audit after three
+    other blocking call sites elsewhere were fixed and the symptom
+    persisted. Both must now run in the executor's thread pool, not the
+    event loop's own thread."""
+
+    @pytest.mark.asyncio
+    async def test_resolve_worktree_and_prepare_launch_environment_run_off_the_event_loop(
+        self, mock_agent_manager, db_manager
+    ):
+        import threading
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-offload", name="Offload WF", status="active",
+                    working_directory="/tmp/test-project-offload", phases_folder_path="/tmp",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-offload", workflow_id="wf-offload", name="implementation",
+                    order=1, description="d", done_definitions=["d"], cli_tool="claude",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-offload", workflow_id="wf-offload", phase_id="phase-offload",
+                    raw_description="r", enriched_description="r", done_definition="d",
+                    status="pending",
+                )
+            )
+
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-offload-agent",
+                "branch_name": "agent-offload-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-offload"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        main_thread_id = threading.get_ident()
+        call_thread_ids = {}
+
+        real_resolve_worktree = mock_agent_manager._launch._resolve_worktree
+        real_prepare_launch_env = mock_agent_manager._launch._prepare_launch_environment
+
+        def _spy_resolve_worktree(*args, **kwargs):
+            call_thread_ids["resolve_worktree"] = threading.get_ident()
+            return real_resolve_worktree(*args, **kwargs)
+
+        def _spy_prepare_launch_env(*args, **kwargs):
+            call_thread_ids["prepare_launch_environment"] = threading.get_ident()
+            return real_prepare_launch_env(*args, **kwargs)
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-offload").first()
+
+            with (
+                patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli,
+                patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock),
+                patch.object(
+                    mock_agent_manager._launch, "_resolve_worktree",
+                    side_effect=_spy_resolve_worktree,
+                ),
+                patch.object(
+                    mock_agent_manager._launch, "_prepare_launch_environment",
+                    side_effect=_spy_prepare_launch_env,
+                ),
+            ):
+                mock_cli = MagicMock()
+                mock_cli.get_launch_command.return_value = LaunchResult("claude --task test", LaunchResult.FLAG)
+                mock_cli.default_model = "test-model"
+                mock_get_cli.return_value = mock_cli
+                mock_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock(return_value=None)
+
+                agent = await mock_agent_manager.create_agent_for_task(
+                    task=task,
+                    enriched_data={"description": "d"},
+                    memories=[],
+                    project_context="",
+                    working_directory="/tmp/test-project-offload",
+                )
+
+        assert agent is not None
+        assert call_thread_ids.get("resolve_worktree") is not None
+        assert call_thread_ids.get("prepare_launch_environment") is not None
+        assert call_thread_ids["resolve_worktree"] != main_thread_id, (
+            "_resolve_worktree ran on the event loop's own thread -- it "
+            "must run in the executor's thread pool instead"
+        )
+        assert call_thread_ids["prepare_launch_environment"] != main_thread_id, (
+            "_prepare_launch_environment ran on the event loop's own thread "
+            "-- it must run in the executor's thread pool instead"
+        )
