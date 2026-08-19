@@ -25,13 +25,31 @@ class TaskEnrichmentService:
         workflow_id: Optional[str],
         requesting_agent_id: str,
     ) -> Optional[str]:
-        """Resolve a phase_id that may be a UUID, a digit-string order
-        number, or absent (in which case phase_order/current phase is used).
+        """Resolve a phase_id that may be a UUID, a phase NAME (e.g.
+        "adversarial_review" -- the natural, common way an agent names a
+        phase when creating a follow-up task), a digit-string order
+        number, or absent (in which case phase_order/current phase is
+        used).
 
         This is the canonical "order vs UUID" resolution — previously
         reimplemented independently at every call site (SOLID review 1.4).
+
+        The name-lookup branch was added 2026-08-19 after a live FK
+        violation: this function's non-digit branch used to return
+        phase_id_raw completely unvalidated, silently assuming any
+        non-digit string was already a real Phase.id UUID. An agent
+        passing a phase NAME (very much the common case -- "adversarial_
+        review" is far more natural to write than its UUID) sailed
+        through unresolved, and the later `UPDATE tasks SET phase_id=...`
+        failed with `FOREIGN KEY constraint failed` -- silently, since
+        that write happens inside a fire-and-forget background task whose
+        own failure handler (_handle_task_processing_failure) then failed
+        too (a separate, also-fixed session-leak bug), leaving the task
+        permanently stuck at status="pending" with no phase_id and no
+        error visible anywhere the agent or a human would see it.
         """
         from src.core.app_context import get_app_state
+        from src.core.database import Phase
 
         server_state = get_app_state()
 
@@ -43,7 +61,36 @@ class TaskEnrichmentService:
                 workflow_id=workflow_id,
             )
         elif phase_id_raw:
-            return phase_id_raw
+            with server_state.db_manager.session_scope() as session:
+                if session.query(Phase).filter_by(id=phase_id_raw).first():
+                    return phase_id_raw
+
+                # Not a real Phase.id -- try it as a phase NAME instead.
+                # Scope to the resolved workflow when we have one: phase
+                # names are not unique across different workflow
+                # definitions (e.g. "development" appears in more than
+                # one), so an unscoped lookup could silently match the
+                # wrong workflow's phase.
+                resolved_workflow_id = workflow_id or server_state.phase_manager.workflow_id
+                query = session.query(Phase).filter_by(name=phase_id_raw)
+                if resolved_workflow_id:
+                    query = query.filter_by(workflow_id=resolved_workflow_id)
+                matches = query.all()
+                if len(matches) == 1:
+                    return matches[0].id
+                if len(matches) > 1:
+                    logger.warning(
+                        f"resolve_phase_id: phase name {phase_id_raw!r} matched "
+                        f"{len(matches)} phases (workflow_id={resolved_workflow_id!r} "
+                        "did not narrow it to one) -- refusing to guess"
+                    )
+                    return None
+
+            logger.warning(
+                f"resolve_phase_id: {phase_id_raw!r} is neither a known Phase.id "
+                "nor a phase name resolvable in this workflow"
+            )
+            return None
         else:
             return server_state.phase_manager.get_phase_for_task(
                 phase_id=None,
