@@ -474,27 +474,6 @@ class TestGuardian:
         assert isinstance(context["constraints"], list)
         assert isinstance(context["session_start"], datetime)
 
-    def test_should_steer_agent(self, guardian):
-        """Test steering throttling logic."""
-        agent_id = "test-agent-6"
-
-        # First steering should be allowed
-        assert guardian._should_steer_agent(agent_id) is True
-
-        # Record a steering
-        guardian._record_steering(agent_id, "stuck", "test message")
-
-        # Immediate second steering should be blocked
-        assert guardian._should_steer_agent(agent_id) is False
-
-        # Simulate time passing (cooldown is 10 minutes)
-        guardian.steering_history[agent_id][0]["timestamp"] = (
-            datetime.utcnow() - timedelta(minutes=11)
-        ).isoformat()
-
-        # Now should be allowed again
-        assert guardian._should_steer_agent(agent_id) is True
-
     def test_extract_last_error(self, guardian):
         """Test error extraction from output."""
         output = """

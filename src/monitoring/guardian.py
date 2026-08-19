@@ -451,25 +451,6 @@ class Guardian:
             )
             session.add(log_entry)
 
-    def _should_steer_agent(self, agent_id: str) -> bool:
-        """Check if we should steer agent (avoid over-messaging).
-
-        Last-resort model: max 1 steering per 10 minutes.
-        """
-        if agent_id not in self.steering_history:
-            self.steering_history[agent_id] = []
-            return True
-
-        # Check recent steering
-        recent_steerings = [
-            s
-            for s in self.steering_history[agent_id]
-            if datetime.fromisoformat(s["timestamp"])
-            > datetime.utcnow() - timedelta(minutes=10)
-        ]
-
-        return len(recent_steerings) == 0
-
     def _evaluate_steering_eligibility(
         self, agent_id: str, steering_type: str
     ) -> tuple[bool, str]:
