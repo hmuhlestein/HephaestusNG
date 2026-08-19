@@ -14,7 +14,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.mcp import server as mcp_server
+from src.mcp.server import _mcp_tool_registry
+from src.mcp.server import mcp_protocol as mcp_server
 
 
 class TestMCPToolRegistryConsistency:
@@ -213,8 +214,8 @@ class TestSubmitResultToolWrapper:
     @pytest.mark.asyncio
     async def test_dispatches_to_submit_result_with_agent_id_as_argument(self):
         mock_response = object()
-        with patch("src.mcp.server.submit_result", new=AsyncMock(return_value=mock_response)) as mock_submit:
-            result = await mcp_server._tool_submit_result({
+        with patch("src.mcp.server._mcp_tool_registry.submit_result", new=AsyncMock(return_value=mock_response)) as mock_submit:
+            result = await _mcp_tool_registry._tool_submit_result({
                 "agent_id": "agent-1",
                 "markdown_file_path": "/tmp/result.md",
                 "explanation": "Did the thing",
@@ -232,7 +233,7 @@ class TestSubmitResultToolWrapper:
     @pytest.mark.asyncio
     async def test_rejects_missing_required_arguments(self):
         with pytest.raises(Exception) as exc_info:
-            await mcp_server._tool_submit_result({"agent_id": "agent-1"})
+            await _mcp_tool_registry._tool_submit_result({"agent_id": "agent-1"})
         assert "required" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
@@ -242,7 +243,7 @@ class TestSubmitResultToolWrapper:
         resolve through /tools/execute's dispatch, not 400 with "Unknown
         tool: submit_result" the way it used to."""
         mock_response = object()
-        with patch("src.mcp.server.submit_result", new=AsyncMock(return_value=mock_response)):
+        with patch("src.mcp.server._mcp_tool_registry.submit_result", new=AsyncMock(return_value=mock_response)):
             result = await mcp_server.execute_tool({
                 "tool": "heph_submit_result",
                 "arguments": {
@@ -258,8 +259,8 @@ class TestSubmitResultValidationToolWrapper:
     @pytest.mark.asyncio
     async def test_dispatches_without_requiring_agent_id(self):
         mock_response = object()
-        with patch("src.mcp.server.submit_result_validation", new=AsyncMock(return_value=mock_response)) as mock_fn:
-            result = await mcp_server._tool_submit_result_validation({
+        with patch("src.mcp.server._mcp_tool_registry.submit_result_validation", new=AsyncMock(return_value=mock_response)) as mock_fn:
+            result = await _mcp_tool_registry._tool_submit_result_validation({
                 "result_id": "result-1",
                 "validation_passed": True,
                 "feedback": "Looks good",
@@ -274,7 +275,7 @@ class TestSubmitResultValidationToolWrapper:
     @pytest.mark.asyncio
     async def test_reachable_through_dispatch_with_heph_prefix(self):
         mock_response = object()
-        with patch("src.mcp.server.submit_result_validation", new=AsyncMock(return_value=mock_response)):
+        with patch("src.mcp.server._mcp_tool_registry.submit_result_validation", new=AsyncMock(return_value=mock_response)):
             result = await mcp_server.execute_tool({
                 "tool": "heph_submit_result_validation",
                 "arguments": {
@@ -290,8 +291,8 @@ class TestGiveValidationReviewToolWrapper:
     @pytest.mark.asyncio
     async def test_dispatches_with_agent_id_as_argument_and_defaults_validator_agent_id(self):
         mock_response = object()
-        with patch("src.mcp.server.give_validation_review", new=AsyncMock(return_value=mock_response)) as mock_fn:
-            result = await mcp_server._tool_give_validation_review({
+        with patch("src.mcp.server._mcp_tool_registry.give_validation_review", new=AsyncMock(return_value=mock_response)) as mock_fn:
+            result = await _mcp_tool_registry._tool_give_validation_review({
                 "agent_id": "validator-1",
                 "task_id": "task-1",
                 "validation_passed": True,
@@ -312,7 +313,7 @@ class TestGiveValidationReviewToolWrapper:
         while auditing every heph_ reference in the codebase rather than
         stopping at config/prompts/**/*.yaml."""
         mock_response = object()
-        with patch("src.mcp.server.give_validation_review", new=AsyncMock(return_value=mock_response)):
+        with patch("src.mcp.server._mcp_tool_registry.give_validation_review", new=AsyncMock(return_value=mock_response)):
             result = await mcp_server.execute_tool({
                 "tool": "heph_give_validation_review",
                 "arguments": {

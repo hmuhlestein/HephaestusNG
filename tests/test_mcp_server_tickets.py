@@ -35,7 +35,7 @@ def setup_test_database(tmp_path_factory):
         Phase,
         Workflow,
     )
-    from src.mcp.server import server_state
+    from src.mcp.server._shared import server_state
 
     db_manager = DatabaseManager(db_path)
     db_manager.create_tables()
@@ -393,19 +393,43 @@ class TestCreateTaskValidation:
         assert ticket_response.status_code == 200
         ticket_id = ticket_response.json()["ticket_id"]
 
-        # Without ticket_id — should fail
+        # Without ticket_id — should fail.
+        # NOTE: no workflow_id/phase_id here. Sending both makes the caller a
+        # "phase agent" (request.workflow_id is not None and
+        # request.phase_id is not None), which create_task deliberately
+        # exempts from the ticket requirement -- "part of the pipeline, not
+        # external callers". This test is about the requirement for external
+        # MCP agents, so it must not accidentally qualify for the exemption;
+        # with those fields set it was asserting the gate while taking the
+        # bypass, and passed only because the gate never ran.
         response_without = client.post(
             "/create_task",
             headers=headers,
             json={
                 "task_description": "Task without ticket_id",
                 "done_definition": "Task is done",
+                "ai_agent_id": headers["X-Agent-ID"],
+            },
+        )
+        assert response_without.status_code in [400, 422]
+
+        # And the exemption itself is real behaviour -- pin it, so a future
+        # change to either side is a deliberate one.
+        response_phase_agent = client.post(
+            "/create_task",
+            headers=headers,
+            json={
+                "task_description": "Phase-agent task without ticket_id",
+                "done_definition": "Task is done",
                 "workflow_id": "workflow-e2e-test",
                 "ai_agent_id": headers["X-Agent-ID"],
                 "phase_id": phase_id,
             },
         )
-        assert response_without.status_code in [400, 422]
+        assert response_phase_agent.status_code == 200, (
+            "a phase agent (workflow_id + phase_id) is exempt from the "
+            "ticket_id requirement"
+        )
 
         # With ticket_id — should succeed
         response_with = client.post(

@@ -222,7 +222,7 @@ async def save_memory(
     """Store important discoveries and learnings."""
     server_state = _get_server_state()
     # Touch agent activity timestamp
-    from src.mcp.server import _touch_agent_activity
+    from src.mcp.server._shared import _touch_agent_activity
     _touch_agent_activity(agent_id)
     logger.info(
         f"Saving memory from agent {agent_id}: {request.memory_content[:100]}..."
@@ -576,7 +576,7 @@ async def give_validation_review(
             async def terminate_both_and_process_queue():
                 await server_state.agent_manager.terminate_agent(original_agent_id)
                 await server_state.agent_manager.terminate_agent(agent_id)
-                from src.mcp.server import process_queue
+                from src.mcp.server.background_loops import process_queue
                 await process_queue()
 
             asyncio.create_task(terminate_both_and_process_queue())
@@ -626,7 +626,7 @@ async def give_validation_review(
             # Terminate validator (its job is done) and process queue
             async def terminate_validator_and_process_queue():
                 await server_state.agent_manager.terminate_agent(agent_id)
-                from src.mcp.server import process_queue
+                from src.mcp.server.background_loops import process_queue
                 await process_queue()
 
             asyncio.create_task(terminate_validator_and_process_queue())
@@ -912,7 +912,7 @@ async def submit_result_validation(
         # Terminate validator agent and process queue
         async def terminate_result_validator_and_process_queue():
             await server_state.agent_manager.terminate_agent(agent_id)
-            from src.mcp.server import process_queue
+            from src.mcp.server.background_loops import process_queue
             await process_queue()
 
         asyncio.create_task(terminate_result_validator_and_process_queue())

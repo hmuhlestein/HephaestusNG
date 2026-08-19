@@ -7,7 +7,7 @@ from source YAML at server startup -- a bug that made every per-phase
 cli_tool: override in config/workflows/*.yaml a no-op.
 """
 
-from src.mcp.server import _build_phase_dict
+from src.mcp.server._shared import _build_phase_dict
 from src.sdk.models import Phase
 
 

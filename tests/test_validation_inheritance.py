@@ -30,8 +30,8 @@ def test_db():
 @pytest.fixture
 def test_client(test_db):
     """Create a test client with mocked dependencies."""
-    with patch("src.mcp.server.server_state.db_manager", test_db):
-        with patch("src.mcp.server.server_state.initialized", True):
+    with patch("src.mcp.server._shared.server_state.db_manager", test_db):
+        with patch("src.mcp.server._shared.server_state.initialized", True):
             client = TestClient(app)
             yield client
 
@@ -312,7 +312,7 @@ class TestValidationInheritanceIntegration:
         session.commit()
 
         # Mock the async parts
-        with patch("src.mcp.server.server_state") as mock_state:
+        with patch("src.mcp.server._shared.server_state") as mock_state:
             mock_state.db_manager = test_db
             mock_state.initialized = True
             mock_state.rag_system.retrieve_for_task = AsyncMock(return_value=[])
@@ -436,7 +436,7 @@ class TestValidationFlowWithInheritance:
 
             mock_spawn.return_value = mock_spawn_func()
 
-            with patch("src.mcp.server.server_state") as mock_state:
+            with patch("src.mcp.server._shared.server_state") as mock_state:
                 mock_state.db_manager = test_db
                 mock_state.agent_manager.terminate_agent = AsyncMock()
                 mock_state.broadcast_update = AsyncMock()

@@ -108,7 +108,7 @@ def _make_server_state(db, queue_service):
 class TestRestartTaskEndpointCliModelConcurrency:
     @pytest.mark.asyncio
     async def test_dispatches_on_fallback_when_primary_combo_saturated(self, db_manager):
-        from src.mcp.server import restart_task_endpoint
+        from src.mcp.server.task_admin_routes import restart_task_endpoint
 
         _seed_task(db_manager, "task-1", status="failed", cli_tool="pi", cli_model="qwen-local", saturate=True)
         qs = _make_queue_service(
@@ -121,7 +121,7 @@ class TestRestartTaskEndpointCliModelConcurrency:
         server_state = _make_server_state(db_manager, qs)
         dispatched_agent = Mock(id="new-agent")
 
-        with patch("src.mcp.server.server_state", server_state), \
+        with patch("src.mcp.server.task_admin_routes.server_state", server_state), \
              patch(
                  "src.services.agent_dispatch_service.AgentDispatchService.build_dispatch_context",
                  new=AsyncMock(return_value={"phase_cli_tool": "pi", "phase_cli_model": "qwen-local"}),
@@ -142,7 +142,7 @@ class TestRestartTaskEndpointCliModelConcurrency:
 
     @pytest.mark.asyncio
     async def test_queues_instead_of_dispatching_when_saturated_with_no_fallback(self, db_manager):
-        from src.mcp.server import restart_task_endpoint
+        from src.mcp.server.task_admin_routes import restart_task_endpoint
 
         _seed_task(db_manager, "task-1", status="failed", cli_tool="pi", cli_model="qwen-local", saturate=True)
         qs = _make_queue_service(
@@ -154,7 +154,7 @@ class TestRestartTaskEndpointCliModelConcurrency:
         )
         server_state = _make_server_state(db_manager, qs)
 
-        with patch("src.mcp.server.server_state", server_state), \
+        with patch("src.mcp.server.task_admin_routes.server_state", server_state), \
              patch(
                  "src.services.agent_dispatch_service.AgentDispatchService.build_dispatch_context",
                  new=AsyncMock(return_value={"phase_cli_tool": "pi", "phase_cli_model": "qwen-local"}),
@@ -179,14 +179,14 @@ class TestRestartTaskEndpointCliModelConcurrency:
         """Regression: the concurrency gate must be a true no-op (no phase
         lookups, no behavior change) when cli_model_concurrency_limits is
         unset -- the original, pre-gate behavior for every existing caller."""
-        from src.mcp.server import restart_task_endpoint
+        from src.mcp.server.task_admin_routes import restart_task_endpoint
 
         _seed_task(db_manager, "task-1", status="failed")
         qs = _make_queue_service(db_manager)  # no concurrency limits
         server_state = _make_server_state(db_manager, qs)
         dispatched_agent = Mock(id="new-agent")
 
-        with patch("src.mcp.server.server_state", server_state), \
+        with patch("src.mcp.server.task_admin_routes.server_state", server_state), \
              patch(
                  "src.services.agent_dispatch_service.AgentDispatchService.build_dispatch_context",
                  new=AsyncMock(return_value={"phase_cli_tool": None, "phase_cli_model": None}),
@@ -211,7 +211,7 @@ class TestRestartTaskEndpointCliModelConcurrency:
         "completed" one. Left paused_by/paused_at stale, producing an
         inconsistent status="active"-but-still-flagged-paused row."""
         from src.core.database import Feature
-        from src.mcp.server import restart_task_endpoint
+        from src.mcp.server.task_admin_routes import restart_task_endpoint
 
         session = db_manager.get_session()
         try:
@@ -242,7 +242,7 @@ class TestRestartTaskEndpointCliModelConcurrency:
         server_state = _make_server_state(db_manager, qs)
         dispatched_agent = Mock(id="new-agent")
 
-        with patch("src.mcp.server.server_state", server_state), \
+        with patch("src.mcp.server.task_admin_routes.server_state", server_state), \
              patch(
                  "src.services.agent_dispatch_service.AgentDispatchService.build_dispatch_context",
                  new=AsyncMock(return_value={"phase_cli_tool": None, "phase_cli_model": None}),
@@ -267,7 +267,7 @@ class TestRestartTaskEndpointCliModelConcurrency:
 class TestBumpTaskPriorityEndpointCliModelConcurrency:
     @pytest.mark.asyncio
     async def test_dispatches_on_fallback_when_primary_combo_saturated(self, db_manager):
-        from src.mcp.server import bump_task_priority_endpoint
+        from src.mcp.server.task_admin_routes import bump_task_priority_endpoint
 
         _seed_task(db_manager, "task-1", status="queued", cli_tool="pi", cli_model="qwen-local", saturate=True)
         qs = _make_queue_service(
@@ -280,7 +280,7 @@ class TestBumpTaskPriorityEndpointCliModelConcurrency:
         server_state = _make_server_state(db_manager, qs)
         dispatched_agent = Mock(id="new-agent")
 
-        with patch("src.mcp.server.server_state", server_state), \
+        with patch("src.mcp.server.task_admin_routes.server_state", server_state), \
              patch(
                  "src.services.agent_dispatch_service.AgentDispatchService.build_dispatch_context",
                  new=AsyncMock(return_value={"phase_cli_tool": "pi", "phase_cli_model": "qwen-local"}),
@@ -303,7 +303,7 @@ class TestBumpTaskPriorityEndpointCliModelConcurrency:
         """This endpoint's whole contract is 'start immediately, bypassing
         limits' -- when no fallback is usable it must still dispatch (on
         the primary) rather than queue, unlike restart_task_endpoint."""
-        from src.mcp.server import bump_task_priority_endpoint
+        from src.mcp.server.task_admin_routes import bump_task_priority_endpoint
 
         _seed_task(db_manager, "task-1", status="queued", cli_tool="pi", cli_model="qwen-local", saturate=True)
         qs = _make_queue_service(
@@ -316,7 +316,7 @@ class TestBumpTaskPriorityEndpointCliModelConcurrency:
         server_state = _make_server_state(db_manager, qs)
         dispatched_agent = Mock(id="new-agent")
 
-        with patch("src.mcp.server.server_state", server_state), \
+        with patch("src.mcp.server.task_admin_routes.server_state", server_state), \
              patch(
                  "src.services.agent_dispatch_service.AgentDispatchService.build_dispatch_context",
                  new=AsyncMock(return_value={"phase_cli_tool": "pi", "phase_cli_model": "qwen-local"}),

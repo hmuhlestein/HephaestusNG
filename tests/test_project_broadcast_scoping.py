@@ -97,7 +97,7 @@ class FakeServerState:
 class TestBroadcastUpdateProjectTagging:
     @pytest.mark.asyncio
     async def test_merges_project_id_and_name_into_message(self):
-        from src.mcp.server import ServerState
+        from src.mcp.server._shared import ServerState
 
         fake = FakeServerState()
         sent = asyncio.Queue()
@@ -115,7 +115,7 @@ class TestBroadcastUpdateProjectTagging:
 
     @pytest.mark.asyncio
     async def test_omits_project_fields_when_not_given(self):
-        from src.mcp.server import ServerState
+        from src.mcp.server._shared import ServerState
 
         fake = FakeServerState()
         sent = asyncio.Queue()
@@ -131,7 +131,7 @@ class TestBroadcastUpdateProjectTagging:
     async def test_does_not_mutate_caller_dict(self):
         """broadcast_update must not leak project_id into a dict the
         caller still holds a reference to and might reuse."""
-        from src.mcp.server import ServerState
+        from src.mcp.server._shared import ServerState
 
         fake = FakeServerState()
         fake.sse_queues = [asyncio.Queue()]

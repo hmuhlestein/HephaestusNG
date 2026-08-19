@@ -20,7 +20,7 @@ from src.core.database import Agent, DatabaseManager, Phase, Task, Workflow
 @pytest.fixture
 def task_env(tmp_path, monkeypatch):
     """Seed a real sqlite DB and point server_state.db_manager at it."""
-    from src.mcp.server import server_state
+    from src.mcp.server._shared import server_state
 
     manager = DatabaseManager(str(tmp_path / "test.db"))
     manager.create_tables()
@@ -101,7 +101,7 @@ def task_env(tmp_path, monkeypatch):
 
 
 def _make_request(**overrides):
-    from src.mcp.server import CreateTaskRequest
+    from src.mcp.server._shared import CreateTaskRequest
 
     defaults = dict(
         task_description="do some work",
@@ -121,7 +121,7 @@ class TestOwnPhaseGuard:
         the first task for phase order 3 — must be rejected."""
         from fastapi import HTTPException
 
-        from src.mcp.server import create_task
+        from src.mcp.server.agent_task_routes import create_task
 
         request = _make_request(
             workflow_id=task_env["workflow_id"],
@@ -140,7 +140,7 @@ class TestOwnPhaseGuard:
         we only assert it gets past the guard, not full success)."""
         from fastapi import HTTPException
 
-        from src.mcp.server import create_task
+        from src.mcp.server.agent_task_routes import create_task
 
         request = _make_request(
             workflow_id=task_env["workflow_id"],
@@ -160,7 +160,7 @@ class TestContentAwareDedup:
     async def test_similar_description_is_deduped(self, task_env):
         """A near-identical resubmission for the same phase should return
         the existing task rather than creating a new one."""
-        from src.mcp.server import create_task
+        from src.mcp.server.agent_task_routes import create_task
 
         manager = task_env["manager"]
         session = manager.get_session()
@@ -212,7 +212,7 @@ class TestContentAwareDedup:
         must not be silently matched to the unrelated existing task."""
         from fastapi import HTTPException
 
-        from src.mcp.server import create_task
+        from src.mcp.server.agent_task_routes import create_task
 
         manager = task_env["manager"]
         session = manager.get_session()

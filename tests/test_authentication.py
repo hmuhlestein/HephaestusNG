@@ -197,7 +197,8 @@ def test_session(test_db):
 def test_client(test_db, monkeypatch):
     """Create a test client with test database."""
     from src.auth import auth_api
-    from src.mcp.server import app, auth_router
+    from src.mcp.server import app
+    from src.mcp.server.lifecycle import auth_router
 
     # Override the auth API's get_db_manager to use test DB
     monkeypatch.setattr(auth_api, "get_db_manager", lambda: test_db)

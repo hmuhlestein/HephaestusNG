@@ -23,7 +23,7 @@ def test_db(tmp_path):
 
 
 async def _run_delete(test_db, task_id, agent_manager=None):
-    import src.mcp.server as server_module
+    import src.mcp.server.task_admin_routes as server_module
 
     with patch.object(server_module, "server_state") as mock_state:
         mock_state.db_manager = test_db
