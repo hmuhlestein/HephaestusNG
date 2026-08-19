@@ -96,7 +96,6 @@ def increment_task_retry_count(task_id: str) -> int:
 def terminate_agent(
     agent_id: str,
     *,
-    kill_tmux: bool = False,
     reason: str = "",
     session=None,
 ) -> bool:
@@ -125,9 +124,9 @@ def terminate_agent(
     "pending", silently clobbering it. Either call session.flush() first, or
     set the task's terminal state AFTER this returns.
 
-    kill_tmux: reserved for future use — full tmux teardown (WIP commit,
-    transcript capture, SIGINT/SIGKILL) is handled by Terminator.terminate_agent
-    via AgentManager. This function always does the DB invariant.
+    Scope is the DB invariant only. Full tmux teardown (WIP commit,
+    transcript capture, SIGINT/SIGKILL) belongs to Terminator.terminate_agent
+    via AgentManager; call that when a session must actually be killed.
     """
 
     def _do_terminate(s):
@@ -178,6 +177,13 @@ def terminate_agent(
 terminate_agent_direct = terminate_agent
 
 
+# The complete set of values that may be stored in Workflow.paused_by.
+# "system-exhausted" is the terminal give-up state written by
+# _retry_exhausted_paused_workflows; it is a valid stored value even though
+# that site does not route through this primitive.
+PAUSE_REASONS = frozenset({"user", "budget", "review", "system", "system-exhausted"})
+
+
 def pause_workflow(
     workflow_id: str,
     *,
@@ -204,7 +210,12 @@ def pause_workflow(
     "system" pause).
 
     reason: 'user', 'budget', 'review', or 'system' -- stored verbatim as
-    paused_by.
+    paused_by, and validated against that set. Every consumer compares
+    paused_by against exact string literals (resume_workflow's
+    force-narrowing, _wait_for_phase0_review_clearance's "review" poll,
+    the budget sweep's "budget" filter), so an unrecognised value does not
+    fail loudly -- it silently makes all of those guards miss, leaving a
+    workflow paused with nothing able to resume it.
 
     cascade_to_feature: when True (default), also sets status="paused" on
     every Feature linked to this workflow -- otherwise derive_feature_status
@@ -219,6 +230,12 @@ def pause_workflow(
     caller's transaction (no auto-commit). Omit to create a standalone
     session that auto-commits.
     """
+
+    if reason not in PAUSE_REASONS:
+        raise ValueError(
+            f"pause_workflow: unknown reason {reason!r}; "
+            f"expected one of {sorted(PAUSE_REASONS)}"
+        )
 
     def _do_pause(s):
         wf = s.query(Workflow).filter_by(id=workflow_id).first()
