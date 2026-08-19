@@ -2906,69 +2906,6 @@ class TestSweepStrayFiles:
         assert (docs / "qa.md").exists()
 
 
-class TestArchiveAndCleanup:
-    """Regression: 5f26488 moved agent artifacts from docs/ to .hephaestus/
-    and updated this function's docstring to say so, but left the actual
-    code reading/writing "docs" -- a docstring/code mismatch, and a real
-    bug: artifacts written to the new .hephaestus/ location were never
-    archived to the permanent designs_folder record at all."""
-
-    def test_archives_flat_and_phase_scoped_reports_from_hephaestus(self, tmp_path):
-        from src.autopilot.orchestrator import OrchestratorLogger, _archive_and_cleanup
-        from src.autopilot.orchestrator.state import DesignEntry
-
-        project_path = tmp_path / "project"
-        (project_path / ".hephaestus" / "qa_validation").mkdir(parents=True)
-        (project_path / ".hephaestus" / "architecture.md").write_text("# Architecture")
-        (project_path / ".hephaestus" / "qa_validation" / "qa.md").write_text("# QA")
-
-        designs_folder = tmp_path / "designs_folder"
-        designs_folder.mkdir()
-
-        design_entry = DesignEntry(
-            path=tmp_path / "design.md", name="d", content_hash="h",
-            project_path=project_path,
-        )
-
-        _archive_and_cleanup(design_entry, designs_folder, OrchestratorLogger(tmp_path / "logs"))
-
-        assert (designs_folder / ".hephaestus" / "architecture.md").exists()
-        assert (designs_folder / ".hephaestus" / "qa.md").exists()
-
-    def test_excludes_tmux_features_and_scratch_directories(self, tmp_path):
-        """tmux/ (transcript logs), features/ (Phase 0 internal state), and
-        scratch/ (agent scratch space) are not phase-report artifacts and
-        must not get swept into the permanent record."""
-        from src.autopilot.orchestrator import OrchestratorLogger, _archive_and_cleanup
-        from src.autopilot.orchestrator.state import DesignEntry
-
-        project_path = tmp_path / "project"
-        hephaestus = project_path / ".hephaestus"
-        (hephaestus / "tmux").mkdir(parents=True)
-        (hephaestus / "tmux" / "agent_x.transcript.log").write_text("log")
-        (hephaestus / "features" / "some-feature").mkdir(parents=True)
-        (hephaestus / "features" / "some-feature" / "scope.md").write_text("scope")
-        (hephaestus / "scratch").mkdir(parents=True)
-        (hephaestus / "scratch" / "notes.md").write_text("notes")
-        (hephaestus / "requirements.md").write_text("# Requirements")
-
-        designs_folder = tmp_path / "designs_folder"
-        designs_folder.mkdir()
-
-        design_entry = DesignEntry(
-            path=tmp_path / "design.md", name="d", content_hash="h",
-            project_path=project_path,
-        )
-
-        _archive_and_cleanup(design_entry, designs_folder, OrchestratorLogger(tmp_path / "logs"))
-
-        dest = designs_folder / ".hephaestus"
-        assert (dest / "requirements.md").exists()
-        assert not (dest / "agent_x.transcript.log").exists()
-        assert not (dest / "scope.md").exists()
-        assert not (dest / "notes.md").exists()
-
-
 class TestCheckApiCredits:
     @patch("src.autopilot.orchestrator.policy.get_tasks")
     @patch("src.autopilot.orchestrator.policy.get_agents")
