@@ -430,6 +430,12 @@ async def create_project(
             )
             if result.returncode == 0:
                 logger.info(f"CodeGraph initialized for project {proj.name} at {resolved}")
+                # Hide .codegraph from git without modifying .gitignore
+                exclude_file = Path(resolved) / ".git" / "info" / "exclude"
+                if exclude_file.exists():
+                    exclude_content = exclude_file.read_text()
+                    if ".codegraph/" not in exclude_content:
+                        exclude_file.write_text(exclude_content.rstrip() + "\n.codegraph/\n")
             else:
                 logger.debug(f"CodeGraph init skipped/failed for {proj.name}: {result.stderr[:200]}")
     except FileNotFoundError:
