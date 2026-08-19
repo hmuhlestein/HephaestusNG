@@ -22,7 +22,6 @@ from src.interfaces import LLMProviderInterface
 from src.memory.rag import RAGSystem
 from src.monitoring.conductor import Conductor
 from src.monitoring.guardian import Guardian
-from src.monitoring.trajectory_context import TrajectoryContext
 from src.phases import PhaseManager
 
 logger = logging.getLogger(__name__)
@@ -205,7 +204,6 @@ class MonitoringLoop:
             db_manager=db_manager,
             agent_manager=agent_manager,
         )
-        self.trajectory_context = TrajectoryContext(db_manager=db_manager)
 
         self.config = get_config()
         self.running = False
@@ -235,7 +233,7 @@ class MonitoringLoop:
         )
         self._guardian_dispatch = GuardianDispatcher(
             db_manager, agent_manager, self.config, self.guardian,
-            phase_manager, self._auto_restart, self.trajectory_context,
+            phase_manager, self._auto_restart,
             self.guardian_summaries_cache,
         )
         self._health_auditor = SystemHealthAuditor(db_manager, agent_manager, self.config)

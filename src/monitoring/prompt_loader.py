@@ -50,7 +50,7 @@ class PromptLoader:
         """Format the Guardian trajectory analysis prompt.
 
         Args:
-            accumulated_context: Full accumulated context from TrajectoryContext
+            accumulated_context: Full accumulated context from Guardian._build_accumulated_context
             past_summaries: List of past Guardian summaries
             task_info: Current task information
             agent_output: Recent agent output from tmux

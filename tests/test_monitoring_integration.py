@@ -8,7 +8,6 @@ import pytest
 from src.core.database import Agent, AgentLog, Task
 from src.monitoring.conductor import Conductor
 from src.monitoring.guardian import Guardian
-from src.monitoring.trajectory_context import TrajectoryContext
 
 
 @pytest.fixture
@@ -50,12 +49,9 @@ def monitoring_system(mock_db_manager, mock_agent_manager, mock_llm_provider):
 
     conductor = Conductor(db_manager=mock_db_manager, agent_manager=mock_agent_manager)
 
-    trajectory_context = TrajectoryContext(db_manager=mock_db_manager)
-
     return {
         "guardian": guardian,
         "conductor": conductor,
-        "trajectory_context": trajectory_context,
         "llm_provider": mock_llm_provider,
     }
 
