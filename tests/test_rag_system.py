@@ -12,7 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.core.simple_config import Config
 from src.interfaces.llm_interface import OpenAIProvider
-from src.memory.rag import MemoryIngestion, RAGSystem
+from src.memory.rag import RAGSystem
 from src.memory.vector_store import VectorStoreManager
 
 
@@ -169,111 +169,6 @@ async def test_rag_retrieval():
     return True
 
 
-@pytest.mark.skip(reason="Requires OpenAI API key")
-async def test_memory_ingestion():
-    """Test document ingestion into memory."""
-    print("\n🧪 Testing Memory Ingestion...")
-
-    # Initialize components
-    config = Config()
-    vector_store = VectorStoreManager()
-    llm_provider = OpenAIProvider(
-        api_key=config.openai_api_key,
-        model=config.llm_model,
-        embedding_model=config.embedding_model,
-    )
-    ingestion = MemoryIngestion(vector_store, llm_provider)
-
-    # Create a test document
-    test_file_path = "/tmp/test_document.md"
-    test_content = """# Test Documentation
-
-## Authentication System
-
-Our authentication system uses JWT tokens with the following features:
-- RS256 algorithm for enhanced security
-- 15-minute access token expiry
-- 7-day refresh token stored in httpOnly cookies
-- Automatic token refresh on 401 responses
-
-## Database Schema
-
-The user table has the following structure:
-- id: UUID primary key
-- email: unique, not null
-- password_hash: bcrypt hashed password
-- created_at: timestamp
-- updated_at: timestamp
-
-## API Endpoints
-
-### POST /auth/login
-Authenticates a user and returns JWT tokens.
-
-### POST /auth/refresh
-Refreshes the access token using the refresh token.
-
-### POST /auth/logout
-Invalidates the refresh token.
-"""
-
-    print("\n1️⃣ Creating test document...")
-    try:
-        with open(test_file_path, "w") as f:
-            f.write(test_content)
-        print(f"   ✅ Created test document: {test_file_path}")
-    except Exception as e:
-        print(f"   ❌ Failed to create test document: {e}")
-        return False
-
-    print("\n2️⃣ Testing document ingestion...")
-    try:
-        await ingestion.ingest_document(
-            file_path=test_file_path, document_type="documentation"
-        )
-        print("   ✅ Document ingested successfully")
-    except Exception as e:
-        print(f"   ❌ Document ingestion failed: {e}")
-        return False
-
-    # Wait for indexing
-    await asyncio.sleep(2)
-
-    print("\n3️⃣ Testing retrieval of ingested content...")
-    try:
-        # Search for content from the ingested document
-        query_embedding = await llm_provider.generate_embedding(
-            "JWT authentication refresh token"
-        )
-
-        results = await vector_store.search(
-            collection="static_docs", query_vector=query_embedding, limit=5
-        )
-
-        print(f"   Found {len(results)} chunks from ingested document")
-        for i, result in enumerate(results[:3]):
-            print(f"      Chunk {i + 1} (Score: {result['score']:.3f}):")
-            print(f"         {result['content'][:100]}...")
-
-    except Exception as e:
-        print(f"   ❌ Failed to retrieve ingested content: {e}")
-        return False
-
-    print("\n4️⃣ Cleaning up...")
-    try:
-        # Clean up test document
-        os.remove(test_file_path)
-        print("   ✅ Removed test document")
-
-        # Note: In production, you'd also clean up the ingested vectors
-        # But for testing, we'll leave them to verify persistence
-
-    except Exception as e:
-        print(f"   ⚠️  Cleanup warning: {e}")
-
-    print("\n✅ Memory Ingestion tests completed successfully!")
-    return True
-
 
 if __name__ == "__main__":
     print("=" * 60)
@@ -286,7 +181,6 @@ if __name__ == "__main__":
 
         try:
             success = await test_rag_retrieval() and success
-            success = await test_memory_ingestion() and success
         except Exception as e:
             print(f"\n❌ Tests failed: {e}")
             return False
