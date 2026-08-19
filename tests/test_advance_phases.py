@@ -17,6 +17,7 @@ from src.core.database import (
     PhaseExecution,
     Task,
     Workflow,
+    WorkflowDefinition,
 )
 
 
@@ -2697,6 +2698,115 @@ class TestCreatePhaseTaskExhaustionArbitrates:
             )
             assert task is not None
             assert task.action_target_phase is None
+
+
+class TestCreatePhaseTaskRetryBoundHonorsConfig:
+    """Regression: _create_phase_task's retry/goto bound used to be a
+    hardcoded constant (5), completely disconnected from
+    eval_point.max_retries -- the config-driven budget
+    WorkflowOrchestrator.evaluate() actually enforces. An operator setting
+    max_retries higher than 5 in workflow.yaml got silently overridden:
+    this bound force-arbitrated at 5 regardless. Now reads the same
+    config value, so the two independent counting mechanisms (this one's
+    DB Task-row count, evaluate()'s in-memory per-call counter) agree on
+    the threshold."""
+
+    def _seed(self, db_manager, max_retries):
+        with db_manager.session_scope() as session:
+            session.add(
+                WorkflowDefinition(
+                    id="def-configured",
+                    name="Configured",
+                    orchestrator_config={
+                        "type": "evaluating",
+                        "evaluation_points": [
+                            {"after_phase": "requirements", "max_retries": max_retries}
+                        ],
+                    },
+                )
+            )
+            session.add(
+                Workflow(
+                    id="wf-configured",
+                    name="Configured Workflow",
+                    status="active",
+                    phases_folder_path="/tmp",
+                    definition_id="def-configured",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-configured",
+                    workflow_id="wf-configured",
+                    name="requirements",
+                    order=1,
+                    description="Gather requirements",
+                    done_definitions=["requirements documented"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-configured",
+                    phase_id="phase-configured",
+                    workflow_execution_id="wf-configured",
+                    status="in_progress",
+                )
+            )
+            for i in range(8):
+                session.add(
+                    Task(
+                        id=f"configured-prior-{i}",
+                        raw_description="r",
+                        done_definition="d",
+                        status="failed",
+                        phase_id="phase-configured",
+                        workflow_id="wf-configured",
+                        created_by_agent_id="orchestrator",
+                        action="goto",
+                    )
+                )
+
+    @patch("src.autopilot.orchestrator.phase_transitions._trigger_arbitration")
+    def test_higher_configured_max_retries_is_not_overridden_by_hardcoded_default(
+        self, mock_trigger, db_manager
+    ):
+        """8 prior attempts, workflow.yaml says max_retries=10 -- must NOT
+        arbitrate yet (the old hardcoded bound of 5 would have)."""
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+
+        self._seed(db_manager, max_retries=10)
+
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
+            side_effect=_agent_row_side_effect("a1"),
+        ):
+            with db_manager.session_scope() as session:
+                session.add(Agent(id="a1", system_prompt="p", status="working", cli_type="pi"))
+            result = _create_phase_task(
+                "wf-configured", "phase-configured", "requirements", "goto", MagicMock(),
+            )
+
+        assert result is True
+        mock_trigger.assert_not_called()
+
+    @patch("src.autopilot.orchestrator.phase_transitions._trigger_arbitration")
+    def test_lower_configured_max_retries_arbitrates_before_the_old_hardcoded_bound(
+        self, mock_trigger, db_manager
+    ):
+        """8 prior attempts, workflow.yaml says max_retries=3 -- must
+        arbitrate (the old hardcoded bound of 5 would have allowed this
+        through)."""
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+
+        self._seed(db_manager, max_retries=3)
+
+        result = _create_phase_task(
+            "wf-configured", "phase-configured", "requirements", "goto", MagicMock(),
+            feedback="still drifting",
+        )
+
+        assert result is False
+        mock_trigger.assert_called_once()
 
 
 class TestArbitrationDoesNotConfuseAdvancement:

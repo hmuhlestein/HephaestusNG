@@ -2671,6 +2671,33 @@ def _cap_out_review_phase(
     return _fire_phase_transition(workflow_id, phase.id, phase.name, logger, force_continue=True)
 
 
+def _get_phase_max_retries(workflow_id: str, phase_name: str) -> Optional[int]:
+    """Look up eval_point.max_retries for a phase, the same config-driven
+    value WorkflowOrchestrator.evaluate() checks phase_retry_counts
+    against.
+
+    _create_phase_task's own retry/goto bound (below) used to be a
+    hardcoded constant, completely disconnected from this value -- two
+    independent counting mechanisms (this one via a DB Task-row count,
+    evaluate()'s via an in-memory per-call counter) for what's supposed to
+    be the same per-phase retry budget, able to disagree whenever
+    workflow.yaml configured a max_retries different from the hardcoded
+    number. Returns None if the workflow has no orchestrator config or no
+    evaluation point for this phase (e.g. sequential mode) -- the caller
+    falls back to a sane default in that case, same role the hardcoded
+    constant used to play.
+    """
+    from src.core.database import DatabaseManager
+
+    pm = PhaseManager(DatabaseManager(None))
+    with get_db() as db:
+        orchestrator = pm._get_orchestrator(db, workflow_id)
+        if not orchestrator:
+            return None
+        eval_point = orchestrator._find_evaluation_point(phase_name)
+        return eval_point.max_retries if eval_point else None
+
+
 def _create_phase_task(
     workflow_id: str,
     phase_id: str,
@@ -2856,8 +2883,14 @@ def _create_phase_task(
                 logger.info(f"[PHASE-TASK] {phase_name} has active agent {active_agent.id[:8]}, skipping")
                 return False
 
-            # Check retry/goto bounds
-            max_phase_attempts = 5
+            # Check retry/goto bounds. Reads the same config-driven budget
+            # WorkflowOrchestrator.evaluate() enforces (eval_point.max_retries)
+            # instead of an independent hardcoded number, so this DB-row-count
+            # safety net (durable across a process restart, unlike evaluate's
+            # in-memory counter) agrees with the configured budget rather than
+            # silently overriding it. Falls back to 5 when no orchestrator
+            # config/evaluation point exists for this phase.
+            max_phase_attempts = _get_phase_max_retries(workflow_id, phase_name) or 5
             if action in ("retry", "goto"):
                 retries = (
                     db.query(Task)
