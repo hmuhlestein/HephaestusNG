@@ -369,6 +369,7 @@ class TestReadTranscriptLogReal:
         from unittest.mock import MagicMock
 
         from src.agents.manager import AgentManager
+        from src.agents.output_capture import AgentOutputCapture
 
         _write_transcript(tmp_path, "test_agent", content)
 
@@ -380,6 +381,7 @@ class TestReadTranscriptLogReal:
         session.query.return_value.filter_by.return_value.first.return_value = task
         mgr.db_manager = MagicMock()
         mgr.db_manager.get_session.return_value = session
+        mgr._output_capture = AgentOutputCapture(mgr.db_manager, MagicMock())
 
         agent = _make_agent(current_task_id="t1")
         return mgr._read_transcript_log(agent, lines)
@@ -598,6 +600,7 @@ class TestReadTranscriptLogReal:
         from unittest.mock import MagicMock
 
         from src.agents.manager import AgentManager
+        from src.agents.output_capture import AgentOutputCapture
 
         _write_transcript(tmp_path, "test_agent", content)
 
@@ -609,6 +612,7 @@ class TestReadTranscriptLogReal:
         session.query.return_value.filter_by.return_value.first.return_value = task
         mgr.db_manager = MagicMock()
         mgr.db_manager.get_session.return_value = session
+        mgr._output_capture = AgentOutputCapture(mgr.db_manager, MagicMock())
 
         agent = _make_agent(current_task_id="t1", status=status)
         return mgr, agent

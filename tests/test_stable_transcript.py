@@ -76,7 +76,7 @@ class TestPollStableTranscript:
         # with 6 echoed commands (each producing a prompt+command line and
         # an output line), the very last couple of lines shouldn't be
         # committed yet.
-        state = agent_manager._pane_stability_cache[session_name]
+        state = agent_manager._output_capture._pane_stability_cache[session_name]
         assert state["committed"] == len(state["history"][-1]) - 2
 
     def test_third_identical_poll_confirms_previously_held_back_lines(
@@ -93,7 +93,7 @@ class TestPollStableTranscript:
 
         clean_path = tmp_path / f"{session_name}.clean.log"
         agent_manager._poll_stable_transcript(session_name, clean_path)
-        first_committed = agent_manager._pane_stability_cache[session_name]["committed"]
+        first_committed = agent_manager._output_capture._pane_stability_cache[session_name]["committed"]
 
         # Nothing changed in the pane -- one more agreeing poll still isn't
         # enough (only 2 of the required 3 consecutive polls so far). Not
@@ -102,12 +102,12 @@ class TestPollStableTranscript:
         # bootstrap and contains that same substring; committed-count
         # equality is the real signal that nothing new confirmed yet.
         agent_manager._poll_stable_transcript(session_name, clean_path)
-        second_committed = agent_manager._pane_stability_cache[session_name]["committed"]
+        second_committed = agent_manager._output_capture._pane_stability_cache[session_name]["committed"]
         assert second_committed == first_committed
 
         # Third agreeing poll -- now confirmed and committed.
         agent_manager._poll_stable_transcript(session_name, clean_path)
-        third_committed = agent_manager._pane_stability_cache[session_name]["committed"]
+        third_committed = agent_manager._output_capture._pane_stability_cache[session_name]["committed"]
 
         assert third_committed > first_committed
         assert "final-marker-line" in clean_path.read_text()
@@ -162,7 +162,7 @@ class TestStabilityConfirmationRace:
 
         bootstrap = ["prompt-1", "$ ruff check .", "blank-placeholder"]
         monkeypatch.setattr(
-            agent_manager, "_capture_pane_lines", lambda _sn: bootstrap
+            agent_manager._output_capture, "_capture_pane_lines", lambda _sn: bootstrap
         )
         agent_manager._poll_stable_transcript(session_name, clean_path)
 
@@ -171,7 +171,7 @@ class TestStabilityConfirmationRace:
         # confirmed (wrongly) under the old 2-poll algorithm.
         still_blank = ["prompt-1", "$ ruff check .", "blank-placeholder"]
         monkeypatch.setattr(
-            agent_manager, "_capture_pane_lines", lambda _sn: still_blank
+            agent_manager._output_capture, "_capture_pane_lines", lambda _sn: still_blank
         )
         agent_manager._poll_stable_transcript(session_name, clean_path)
         assert "blank-placeholder" not in clean_path.read_text()
@@ -181,7 +181,7 @@ class TestStabilityConfirmationRace:
         # placeholder was never locked in.
         real_content = ["prompt-1", "$ ruff check .", "All checks passed!"]
         monkeypatch.setattr(
-            agent_manager, "_capture_pane_lines", lambda _sn: real_content
+            agent_manager._output_capture, "_capture_pane_lines", lambda _sn: real_content
         )
         agent_manager._poll_stable_transcript(session_name, clean_path)
         assert "blank-placeholder" not in clean_path.read_text()
@@ -217,10 +217,10 @@ class TestPollStableTranscriptDiscontinuity:
 
         first_window = [f"line-{i}" for i in range(10)]
         monkeypatch.setattr(
-            agent_manager, "_capture_pane_lines", lambda _sn: first_window
+            agent_manager._output_capture, "_capture_pane_lines", lambda _sn: first_window
         )
         agent_manager._poll_stable_transcript(session_name, clean_path)
-        committed_before = agent_manager._pane_stability_cache[session_name]["committed"]
+        committed_before = agent_manager._output_capture._pane_stability_cache[session_name]["committed"]
         assert committed_before > 0
         content_before = clean_path.read_text()
 
@@ -230,7 +230,7 @@ class TestPollStableTranscriptDiscontinuity:
         # present, just at a different index.
         scrolled_window = [f"line-{i}" for i in range(3, 10)] + ["line-10", "line-11"]
         monkeypatch.setattr(
-            agent_manager, "_capture_pane_lines", lambda _sn: scrolled_window
+            agent_manager._output_capture, "_capture_pane_lines", lambda _sn: scrolled_window
         )
         agent_manager._poll_stable_transcript(session_name, clean_path)
 
@@ -253,20 +253,20 @@ class TestPollStableTranscriptDiscontinuity:
 
         first_window = [f"line-{i}" for i in range(5)]
         monkeypatch.setattr(
-            agent_manager, "_capture_pane_lines", lambda _sn: first_window
+            agent_manager._output_capture, "_capture_pane_lines", lambda _sn: first_window
         )
         agent_manager._poll_stable_transcript(session_name, clean_path)
 
         # Entirely disjoint window -- none of the previous lines appear.
         disjoint_window = [f"unrelated-{i}" for i in range(5)]
         monkeypatch.setattr(
-            agent_manager, "_capture_pane_lines", lambda _sn: disjoint_window
+            agent_manager._output_capture, "_capture_pane_lines", lambda _sn: disjoint_window
         )
         agent_manager._poll_stable_transcript(session_name, clean_path)
 
         content = clean_path.read_text()
         assert "unrelated-0" in content
-        state = agent_manager._pane_stability_cache[session_name]
+        state = agent_manager._output_capture._pane_stability_cache[session_name]
         assert state["committed"] == len(disjoint_window)
 
 
@@ -282,7 +282,7 @@ class TestFlushStableTranscript:
         agent_manager._poll_stable_transcript(session_name, clean_path)
         # Bootstrap withholds the last 2 lines pending confirmation --
         # committed must be strictly less than the full captured pane.
-        state = agent_manager._pane_stability_cache[session_name]
+        state = agent_manager._output_capture._pane_stability_cache[session_name]
         assert state["committed"] < len(state["history"][-1])
 
         agent_manager._flush_stable_transcript(session_name, clean_path)
@@ -381,12 +381,12 @@ class TestGetAgentOutputUsesCleanTranscript:
         # _poll_stable_transcript withholds everything (clean.log stays
         # empty/nonexistent) -- simulates a fresh session or an
         # unsettled, still-streaming response.
-        monkeypatch.setattr(agent_manager, "_poll_stable_transcript", lambda *a, **k: None)
+        monkeypatch.setattr(agent_manager._output_capture, "_poll_stable_transcript", lambda *a, **k: None)
         monkeypatch.setattr(
-            agent_manager, "_capture_pane_lines", lambda _sn: ["live-correctly-rendered-line"]
+            agent_manager._output_capture, "_capture_pane_lines", lambda _sn: ["live-correctly-rendered-line"]
         )
         monkeypatch.setattr(
-            agent_manager, "_read_transcript_log", lambda *a, **k: "raw-duplicated-streaming-line\nraw-duplicated-streaming-line-longer"
+            agent_manager._output_capture, "_read_transcript_log", lambda *a, **k: "raw-duplicated-streaming-line\nraw-duplicated-streaming-line-longer"
         )
 
         output = agent_manager.get_agent_output(agent_id, lines=100)
@@ -444,7 +444,7 @@ class TestGetAgentOutputUsesCleanTranscript:
         )
 
         # Session is gone (agent terminated) -- capture-pane can't see it.
-        monkeypatch.setattr(agent_manager, "_capture_pane_lines", lambda _sn: None)
+        monkeypatch.setattr(agent_manager._output_capture, "_capture_pane_lines", lambda _sn: None)
 
         output = agent_manager.get_agent_output(agent_id, lines=100)
 

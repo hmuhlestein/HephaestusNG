@@ -326,7 +326,7 @@ class TestCreateAgentForTask:
 
         with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
              patch(
-                 "src.agents.manager.asyncio.sleep",
+                 "src.agents.launch_pipeline.asyncio.sleep",
                  new_callable=AsyncMock,
                  side_effect=_cancel_task_during_sleep,
              ), patch.object(
@@ -914,7 +914,7 @@ class TestCreateAgentForTaskFallback:
             task = session.query(Task).filter_by(id="task-fb").first()
 
             with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, patch(
-                "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
+                "src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock
             ):
                 mock_cli = MagicMock()
                 mock_cli.get_launch_command.return_value = LaunchResult("claude --task test", LaunchResult.FLAG)
@@ -1034,7 +1034,7 @@ class TestCreateAgentForTaskFallback:
             task = session.query(Task).filter_by(id="task-badmodel").first()
 
             with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, patch(
-                "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
+                "src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock
             ):
                 mock_cli = MagicMock()
                 mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
@@ -1142,7 +1142,7 @@ class TestCreateAgentForTaskSessionLimitPause:
         task = session.query(Task).filter_by(id="task-sl").first()
 
         with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, patch(
-            "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
+            "src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock
         ):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = LaunchResult("claude --task test", LaunchResult.FLAG)
