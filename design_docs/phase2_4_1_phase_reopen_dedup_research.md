@@ -138,6 +138,48 @@ history already produced (`test_reopening_resets_stale_task_creation_claim`,
 `"in_progress"`-not-`"pending"` requirement) re-run unchanged against the
 refactored code.
 
+## Addendum, 2026-08-19 (gap-check after implementation): a 5th site existed
+
+Implementing the above and then re-sweeping the whole codebase fresh for
+every `task_creation_claimed_at = None` write (rather than trusting this
+doc's own "4 sites" count, inherited directly from the plan doc's
+enumeration) found one more: `_create_phase_task`'s success-path claim
+release (`phase_transitions.py`, ~line 2930, right after the new `Task`
+row is added). It was never named in the plan doc's scoping note, but its
+own existing test class already understood it as a sibling of exactly
+this pattern — `tests/test_advance_phases.py::TestCreatePhaseTaskResetsClaim`'s
+docstring: "Every OTHER reopen point (`_start_next_phase`,
+`_handle_evaluation_retry`, `_handle_evaluation_arbitrate`) resets
+`task_creation_claimed_at` when it reopens a phase; this one didn't
+[before its own historical fix]."
+
+Its shape is structurally close to `_start_next_phase`'s
+(`status in ("pending", "completed") → "in_progress"`, `started_at=now`),
+with one real, documented asymmetry: the claim-clear fires even when the
+status guard doesn't, because a second, different caller path
+(`_case_in_progress_no_tasks`) can reach this function for a phase
+another path already flipped to `"in_progress"` before any task existed
+— for that case there's no status transition to gate on, but the claim
+this call took must still be released. Migrated by wrapping only the
+guarded branch in `reopen_phase_execution(execution, status="in_progress",
+started_at="now")`, leaving the unguarded claim-only clear as its own
+line — this preserves the asymmetry exactly rather than distorting the
+primitive to accommodate it.
+
+A fresh full sweep of every `task_creation_claimed_at`-writing site in
+`phase_transitions.py` (10 total, across both `x.field = None` and
+`.update({...})` forms) confirmed the remaining 4 non-primitive sites are
+correctly out of scope, each with its own documented, distinct reason:
+`_release_phase_task_creation_claim` (a different already-existing shared
+primitive, with its own task-anchored `started_at` strategy), and three
+single-field, claim-only `finally:`-block releases (`_resolve_arbitration_outcome`,
+`_create_phase_task`'s own failure/bail-out path, `_create_corrective_task`,
+`_case_in_progress_complete`) that guard a different kind of region
+(evaluation-in-flight, or task-creation-attempt-in-flight) and deliberately
+never touch `status` — reusing a status-touching helper there would be
+wrong, not just unnecessary, exactly as several of their own comments
+already say.
+
 ## What this does not do
 
 Does not touch the 4 guards. Does not attempt to answer whether
