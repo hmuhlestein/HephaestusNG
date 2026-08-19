@@ -14,7 +14,7 @@ import pytest
 
 import src.mcp.server  # noqa: F401 -- import once here; importing it lazily
 
-# inside a test (e.g. via monkeypatch.setattr("src.mcp.server.process_queue", ...))
+# inside a test (e.g. via monkeypatch.setattr("src.mcp.server.background_loops.process_queue", ...))
 # would run its module-level `_set_app_state(server_state)` and clobber the
 # fake app state a test just installed.
 from src.core.app_context import set_app_state
@@ -214,7 +214,7 @@ class TestTerminateAgentBroadcast:
         async def noop_process_queue():
             pass
 
-        monkeypatch.setattr("src.mcp.server.process_queue", noop_process_queue)
+        monkeypatch.setattr("src.mcp.server.background_loops.process_queue", noop_process_queue)
 
         _seed_project_workflow(db_manager)
         with db_manager.session_scope() as session:
@@ -296,7 +296,7 @@ class TestGiveValidationReviewBroadcast:
         async def noop_process_queue():
             pass
 
-        monkeypatch.setattr("src.mcp.server.process_queue", noop_process_queue)
+        monkeypatch.setattr("src.mcp.server.background_loops.process_queue", noop_process_queue)
 
         _seed_project_workflow(db_manager)
         with db_manager.session_scope() as session:
@@ -345,7 +345,7 @@ class TestGiveValidationReviewClearsStaleFailureReason:
         async def noop_process_queue():
             pass
 
-        monkeypatch.setattr("src.mcp.server.process_queue", noop_process_queue)
+        monkeypatch.setattr("src.mcp.server.background_loops.process_queue", noop_process_queue)
 
         _seed_project_workflow(db_manager)
         with db_manager.session_scope() as session:

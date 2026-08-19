@@ -24,16 +24,12 @@ from src.core.constants import (
     GOTO_REASON_PREFIX,
     PHASE0_DEFINITION_IDS,
 )
-
-# Import authentication function from server module
-from src.mcp.server import (
-    KNOWN_SYSTEM_AGENTS,
-    _check_rate_limit,
-    verify_agent_authentication,
-)
-
 from src.mcp.autopilot._shared import ALLOWED_EXTENSIONS, _cached, _extract_pr_url, _invalidate, _safe_path, _store
 from src.mcp.autopilot.feature_routes import _find_archived_feature_report
+
+# Import authentication function from server module
+from src.mcp.server._shared import KNOWN_SYSTEM_AGENTS, verify_agent_authentication
+from src.mcp.server.oauth_routes import _check_rate_limit
 
 logger = logging.getLogger(__name__)
 

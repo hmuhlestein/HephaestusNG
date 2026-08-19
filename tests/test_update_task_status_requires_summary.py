@@ -35,7 +35,7 @@ def test_db():
 
 @pytest.fixture
 def test_client(test_db, monkeypatch):
-    import src.mcp.server as server_module
+    import src.mcp.server._shared as server_module
 
     monkeypatch.setattr(server_module.server_state, "db_manager", test_db)
     monkeypatch.setattr(server_module.server_state, "initialized", True, raising=False)

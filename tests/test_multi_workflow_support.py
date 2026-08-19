@@ -11,10 +11,10 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from src.mcp.server import (
+from src.mcp.server import app
+from src.mcp.server._shared import (
     CreateTaskRequest,
     StartWorkflowRequest,
-    app,
 )
 from src.mcp.tickets_api import (
     CreateTicketRequest,

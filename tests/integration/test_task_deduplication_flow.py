@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from src.mcp.server import app, server_state
+from src.mcp.server import app
+from src.mcp.server._shared import server_state
 from src.memory.embedding_factory import EmbeddingProvider
 from src.services.task_similarity_service import TaskSimilarityService
 
@@ -18,10 +19,22 @@ class TestTaskDeduplicationFlow:
     async def initialized_server(self):
         """Initialize server with mocked services."""
         # Mock the services
-        with patch("src.mcp.server.get_config") as mock_config, \
+        with patch("src.mcp.server._create_task_steps.get_config") as mock_config, \
+             patch("src.mcp.server._shared.get_config") as mock_config_shared, \
              patch("src.interfaces.llm_interface.get_llm_provider") as mock_llm, \
-             patch("src.mcp.server.verify_agent_authentication", return_value=True):
-            config = Mock()
+             patch("src.mcp.server.agent_task_routes.verify_agent_authentication", return_value=True):
+            # A real Config with overrides, not a bare Mock. Every
+            # attribute production reads but the fixture forgot came back
+            # as an auto-Mock, and those leak downstream: one became an
+            # "Unsupported CLI agent type", the next a SQL bind error
+            # ("Error binding parameter 5: type 'Mock'"). create_task
+            # swallows both in its background handler, so the request still
+            # returned 200 and the only symptom was a dispatch that never
+            # happened -- a fixture drifting from production reads, one
+            # unset attribute at a time.
+            from src.core.simple_config import Config
+
+            config = Config()
             config.openai_api_key = "test-key"
             config.task_dedup_enabled = True
             config.task_similarity_threshold = 0.7
@@ -34,7 +47,15 @@ class TestTaskDeduplicationFlow:
             config.llm_model = "gpt-4"
             config.embedding_model = "text-embedding-ada-002"
             config.max_concurrent_agents = 10
+            # Must be a real CLI name, not left as an auto-Mock: dispatch
+            # resolves the agent class through CLI_AGENTS and raises
+            # "Unsupported CLI agent type" on anything else -- which the
+            # create_task background handler swallows, so the request still
+            # returns 200 and only the missing create_agent_for_task call
+            # reveals it.
+            config.default_cli_tool = "claude"
             mock_config.return_value = config
+            mock_config_shared.return_value = config
 
             # Mock LLM provider to avoid needing langchain_core
             mock_provider = Mock()
@@ -322,14 +343,34 @@ class TestTaskDeduplicationFlow:
     @pytest.mark.asyncio
     async def test_deduplication_disabled(self, client):
         """Test that tasks are created normally when deduplication is disabled."""
-        with patch("src.mcp.server.get_config") as mock_config:
-            config = Mock()
+        with patch("src.mcp.server._create_task_steps.get_config") as mock_config, \
+             patch("src.mcp.server._shared.get_config") as mock_config_shared:
+            # A real Config with overrides, not a bare Mock. Every
+            # attribute production reads but the fixture forgot came back
+            # as an auto-Mock, and those leak downstream: one became an
+            # "Unsupported CLI agent type", the next a SQL bind error
+            # ("Error binding parameter 5: type 'Mock'"). create_task
+            # swallows both in its background handler, so the request still
+            # returned 200 and the only symptom was a dispatch that never
+            # happened -- a fixture drifting from production reads, one
+            # unset attribute at a time.
+            from src.core.simple_config import Config
+
+            config = Config()
             config.task_dedup_enabled = False  # Disabled
             config.openai_api_key = "test-key"
             config.enable_cors = False
             config.database_path = ":memory:"
             config.max_concurrent_agents = 10
+            # Must be a real CLI name, not left as an auto-Mock: dispatch
+            # resolves the agent class through CLI_AGENTS and raises
+            # "Unsupported CLI agent type" on anything else -- which the
+            # create_task background handler swallows, so the request still
+            # returns 200 and only the missing create_agent_for_task call
+            # reveals it.
+            config.default_cli_tool = "claude"
             mock_config.return_value = config
+            mock_config_shared.return_value = config
 
             # Initialize server without deduplication
             await server_state.initialize()

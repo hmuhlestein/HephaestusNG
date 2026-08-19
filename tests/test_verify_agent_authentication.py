@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.mcp.server import verify_agent_authentication
+from src.mcp.server._shared import verify_agent_authentication
 
 
 class _FakeAgent:
@@ -53,7 +53,7 @@ class _FakeSession:
 class TestVerifyAgentAuthentication:
     @pytest.mark.asyncio
     async def test_known_system_agent_trusted_immediately(self):
-        from src.mcp.server import KNOWN_SYSTEM_AGENTS
+        from src.mcp.server._shared import KNOWN_SYSTEM_AGENTS
 
         any_known = next(iter(KNOWN_SYSTEM_AGENTS))
         assert await verify_agent_authentication(any_known) is True
@@ -66,7 +66,7 @@ class TestVerifyAgentAuthentication:
     @pytest.mark.asyncio
     async def test_active_agent_found_on_first_try(self):
         fake_session = _FakeSession([_FakeAgent("working")])
-        with patch("src.mcp.server.server_state") as mock_state:
+        with patch("src.mcp.server._shared.server_state") as mock_state:
             mock_state.db_manager.get_session.return_value = fake_session
             result = await verify_agent_authentication("agent-1")
         assert result is True
@@ -77,7 +77,7 @@ class TestVerifyAgentAuthentication:
         """A terminated agent is a confirmed rejection, not a visibility
         race — must not retry (would just waste 0.3s for no benefit)."""
         fake_session = _FakeSession([_FakeAgent("terminated")])
-        with patch("src.mcp.server.server_state") as mock_state:
+        with patch("src.mcp.server._shared.server_state") as mock_state:
             mock_state.db_manager.get_session.return_value = fake_session
             result = await verify_agent_authentication("agent-2")
         assert result is False
@@ -89,7 +89,7 @@ class TestVerifyAgentAuthentication:
         lookup (after the retry sleep) finds it active -> must succeed,
         not reject as permanently unknown."""
         fake_session = _FakeSession([None, _FakeAgent("working")])
-        with patch("src.mcp.server.server_state") as mock_state, patch(
+        with patch("src.mcp.server._shared.server_state") as mock_state, patch(
             "asyncio.sleep", new_callable=AsyncMock
         ):
             mock_state.db_manager.get_session.return_value = fake_session
@@ -100,7 +100,7 @@ class TestVerifyAgentAuthentication:
     @pytest.mark.asyncio
     async def test_genuinely_unknown_agent_rejected_after_retry(self):
         fake_session = _FakeSession([None, None])
-        with patch("src.mcp.server.server_state") as mock_state:
+        with patch("src.mcp.server._shared.server_state") as mock_state:
             mock_state.db_manager.get_session.return_value = fake_session
             result = await verify_agent_authentication("agent-4")
         assert result is False

@@ -25,7 +25,7 @@ def test_db(tmp_path):
 
 
 async def _run_resume(test_db, workflow_id=None, project_id=None):
-    import src.mcp.server as server_module
+    import src.mcp.server.lifecycle as server_module
 
     with patch.object(server_module, "server_state") as mock_state:
         mock_state.db_manager = test_db
@@ -331,7 +331,7 @@ class TestResumeInterruptedWorkflowsGitCommitPushRecovery:
         wt_path = _make_git_repo_with_worktree(tmp_path, branch_merged=True)
         self._seed(test_db, wt_path)
 
-        with patch("src.mcp.server._tmux_session_alive", return_value=False):
+        with patch("src.mcp.server.lifecycle._tmux_session_alive", return_value=False):
             result = await _run_resume(test_db, "wf-git")
 
         assert result["resumed"] == 1
@@ -347,7 +347,7 @@ class TestResumeInterruptedWorkflowsGitCommitPushRecovery:
         wt_path = _make_git_repo_with_worktree(tmp_path, branch_merged=False)
         self._seed(test_db, wt_path)
 
-        with patch("src.mcp.server._tmux_session_alive", return_value=False):
+        with patch("src.mcp.server.lifecycle._tmux_session_alive", return_value=False):
             result = await _run_resume(test_db, "wf-git")
 
         assert result["resumed"] == 1
@@ -363,7 +363,7 @@ class TestResumeInterruptedWorkflowsGitCommitPushRecovery:
         wt_path = _make_git_repo_with_worktree(tmp_path, branch_merged=True)
         self._seed(test_db, wt_path, phase_name="development")
 
-        with patch("src.mcp.server._tmux_session_alive", return_value=False):
+        with patch("src.mcp.server.lifecycle._tmux_session_alive", return_value=False):
             result = await _run_resume(test_db, "wf-git")
 
         assert result["resumed"] == 1

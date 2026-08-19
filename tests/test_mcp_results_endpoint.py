@@ -6,7 +6,8 @@ from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from src.mcp.server import app, server_state
+from src.mcp.server import app
+from src.mcp.server._shared import server_state
 from unittest.mock import AsyncMock, patch
 
 
@@ -57,7 +58,7 @@ class TestReportResultsEndpoint:
         os.unlink(temp_path)
 
     @patch("src.services.result_service.ResultService.create_result")
-    @patch("src.mcp.server.server_state.broadcast_update")
+    @patch("src.mcp.server._shared.server_state.broadcast_update")
     @patch("src.mcp.memory_api.get_app_state")
     def test_report_results_success(
         self, mock_get_state, mock_broadcast, mock_create_result, client, valid_markdown_file, results_db
@@ -265,7 +266,7 @@ class TestReportResultsEndpoint:
         assert "directory traversal" in response.json()["detail"].lower()
 
     @patch("src.services.result_service.ResultService.create_result")
-    @patch("src.mcp.server.server_state.broadcast_update")
+    @patch("src.mcp.server._shared.server_state.broadcast_update")
     @patch("src.mcp.memory_api.get_app_state")
     def test_multiple_results_per_task(
         self, mock_get_state, mock_broadcast, mock_create_result, client, valid_markdown_file, results_db
