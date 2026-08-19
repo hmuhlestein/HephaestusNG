@@ -26,7 +26,6 @@ from src.core.database import DatabaseManager
 from src.core.logging_config import configure_logging
 from src.core.simple_config import get_config
 from src.interfaces import get_llm_provider
-from src.memory.rag import RAGSystem
 from src.monitoring.monitor import MonitoringLoop
 from src.phases import PhaseManager
 
@@ -66,19 +65,6 @@ async def setup_monitoring_system():
         agent_manager = AgentManager(db_manager, llm_provider)
         logger.info("Agent manager initialized")
 
-        # Initialize vector store manager
-        from src.memory.vector_store import VectorStoreManager
-
-        vector_store = VectorStoreManager(
-            qdrant_url=config.qdrant_url,
-            collection_prefix=config.qdrant_collection_prefix,
-        )
-        logger.info("Vector store manager initialized")
-
-        # Initialize RAG system
-        rag_system = RAGSystem(vector_store, llm_provider)
-        logger.info("RAG system initialized")
-
         # Initialize phase manager (optional)
         phase_manager = None
         try:
@@ -117,7 +103,6 @@ async def setup_monitoring_system():
             db_manager=db_manager,
             agent_manager=agent_manager,
             llm_provider=llm_provider,
-            rag_system=rag_system,
             phase_manager=phase_manager,
         )
 

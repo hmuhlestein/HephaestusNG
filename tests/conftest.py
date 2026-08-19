@@ -273,19 +273,6 @@ def mock_agent_manager():
 
 
 @pytest.fixture
-def mock_rag_system():
-    """Create a mock RAG system."""
-    mock = MagicMock()
-    mock.retrieve_for_task = AsyncMock(
-        return_value=[
-            {"content": "Memory 1", "type": "learning"},
-            {"content": "Memory 2", "type": "discovery"},
-        ]
-    )
-    return mock
-
-
-@pytest.fixture
 def test_workflow_id():
     """Generate a unique test workflow ID."""
     return f"test-workflow-{uuid.uuid4()}"

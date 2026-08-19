@@ -42,16 +42,7 @@ def mock_llm():
 
 
 @pytest.fixture
-def mock_rag():
-    mock = Mock()
-    mock.retrieve_for_task = AsyncMock(return_value=[])
-    return mock
-
-
-
-
-@pytest.fixture
-def make_monitoring_loop(mock_db, mock_agent_manager, mock_llm, mock_rag):
+def make_monitoring_loop(mock_db, mock_agent_manager, mock_llm):
     from src.monitoring.monitor import MonitoringLoop
 
     with patch("src.monitoring.monitor.get_config") as mock_cfg:
@@ -63,7 +54,6 @@ def make_monitoring_loop(mock_db, mock_agent_manager, mock_llm, mock_rag):
             db_manager=mock_db,
             agent_manager=mock_agent_manager,
             llm_provider=mock_llm,
-            rag_system=mock_rag,
         )
     return ml
 
@@ -2998,7 +2988,7 @@ class TestStuckTaskNudgeCap:
         return db
 
     @pytest.fixture
-    def audit_monitor(self, real_db, mock_agent_manager, mock_llm, mock_rag):
+    def audit_monitor(self, real_db, mock_agent_manager, mock_llm):
         from src.monitoring.monitor import MonitoringLoop
 
         with patch("src.monitoring.monitor.get_config") as mock_cfg:
@@ -3007,7 +2997,6 @@ class TestStuckTaskNudgeCap:
                 db_manager=real_db,
                 agent_manager=mock_agent_manager,
                 llm_provider=mock_llm,
-                rag_system=mock_rag,
             )
         return m
 
@@ -3156,7 +3145,7 @@ class TestStuckTaskPromotionClearsStaleFailureReason:
         return db
 
     @pytest.fixture
-    def audit_monitor(self, real_db, mock_agent_manager, mock_llm, mock_rag):
+    def audit_monitor(self, real_db, mock_agent_manager, mock_llm):
         from src.monitoring.monitor import MonitoringLoop
 
         with patch("src.monitoring.monitor.get_config") as mock_cfg:
@@ -3165,7 +3154,6 @@ class TestStuckTaskPromotionClearsStaleFailureReason:
                 db_manager=real_db,
                 agent_manager=mock_agent_manager,
                 llm_provider=mock_llm,
-                rag_system=mock_rag,
             )
         return m
 

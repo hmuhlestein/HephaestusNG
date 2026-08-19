@@ -8,7 +8,6 @@ import pytest
 from src.agents.manager import AgentManager
 from src.core.database import Agent, DatabaseManager, Task
 from src.interfaces import LLMProviderInterface
-from src.memory.rag import RAGSystem
 from src.monitoring.guardian import Guardian
 from src.monitoring.monitor import MonitoringLoop
 
@@ -41,13 +40,6 @@ def mock_llm_provider():
     """Mock LLM provider."""
     mock = Mock(spec=LLMProviderInterface)
     mock.analyze_agent_trajectory = AsyncMock()
-    return mock
-
-
-@pytest.fixture
-def mock_rag_system():
-    """Mock RAG system."""
-    mock = Mock(spec=RAGSystem)
     return mock
 
 
@@ -176,7 +168,6 @@ class TestSteeringMessageFix:
         mock_db_manager,
         mock_agent_manager,
         mock_llm_provider,
-        mock_rag_system,
         test_agent,
         test_task,
     ):
@@ -219,7 +210,6 @@ class TestSteeringMessageFix:
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
             llm_provider=mock_llm_provider,
-            rag_system=mock_rag_system,
         )
 
         # Run one monitoring cycle
@@ -245,7 +235,6 @@ class TestSteeringMessageFix:
         mock_db_manager,
         mock_agent_manager,
         mock_llm_provider,
-        mock_rag_system,
         test_agent,
         test_task,
     ):
@@ -288,7 +277,6 @@ class TestSteeringMessageFix:
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
             llm_provider=mock_llm_provider,
-            rag_system=mock_rag_system,
         )
 
         # Run one monitoring cycle
@@ -304,7 +292,6 @@ class TestSteeringMessageFix:
         mock_db_manager,
         mock_agent_manager,
         mock_llm_provider,
-        mock_rag_system,
         test_agent,
         test_task,
     ):
@@ -345,7 +332,6 @@ class TestSteeringMessageFix:
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
             llm_provider=mock_llm_provider,
-            rag_system=mock_rag_system,
         )
 
         # Run one monitoring cycle
