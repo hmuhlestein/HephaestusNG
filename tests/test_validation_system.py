@@ -247,6 +247,78 @@ class TestValidatorAgent:
 
         assert mock_format_prompt.call_args.kwargs["working_directory"] == "/tmp"
 
+    @pytest.mark.asyncio
+    async def test_spawn_validator_agent_wires_workspace_changes_and_claims(
+        self, mock_db_manager
+    ):
+        """Phase 3 Tier 2 item 18 (docs/AUTOPILOT_REFACTOR_PLAN.md):
+        get_workspace_changes and get_agent_results were both called and
+        their return values discarded -- the validation prompt was built
+        with no diff summary and no claimed-results text despite dedicated
+        code existing to produce both. Confirm both now actually reach
+        format_task_validation_prompt's call."""
+        session = mock_db_manager.get_session()
+
+        task = Mock()
+        task.id = "task123"
+        task.assigned_agent_id = "agent123"
+        task.phase_id = None  # see the neighboring fallback test's comment
+        task.validation_iteration = 1
+        task.raw_description = "Test"
+        task.enriched_description = "Test enhanced"
+        task.done_definition = "Done"
+        task.last_validation_feedback = None
+
+        def _query_side_effect(model):
+            query = Mock()
+            if model is Task:
+                query.filter_by.return_value.first.return_value = task
+            else:
+                query.filter_by.return_value.first.return_value = None
+            return query
+
+        session.query.side_effect = _query_side_effect
+
+        mock_worktree = Mock()
+        real_workspace_changes = {
+            "files_created": ["src/new_file.py"],
+            "files_modified": [],
+            "files_deleted": [],
+            "stats": {"insertions": 10, "deletions": 0},
+        }
+        mock_worktree.get_workspace_changes.return_value = real_workspace_changes
+        mock_worktree.get_agent_branch_path.return_value = "/tmp/wt"
+
+        mock_agent_manager = AsyncMock()
+
+        with (
+            patch(
+                "src.validation.validator_agent.get_agent_results",
+                return_value="Agent claims it implemented the new file.",
+            ),
+            patch(
+                "src.monitoring.prompt_loader.prompt_loader.format_task_validation_prompt",
+                return_value="Validation prompt",
+            ) as mock_format_prompt,
+        ):
+            await spawn_validator_agent(
+                validation_type="task",
+                target_id="task123",
+                workflow_id="wf-123",
+                commit_sha="abc123",
+                db_manager=mock_db_manager,
+                branch_manager=mock_worktree,
+                agent_manager=mock_agent_manager,
+                original_agent_id="agent-123",
+            )
+
+        assert mock_format_prompt.call_args.kwargs["workspace_changes"] == (
+            real_workspace_changes
+        )
+        assert mock_format_prompt.call_args.kwargs["agent_claims"] == (
+            "Agent claims it implemented the new file."
+        )
+
     def test_send_feedback_to_agent(self):
         """Test sending feedback to agent."""
         with patch("subprocess.run") as mock_run:

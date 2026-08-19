@@ -536,7 +536,13 @@ async def cleanup_branches(project_path: Optional[str] = None):
 @router.get("/health")
 async def get_system_health():
     """Get system health audit results."""
-    return run_health_audit()
+    import asyncio
+
+    loop = asyncio.get_event_loop()
+    # run_health_audit stays sync -- it's shared with the Monitor's own
+    # background-thread call path (health_audit.py). Offload here, at the
+    # async caller, instead of making the shared function itself async.
+    return await loop.run_in_executor(None, run_health_audit)
 
 def run_health_audit(db_manager=None):
     """Shared health audit logic used by both Monitor and API endpoint.

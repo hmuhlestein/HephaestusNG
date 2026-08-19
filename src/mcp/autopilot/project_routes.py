@@ -1396,12 +1396,19 @@ async def remove_project_design(project_id: str, filename: str):
                     from src.autopilot.orchestrator.engine_client import terminate_agent
 
                     agents = db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
+                    loop = asyncio.get_event_loop()
                     for agent in agents:
                         try:
-                            subprocess.run(
-                                ["tmux", "kill-session", "-t", agent.tmux_session_name],
-                                capture_output=True,
-                                timeout=3,
+                            import functools
+
+                            await loop.run_in_executor(
+                                None,
+                                functools.partial(
+                                    subprocess.run,
+                                    ["tmux", "kill-session", "-t", agent.tmux_session_name],
+                                    capture_output=True,
+                                    timeout=3,
+                                ),
                             )
                         except Exception:
                             pass

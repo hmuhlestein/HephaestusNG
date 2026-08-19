@@ -647,12 +647,21 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             # Merge it now that the feature is approved.
             pr_url = feature.pr_url or _extract_pr_url(db, wf.id, {})
             if pr_url:
+                import functools
                 import subprocess
                 try:
-                    # Try gh pr merge first
-                    result = subprocess.run(
-                        ["gh", "pr", "merge", pr_url, "--merge"],
-                        capture_output=True, text=True, timeout=30,
+                    # Try gh pr merge first -- offloaded, this can take up
+                    # to the full 30s timeout and would otherwise block the
+                    # event loop (every other request this process is
+                    # serving) for that whole window on every approval.
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(
+                        None,
+                        functools.partial(
+                            subprocess.run,
+                            ["gh", "pr", "merge", pr_url, "--merge"],
+                            capture_output=True, text=True, timeout=30,
+                        ),
                     )
                     if result.returncode == 0:
                         logger.info(f"[REVIEW] Merged PR {pr_url} after approval")

@@ -98,3 +98,46 @@ def create_vector_store() -> VectorStoreProtocol:
     raise ValueError(
         f"Unknown VECTOR_STORE_BACKEND: {backend}. Use 'qdrant' or 'turbovec'."
     )
+
+
+def validate_embedding_dimension_compatibility(
+    vector_store: VectorStoreProtocol, embedding_dim: int
+) -> None:
+    """Fail fast if the configured embedding provider's output dimension
+    doesn't match the vector store's collection dimension.
+
+    Without this, a mismatch (e.g. EMBEDDING_BACKEND=openai's 3072-dim
+    output against VECTOR_STORE_BACKEND=turbovec's 384-dim collections)
+    isn't caught here -- store_memory's own per-call ValueError guard
+    catches it, but every current caller (rag.py's ingest_document,
+    memory_api.py's save_memory background task) wraps that call in a
+    bare except that logs and continues, so the failure is invisible
+    until someone notices every single memory save has silently failed.
+
+    Args:
+        vector_store: An already-constructed store from create_vector_store().
+        embedding_dim: The embedding provider's output dimension
+            (EmbeddingProvider.get_dim()).
+
+    Raises:
+        ValueError: If the store's collections expect a different dimension.
+    """
+    collections = getattr(vector_store, "COLLECTIONS", None)
+    if not collections:
+        return
+
+    # TurboVecStore keys its per-collection dict "dim"; VectorStoreManager
+    # (Qdrant) keys it "size" -- both are uniform across every collection
+    # within a given backend, so checking one collection is sufficient.
+    sample = next(iter(collections.values()))
+    store_dim = sample.get("dim", sample.get("size"))
+    if store_dim is None or store_dim == embedding_dim:
+        return
+
+    raise ValueError(
+        f"Embedding/vector-store dimension mismatch: the configured "
+        f"embedding provider produces {embedding_dim}-dim vectors, but "
+        f"{type(vector_store).__name__}'s collections expect {store_dim}-dim. "
+        f"Check EMBEDDING_BACKEND against VECTOR_STORE_BACKEND -- every "
+        f"store_memory call will otherwise fail silently."
+    )

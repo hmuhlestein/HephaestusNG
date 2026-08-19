@@ -441,3 +441,41 @@ class TestCreateTaskValidation:
         )
         assert response.status_code == 200
         assert "task_id" in response.json()
+
+
+class TestGetCommitDiffTimeouts:
+    """Phase 3 Tier 2 item 10 (docs/AUTOPILOT_REFACTOR_PLAN.md):
+    get_commit_diff_endpoint's three subprocess.run calls (git show, git
+    diff --numstat, per-file git diff) had no timeout, so a hung git
+    process (e.g. against a corrupted repo or a network-mounted worktree)
+    would block the request indefinitely."""
+
+    def test_every_git_subprocess_call_has_a_timeout(self, client, headers):
+        from unittest.mock import patch
+
+        calls = []
+
+        def _fake_run(cmd, **kwargs):
+            calls.append(kwargs)
+            from unittest.mock import MagicMock
+
+            result = MagicMock()
+            result.returncode = 0
+            if cmd[:2] == ["git", "show"]:
+                result.stdout = "abc123|Test Author|1700000000|Test commit message"
+            elif "--numstat" in cmd:
+                result.stdout = ""
+            else:
+                result.stdout = ""
+            return result
+
+        with patch("subprocess.run", side_effect=_fake_run):
+            response = client.get(
+                "/api/tickets/commit-diff/abc123",
+                headers=headers,
+            )
+
+        assert response.status_code == 200
+        assert len(calls) >= 2, "expected at least the show + numstat git calls"
+        for kwargs in calls:
+            assert "timeout" in kwargs, f"subprocess.run call missing timeout: {kwargs}"

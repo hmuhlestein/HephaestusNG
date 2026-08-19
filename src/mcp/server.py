@@ -340,9 +340,17 @@ class ServerState:
         if config.task_dedup_enabled:
             try:
                 from src.memory.embedding_factory import create_embedding_provider
+                from src.memory.store_factory import validate_embedding_dimension_compatibility
                 from src.services.ticket_search_service import TicketSearchService
 
                 self.embedding_service = create_embedding_provider()
+                # Fail fast here, at startup, rather than letting every
+                # store_memory call fail silently later (see the
+                # function's own docstring -- every current caller
+                # swallows that per-call ValueError).
+                validate_embedding_dimension_compatibility(
+                    self.vector_store, self.embedding_service.get_dim()
+                )
                 # Share the same embedding provider instance with TicketSearchService
                 # instead of letting it create its own separate model load.
                 TicketSearchService._embedding_provider = self.embedding_service

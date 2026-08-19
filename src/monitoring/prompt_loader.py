@@ -346,6 +346,8 @@ class PromptLoader:
         previous_feedback: str = None,
         workflow_id: Optional[str] = None,
         workflow_description: Optional[str] = None,
+        workspace_changes: Optional[Dict[str, Any]] = None,
+        agent_claims: Optional[str] = None,
     ) -> str:
         """Format the task validation prompt with specific values.
 
@@ -362,11 +364,44 @@ class PromptLoader:
             previous_feedback: Previous validation feedback if any
             workflow_id: ID of the workflow this task belongs to
             workflow_description: Description of the workflow
+            workspace_changes: WorktreeManager.get_workspace_changes()'s
+                return dict (files_created/modified/deleted, stats), if
+                available. Gives the validator a pre-computed starting
+                point before it explores the worktree itself per STEP 2.
+            agent_claims: get_agent_results()'s return string -- what the
+                original agent reported completing, if available.
 
         Returns:
             Formatted prompt ready to send to validator
         """
         template = self.load_prompt("task_validation_prompt")
+
+        if workspace_changes:
+            stats = workspace_changes.get("stats", {})
+            summary_section = get_prompt(
+                "task_validation_workspace_changes",
+                {
+                    "files_created": self._format_list(
+                        workspace_changes.get("files_created", []), "(none)"
+                    ),
+                    "files_modified": self._format_list(
+                        workspace_changes.get("files_modified", []), "(none)"
+                    ),
+                    "files_deleted": self._format_list(
+                        workspace_changes.get("files_deleted", []), "(none)"
+                    ),
+                    "insertions": stats.get("insertions", 0),
+                    "deletions": stats.get("deletions", 0),
+                },
+            )
+        else:
+            summary_section = ""
+
+        agent_claims_section = (
+            get_prompt("task_validation_agent_claims", {"agent_claims": agent_claims})
+            if agent_claims
+            else ""
+        )
 
         # Handle previous feedback section
         if previous_feedback and iteration > 1:
@@ -404,6 +439,8 @@ class PromptLoader:
             workflow_id=workflow_id or "N/A (standalone task)",
             workflow_description=workflow_description
             or "No workflow description available",
+            workspace_changes_section=summary_section,
+            agent_claims_section=agent_claims_section,
         )
 
     def _format_list(self, items: list, empty_message: str) -> str:
