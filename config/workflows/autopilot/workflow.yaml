@@ -250,8 +250,12 @@ orchestrator:
 
     - after_phase: git_commit_push
       evaluator: heuristic
-      max_retries: 0
+      max_retries: 2
       conditions:
+        - if: "score < 0.3"
+          action: goto
+          target: development
+          reason: "Blocking issues found at commit stage — returning to development to fix before merge"
         - if: "score >= 0.0"
           action: continue
           reason: "Git commit complete"
