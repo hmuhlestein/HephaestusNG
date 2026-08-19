@@ -156,9 +156,27 @@ async def get_pipeline_status(
         # Fall back to persistent state if run-specific state is empty
         if not state:
             try:
+                import asyncio
+
                 from src.autopilot.orchestrator.state import PersistentPipelineState
 
-                state_obj, _processed = PersistentPipelineState(project_id=project_id).load()
+                # .load() does two synchronous DB round-trips and
+                # deserializes a JSON blob that grows with every design
+                # ever processed (838+ processed-design hashes on the
+                # live DB) -- called directly here, that blocks the
+                # single-threaded event loop on every uncached poll of
+                # this endpoint, which the dashboard hits every 3s (see
+                # frontend Autopilot.tsx). The 2s cache above limits how
+                # often this actually runs, but doesn't make each run
+                # free. Confirmed live 2026-08-19: /health -- a bare dict
+                # return with zero I/O of its own -- intermittently took
+                # several seconds (once the full 8s curl timeout) even
+                # after offloading the two other blocking cost-recording
+                # call sites found in the same investigation.
+                loop = asyncio.get_event_loop()
+                state_obj, _processed = await loop.run_in_executor(
+                    None, PersistentPipelineState(project_id=project_id).load
+                )
                 state = state_obj.to_dict()
             except Exception:
                 state = {}
