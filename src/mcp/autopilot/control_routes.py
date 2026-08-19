@@ -104,7 +104,7 @@ async def get_pipeline_status(
             from src.core.database import Agent, Task, Workflow, get_db
 
             with get_db() as db:
-                has_active = db.query(Workflow).filter(Workflow.project_id == project_id, Workflow.status.in_(["active", "running"])).first()
+                has_active = db.query(Workflow).filter(Workflow.project_id == project_id, Workflow.status == "active").first()
                 if has_active:
                     running = True
                 else:
@@ -132,7 +132,7 @@ async def get_pipeline_status(
                 # Excludes "paused" -- see the project_id-scoped check above,
                 # which deliberately does the same for the same reason: a
                 # user pause must not be reported back as "still running".
-                active_wf = db.query(Workflow).filter(Workflow.status.in_(["active", "running"])).first()
+                active_wf = db.query(Workflow).filter(Workflow.status == "active").first()
                 if active_wf:
                     active_agents = (
                         db.query(Agent)
@@ -641,7 +641,7 @@ def run_health_audit(db_manager=None):
             session.query(Workflow)
             .filter(
                 Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
-                Workflow.status.in_(["active", "running", "paused"]),
+                Workflow.status.in_(["active", "paused"]),
             )
             .all()
         )

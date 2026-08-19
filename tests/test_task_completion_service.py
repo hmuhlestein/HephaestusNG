@@ -105,15 +105,37 @@ class TestVerifyOutputArtifact:
             )
             assert result is None
 
-    def test_passes_when_no_workflow_id_and_files_in_feature_dir(self):
-        """Test passes when workflow_id is None but files exist in feature dir."""
+    def test_passes_when_no_workflow_id_and_files_in_feature_dir(self, tmp_path):
+        """Test passes when workflow_id is None but files exist in feature dir.
+
+        Uses a real, isolated project_root (tmp_path) with a real feature
+        subdirectory and output file -- not a global `Path.exists` patch.
+        The old version's global patch made `feature_dir.exists()` lie
+        (always True), but `feature_dir.iterdir()` is never mocked and
+        still hits the real filesystem -- so the test only actually passed
+        because this repo's own real .hephaestus/features/ directory
+        happened to have at least one entry from a prior real run. Moving
+        that directory aside reproduced the failure the plan describes.
+        """
         phase = Mock(name="development", id="phase-1")
         task = Mock(phase_id="phase-1", workflow_id=None, id="task-1")
 
         mock_session = Mock()
 
+        # The feature-folder fallback builds d / "docs" / declared_output,
+        # and declared_output here is "docs/output.md" (matching this
+        # test's own required_files mock below) -- so the real file needs
+        # both "docs" segments, not just one.
+        feature_output = (
+            tmp_path / ".hephaestus" / "features" / "some-feature" / "docs" / "docs" / "output.md"
+        )
+        feature_output.parent.mkdir(parents=True)
+        feature_output.write_text("output")
+
+        fake_config = Mock(project_root=str(tmp_path))
+
         with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]), \
-             patch("pathlib.Path.exists", return_value=True), \
+             patch("src.core.simple_config.get_config", return_value=fake_config), \
              patch("src.autopilot.okf_markdown.read_okf", return_value=({"type": "test"}, "body")):
             result = TaskCompletionService.verify_output_artifact(
                 session=mock_session, task=task, phase=phase

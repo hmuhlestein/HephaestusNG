@@ -2,15 +2,16 @@ id: 13
 name: git_commit_push
 thinking_level: low
 description: |
-  Human-only Git hand-off. The pipeline must not commit, push, create pull
-  requests, or merge branches. An operator reviews the validated worktree and
-  explicitly authorizes any Git action.
+  Autonomous Git hand-off, with the merge step gated by review_mode. The
+  agent commits and pushes on its own; whether it also merges depends on
+  the project's review_mode setting.
 
   This phase runs inside the shared feature worktree. The worktree is already on
   the correct feature branch. Steps:
   1. Stage and commit all remaining changes
   2. Push the feature branch to remote
-  3. Create and merge a pull request (or local merge if gh unavailable)
+  3. Merge to main (or, in review_mode, create a pull request and stop —
+     a human approves and merges later via the dashboard's review flow)
   4. Record commit hash and PR URL
 done_definitions:
   - "Current branch and remote confirmed (or no-remote noted)"

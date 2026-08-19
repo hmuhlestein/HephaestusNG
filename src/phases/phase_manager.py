@@ -1204,10 +1204,11 @@ class PhaseManager:
             # evaluating. WorkflowOrchestrator.total_gotos is in-memory only,
             # and a fresh PhaseManager (hence a fresh, uncached orchestrator)
             # gets constructed on nearly every mark_phase_complete call (see
-            # task_completion_service.py's fire_spec_gate_if_ready and
-            # autopilot/orchestrator.py's periodic sweep) — without this, the
-            # counter silently reset to 0 every time and max_total_gotos never
-            # actually fired, letting a failing gate goto-loop forever.
+            # src/autopilot/orchestrator/phase_transitions.py's
+            # fire_spec_gate_if_ready and its own periodic sweep) — without
+            # this, the counter silently reset to 0 every time and
+            # max_total_gotos never actually fired, letting a failing gate
+            # goto-loop forever.
             workflow_row = (
                 session.query(Workflow).filter_by(id=phase.workflow_id).first()
             )
