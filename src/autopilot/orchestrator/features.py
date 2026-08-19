@@ -12,6 +12,7 @@ from src.core.database import (
     Workflow,
     get_db,
 )
+from src.core.status_derivation import derive_feature_status
 
 from typing import TYPE_CHECKING
 
@@ -239,10 +240,19 @@ def _sync_stale_feature_statuses(logger: "OrchestratorLogger") -> int:
             .all()
         )
         for feature in stale:
-            logger.info(f"[FEATURE-SYNC] {feature.feature_key}: workflow already completed but Feature.status was {feature.status!r} -- syncing to completed")
-            feature.status = "completed"
-            feature.completed_at = feature.completed_at or datetime.utcnow()
-            repaired += 1
+            old_status = feature.status
+            # Route through the single source of truth instead of
+            # hand-rolling "workflow completed -> feature completed" --
+            # derive_feature_status also handles the edge cases this sweep
+            # doesn't (a workflow that's "completed" but has an early
+            # superseded-by-retry failed task, PAUSED/SKIPPED preservation,
+            # incomplete-phase checks), and does its own write-back/commit.
+            derived = derive_feature_status(db, feature.id, write_back=True)
+            if derived != old_status:
+                logger.info(f"[FEATURE-SYNC] {feature.feature_key}: workflow already completed, Feature.status was {old_status!r} -- derived {derived!r}")
+                if derived in ("completed", "failed", "skipped"):
+                    feature.completed_at = feature.completed_at or datetime.utcnow()
+                repaired += 1
 
         if repaired:
             db.commit()
@@ -279,6 +289,7 @@ def _sync_stale_design_statuses(logger: "OrchestratorLogger") -> int:
     Returns the number of designs repaired.
     """
     from src.core.database import AutopilotDesign, Feature
+    from src.core.status_derivation import derive_design_status
 
     repaired = 0
     with get_db() as db:
@@ -297,9 +308,18 @@ def _sync_stale_design_statuses(logger: "OrchestratorLogger") -> int:
             )
             if incomplete > 0:
                 continue
-            logger.info(f"[DESIGN-SYNC] Design {design.id[:8]} ({design.name}) has all {total} feature(s) completed/skipped but status was 'active' -- syncing to completed")
-            design.status = "completed"
-            repaired += 1
+            # This raw-status pre-filter is just a cheap "worth checking"
+            # gate -- the actual derivation (and its own write-back/commit)
+            # goes through the single source of truth, which re-derives
+            # each feature's status fresh rather than trusting the raw
+            # Feature.status columns this filter used, and accounts for
+            # has_failed_wf/VALIDATED cases this sweep's own simpler
+            # "all completed/skipped" check doesn't.
+            old_status = design.status
+            derived = derive_design_status(db, design.id, write_back=True)
+            if derived != old_status:
+                logger.info(f"[DESIGN-SYNC] Design {design.id[:8]} ({design.name}) has all {total} feature(s) completed/skipped, status was {old_status!r} -- derived {derived!r}")
+                repaired += 1
         if repaired:
             db.commit()
     return repaired

@@ -3933,7 +3933,7 @@ class TestSyncStaleFeatureStatuses:
         self, orch_db_env
     ):
         from src.autopilot.orchestrator.features import _sync_stale_feature_statuses
-        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Task, Workflow
 
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
@@ -3957,6 +3957,18 @@ class TestSyncStaleFeatureStatuses:
                     name="Feature A",
                     scope="s",
                     status="active",
+                    workflow_id="wf-done",
+                )
+            )
+            # derive_feature_status needs at least one real task to derive
+            # from -- with none, it conservatively returns the current
+            # status unchanged ("no tasks yet").
+            session.add(
+                Task(
+                    id="task-1",
+                    raw_description="do work",
+                    done_definition="done",
+                    status="done",
                     workflow_id="wf-done",
                 )
             )
@@ -4116,7 +4128,7 @@ class TestSyncStaleFeatureStatuses:
         relink from the matching workflow's launch_params first, then sync
         status in the same tick."""
         from src.autopilot.orchestrator.features import _sync_stale_feature_statuses
-        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Task, Workflow
 
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
@@ -4143,6 +4155,18 @@ class TestSyncStaleFeatureStatuses:
                     scope="s",
                     status="active",
                     workflow_id=None,
+                )
+            )
+            # derive_feature_status needs at least one real task to derive
+            # from -- with none, it conservatively returns the current
+            # status unchanged ("no tasks yet").
+            session.add(
+                Task(
+                    id="task-1",
+                    raw_description="do work",
+                    done_definition="done",
+                    status="done",
+                    workflow_id="wf-done",
                 )
             )
 
