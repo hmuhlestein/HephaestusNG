@@ -133,14 +133,9 @@ def _get_paused_workflow_max_retry_cycles() -> int:
 STUCK_THRESHOLD = 3
 DESIGN_QUEUE_SCAN_INTERVAL = 60
 HEARTBEAT_INTERVAL = 300
-# FIX: Extracted to config (hephaestus_config.yaml -> autopilot section)
-# Fallback values preserved here for backward compatibility.
-MAX_WORKFLOW_TIME = 7200  # 2 hours per workflow execution (deprecated: use config)
 PARENT_PEEK_INTERVAL = int(os.environ.get("HEPH_PEEK_INTERVAL", "60"))  # seconds between parent peeks
 
 # Feature Model constants
-# FIX: Extracted to config (hephaestus_config.yaml -> autopilot section)
-MAX_PHASE0_TIME = 3600  # 1 hour timeout for Phase 0 (deprecated: use config)
 MAX_PARALLEL_FEATURES = 4  # max concurrent feature pipelines
 # How many CONSECUTIVE design-queue scans (each DESIGN_QUEUE_SCAN_INTERVAL
 # apart) a workflow can show zero agent/task activity while "active" before
@@ -2667,69 +2662,6 @@ def run_design_aggregate(
 
     return status, report
 
-
-
-
-
-
-def _archive_and_cleanup(
-    design_entry: DesignEntry,
-    designs_folder: Path,
-    logger: OrchestratorLogger,
-) -> None:
-    """Copy phase artifacts to the permanent designs folder, then remove the worktree.
-
-    Copies .hephaestus/*.md, *.json, *.html from the shared worktree into
-    designs_folder/.hephaestus/ so artifacts survive worktree removal.
-    Then removes the linked worktree via `git worktree remove`.
-    """
-    import shutil
-    import subprocess
-
-    project_path = Path(design_entry.project_path) if design_entry.project_path else None
-    if not project_path or not project_path.exists():
-        return
-
-    # Worktrees live at <project_root>/.worktrees/wt_<name>. The project_path
-    # passed to run_single_design IS the worktree root.
-    worktree = project_path
-    repo_root = worktree.parent.parent  # .worktrees/ -> project root
-
-    # Copy docs. Recurse, not iterate the top level -- some phase reports
-    # sit flat at .hephaestus/<file> (requirements.md,
-    # architecture.md), others one level down in a phase subdirectory
-    # (qa_validation/qa.md, per each gated phase's CRITICAL PATH
-    # RULE). Excludes tmux/ (transcript logs), features/ (Phase 0 internal
-    # state), and scratch/ (agent scratch space) -- not phase-report
-    # artifacts.
-    worktree_docs = worktree / ".hephaestus"
-    dest_docs = designs_folder / ".hephaestus"
-    _archive_excluded_dirs = {"tmux", "features", "scratch"}
-    if worktree_docs.exists():
-        dest_docs.mkdir(parents=True, exist_ok=True)
-        for f in worktree_docs.rglob("*"):
-            if not f.is_file():
-                continue
-            if f.relative_to(worktree_docs).parts[0] in _archive_excluded_dirs:
-                continue
-            dest = dest_docs / f.name
-            if not dest.exists():
-                shutil.copy2(f, dest)
-        logger.info(f"Artifacts archived to {dest_docs}")
-
-    # Remove the linked worktree
-    if ".worktrees" in str(worktree) and worktree.exists():
-        result = subprocess.run(
-            ["git", "worktree", "remove", "--force", str(worktree)],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            logger.info(f"Worktree removed: {worktree}")
-        else:
-            logger.warning(f"git worktree remove failed: {result.stderr.strip()}")
-            subprocess.run(["git", "worktree", "prune"], cwd=str(repo_root))
 
 
 def run_single_design(
