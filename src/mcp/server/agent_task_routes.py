@@ -13,6 +13,7 @@ from fastapi import (
     Header,
     HTTPException,
 )
+from sqlalchemy.exc import OperationalError
 
 from src.core.database import Phase, TaskStatus
 from src.mcp.server._create_task_steps import (
@@ -176,10 +177,9 @@ async def validate_agent_id(agent_id: str):
             ],
         }
 
-@router.post("/update_task_status", response_model=UpdateTaskStatusResponse)
-async def update_task_status(
+async def _update_task_status_once(
     request: UpdateTaskStatusRequest,
-    agent_id: str = Header(..., alias="X-Agent-ID"),
+    agent_id: str,
 ):
     """Update task status when complete or failed."""
     from src.core.log_context import set_log_context
@@ -300,8 +300,54 @@ async def update_task_status(
 
     except HTTPException:
         raise
+    except OperationalError:
+        # Let update_task_status's retry wrapper see this as-is -- wrapping
+        # it in HTTPException here would hide it from that wrapper's own
+        # `except OperationalError`, silently defeating the retry.
+        raise
     except Exception as e:
         logger.error(f"Failed to update task status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
+
+
+# Bounded retry for SQLite write-lock contention: this handler runs a long
+# chain of DB writes (record_learnings, self-review gate, hard-floor
+# checks, ticket creation, task completion, spec-gate firing) across
+# multiple committed transactions, and 2-3 agents completing tasks close
+# together can collide even with journal_mode=WAL and busy_timeout=30000 --
+# confirmed live 2026-08-19, "database is locked" surfacing here and
+# failing the whole call with a 500, losing the agent's task-completion
+# report entirely. Retrying the WHOLE handler from a fresh session (not
+# just the failing commit) is deliberate: once a commit raises
+# OperationalError, SQLAlchemy may already have rolled back that
+# transaction's pending changes, so retrying commit() alone can silently
+# no-op instead of re-persisting anything. A full-handler retry is safe
+# here specifically because this handler's own terminal-state idempotency
+# guard (task.status in TaskStatus.TERMINAL, checked at the top) already
+# makes a second full pass a no-op past whatever the first pass actually
+# committed -- the same guard this codebase already relies on for a CLI
+# auto-compact's redundant completion calls.
+_LOCK_RETRY_ATTEMPTS = 5
+_LOCK_RETRY_BASE_DELAY_SECONDS = 0.3
+
+
+@router.post("/update_task_status", response_model=UpdateTaskStatusResponse)
+async def update_task_status(
+    request: UpdateTaskStatusRequest,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    for attempt in range(_LOCK_RETRY_ATTEMPTS):
+        try:
+            return await _update_task_status_once(request, agent_id)
+        except OperationalError as e:
+            is_lock_error = "database is locked" in str(e).lower()
+            if not is_lock_error or attempt == _LOCK_RETRY_ATTEMPTS - 1:
+                raise
+            delay = _LOCK_RETRY_BASE_DELAY_SECONDS * (2**attempt)
+            logger.warning(
+                f"[{request.task_id[:8]}] update_task_status hit a locked database "
+                f"(attempt {attempt + 1}/{_LOCK_RETRY_ATTEMPTS}) -- retrying in {delay:.1f}s"
+            )
+            await asyncio.sleep(delay)
