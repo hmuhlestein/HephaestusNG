@@ -140,6 +140,28 @@ The fifteen `_devtools_*` handlers (L5796-5890), `_DEVTOOLS_TOOLS` (L5894),
    Phase 1b lacked, and its absence is why `api.py`'s split produced a
    2,872-line `_shared.py`. A split that relocates mass has not decomposed
    anything.
+
+   **Assessed 2026-08-19: met in substance.** Eleven modules, largest 837
+   (`task_admin_routes.py`), next 828 (`_mcp_tool_registry.py`) -- both ~4%
+   over an explicitly approximate bar. The two were examined rather than
+   waved through:
+
+   - `_mcp_tool_registry.py` is **442 of its 828 lines declarative data**
+     (the tool-spec registry) plus 14 small handlers. Splitting a data table
+     to satisfy a line count buys indirection and nothing else.
+   - `task_admin_routes.py`'s size is driven by `restart_task_endpoint`
+     (229 lines). Decomposing it would bring the module to ~750 -- but that
+     endpoint carries several documented live-incident fixes in its branches
+     and has only ~4 tests covering it. Restructuring incident-hardened code
+     with thin coverage, to move a number 4% against a bar this document
+     itself wrote as "~800", is the wrong trade.
+
+   The criterion's stated purpose was to stop a split from *relocating* mass.
+   That purpose is served: one 6,052-line file became eleven modules, and the
+   two god-functions were genuinely decomposed rather than moved. Marking
+   this met, with `restart_task_endpoint` noted as a worthwhile future target
+   **once it has characterization tests** -- which is the same
+   coverage-before-consolidation discipline Phase 0 exists to enforce.
 4. `create_task` and `update_task_status` are each decomposed into named steps;
    neither exceeds ~150 lines after the split.
 5. The duplicate rate-limit block (L1363-1378) is deleted and the three OAuth

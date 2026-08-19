@@ -580,10 +580,18 @@ def test_start_next_phase_honors_action_target_phase_skipping_intermediates(
     assert next_phase is not None
     assert next_phase.id == phase_ids[3]
 
-    # Intermediate phases must be left untouched -- not started.
+    # Intermediate phases must not be STARTED -- but they are recorded as
+    # "skipped" rather than left "pending". phase_manager marks them
+    # deliberately ("skipped over by the jump ... instead of leaving it
+    # 'pending' forever"): a PhaseExecution stuck at "pending" is never
+    # completed by anything, so every downstream all-phases-done check waits
+    # on it indefinitely. "skipped" is terminal and honest about what
+    # happened; the requirement this test exists for is that they were not
+    # started, which "skipped" satisfies.
     for pid in (phase_ids[1], phase_ids[2]):
         execution = db_session.query(PhaseExecution).filter_by(phase_id=pid).first()
-        assert execution.status == "pending"
+        assert execution.status == "skipped"
+        assert execution.started_at is None, "skipped-over phase must never start"
 
     target_execution = (
         db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[3]).first()

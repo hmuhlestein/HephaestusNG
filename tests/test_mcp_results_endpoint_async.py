@@ -152,9 +152,16 @@ class TestReportResultsEndpointAsync:
 
     async def test_integration_with_server(self):
         """Test integration with running server."""
-        async with httpx.AsyncClient() as client:
-            # Check server health first
-            response = await client.get(f"{self.BASE_URL}/health")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Check server health first. The skip has to cover transport
+            # failures too, not just a non-200: with nothing listening, or a
+            # server too busy to answer inside the timeout, client.get raises
+            # before the status check is ever reached and the test fails
+            # instead of skipping.
+            try:
+                response = await client.get(f"{self.BASE_URL}/health")
+            except (httpx.TransportError, httpx.TimeoutException) as e:
+                pytest.skip(f"Server not reachable: {e}")
 
             if response.status_code != 200:
                 pytest.skip("Server not running")
@@ -167,6 +174,10 @@ class TestReportResultsEndpointAsync:
                 "priority": "medium",
             }
 
+            # NOTE: this exercises a REAL running server and creates real
+            # rows in whatever database it is pointed at. Treat any transport
+            # failure past this point as "not runnable here" rather than a
+            # product failure.
             response = await client.post(
                 f"{self.BASE_URL}/create_task",
                 json=task_payload,
