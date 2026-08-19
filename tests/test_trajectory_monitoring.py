@@ -6,10 +6,9 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from src.core.database import Agent, AgentLog, Task
+from src.core.database import Agent, Task
 from src.monitoring.conductor import Conductor
 from src.monitoring.guardian import Guardian
-from src.monitoring.trajectory_context import TrajectoryContext
 
 
 def _task_dict(task: Task) -> dict:
@@ -423,76 +422,6 @@ class TestConductor:
         # Should have termination recommendations
         decisions = result["decisions"]
         assert len(decisions) > 0
-
-
-class TestTrajectoryContext:
-    """Test Trajectory Context Manager."""
-
-    def test_build_accumulated_context(self, mock_db_manager):
-        """Test building accumulated context from logs."""
-        context_manager = TrajectoryContext(db_manager=mock_db_manager)
-
-        # Mock agent logs
-        mock_logs = [
-            AgentLog(
-                agent_id="agent-1",
-                log_type="input",
-                message="Build authentication without external libraries",
-                created_at=datetime.utcnow() - timedelta(minutes=10),
-            ),
-            AgentLog(
-                agent_id="agent-1",
-                log_type="output",
-                message="I'll implement JWT authentication from scratch",
-                created_at=datetime.utcnow() - timedelta(minutes=9),
-            ),
-            AgentLog(
-                agent_id="agent-1",
-                log_type="input",
-                message="Make sure it's simple and well-tested",
-                created_at=datetime.utcnow() - timedelta(minutes=5),
-            ),
-        ]
-
-        mock_session = Mock()
-        mock_session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = mock_logs
-        mock_db_manager.get_session.return_value = mock_session
-
-        context = context_manager.build_accumulated_context("agent-1")
-
-        # Should extract constraints and goals
-        assert "overall_goal" in context
-        assert "constraints" in context
-        assert "standing_instructions" in context
-        assert context["conversation_length"] == 3
-
-    def test_check_constraint_violations(self, mock_db_manager):
-        """Test constraint violation detection."""
-        context_manager = TrajectoryContext(db_manager=mock_db_manager)
-
-        constraints = [
-            "no external libraries",
-            "keep it simple",
-            "avoid complex patterns",
-        ]
-
-        # Test violation detection
-        has_violation, violations = context_manager.check_constraint_violations(
-            action="pip install requests",
-            constraints=constraints,
-        )
-
-        assert has_violation is True
-        assert "no external libraries" in violations
-
-        # Test no violation
-        has_violation, violations = context_manager.check_constraint_violations(
-            action="import json",
-            constraints=constraints,
-        )
-
-        assert has_violation is False
-        assert len(violations) == 0
 
 
 @pytest.mark.asyncio

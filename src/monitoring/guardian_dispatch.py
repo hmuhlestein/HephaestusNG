@@ -38,7 +38,6 @@ class GuardianDispatcher:
         guardian,
         phase_manager,
         auto_restart,
-        trajectory_context,
         guardian_summaries_cache,
     ):
         self.db_manager = db_manager
@@ -47,7 +46,6 @@ class GuardianDispatcher:
         self.guardian = guardian
         self.phase_manager = phase_manager
         self._auto_restart = auto_restart
-        self.trajectory_context = trajectory_context
         self.guardian_summaries_cache = guardian_summaries_cache
 
     async def guardian_analysis_for_agent(
