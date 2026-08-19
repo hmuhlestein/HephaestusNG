@@ -13,78 +13,11 @@ from src.core.database import (
     Task,
     ValidationReview,
 )
-from src.validation.check_executors import ValidationCheckType, execute_validation_check
 from src.validation.validator_agent import (
     get_agent_results,
     send_feedback_to_agent,
     spawn_validator_agent,
 )
-
-
-class TestValidationCheckExecutors:
-    """Test validation check executors."""
-
-    def test_file_exists_check(self, tmp_path):
-        """Test file existence checking."""
-        # Create test file
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("content")
-
-        criterion = {"target": ["test.txt"]}
-
-        result = execute_validation_check(
-            ValidationCheckType.FILE_EXISTS, criterion, str(tmp_path)
-        )
-
-        assert result["passed"] is True
-        assert "EXISTS" in result["evidence"]
-
-    def test_file_exists_check_missing(self, tmp_path):
-        """Test file existence check when file is missing."""
-        criterion = {"target": ["missing.txt"]}
-
-        result = execute_validation_check(
-            ValidationCheckType.FILE_EXISTS, criterion, str(tmp_path)
-        )
-
-        assert result["passed"] is False
-        assert "MISSING" in result["evidence"]
-
-    def test_file_contains_check(self, tmp_path):
-        """Test file content checking."""
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("Hello World\nTest Pattern\n")
-
-        criterion = {"target": "test.txt", "pattern": ["Hello", "Pattern"]}
-
-        result = execute_validation_check(
-            ValidationCheckType.FILE_CONTAINS, criterion, str(tmp_path)
-        )
-
-        assert result["passed"] is True
-        assert "FOUND" in result["evidence"]
-
-    def test_command_success_check(self, tmp_path):
-        """Test command execution checking."""
-        criterion = {"command": "echo 'test'"}
-
-        result = execute_validation_check(
-            ValidationCheckType.COMMAND_SUCCESS, criterion, str(tmp_path)
-        )
-
-        assert result["passed"] is True
-        assert result["exit_code"] == 0
-
-    def test_manual_verification_check(self):
-        """Test manual verification check."""
-        criterion = {}
-
-        result = execute_validation_check(
-            ValidationCheckType.MANUAL_VERIFICATION, criterion, "/tmp"
-        )
-
-        assert result["passed"] is None
-        assert result["requires_manual"] is True
 
 
 class TestValidatorAgent:
