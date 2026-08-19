@@ -50,6 +50,75 @@ def _skip_fk_enforcement_for_tests():
     DatabaseManager.__init__ = _original_init
 
 
+# The one database a test must never open. Anything resolving to this path
+# is the real, self-hosted production DB sitting in the repo root.
+PRODUCTION_DB = (Path(__file__).resolve().parent.parent / "hephaestus.db").resolve()
+
+
+def _resolves_to_production_db(database_path) -> bool:
+    """True if this DatabaseManager argument would open the production DB."""
+    if database_path is None:
+        # Mirrors DatabaseManager.__init__/get_db's own fallback.
+        database_path = os.environ.get("HEPHAESTUS_TEST_DB", "hephaestus.db")
+    database_path = str(database_path)
+    if database_path == ":memory:" or database_path.startswith("file::memory:"):
+        return False
+    try:
+        return Path(database_path).resolve() == PRODUCTION_DB
+    except (OSError, ValueError):
+        return False
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _forbid_production_database():
+    """Fail loudly if any test opens the real hephaestus.db.
+
+    HEPHAESTUS_TEST_DB (set above) only covers the paths that go through
+    the None/env fallback. It does nothing for code that resolves a path
+    of its own and passes it explicitly -- which is the normal, correct
+    shape for production code: `DbManager(str(cfg.database_path))`. If a
+    test fails to redirect the *config* that path comes from, production
+    code opens the production database and nothing anywhere complains.
+
+    Found live: test_heal_orphaned_agent_branches.py patched get_config
+    only at its definition site (src.core.simple_config.get_config), but
+    worktree_integration.py binds the name at import time. Run that file
+    alone and the module is imported after the patch, so it picks up the
+    test config and passes. Run anything importing src.mcp.server first
+    and the binding is the real get_config, returning the memoized
+    production Config -- so heal_orphaned_agent_branches enumerated the
+    developer's REAL projects and attempted `git merge --ff-only` in
+    them. The only symptom was one assertion failing in suite order.
+
+    src/'s own AST guard (test_db_test_isolation_guard.py) cannot catch
+    this: it checks how production code *constructs* DatabaseManager,
+    and that code is already correct. The defect is in what the test
+    lets the config resolve to, which is only observable at runtime.
+    """
+    import src.core.database as dbmod
+
+    _wrapped_init = dbmod.DatabaseManager.__init__
+
+    def _guarded_init(self, database_path="hephaestus.db", *args, **kwargs):
+        if _resolves_to_production_db(database_path):
+            raise RuntimeError(
+                "A test tried to open the PRODUCTION database "
+                f"({PRODUCTION_DB}).\n"
+                "Production code resolves its own path from get_config(), so "
+                "patching src.core.simple_config.get_config is not always "
+                "enough -- modules that do `from src.core.simple_config import "
+                "get_config` bind the name at import time. Patch it on the "
+                "module under test as well:\n"
+                "    monkeypatch.setattr(the_module, 'get_config', lambda: cfg)\n"
+                "See _forbid_production_database in tests/conftest.py."
+            )
+        return _wrapped_init(self, database_path, *args, **kwargs)
+
+    dbmod.DatabaseManager.__init__ = _guarded_init
+    yield
+    dbmod.DatabaseManager.__init__ = _wrapped_init
+
+
 @pytest.fixture(autouse=True)
 def _guard_mock_paths(monkeypatch):
     """Raise if any code opens a path whose str looks like a Mock repr.

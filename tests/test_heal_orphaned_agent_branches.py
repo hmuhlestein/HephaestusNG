@@ -50,6 +50,28 @@ def test_db(tmp_path):
 
 @pytest.fixture
 def config(test_db, temp_repo, monkeypatch):
+    """Point every get_config() lookup this module reaches at a test config.
+
+    Patching only the definition site (src.core.simple_config.get_config) is
+    not enough, and the difference is invisible when this file runs alone.
+    worktree_integration.py binds the name at import time
+    (`from src.core.simple_config import get_config`, line 23), so whether
+    that binding is the real function or this lambda depends purely on
+    whether the module was already imported when the patch was applied.
+
+    Run this file alone and it is not: the import happens inside the test
+    body, after the patch, so the module picks up the lambda and everything
+    works. Run anything that imports src.mcp.server first (it pulls in
+    worktree_integration at collection) and the binding is the real
+    get_config -- which returns the memoized production Config, whose
+    database_path is the real "hephaestus.db". heal_orphaned_agent_branches
+    then enumerates the developer's REAL projects and attempts git
+    fast-forwards in them, while this test sees healed == 0.
+
+    Patch where the name is looked up, not only where it is defined -- the
+    same rule AUTOPILOT_REFACTOR_PLAN.md 3.1 records for the
+    test_phase0_idempotency.py bug.
+    """
     import src.core.simple_config
 
     cfg = src.core.simple_config.Config()
@@ -57,6 +79,10 @@ def config(test_db, temp_repo, monkeypatch):
     cfg.base_branch = "main"
     cfg.branch_prefix = "agent-"
     monkeypatch.setattr("src.core.simple_config.get_config", lambda: cfg)
+
+    import src.autopilot.orchestrator.worktree_integration as _wi
+
+    monkeypatch.setattr(_wi, "get_config", lambda: cfg)
     return cfg
 
 
