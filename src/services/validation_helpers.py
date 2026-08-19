@@ -1,8 +1,11 @@
 """Validation helpers for result submission."""
 
+import logging
 import os
 import tempfile
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def validate_file_path(file_path: str, allowed_root: "str | Path | None" = None) -> None:
@@ -163,11 +166,27 @@ def _default_allowed_roots() -> "list[Path]":
         config_read = True
         for attr in ("main_repo_path", "project_root", "worktree_base_path"):
             value = getattr(config, attr, None)
-            if value:
-                try:
-                    roots.append(Path(value).resolve())
-                except OSError:
-                    pass
+            if not value:
+                continue
+            try:
+                candidate = Path(value).resolve()
+            except OSError:
+                continue
+            if _too_broad_to_contain(candidate):
+                # Both main_repo_path and project_root default to Path.cwd().
+                # Launch the server from "/" or the home directory and the
+                # containment check silently degrades to "anything on this
+                # machine" -- a guard that depends on the launch directory is
+                # not a guard. Drop the root and say so, rather than keep a
+                # check that only appears to be enforcing something.
+                logger.warning(
+                    f"[validate_file_path] Ignoring config.{attr}={candidate} as "
+                    "an allowed root: too broad to contain anything. Result files "
+                    "outside the remaining roots will be rejected -- set "
+                    "main_repo_path/project_root explicitly if this is wrong."
+                )
+                continue
+            roots.append(candidate)
     except Exception:
         pass
 
@@ -187,3 +206,19 @@ def _default_allowed_roots() -> "list[Path]":
         except OSError:
             pass
     return roots
+
+
+def _too_broad_to_contain(root: Path) -> bool:
+    """True if `root` is so broad that containing a path within it means nothing.
+
+    The filesystem root and the user's home directory (or any ancestor of it)
+    are never legitimate containment boundaries -- everything the process can
+    read lives under them.
+    """
+    if root == Path(root.anchor):
+        return True
+    try:
+        home = Path.home().resolve()
+    except (OSError, RuntimeError):
+        return False
+    return root == home or home.is_relative_to(root)
