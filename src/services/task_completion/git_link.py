@@ -10,13 +10,38 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def _do_git_commit(wt_path: str, phase_label: str, agent_id: str, task_id: str, summary: Optional[str]) -> Optional[str]:
+    """`git add -A` + `git commit` in the worktree -- real subprocess work,
+    called via run_in_executor by commit_and_link_ticket below. Returns
+    the commit SHA if a commit was made, else None. Any exception (e.g.
+    Repo() on an invalid path) propagates through the awaited executor
+    future to commit_and_link_ticket's own try/except, same as when this
+    body ran inline there."""
+    from git import Repo
+
+    wt_repo = Repo(wt_path)
+    wt_repo.git.add("-A")
+    if not (wt_repo.is_dirty(index=True) or wt_repo.untracked_files):
+        logger.debug(f"[COMMIT] phase agent {agent_id[:8]}: nothing to commit")
+        return None
+
+    summary_str = (summary or "").strip()
+    subject = f"phase({phase_label}): " + (summary_str[:60] if summary_str else f"task {task_id[:8]} done")
+    msg = subject if not summary_str or len(summary_str) <= 60 else f"{subject}\n\n{summary_str}"
+    wt_repo.git.commit("-m", msg, "--no-verify")
+    merge_commit_sha = wt_repo.head.commit.hexsha
+    logger.info(f"[COMMIT] phase({phase_label}) agent {agent_id[:8]}: {merge_commit_sha[:8]}")
+    return merge_commit_sha
+
+
 async def commit_and_link_ticket(session, agent_id: str, task, summary: str) -> Optional[str]:
     """Commit the agent's changes in the shared worktree, and if the
     task has a ticket_id, auto-link the resulting commit to it.
 
     Returns the commit SHA if a commit was made, else None.
     """
-    from git import Repo
+    import asyncio
+    import functools
 
     from src.core.app_context import get_app_state
     from src.core.database import Phase
@@ -48,17 +73,21 @@ async def commit_and_link_ticket(session, agent_id: str, task, summary: str) -> 
             phase_obj = session.query(Phase).filter_by(id=task.phase_id).first() if task.phase_id else None
             phase_label = phase_obj.name if phase_obj else (task.phase_id[:8] if task.phase_id else "unknown")
 
-            wt_repo = Repo(wt_path)
-            wt_repo.git.add("-A")
-            if wt_repo.is_dirty(index=True) or wt_repo.untracked_files:
-                summary_str = (summary or "").strip()
-                subject = f"phase({phase_label}): " + (summary_str[:60] if summary_str else f"task {task.id[:8]} done")
-                msg = subject if not summary_str or len(summary_str) <= 60 else f"{subject}\n\n{summary_str}"
-                wt_repo.git.commit("-m", msg, "--no-verify")
-                merge_commit_sha = wt_repo.head.commit.hexsha
-                logger.info(f"[COMMIT] phase({phase_label}) agent {agent_id[:8]}: {merge_commit_sha[:8]}")
-            else:
-                logger.debug(f"[COMMIT] phase agent {agent_id[:8]}: nothing to commit")
+            # The actual git subprocess work (_do_git_commit) doesn't need
+            # `session` -- only the two fast, single-row lookups above do,
+            # which stay on this thread. Offloaded because `git add -A`
+            # over a worktree after an agent's edits routinely takes
+            # 0.5-3s, called directly on the event loop with no executor
+            # -- confirmed live 2026-08-19 investigating intermittent
+            # multi-second /health stalls, one of three call sites found
+            # via a systematic audit.
+            loop = asyncio.get_event_loop()
+            merge_commit_sha = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    _do_git_commit, wt_path, phase_label, agent_id, task.id, summary,
+                ),
+            )
     except Exception as e:
         logger.warning(f"Failed to commit after task done for agent {agent_id[:8]}: {e}")
 

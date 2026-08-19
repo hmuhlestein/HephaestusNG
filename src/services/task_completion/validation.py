@@ -33,9 +33,23 @@ async def spawn_validation(
         commit_sha = None
         if hasattr(server_state, "branch_manager"):
             try:
-                commit_result = server_state.branch_manager.commit_for_validation(
-                    agent_id=agent_id,
-                    iteration=task_validation_iteration,
+                # commit_for_validation is a second, independent git add
+                # -A/commit pair on the same worktree as commit_and_link_
+                # ticket's own (task_completion/git_link.py) -- same real
+                # subprocess cost, same fix: offload rather than block the
+                # event loop directly. Confirmed live 2026-08-19,
+                # investigating intermittent multi-second /health stalls.
+                import asyncio
+                import functools
+
+                loop = asyncio.get_event_loop()
+                commit_result = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        server_state.branch_manager.commit_for_validation,
+                        agent_id=agent_id,
+                        iteration=task_validation_iteration,
+                    ),
                 )
                 commit_sha = commit_result.get("commit_sha")
             except Exception as e:
