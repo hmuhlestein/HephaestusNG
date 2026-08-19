@@ -390,15 +390,59 @@ class TestAuthenticationMiddleware:
 
     def test_protected_route_without_token(self, test_client):
         """Test accessing protected route without token."""
-        # This would be a protected endpoint
-        # response = test_client.get("/api/protected")
-        # assert response.status_code == 401
-        pass  # TODO: Add when protected endpoints are implemented
+        response = test_client.get("/api/auth/me")
+        assert response.status_code == 401
 
-    def test_protected_route_with_valid_token(self, test_client, test_db):
-        """Test accessing protected route with valid token."""
-        # TODO: Add when protected endpoints are implemented
-        pass
+    def test_protected_route_with_valid_token(self, test_client, test_db, test_session, monkeypatch):
+        """Test accessing protected route with valid token.
+
+        Regression: GET /me was a permanent 501 stub
+        ("Endpoint not yet implemented") that also shadowed
+        auth_middleware.get_current_user by reusing its exact function
+        name -- fixed by wiring this route through that dependency and
+        re-fetching the full User row for the response fields
+        CurrentUser doesn't carry."""
+        from src.auth import auth_middleware
+        from src.core.user_models import User as UserModel
+
+        # auth_middleware.get_current_user constructs its own
+        # DatabaseManager(None) independently of auth_api.get_db_manager
+        # (see the live-bug note in docs/SOLID_OO_REVIEW_UPDATE_2026-08-19.md)
+        # -- must be pointed at the same test DB or the token's user
+        # lookup silently misses.
+        monkeypatch.setattr(auth_middleware, "DatabaseManager", lambda *_: test_db)
+
+        user = UserModel(
+            id=str(uuid.uuid4()),
+            email="metest@example.com",
+            username="metest",
+            password_hash=hash_password("TestPassword123!"),
+            status="active",
+            email_verified=True,
+            first_name="Meg",
+            last_name="Testerson",
+        )
+        test_session.add(user)
+        test_session.commit()
+
+        login_response = test_client.post(
+            "/api/auth/login",
+            data={"username": "metest@example.com", "password": "TestPassword123!"},
+        )
+        assert login_response.status_code == 200
+        access_token = login_response.json()["access_token"]
+
+        response = test_client.get(
+            "/api/auth/me", headers={"Authorization": f"Bearer {access_token}"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == user.id
+        assert data["email"] == "metest@example.com"
+        assert data["username"] == "metest"
+        assert data["first_name"] == "Meg"
+        assert data["last_name"] == "Testerson"
 
     def test_protected_route_with_expired_token(self, test_client):
         """Test accessing protected route with expired token."""

@@ -22,6 +22,8 @@ from . import (
     verify_refresh_token,
 )
 from .auth_config import get_auth_config
+from .auth_middleware import CurrentUser
+from .auth_middleware import get_current_user as _get_authenticated_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
@@ -458,10 +460,30 @@ async def logout(token: str = Depends(oauth2_scheme)):
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    """Get current user information."""
-    # TODO: Implement get current user from token
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Endpoint not yet implemented",
-    )
+async def get_my_profile(current_user: CurrentUser = Depends(_get_authenticated_user)):
+    """Get current user information.
+
+    _get_authenticated_user (auth_middleware.get_current_user) already
+    verifies the token and confirms the User row exists/is active --
+    CurrentUser itself doesn't carry the profile fields UserResponse
+    needs (first_name/last_name/created_at/email_verified/status), so
+    this re-fetches the full row, same mapping as register()'s.
+    """
+    db_manager = get_db_manager()
+    with db_manager.get_session() as db:
+        user = db.query(User).filter(User.id == current_user.id).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+            )
+
+        return UserResponse(
+            id=user.id,
+            email=user.email,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            created_at=user.created_at,
+            email_verified=user.email_verified,
+            status=user.status,
+        )
