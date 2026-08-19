@@ -101,6 +101,13 @@ class TestValidatorAgent:
         manager.session_scope = Mock(
             return_value=session
         )  # validator uses session_scope()
+        # No phase sibling by default. check_phase_sibling_active (Phase 2
+        # §4.3) ends in query(...).first(); against an unconfigured Mock that
+        # returns a truthy Mock, so the guard "finds" a sibling, skips the
+        # dispatch under test, and then blows up slicing _sibling.id[:8].
+        # Tests that want the guard to fire should override this.
+        session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+        session.query.return_value.filter.return_value.first.return_value = None
         return manager
 
     @pytest.mark.asyncio

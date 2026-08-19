@@ -14,7 +14,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.mcp import server
+# Phase 1c: server.py is now a package. Import the module that owns the
+# function under test -- patching must target where the name is looked
+# up, and `src.mcp.server` (the package __init__) no longer carries
+# asyncio or server_state.
+from src.mcp.server import lifecycle as server
 
 
 class FakeService:

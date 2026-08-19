@@ -37,7 +37,10 @@ class TestBackgroundQueueProcessorProjectScoping:
     async def test_calls_process_queue_once_per_active_project(
         self, db_manager, monkeypatch
     ):
-        from src.mcp import server
+        # Phase 1c: server.py is now a package. background_loops owns the
+        # sweep/queue-processor functions and reads server_state from
+        # _shared, so patch where the name is looked up.
+        from src.mcp.server import background_loops as server
         from src.services.queue_service import QueueService
 
         _make_active_project(db_manager, "proj-a")
@@ -98,7 +101,10 @@ class TestBackgroundQueueProcessorProjectScoping:
         import uuid
 
         from src.core.database import Task
-        from src.mcp import server
+        # Phase 1c: server.py is now a package. background_loops owns the
+        # sweep/queue-processor functions and reads server_state from
+        # _shared, so patch where the name is looked up.
+        from src.mcp.server import background_loops as server
         from src.services.queue_service import QueueService
 
         monkeypatch.setattr(server.server_state, "db_manager", db_manager)

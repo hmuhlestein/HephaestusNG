@@ -65,7 +65,10 @@ def _make_active_project_with_workflow(db_manager, project_id, workflow_id):
 class TestBackgroundPhaseAdvancementSweep:
     @pytest.mark.asyncio
     async def test_advances_every_active_or_paused_workflow(self, db_manager, monkeypatch):
-        from src.mcp import server
+        # Phase 1c: server.py is now a package. background_loops owns the
+        # sweep/queue-processor functions and reads server_state from
+        # _shared, so patch where the name is looked up.
+        from src.mcp.server import background_loops as server
 
         _make_workflow(db_manager, "wf-active", "active")
         _make_workflow(db_manager, "wf-paused", "paused")
@@ -95,7 +98,10 @@ class TestBackgroundPhaseAdvancementSweep:
         """A single workflow raising must not stop the sweep from advancing
         the rest -- one bad workflow shouldn't take down every other
         workflow's advancement for that cycle."""
-        from src.mcp import server
+        # Phase 1c: server.py is now a package. background_loops owns the
+        # sweep/queue-processor functions and reads server_state from
+        # _shared, so patch where the name is looked up.
+        from src.mcp.server import background_loops as server
 
         _make_workflow(db_manager, "wf-broken", "active")
         _make_workflow(db_manager, "wf-fine", "active")
@@ -135,7 +141,10 @@ class TestSweepSelfHealing:
     async def test_runs_self_healing_for_active_workflows_only(
         self, db_manager, monkeypatch
     ):
-        from src.mcp import server
+        # Phase 1c: server.py is now a package. background_loops owns the
+        # sweep/queue-processor functions and reads server_state from
+        # _shared, so patch where the name is looked up.
+        from src.mcp.server import background_loops as server
 
         _make_workflow(db_manager, "wf-active", "active")
         _make_workflow(db_manager, "wf-paused", "paused")
@@ -185,7 +194,10 @@ class TestSweepMultiProjectScoping:
     async def test_sweeps_workflows_across_all_active_projects(
         self, db_manager, monkeypatch
     ):
-        from src.mcp import server
+        # Phase 1c: server.py is now a package. background_loops owns the
+        # sweep/queue-processor functions and reads server_state from
+        # _shared, so patch where the name is looked up.
+        from src.mcp.server import background_loops as server
 
         _make_active_project_with_workflow(db_manager, "proj-a", "wf-a")
         _make_active_project_with_workflow(db_manager, "proj-b", "wf-b")
@@ -212,7 +224,10 @@ class TestSweepMultiProjectScoping:
     async def test_does_not_sweep_workflows_of_an_inactive_project(
         self, db_manager, monkeypatch
     ):
-        from src.mcp import server
+        # Phase 1c: server.py is now a package. background_loops owns the
+        # sweep/queue-processor functions and reads server_state from
+        # _shared, so patch where the name is looked up.
+        from src.mcp.server import background_loops as server
 
         _make_active_project_with_workflow(db_manager, "proj-active", "wf-in-scope")
         with db_manager.session_scope() as session:

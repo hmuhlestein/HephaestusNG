@@ -662,6 +662,129 @@ blocked on the same test-reference migration Phase 1c's exit criteria already
 budget for (70 `src.mcp.server` references across 20 files). Whoever does that
 migration is already in the right frame of mind to retire these stubs.
 
+### 20. The first real silent behaviour drop -- and how close it came to shipping
+
+Everything earlier in this audit that *looked* like decomposition losing
+behaviour turned out not to be. Finding 14 corrected §4.3's cooldown claim (it
+was removed four weeks before the split that got blamed). The symbol-and-state
+diff across all four Phase 1b decompositions came back with **zero** losses.
+The pattern the plan kept warning about had not, until now, actually happened.
+
+It happened during the `output_capture` extraction, in the same edit that did
+three things correctly:
+
+    _frame_kind, _strip_trailing_pad, _norm   ->  output_capture.py   moved
+    broadcast_message_to_all_agents (77 ln)   ->  deleted
+    send_direct_message             (66 ln)   ->  deleted
+    get_project_context             (53 ln)   ->  deleted
+    send_recovery_keystrokes        (40 ln)   ->  deleted
+    send_message_to_agent delegate  ( 8 ln)   ->  deleted
+
+The three genuine transcript helpers moved to their new home. 244 lines of
+unrelated messaging and recovery code went with them and landed nowhere --
+verified by grepping `def <name>` across all of `src/`, not by reading the
+diff.
+
+**25 production call sites depended on those five**: `guardian.py`,
+`mechanical_recovery.py` (nine), `conductor.py`, `health_audit.py`,
+`messaging_api.py`, `task_enrichment_service.py`, `agent_dispatch_service.py`,
+and three of Phase 1c's new `src/mcp/server/` modules. Every one would raise
+`AttributeError`.
+
+**Why it nearly shipped.** `import src.mcp.server` stayed clean the entire
+time -- a missing method raises only when called. Nothing in the import graph,
+no linter, and no smoke check would show it. The single signal was
+`tests/test_agent_communication.py` going from 22 passing to 17 failing in a
+full-suite run, and that signal only meant something because the suite had been
+brought down from 82 failures to a handful first. At 82, five more red tests in
+a file nobody was looking at would have been indistinguishable from the noise.
+
+The blast radius is the recovery path specifically: agent steering, recovery
+keystrokes, stuck-agent handling. Those fire when something has *already* gone
+wrong -- so the failure mode is the recovery system being broken at exactly the
+moment it is needed, with no prior symptom.
+
+Restored from `HEAD`, including the four imports the same edit removed
+(`asyncio`, `datetime`, `get_cli_agent`, `AgentLog` -- their absence is why a
+first restore attempt still failed 5 tests). Verified: 22/22 in
+`test_agent_communication.py`, 185 passed across the agent and monitor suites,
+ruff clean.
+
+**Not a criticism of the extraction's author -- a criticism of the check.** A
+symbol-level diff of "what methods existed before, and where does each live
+now" takes seconds and would have caught this immediately. It is the same
+check that cleared Phase 1b. It should run on every extraction, not only when
+someone goes looking after the fact.
+
+**Phase 1c itself is clean**, checked at the same time: `src/mcp/server.py` is
+gone, the package has the nine modules the plan specified, and all **37 routes
+survive with zero dropped**.
+
+### 21. Phase 1c mid-flight review against its own exit criteria
+
+Phase 1c (`design_docs/phase_1c_server_decomposition.md`) is being executed by
+another agent and was still being written to during this review, so this is an
+assessment, not a set of fixes -- editing that package concurrently is how the
+two collisions earlier in this session happened.
+
+**Met:**
+
+- **(1) flat file gone, route set preserved.** `src/mcp/server.py` is replaced
+  by the nine-module package the plan specified. All **37 routes** survive;
+  zero dropped, verified against `HEAD`'s route set.
+- **(2) route-set guardrail.** `tests/test_server_route_set_guardrail.py`
+  exists and passes -- and it is written in the pinned-set style finding 4
+  argued for, not a bare count.
+- **(5) duplicated rate-limit block deleted.** Exactly one `_check_rate_limit`
+  and one `_rate_limit_store` survive, in `oauth_routes.py`, and it is the
+  **thread-safe copy** (`with _rate_limit_lock`). The unlocked duplicate whose
+  correctness depended on definition order is gone. This was step 0 of the
+  plan and it was done first.
+- **(7) test references re-pointed.** The 70 references have largely been
+  migrated to the new submodule paths (`src.mcp.server._shared`,
+  `.task_admin_routes`, `.background_loops`, `.lifecycle`, `.mcp_protocol`).
+  The remaining bare `from src.mcp.server import app` imports resolve --
+  `__init__.py` re-exports `app`. **Note:** it does *not* re-export
+  `server_state`; I flagged that as a break before checking, and no test or
+  production module actually imports it from the package root, so it is a
+  non-issue. Mentioned only so nobody else re-raises it.
+
+**Resolved since this was written.** The other agent decomposed both
+god-functions while this review was in progress: `create_task` 601 -> extracted
+to `_create_task_steps.py`, `update_task_status` 423 -> `_update_task_status_steps.py`,
+and the tool registry out of `mcp_protocol.py` (1,236 -> 434) into
+`_mcp_tool_registry.py`. `agent_task_routes.py` went 1,101 -> 307. A symbol-drop
+check across the whole package (the check finding 20 recommends) returns
+**98 functions at HEAD, 120 now, zero lost**. Criterion 3 is now met in
+substance -- see the assessment appended to
+`phase_1c_server_decomposition.md`, which explains why the two remaining
+~830-line modules are left alone rather than split to hit a round number.
+
+**What was outstanding when this was written:**
+
+- **(3) no module over ~800 lines.** Three exceed it:
+  `mcp_protocol.py` 1,236, `agent_task_routes.py` 1,101,
+  `task_admin_routes.py` 837.
+- **(4) `create_task` and `update_task_status` decomposed to ~150 lines
+  each.** Both moved **verbatim**: `create_task` is still 601 lines,
+  `update_task_status` 423, plus `process_task_async` at 287 -- all three in
+  `agent_task_routes.py`, which is why that module is 1,101 lines.
+
+These two criteria exist for one reason, stated in the plan: `api.py`'s split
+met its stated goal while relocating the implementation into a single
+2,872-line `_shared.py`, and without an explicit size bar that outcome reads as
+success. `agent_task_routes.py` is currently the same shape at a smaller
+scale. The work is unfinished rather than wrong -- the god-functions need the
+`create_agent_for_task` treatment (decompose into named steps *during* the
+move), which is the part still outstanding.
+
+**(6) full-suite baseline** was still running at the time of writing.
+
+Worth relaying to whoever is finishing Phase 1c: steps 0 and the route
+guardrail were done properly and in the right order; what remains is the
+function-level decomposition inside `agent_task_routes.py` and
+`mcp_protocol.py`.
+
 ## OPEN — deliberately not fixed
 
 ### 1. Should the state primitives raise instead of returning `False`?

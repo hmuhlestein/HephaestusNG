@@ -1865,9 +1865,16 @@ class DatabaseManager:
                 # before the fix that passes self_review from YAML to DB.
                 # SECURITY: Use parameterized query to avoid SQL injection pattern
                 try:
+                    # Both spellings of "no value": a true SQL NULL, and the
+                    # JSON null literal. A column written as the four-byte
+                    # string 'null' is not SQL NULL, so an IS NULL predicate
+                    # skips it silently and that phase never gets self-review
+                    # enabled -- indistinguishable, from the caller's side,
+                    # from a phase that was deliberately configured off.
                     conn.execute(text(
                         "UPDATE phases SET self_review = :value "
-                        "WHERE name = 'development' AND self_review IS NULL"
+                        "WHERE name = 'development' "
+                        "AND (self_review IS NULL OR self_review = 'null')"
                     ), {"value": '{"enabled": true}'})
                 except Exception:
                     pass  # Already populated or table empty
