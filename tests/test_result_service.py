@@ -91,11 +91,15 @@ class TestResultService:
     @patch("src.services.result_service.get_db")
     def test_create_result_file_not_found(self, mock_get_db):
         """Test result creation with non-existent file."""
+        # Under the system temp dir -- a legitimate location per
+        # validate_file_path's default allowed roots -- so this exercises
+        # the "file doesn't exist" path, not the containment check.
+        missing_path = os.path.join(tempfile.gettempdir(), "nonexistent-result-file.md")
         with pytest.raises(FileNotFoundError, match="Markdown file not found"):
             ResultService.create_result(
                 agent_id="agent-456",
                 task_id="task-123",
-                markdown_file_path="/nonexistent/file.md",
+                markdown_file_path=missing_path,
                 result_type="implementation",
                 summary="Test",
             )
@@ -223,8 +227,9 @@ class TestValidationHelpers:
 
     def test_validate_file_path_valid(self):
         """Test valid file path validation."""
-        # Should not raise
-        validate_file_path("/valid/path/to/file.md")
+        # Should not raise -- both are under validate_file_path's default
+        # allowed roots (system temp dir, and the repo via cwd).
+        validate_file_path(os.path.join(tempfile.gettempdir(), "valid-file.md"))
         validate_file_path("relative/path.md")
 
     def test_validate_file_path_traversal(self):
