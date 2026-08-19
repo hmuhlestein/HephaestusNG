@@ -1707,3 +1707,115 @@ class TestTerminateAgent:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestLaunchPipelineOwnAttributesAfterManagerSplit:
+    """_CLAUDE_CODE_CONFIRMATION_PATTERN and the two stable-transcript-flush
+    helpers are referenced as `self.X` inside LaunchPipeline/Terminator
+    methods that were moved out of AgentManager during the Phase 1b split
+    (manager_py_decomposition_prompt.md). None of the three were carried
+    over -- LaunchPipeline and Terminator only got the six/seven forwarding
+    properties (db_manager, config, tmux_server, _messenger, etc.) that an
+    earlier pass of the split remembered to add.
+
+    Found live, 2026-08-19, restarting the self-hosted backend right after
+    this week's refactor work: _detect_launch_failure crashed with
+    AttributeError on the very first CLI launch-rejection it tried to
+    classify (a "pi" agent whose launch command failed), logged as a
+    generic "Failed to create agent with pi" instead of the specific
+    shell-rejection/confirmation-dialog message the code was designed to
+    produce. The existing TestCreateAgentForTaskFallback test never caught
+    this because it only asserts that SOME failure triggered the fallback
+    path, not what the failure actually was -- an AttributeError caught by
+    the same broad `except Exception` around this call is observationally
+    identical to the intended, specific rejection Exception.
+
+    The transcript-flush half is worse: both call sites wrap the same two
+    now-missing attributes in `except Exception: logger.debug(...)`, so
+    every restart and every termination has been silently skipping its
+    final stable-transcript flush since the split, with no error visible
+    above DEBUG level anywhere.
+    """
+
+    def test_detect_launch_failure_classifies_the_confirmation_dialog_pattern(
+        self, mock_agent_manager
+    ):
+        """The specific-message branch this whole comparison exists for."""
+        pane = MagicMock()
+        pane.cmd.return_value = MagicMock(stdout=["Bypass Permissions mode?"])
+
+        cli_agent = MagicMock()
+        cli_agent.get_launch_rejection_patterns.return_value = [
+            r"command not found",
+            r"No such file or directory",
+            r"Bypass Permissions mode",
+        ]
+
+        with pytest.raises(Exception, match="stuck on an unhandled first-run confirmation"):
+            mock_agent_manager._launch._detect_launch_failure(
+                pane, cli_agent, "claude", "session-x"
+            )
+
+    def test_detect_launch_failure_classifies_a_generic_shell_rejection(
+        self, mock_agent_manager
+    ):
+        """A non-confirmation-dialog pattern must still raise the generic
+        message, not crash on the way to deciding which message to raise."""
+        pane = MagicMock()
+        pane.cmd.return_value = MagicMock(stdout=["command not found: pi"])
+
+        cli_agent = MagicMock()
+        cli_agent.get_launch_rejection_patterns.return_value = [
+            r"command not found",
+            r"No such file or directory",
+        ]
+
+        with pytest.raises(Exception, match="shell reported the launch command was not found"):
+            mock_agent_manager._launch._detect_launch_failure(
+                pane, cli_agent, "pi", "session-y"
+            )
+
+    def test_no_self_attribute_referenced_without_a_definition(self):
+        """Structural guard against this exact class of bug recurring: every
+        self.X read inside LaunchPipeline/Terminator must resolve to a
+        method, property, or assigned attribute somewhere in the class --
+        an AST sweep, since the crash only shows up at runtime on whichever
+        code path happens to hit the missing name first."""
+        import ast
+
+        def missing_self_refs(path, clsname):
+            tree = ast.parse(Path(path).read_text())
+            class_node = next(
+                n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == clsname
+            )
+            defined = set()
+            for n in ast.walk(class_node):
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    defined.add(n.name)
+                if isinstance(n, (ast.Assign, ast.AnnAssign)):
+                    targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+                    for t in targets:
+                        if isinstance(t, ast.Name):
+                            defined.add(t.id)
+                        if (
+                            isinstance(t, ast.Attribute)
+                            and isinstance(t.value, ast.Name)
+                            and t.value.id == "self"
+                        ):
+                            defined.add(t.attr)
+            refs = {
+                n.attr
+                for n in ast.walk(class_node)
+                if isinstance(n, ast.Attribute)
+                and isinstance(n.value, ast.Name)
+                and n.value.id == "self"
+            }
+            return sorted(r for r in refs if r not in defined and not r.startswith("__"))
+
+        for path, cls in [
+            ("src/agents/manager.py", "AgentManager"),
+            ("src/agents/launch_pipeline.py", "LaunchPipeline"),
+            ("src/agents/terminator.py", "Terminator"),
+        ]:
+            missing = missing_self_refs(path, cls)
+            assert not missing, f"{cls} ({path}) references self.X with no definition: {missing}"

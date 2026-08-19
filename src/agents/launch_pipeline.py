@@ -47,6 +47,11 @@ class WorktreeResolution(NamedTuple):
 class LaunchPipeline:
     """Agent launch pipeline — worktree resolution, tmux session creation, prompt delivery, and the create/restart orchestrators. Extracted from AgentManager per design_docs/manager_py_decomposition_prompt.md."""
 
+    # Mirrors AgentManager._CLAUDE_CODE_CONFIRMATION_PATTERN (manager.py) --
+    # _detect_launch_failure needs it on self, and AgentManager itself no
+    # longer owns launch-failure detection after this split.
+    _CLAUDE_CODE_CONFIRMATION_PATTERN = r"Bypass Permissions mode"
+
     def __init__(self, agent_manager):
         self._agent_manager = agent_manager
 
@@ -1967,9 +1972,9 @@ class LaunchPipeline:
             # Kill existing tmux session
             if agent.tmux_session_name:
                 try:
-                    transcript_dir = self._resolve_tmux_transcript_dir(agent)
+                    transcript_dir = self._output_capture._resolve_tmux_transcript_dir(agent)
                     if transcript_dir:
-                        self._flush_stable_transcript(
+                        self._output_capture._flush_stable_transcript(
                             agent.tmux_session_name,
                             transcript_dir / f"{agent.tmux_session_name}.clean.log",
                         )
