@@ -573,7 +573,11 @@ class WorktreeManager:
                 "merged_to": target_branch,
                 "commit_sha": merge_commit_sha,
                 "conflicts_resolved": conflicts_resolved,
-                "resolution_strategy": self.config.conflict_resolution_strategy,
+                # _resolve_conflicts always runs newest-file-wins,
+                # unconditionally -- this used to echo
+                # self.config.conflict_resolution_strategy, a config field
+                # that was never actually branched on anywhere (removed).
+                "resolution_strategy": "newest_file_wins",
                 "total_conflicts": len(conflicts_resolved),
                 "resolution_time_ms": elapsed_ms,
             }

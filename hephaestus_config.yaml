@@ -10,7 +10,6 @@ git:
   # main_repo_path: defaults to current working directory
   worktree_branch_prefix: agent-
   auto_commit: true
-  conflict_resolution: newest_file_wins
 llm:
   embedding_model: BAAI/bge-small-en-v1.5
   embedding_provider: fastembed

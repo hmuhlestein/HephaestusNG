@@ -62,9 +62,6 @@ class Config:
         )  # Base branch/commit for merging
         self.branch_prefix = git.get("branch_prefix", "agent-")
         self.auto_commit = git.get("auto_commit", True)
-        self.conflict_resolution_strategy = git.get(
-            "conflict_resolution", "newest_file_wins"
-        )
 
         # LLM settings
         llm = config.get("llm", {})
@@ -179,10 +176,6 @@ class Config:
         self.max_branches = 50
         self.max_tree_depth = 10
         self.disk_space_threshold_gb = 10
-        self.auto_merge_enabled = True
-        self.prefer_child_on_tie = True
-        self.require_manual_review = False
-        self.log_all_resolutions = True
         self.branch_auto_cleanup_enabled = True
         self.branch_cleanup_interval_hours = 6
         self.branch_retention_hours = {
@@ -315,20 +308,6 @@ class Config:
             self.max_tree_depth = int(os.getenv("WORKTREE_MAX_DEPTH"))
         if os.getenv("WORKTREE_DISK_THRESHOLD_GB"):
             self.disk_space_threshold_gb = int(os.getenv("WORKTREE_DISK_THRESHOLD_GB"))
-
-        # Worktree conflict resolution
-        if os.getenv("WORKTREE_AUTO_MERGE"):
-            self.auto_merge_enabled = os.getenv("WORKTREE_AUTO_MERGE").lower() == "true"
-        if os.getenv("WORKTREE_CONFLICT_STRATEGY"):
-            self.conflict_resolution_strategy = os.getenv("WORKTREE_CONFLICT_STRATEGY")
-        if os.getenv("WORKTREE_PREFER_CHILD_ON_TIE"):
-            self.prefer_child_on_tie = (
-                os.getenv("WORKTREE_PREFER_CHILD_ON_TIE").lower() == "true"
-            )
-        if os.getenv("WORKTREE_LOG_RESOLUTIONS"):
-            self.log_all_resolutions = (
-                os.getenv("WORKTREE_LOG_RESOLUTIONS").lower() == "true"
-            )
 
         # Worktree cleanup settings
         if os.getenv("BRANCH_AUTO_CLEANUP"):
