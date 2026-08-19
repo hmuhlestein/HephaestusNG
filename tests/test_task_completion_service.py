@@ -975,3 +975,48 @@ class TestCommitAndLinkTicket:
             )
             assert result is not None
             mock_ticket_svc.link_commit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_git_commit_runs_off_the_event_loop_thread(self):
+        """Regression: `git add -A` + `git commit` over a worktree after an
+        agent's edits routinely takes 0.5-3s -- was called directly inside
+        this async function with no thread-pool offload. Confirmed live
+        2026-08-19, investigating intermittent multi-second /health stalls
+        under concurrent task completions. Found via a systematic audit
+        after three other blocking call sites elsewhere were fixed and the
+        symptom persisted."""
+        import threading
+
+        task = Mock(workflow_id="wf-1", phase_id="phase-1", id="task-1", ticket_id=None)
+        wf = Mock(working_directory="/path/to/project")
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = wf
+
+        main_thread_id = threading.get_ident()
+        call_thread_id = {}
+
+        mock_repo = Mock()
+        mock_repo.is_dirty.return_value = True
+        mock_repo.untracked_files = []
+        mock_repo.head.commit.hexsha = "abc123" * 7
+
+        def _spy_repo(*args, **kwargs):
+            call_thread_id["id"] = threading.get_ident()
+            return mock_repo
+
+        with (
+            patch("git.Repo", side_effect=_spy_repo),
+            patch("src.core.app_context.get_app_state") as mock_state,
+            patch("pathlib.Path.is_dir", return_value=True),
+        ):
+            mock_state.return_value = Mock()
+            result = await TaskCompletionService.commit_and_link_ticket(
+                session=mock_session, agent_id="agent-1", task=task, summary="Fixed the bug"
+            )
+
+        assert result == "abc123" * 7
+        assert call_thread_id.get("id") is not None, "git.Repo was never called"
+        assert call_thread_id["id"] != main_thread_id, (
+            "git commit work ran on the event loop's own thread -- it must "
+            "run in the executor's thread pool instead"
+        )
