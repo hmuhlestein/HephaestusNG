@@ -203,6 +203,14 @@ creation, and stuck-task resume. Ironic given Phase 1c's own stated exit criteri
 module over ~800 lines") was written specifically to prevent this shape. *Fix:* split
 arbitration (`_gather_arbitration_context`/`_build_arbitration_prompt`/`_trigger_arbitration`/
 `_maybe_resolve_arbitration`/`_resolve_arbitration_outcome`) into its own `arbitration.py`.
+**Done, 2026-08-19** — extracted verbatim into `src/autopilot/orchestrator/arbitration.py`
+(671 lines); `phase_transitions.py` drops to 3000 lines. Re-exported under the original
+names so existing callers/test patches keep working; the ~26 test patches targeting
+`create_agent_for_task_direct`/`PhaseManager`/`build_phase_output` (called via
+`arbitration.py`'s own top-level imports, not re-exported) were retargeted. Still 3000
+lines — this fix narrows the god-module problem, it doesn't fully resolve it; the
+remaining task-creation-claim/phase-advance-sweep/phase-task-creation/stuck-task-resume
+mix is a candidate for a further split if this file keeps growing.
 
 **`orchestrator/__init__.py` (3411 lines) — a second new god-module, mixing pipeline
 execution with unrelated infrastructure.** 28 top-level functions: the real
@@ -282,13 +290,20 @@ The original review's "suggested order of attack" is mostly obsolete (items 1, 3
 now fixed or well underway). Re-ranked given what's actually still open, weighted toward
 correctness risk over pure style:
 
-1. **The two live bugs in §1** (Guardian's stale steering key, the disconnected retry
-   budgets, the `_sync_stale_*` sweeps bypassing `status_derivation.py`) — each is a
+1. **Done, 2026-08-19.** The live bugs in §1 (Guardian's stale steering key, the
+   disconnected retry budgets, the `_sync_stale_*` sweeps bypassing
+   `status_derivation.py`, the dead `/me` auth stub, the inert worktree
+   conflict-resolution config, `_complete_workflow`'s own status_derivation.py bypass
+   found in a follow-up gap-check) — all fixed and tested; each was a
    silent-failure-shaped bug hiding behind a style-looking finding, exactly the pattern
    this whole refactor's bug-fix-history methodology has repeatedly found elsewhere.
 2. **Split `phase_transitions.py` and `orchestrator/__init__.py`.** Both are now larger
    than the files this refactor already fixed for the same reason; leaving them
-   unaddressed undercuts the refactor's own stated rationale.
+   unaddressed undercuts the refactor's own stated rationale. **`phase_transitions.py`
+   done, 2026-08-19** — its ~620-line arbitration subsystem extracted to a new
+   `arbitration.py` (671 lines), dropping `phase_transitions.py` from 3539 to 3000
+   lines. `orchestrator/__init__.py`'s split (config getters, human-escalation,
+   orchestrator-agent registration) remains open.
 3. **1.13/1.15/4.6 — the `except Exception`/manual-session patterns.** Still the largest
    volume of individual findings in the codebase (141 broad excepts, dozens of manual
    sessions); no single fix, but the original review's diagnosis (no service layer, so

@@ -1,4 +1,9 @@
-"""Control-loop engine: goto/retry/continue state machine, arbitration, phase-task creation."""
+"""Control-loop engine: goto/retry/continue state machine, phase-task
+creation. The arbitration subsystem (what happens when a phase exhausts
+its retry/goto budget) lives in arbitration.py; its public names are
+re-exported here (see the import block below) for backward compatibility
+with existing callers/test patches.
+"""
 
 import asyncio
 import json
