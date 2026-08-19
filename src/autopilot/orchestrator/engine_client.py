@@ -46,17 +46,6 @@ def file_hash(path: Path) -> str:
     return h.hexdigest()[:16]
 
 
-def api_get(endpoint: str, timeout: int = 5) -> Optional[dict]:
-    """Legacy HTTP GET - prefer direct DB access functions below."""
-    try:
-        r = requests.get(f"{API_BASE}{endpoint}", timeout=timeout)
-        if r.status_code == 200:
-            return r.json()
-    except Exception as e:
-        logger.debug(f"[api_get] {endpoint} failed: {e}")
-    return None
-
-
 def api_post(endpoint: str, data: dict = None, timeout: int = 5, headers: dict = None) -> Optional[dict]:
     """Legacy HTTP POST - prefer direct DB access functions below."""
     try:
