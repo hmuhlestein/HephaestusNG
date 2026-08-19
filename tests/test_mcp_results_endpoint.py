@@ -15,6 +15,24 @@ class TestReportResultsEndpoint:
     """Test suite for the /report_results MCP endpoint."""
 
     @pytest.fixture
+    def results_db(self, tmp_path, monkeypatch):
+        """A real, empty test DB with tables created.
+
+        /report_results mocks the ResultService layer, but the handler also
+        does its own `with get_db()` lookup to resolve the task's workflow
+        for broadcast scoping (memory_api.py:422). That query is not mocked
+        and hits whatever get_db() resolves to -- without this fixture it is
+        a database with no tables, and the endpoint 500s on
+        "no such table: tasks" while the test reports a bare 500 != 200.
+        """
+        from src.core.database import DatabaseManager
+
+        db_path = tmp_path / "results.db"
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+        DatabaseManager(str(db_path)).create_tables()
+        return db_path
+
+    @pytest.fixture
     def client(self):
         """Create sync test client for testing."""
         return TestClient(app)
@@ -42,7 +60,7 @@ class TestReportResultsEndpoint:
     @patch("src.mcp.server.server_state.broadcast_update")
     @patch("src.mcp.memory_api.get_app_state")
     def test_report_results_success(
-        self, mock_get_state, mock_broadcast, mock_create_result, client, valid_markdown_file
+        self, mock_get_state, mock_broadcast, mock_create_result, client, valid_markdown_file, results_db
     ):
         mock_get_state.return_value = server_state
         """Test successful result reporting."""
@@ -250,7 +268,7 @@ class TestReportResultsEndpoint:
     @patch("src.mcp.server.server_state.broadcast_update")
     @patch("src.mcp.memory_api.get_app_state")
     def test_multiple_results_per_task(
-        self, mock_get_state, mock_broadcast, mock_create_result, client, valid_markdown_file
+        self, mock_get_state, mock_broadcast, mock_create_result, client, valid_markdown_file, results_db
     ):
         mock_get_state.return_value = server_state
         """Test submitting multiple results for the same task."""
