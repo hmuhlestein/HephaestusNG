@@ -351,6 +351,22 @@ class AgentOutputCapture:
 
             # Classify every line first; separators need a look-ahead over
             # later lines' kinds, so this can't be a single filter pass.
+            # Status-bar chrome, anchored so it cannot swallow real output:
+            #   "↑62k ↓4.6k R629k CH88.3% $0.033 6.1%/1.0M (auto)"  counters
+            #   "MCP: 1/1 servers"                                   server line
+            #   "⠧ Working..."                                       braille spinner
+            #   "~/code/x/.worktrees/wt_y (feature/branch)"          shell prompt
+            # The prompt pattern requires BOTH a leading ~/ or / and a
+            # trailing parenthesised branch, so prose mentioning a path
+            # does not match.
+            chrome_re = re.compile(
+                r'^(?:'
+                r'[\u2191\u2193]\s*\d'
+                r'|MCP:\s'
+                r'|[\u2800-\u28ff]\s'
+                r'|[~/][^\s]*\s+\([^)]+\)$'
+                r')'
+            )
             classified = []  # (kind, line, clean)
             for line in text.split('\n'):
                 line = _strip_trailing_pad(line)
@@ -362,6 +378,13 @@ class AgentOutputCapture:
                     kind = 'blank'
                 elif separator_re.match(clean):
                     kind = 'sep'
+                elif chrome_re.match(clean):
+                    # pi's bottom status bar, re-rendered on every frame.
+                    # Frame dedup collapses consecutive repeats, but chrome
+                    # that brackets real content survives it -- those frames
+                    # are no longer adjacent -- so it must be classified out
+                    # here or it reaches the caller as content.
+                    kind = 'chrome'
                 else:
                     kind = 'content'
                 classified.append((kind, line, clean))
