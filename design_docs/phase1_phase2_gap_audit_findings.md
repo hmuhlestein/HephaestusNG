@@ -600,6 +600,68 @@ hand-grown-string-matching class §4.9 and §4.10 are about, in a third place.
 Not fixed here: whether that path should be cap-exempt is a behavioural
 question, not a typo.
 
+### 19. Phase 3 Tier 3 freshness check (7 items)
+
+Completes the freshness service given to Tiers 1 and 2. Tier 3 is the
+low-severity tail -- stale docs, dead branches, deprecation debt -- so the
+value here is mostly telling whoever picks it up that a third of it is already
+gone.
+
+**Already fixed -- no work needed (3):**
+
+- **22** `git_commit_push.yaml`'s description contradicting its own STEP 1-5
+  body. The description now reads "with the merge step gated by review_mode
+  ... whether it also merges depends on the project's review_mode setting",
+  which matches the gated behaviour. Contradiction resolved.
+- **23** seven dead `Workflow.status.in_(["active", "running"])` branches.
+  Zero occurrences remain. Confirmed the premise was real:
+  `database.py:392`'s constraint is
+  `status IN ('active', 'completed', 'paused', 'failed')` -- `"running"` was
+  never a permitted value, so every one of those branches was unreachable.
+- **26** stale comments/docstrings pointing at pre-split locations.
+  `phase_manager.py` no longer references `task_completion_service` at all.
+
+**Still live (4):**
+
+- **24** ticket-creation friction. The require-a-ticket-id gate is still in
+  `server.py:1975`; the three historical fixes the item cites were each
+  point patches, and no consolidation happened.
+- **25** `MonitoringLoop` compat debt. `monitor.py` still carries delegator
+  stubs forwarding the old underscored names "for test compat"
+  (`monitor.py:225`), across 51 underscore-prefixed methods and six
+  collaborators. This is exactly the shape finding 15 documents -- the
+  decomposition kept a compatibility surface *because* the tests point at the
+  old names, so the stubs cannot go until those tests are re-pointed. Same
+  coupling, one layer up.
+- **27** test hygiene: `tests/manual_validation_test.py` still exists and
+  still contains zero `timeout` usages, so its un-timed calls are unchanged.
+
+  **Update, same day, a separate pass through Tier 3 (`design_docs/
+  phase3_tier3_findings.md`):** both halves of item 27 are now fixed.
+  `manual_validation_test.py`'s HTTP calls are wrapped behind `if __name__ ==
+  "__main__"` -- still no `timeout=` kwargs (that wasn't the actual hazard;
+  import-time execution against a server that isn't running was), but
+  `pytest --collect-only` on the file is now a no-op instead of attempting a
+  network call. `test_task_completion_service.py`'s flaky fixture-dependent
+  test was rebuilt on an isolated `tmp_path`, verified by reproducing the
+  original failure (moving this repo's real `.hephaestus/features/`
+  directory aside) before and after the fix.
+- **28** deprecated `libtmux` `attached_window`/`attached_pane` API -- 12 call
+  sites across `src/`. Unchanged since the item was written.
+
+  **Same update:** investigated, not migrated. The installed libtmux in this
+  project (`0.23.2`, confirmed against `.venv` directly) still has
+  `attached_window`/`attached_pane` as normal, non-deprecated properties --
+  `active_window`/`active_pane` don't exist on this version at all.
+  Migrating would break all 12 sites in production, not just tests. The
+  count above (12 sites) is independently confirmed accurate; the premise
+  that they need migrating right now isn't.
+
+Nothing here is urgent. The one worth pairing with other work is **25**: it is
+blocked on the same test-reference migration Phase 1c's exit criteria already
+budget for (70 `src.mcp.server` references across 20 files). Whoever does that
+migration is already in the right frame of mind to retire these stubs.
+
 ## OPEN — deliberately not fixed
 
 ### 1. Should the state primitives raise instead of returning `False`?
