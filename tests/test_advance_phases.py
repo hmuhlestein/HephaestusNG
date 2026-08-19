@@ -2890,7 +2890,7 @@ class TestTriggerArbitration:
     the phase's task_creation_claimed_at so a repeat sweep tick can't spawn
     a duplicate. See _maybe_resolve_arbitration for consumption."""
 
-    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_creates_task_and_dispatches_arbitration_agent(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -2933,7 +2933,7 @@ class TestTriggerArbitration:
             assert "requirements" in wf.status_reason
             assert "exhausted 5 attempts" in wf.status_reason
 
-    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_creates_its_own_sentinel_agent_if_missing(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -2974,7 +2974,7 @@ class TestTriggerArbitration:
             )
             assert task is not None
 
-    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_agent_type_satisfies_the_check_constraint(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -3013,7 +3013,7 @@ class TestTriggerArbitration:
                 agent_type=agent_type,
             ))
 
-    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_prompt_lists_valid_phase_names(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -3034,7 +3034,7 @@ class TestTriggerArbitration:
         assert "requirements" in prompt
         assert "implementation" in prompt  # sample_workflow's phase-2
 
-    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_caps_repeated_arbitration_and_fails_workflow(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -3078,9 +3078,9 @@ class TestTriggerArbitration:
             assert "3 times" in wf.status_reason
 
     @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
-    @patch("src.autopilot.orchestrator.phase_transitions.build_phase_output")
-    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.build_phase_output")
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_cap_exhausted_with_no_pending_decision_advances_if_output_already_passes(
         self, mock_create_agent, mock_build_output, mock_pm_class, mock_fire_transition,
         db_manager, sample_workflow, tmp_path
@@ -3147,7 +3147,7 @@ class TestTriggerArbitration:
             # Advancing, not failing.
             assert wf.status != "failed"
 
-    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_retry_resets_the_arbitration_cap_via_gotos_reset_at(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -3200,7 +3200,7 @@ class TestTriggerArbitration:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status != "failed"
 
-    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_already_in_flight_uses_real_orchestrator_logger(
         self, mock_create_agent, db_manager, sample_workflow, tmp_path
     ):
@@ -3234,7 +3234,7 @@ class TestTriggerArbitration:
         assert result is False
         mock_create_agent.assert_not_called()
 
-    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_prompt_forbids_editing_files(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -3255,7 +3255,7 @@ class TestTriggerArbitration:
         prompt = kwargs["enriched_data_override"]["validation_prompt"].lower()
         assert "do not edit" in prompt or "not edit" in prompt
 
-    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_already_in_flight_skips_duplicate(
         self, mock_create_agent, db_manager, sample_workflow
     ):
@@ -3271,8 +3271,8 @@ class TestTriggerArbitration:
         assert result is False
         mock_create_agent.assert_not_called()
 
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
-    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
     def test_dispatch_failure_fails_workflow_instead_of_silent_pause(
         self, mock_create_agent, mock_pm_class, db_manager, sample_workflow
     ):
@@ -3371,7 +3371,7 @@ class TestResolveArbitrationOutcome:
             _claim_phase_task_creation(session, "phase-1")
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_continue_dispatches_next_phase_task(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
     ):
@@ -3405,7 +3405,7 @@ class TestResolveArbitrationOutcome:
             assert wf.status_reason is None
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_continue_at_last_phase_does_not_dispatch(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
     ):
@@ -3430,7 +3430,7 @@ class TestResolveArbitrationOutcome:
         mock_create_task.assert_not_called()
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_goto_dispatches_target_phase_task(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
     ):
@@ -3467,7 +3467,7 @@ class TestResolveArbitrationOutcome:
             assert execution.task_creation_claimed_at is None
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_goto_dispatch_failure_is_logged_loudly(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
     ):
@@ -3496,7 +3496,7 @@ class TestResolveArbitrationOutcome:
         assert logger.error.called
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_fail_calls_force_fail_clears_claim_and_sets_status_reason(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
     ):
@@ -3528,7 +3528,7 @@ class TestResolveArbitrationOutcome:
             assert "requirements" in wf.status_reason
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_goto_without_target_treated_as_fail(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
     ):
@@ -3556,7 +3556,7 @@ class TestResolveArbitrationOutcome:
         mock_create_task.assert_not_called()
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_goto_with_unresolvable_target_phase_is_surfaced_not_hidden(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow
     ):
@@ -3623,7 +3623,7 @@ class TestMaybeResolveArbitration:
             )
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_resolves_done_arbitration_with_valid_result(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow, tmp_path
     ):
@@ -3664,7 +3664,7 @@ class TestMaybeResolveArbitration:
             assert execution.task_creation_claimed_at is None
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_still_running_arbitration_is_left_alone(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow, tmp_path
     ):
@@ -3687,7 +3687,7 @@ class TestMaybeResolveArbitration:
             assert execution.task_creation_claimed_at is not None  # still claimed
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_failed_arbitration_agent_resolves_as_fail(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow, tmp_path
     ):
@@ -3731,7 +3731,7 @@ class TestMaybeResolveArbitration:
         mock_create_task.assert_not_called()
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_done_without_result_file_resolves_as_fail(
         self, mock_pm_class, mock_create_task, db_manager, sample_workflow, tmp_path
     ):
@@ -3761,7 +3761,7 @@ class TestMaybeResolveArbitration:
             "phase-1", ANY, force_action="fail"
         )
 
-    @patch("src.autopilot.orchestrator.phase_transitions.PhaseManager")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
     def test_no_arbitration_task_is_a_noop(
         self, mock_pm_class, db_manager, sample_workflow
     ):
