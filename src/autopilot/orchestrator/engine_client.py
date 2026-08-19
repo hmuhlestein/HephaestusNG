@@ -316,6 +316,16 @@ def resume_workflow(
     primitive paused-and-cascaded doesn't leave its feature stuck showing
     "Paused" after the workflow itself resumes.
 
+    Every successful resume also zeroes Workflow.paused_retry_count.
+    _retry_exhausted_paused_workflows increments that counter on its own
+    self-heal cycles and gives up permanently once it hits
+    paused_workflow_max_retry_cycles -- a stale count left over from an
+    earlier, now-resolved pause episode would let the very next "system"
+    pause trip that cap immediately, with zero real retries this time
+    around. This primitive is the only other writer of paused_by/
+    paused_at, so it is the one place that can reliably tell "this pause
+    episode is over" and reset the counter for it.
+
     session: see pause_workflow.
     """
 
@@ -329,6 +339,7 @@ def resume_workflow(
         wf.paused_by = None
         wf.paused_at = None
         wf.status_reason = None
+        wf.paused_retry_count = 0
         if cascade_to_feature:
             from src.core.database import Feature, FeatureStatus
 
