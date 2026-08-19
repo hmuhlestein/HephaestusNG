@@ -23,6 +23,26 @@ additional_notes: |
 
   ═══ STEP 1: CLEAN UP ═══
 
+  ## UNRESOLVED TICKET CHECK
+
+  Before any doc work, check for open bug tickets:
+  ```bash
+  search_tickets(status="open", ticket_type="bug")
+  ```
+
+  If open bug tickets exist:
+  1. Do NOT attempt to fix the bugs yourself
+  2. Do NOT proceed with documentation cleanup
+  3. Fail the task — the orchestrator will goto development automatically
+
+  ```
+  complete_my_task(
+    status="failed",
+    summary="Open bug tickets must be resolved before doc review: <ticket details>",
+    key_learnings=["Blocking bugs found at doc review stage"]
+  )
+  ```
+
   Move stray .md/.txt/.log files from project root into Artifacts Path (skip README.md, AGENTS.md, etc.). Artifacts Path (./.hephaestus/) is gitignored, so do NOT use `git mv` -- it re-tracks the destination even when it's ignored. Instead: copy the file to the destination, then `git rm <source>` to stage the removal. If `git rm` fails with "did not match any files", the source was never committed -- just `rm <source>`, nothing to stage.
 
   Sweep ./docs/ for known agent report filenames left there by mistake (stale reports from before the .hephaestus/ migration, or an agent that ignored these instructions): architecture.md, requirements.md, qa.md, validation.md, scope.md, review.md, adversarial.md, forensics.md, docs.md, feature_report.html, summary.md, pipeline_metrics.json, run_health.json, arbitration_result.json. Same copy-then-`git rm` rule as above (never `git mv`), keeping the same relative path if it's under a phase-named subdirectory (e.g. copy docs/qa_validation/qa.md to .hephaestus/qa_validation/qa.md, then `git rm docs/qa_validation/qa.md`). Leave everything else in ./docs/ alone -- it's human-authored project documentation.
