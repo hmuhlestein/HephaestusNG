@@ -1,19 +1,25 @@
 """Guardrail test for the frontend API route set (Phase 0 gate).
 
-Asserts that src.mcp.frontend.router exposes exactly 42 routes with the
+Asserts that src.mcp.frontend.router exposes exactly 40 routes with the
 exact {(method, path)} set from the doc §4.1 tables. The set is hardcoded,
 not computed, so a missing or extra route fails immediately.
+
+Baseline dropped from 42 to 40 in Phase 4 (docs/AUTOPILOT_REFACTOR_PLAN.md):
+GET /api/agents and GET /api/agents/{agent_id}/output were deleted from
+agent_routes.py -- src.mcp.agents_api registers identically-pathed routes
+at import time (src/mcp/server/_shared.py), strictly before this frontend
+router is included in lifecycle.py's startup_event, so FastAPI's
+registration-order route matching meant these two were permanently
+unreachable dead code, not a live, redundant surface.
 """
 
 from unittest.mock import MagicMock
 
 from src.mcp.frontend import create_frontend_routes, router
 
-# ── 42-route baseline (hardcoded from doc §4.1 cluster tables) ────────────
+# ── 40-route baseline (hardcoded from doc §4.1 cluster tables) ────────────
 EXPECTED_ROUTES = {
-    # agent_routes.py — 4 routes
-    ("GET", "/api/agents"),
-    ("GET", "/api/agents/{agent_id}/output"),
+    # agent_routes.py — 2 routes
     ("GET", "/api/phases/{phase_id}/agents"),
     ("POST", "/api/workflows/{workflow_id}/stop"),
     # task_routes.py — 6 routes
@@ -93,10 +99,10 @@ def _count_routes(rtr):
 class TestFrontendAPIRoutesGuardrail:
     """Phase 0 gate: exact route count and path set must match baseline."""
 
-    def test_route_count_is_42(self):
+    def test_route_count_is_40(self):
         count = _count_routes(router)
-        assert count == 42, (
-            f"Expected 42 routes on src.mcp.frontend.router, got {count}"
+        assert count == 40, (
+            f"Expected 40 routes on src.mcp.frontend.router, got {count}"
         )
 
     def test_exact_route_set_matches_baseline(self):
@@ -114,6 +120,6 @@ class TestFrontendAPIRoutesGuardrail:
         # Must return the module-level aggregate router
         assert result is router
 
-    def test_expected_set_has_exactly_42_entries(self):
-        """Self-check: the hardcoded baseline itself has 42 entries."""
-        assert len(EXPECTED_ROUTES) == 42
+    def test_expected_set_has_exactly_40_entries(self):
+        """Self-check: the hardcoded baseline itself has 40 entries."""
+        assert len(EXPECTED_ROUTES) == 40
