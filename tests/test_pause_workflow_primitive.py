@@ -22,7 +22,10 @@ def orch_db_env(tmp_path, monkeypatch):
     return db
 
 
-def _make_workflow(db, wf_id, status="active", paused_by=None, paused_at=None, status_reason=None):
+def _make_workflow(
+    db, wf_id, status="active", paused_by=None, paused_at=None, status_reason=None,
+    paused_retry_count=0,
+):
     from src.core.database import Workflow
 
     with db.session_scope() as session:
@@ -35,6 +38,7 @@ def _make_workflow(db, wf_id, status="active", paused_by=None, paused_at=None, s
                 paused_by=paused_by,
                 paused_at=paused_at,
                 status_reason=status_reason,
+                paused_retry_count=paused_retry_count,
             )
         )
 
@@ -220,6 +224,44 @@ class TestResumeWorkflowPrimitive:
         with orch_db_env.session_scope() as session:
             feat = session.query(Feature).filter_by(id="feat-1").first()
             assert feat.status == "active"
+
+    def test_resets_paused_retry_count(self, orch_db_env):
+        """§4.8 gap: a stale paused_retry_count carried across a resolved
+        pause episode let the very next "system" pause immediately trip
+        _retry_exhausted_paused_workflows's max-cycles cap
+        (phase_transitions.py:456), with zero real retries this time
+        around. A successful resume must zero the counter."""
+        from src.autopilot.orchestrator.engine_client import resume_workflow
+        from src.core.database import Workflow
+
+        _make_workflow(
+            orch_db_env, "wf-1", status="paused", paused_by="system",
+            paused_retry_count=2,
+        )
+
+        assert resume_workflow("wf-1") is True
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.paused_retry_count == 0
+
+    def test_noop_resume_leaves_paused_retry_count_untouched(self, orch_db_env):
+        """A resume that's rejected by the paused_by narrowing (no force)
+        must not reset the counter either -- the pause episode isn't
+        actually over."""
+        from src.autopilot.orchestrator.engine_client import resume_workflow
+        from src.core.database import Workflow
+
+        _make_workflow(
+            orch_db_env, "wf-1", status="paused", paused_by="user",
+            paused_retry_count=2,
+        )
+
+        assert resume_workflow("wf-1", force=False) is False
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.paused_retry_count == 2
 
 
 class TestHistoricalPauseSiteConsistency:
