@@ -221,7 +221,12 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
         # Orphaned tasks (never dispatched to an agent) are scheduling
         # issues, not agent failures -- they should retry indefinitely.
         retry_count = task.get("retry_count", 0)
-        is_orphan = "Orphaned" in (task.get("failure_reason") or "")
+        # Case-insensitive: the three writers disagree on capitalisation --
+        # features.py and _create_corrective_task write "Orphaned: ...",
+        # mechanical_recovery.py writes "Agent orphaned - tmux session not
+        # found". A capital-only match silently exempted the first two from
+        # the retry cap and not the third, for the same condition.
+        is_orphan = "orphaned" in (task.get("failure_reason") or "").lower()
         # Read max_task_retries from workflow config, default to 5
         try:
             from src.autopilot.spec import load_workflow_definition
@@ -1431,7 +1436,7 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                 retryable_tasks = [
                     t for t in failed_tasks
                     if (t.retry_count or 0) < max_retry_count
-                    or "Orphaned" in (t.failure_reason or "")
+                    or "orphaned" in (t.failure_reason or "").lower()
                     or _limit_failure(t.failure_reason)
                     or _stuck_failure(t.failure_reason)
                 ]
@@ -1608,7 +1613,7 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
         retryable_tasks = [
             t for t in failed_tasks
             if (t.retry_count or 0) < max_retry_count
-            or "Orphaned" in (t.failure_reason or "")
+            or "orphaned" in (t.failure_reason or "").lower()
             or _limit_failure(t.failure_reason)
             or _stuck_failure(t.failure_reason)
         ]
