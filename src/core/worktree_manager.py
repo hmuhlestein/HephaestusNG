@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import git
 from git import GitCommandError, Repo
@@ -1132,10 +1132,37 @@ class WorktreeManager:
             ]
             tracked_branches = {r.branch_name for r in records} | active_branch_names
             all_branches = [b.name for b in self.main_repo.branches]
+            # self.config.branch_prefix, not a hardcoded "agent-": the
+            # config default is "agent-" but it's overridable (git.
+            # branch_prefix / BRANCH_PREFIX), and create_agent_worktree
+            # (above, line 281) already builds real branch names from this
+            # same attribute -- a hardcoded literal here would silently
+            # stop matching the moment someone overrides the prefix.
+            # "autopilot-" dropped: no code anywhere constructs a branch
+            # with that prefix (confirmed via full-repo grep), it never
+            # matched anything. "feature/" added: covers both
+            # f"feature/{design}" (Phase 0 -> feature_architect handoff,
+            # orchestrator/__init__.py) and f"feature/{design}/{feature}"
+            # (per-feature branches, worktree_integration.py) -- neither
+            # was covered before, so branches from every feature pipeline
+            # run were permanently exempt from this cleanup.
             untracked_branches = [
                 b
                 for b in all_branches
-                if b.startswith(("agent-", "autopilot-", "feature_architect/"))
+                # "autopilot-" is the pre-rename legacy prefix and must stay:
+                # dropping it silently stops reclaiming every branch created
+                # before the rename (test_legacy_autopilot_prefixed_branch_
+                # still_cleaned_up covers exactly that). config.branch_prefix
+                # is "agent-" by default but is configurable, so list both.
+                if b.startswith(
+                    (
+                        self.config.branch_prefix,
+                        "agent-",
+                        "autopilot-",
+                        "feature_architect/",
+                        "feature/",
+                    )
+                )
                 and b not in tracked_branches
             ]
 
@@ -1164,13 +1191,154 @@ class WorktreeManager:
             for branch_name in untracked_branches:
                 _merge_and_delete(branch_name, None)
 
+            # Step 4: reconcile disk against the database, both directions.
+            #
+            # Everything above is DB-driven: it walks AgentBranch rows and
+            # git branches. Neither reaches a worktree DIRECTORY that has no
+            # row. create_agent_worktree does its git work (worktree add +
+            # branch) and only then writes the record and commits, so a
+            # failure in that window leaks a directory nothing can ever
+            # reclaim -- observed live: seven orphans accumulated under
+            # .worktrees/, invisible to every sweep, and had to be removed by
+            # hand. `git worktree prune` does not help: it only drops admin
+            # entries for directories that are already gone.
+            reconciled_dirs, preserved_dirs, reconciled_rows = (
+                self._reconcile_worktrees_with_db(session)
+            )
+
             return {
                 "cleaned": len(cleaned),
                 "merged": len(merged),
                 "failed": len(failed),
                 "worktrees_cleaned": worktrees_cleaned,
                 "branches": cleaned,
+                "orphan_worktrees_reclaimed": reconciled_dirs,
+                "orphan_worktrees_preserved": preserved_dirs,
+                "stale_rows_reconciled": reconciled_rows,
             }
+
+    def _reconcile_worktrees_with_db(self, session) -> Tuple[int, int, int]:
+        """Reconcile worktree directories against AgentBranch rows.
+
+        Returns (reclaimed_dirs, preserved_dirs, reconciled_rows).
+
+        Direction 1 -- a directory under this repo's worktree base with no
+        AgentBranch row. Reclaimed only if it is provably disposable: clean
+        working tree, and its branch holds no commits the base branch lacks.
+        Anything else is preserved and logged, matching the abort-and-preserve
+        strategy merge_shared_branch settled on -- an orphan we cannot explain
+        is exactly the case where destroying work would be unrecoverable.
+
+        Direction 2 -- a row marked "active" whose directory is gone. Marked
+        "cleaned" so the table stops claiming a live worktree. Scoped to rows
+        under THIS repo's worktree base: agent_worktrees is shared across every
+        project the installation has run, cleanup_all_stale_branches only ever
+        sees one repo, and a path being absent from here says nothing about
+        whether another project's worktree exists. Measured on this database:
+        56 of 176 rows were "active" with a missing directory, all belonging to
+        a different project, none reconcilable from here.
+        """
+        reclaimed = preserved = rows_fixed = 0
+        base = self.worktree_base
+        main_repo_path = str(Path(self.main_repo.working_dir).resolve())
+
+        tracked_paths = set()
+        for r in session.query(AgentBranch).all():
+            if r.worktree_path:
+                try:
+                    tracked_paths.add(str(Path(r.worktree_path).resolve()))
+                except OSError:
+                    tracked_paths.add(r.worktree_path)
+
+        # A worktree can be legitimately live with NO AgentBranch row -- the
+        # shared feature_architect/phase-0 worktrees are tracked by a Workflow's
+        # working_directory instead. Without this, "has no AgentBranch row" reads
+        # as "orphaned" and reconciliation deletes a worktree an active workflow
+        # is using. That is the exact race
+        # test_cleanup_stale_branches_race.py::test_active_workflows_worktree_
+        # survives_cleanup exists for, and it caught this on the first run.
+        # Paused counts as live for the same reason the sweep above says so:
+        # _resume_interrupted_workflows restarts from that worktree later.
+        tracked_paths |= {
+            str(Path(wf.working_directory).resolve())
+            for wf in session.query(Workflow)
+            .filter(Workflow.status.in_(["active", "paused"]))
+            .all()
+            if wf.working_directory
+        }
+
+        # Direction 1: directories with no row.
+        if base.is_dir():
+            for d in sorted(base.iterdir()):
+                if not d.is_dir() or not d.name.startswith("wt_"):
+                    continue
+                resolved = str(d.resolve())
+                if resolved in tracked_paths or resolved == main_repo_path:
+                    continue
+                why = self._orphan_worktree_blocker(d)
+                if why:
+                    preserved += 1
+                    logger.warning(
+                        f"[RECONCILE] Orphaned worktree {d.name} has no "
+                        f"AgentBranch row but is not safe to reclaim ({why}) "
+                        "-- preserving for manual review"
+                    )
+                    continue
+                try:
+                    self._remove_worktree(str(d), require_clean=True)
+                    reclaimed += 1
+                    logger.info(
+                        f"[RECONCILE] Reclaimed orphaned worktree {d.name} "
+                        "(no AgentBranch row, clean, nothing unmerged)"
+                    )
+                except Exception as e:
+                    preserved += 1
+                    logger.warning(
+                        f"[RECONCILE] Failed to reclaim orphan {d.name}: {e}"
+                    )
+
+        # Direction 2: rows under this repo whose directory is gone.
+        base_str = str(base.resolve()) if base.exists() else str(base)
+        for r in (
+            session.query(AgentBranch)
+            .filter(AgentBranch.merge_status == "active")
+            .all()
+        ):
+            path = r.worktree_path or ""
+            if not path.startswith(base_str):
+                continue  # another project's row -- not this sweep's to judge
+            if Path(path).is_dir():
+                continue
+            r.merge_status = "cleaned"
+            rows_fixed += 1
+            logger.info(
+                f"[RECONCILE] agent_worktrees row for {(r.agent_id or '?')[:8]} "
+                f"claimed active but {path} does not exist -- marked cleaned"
+            )
+
+        return reclaimed, preserved, rows_fixed
+
+    def _orphan_worktree_blocker(self, path: Path) -> Optional[str]:
+        """Why this orphaned worktree must not be reclaimed, or None."""
+        try:
+            repo = Repo(str(path))
+        except Exception as e:
+            return f"not a readable git worktree: {e}"
+        try:
+            if repo.is_dirty(untracked_files=True):
+                return "uncommitted or untracked changes"
+            branch = repo.active_branch.name
+        except Exception as e:
+            return f"could not determine state: {e}"
+        try:
+            unmerged = self.main_repo.git.rev_list(
+                "--count", f"{self.config.base_branch}..{branch}"
+            ).strip()
+            if unmerged not in ("", "0"):
+                return f"{unmerged} commit(s) not in {self.config.base_branch}"
+        except Exception as e:
+            return f"could not compare against base branch: {e}"
+        return None
 
 
 # Backward-compatible alias for call sites that still import WorktreeManager.

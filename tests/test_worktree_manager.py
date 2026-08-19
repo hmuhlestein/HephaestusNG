@@ -355,6 +355,44 @@ class TestReloadInstanceIsolation:
         assert wt_b.main_repo.working_dir == str(proj_b)
 
 
+class TestCleanupAllStaleBranchesPrefixFilter:
+    """Phase 3 Tier 2 item 9 (docs/AUTOPILOT_REFACTOR_PLAN.md):
+    cleanup_all_stale_branches's untracked-branch sweep only matched
+    "agent-"/"autopilot-"/"feature_architect/" -- missing "feature/",
+    which every feature-pipeline branch (f"feature/{design}" and
+    f"feature/{design}/{feature}") actually uses, so those branches were
+    permanently exempt from cleanup."""
+
+    def _commit_on_new_branch(self, repo, branch_name, filename):
+        repo.git.checkout("-b", branch_name)
+        f = Path(repo.working_dir) / filename
+        f.write_text("content")
+        repo.index.add([filename])
+        repo.index.commit(f"add {filename}")
+        repo.git.checkout(repo.heads[0].name if repo.heads[0].name != branch_name else "main")
+
+    def test_feature_prefixed_branch_is_swept(self, worktree_manager, temp_repo):
+        base = temp_repo.active_branch.name
+        self._commit_on_new_branch(temp_repo, "feature/des12345/my-feature", "feat.txt")
+        temp_repo.heads[base].checkout()
+
+        result = worktree_manager.cleanup_all_stale_branches()
+
+        remaining = [b.name for b in temp_repo.branches]
+        assert "feature/des12345/my-feature" not in remaining
+        assert result["merged"] + result["cleaned"] >= 1
+
+    def test_unrelated_branch_is_left_alone(self, worktree_manager, temp_repo):
+        base = temp_repo.active_branch.name
+        self._commit_on_new_branch(temp_repo, "totally-unrelated-branch", "other.txt")
+        temp_repo.heads[base].checkout()
+
+        worktree_manager.cleanup_all_stale_branches()
+
+        remaining = [b.name for b in temp_repo.branches]
+        assert "totally-unrelated-branch" in remaining
+
+
 if __name__ == "__main__":
     # Run tests
     pytest.main([__file__, "-v"])
