@@ -153,6 +153,58 @@ class TestPromptTemplateLoading:
             "Iteration context missing"
         )
 
+    def test_format_task_validation_prompt_with_workspace_changes_and_claims(self):
+        """Phase 3 Tier 2 item 18 (docs/AUTOPILOT_REFACTOR_PLAN.md):
+        spawn_validator_agent computed a workspace-changes summary and the
+        agent's claimed results but never passed either into the prompt --
+        confirm both now actually reach the formatted output."""
+        prompt = self.prompt_loader.format_task_validation_prompt(
+            validator_agent_id="validator-xyz",
+            task_id="task-123",
+            task_description="Implement feature Y",
+            done_definition="Feature Y must work with tests",
+            enriched_description="Implement feature Y with unit tests",
+            original_agent_id="agent-original",
+            iteration=1,
+            working_directory="/tmp/worktree",
+            commit_sha="abc123def",
+            previous_feedback=None,
+            workspace_changes={
+                "files_created": ["src/feature_y.py"],
+                "files_modified": ["src/__init__.py"],
+                "files_deleted": [],
+                "stats": {"insertions": 42, "deletions": 3},
+            },
+            agent_claims="Implemented feature Y and added 5 unit tests, all passing.",
+        )
+
+        assert "src/feature_y.py" in prompt
+        assert "src/__init__.py" in prompt
+        assert "+42/-3" in prompt
+        assert "Implemented feature Y and added 5 unit tests" in prompt
+        assert "{workspace_changes_section}" not in prompt
+        assert "{agent_claims_section}" not in prompt
+
+    def test_format_task_validation_prompt_without_workspace_changes_or_claims(self):
+        """When neither is available (e.g. get_workspace_changes raised),
+        the prompt must still render cleanly with empty sections, not a
+        KeyError or a literal unformatted placeholder."""
+        prompt = self.prompt_loader.format_task_validation_prompt(
+            validator_agent_id="validator-xyz",
+            task_id="task-123",
+            task_description="Implement feature Y",
+            done_definition="Feature Y must work with tests",
+            enriched_description="Implement feature Y with unit tests",
+            original_agent_id="agent-original",
+            iteration=1,
+            working_directory="/tmp/worktree",
+            commit_sha="abc123def",
+            previous_feedback=None,
+        )
+
+        assert "{workspace_changes_section}" not in prompt
+        assert "{agent_claims_section}" not in prompt
+
 
 class TestAgentManagerValidatorPrompts:
     """Test that AgentManager correctly uses validation prompts."""

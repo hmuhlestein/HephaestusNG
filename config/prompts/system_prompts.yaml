@@ -537,6 +537,19 @@ task_validation_previous_feedback: |-
   ```
   Please verify that the previous issues have been addressed.
 
+task_validation_workspace_changes: |-
+  ### Summary of Changes (pre-computed, verify independently in STEP 2)
+  - Files created: {files_created}
+  - Files modified: {files_modified}
+  - Files deleted: {files_deleted}
+  - Diff stats: +{insertions}/-{deletions}
+
+task_validation_agent_claims: |-
+  ### Agent's Claimed Work
+  ```
+  {agent_claims}
+  ```
+
 # System prompt built by src/prompts/assembler.py's PromptAssembler
 # (_build_system_prompt) -- preview/diff-only, used by the frontend prompt
 # editor UI, not the live agent-dispatch path (that's

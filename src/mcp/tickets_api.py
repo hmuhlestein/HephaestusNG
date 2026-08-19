@@ -1264,11 +1264,15 @@ async def get_commit_diff_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Get detailed git diff for a commit (for Git Diff Window in UI)."""
+    import asyncio
+    import functools
     import os
     import re
     import subprocess
 
     from src.core.simple_config import get_config
+
+    loop = asyncio.get_event_loop()
 
     logger.info(f"Agent {agent_id} fetching commit diff for {commit_sha}")
 
@@ -1309,8 +1313,12 @@ async def get_commit_diff_endpoint(
 
         # Get commit metadata from the correct repository
         cmd = ["git", "show", "--format=%H|%an|%at|%s", "-s", commit_sha]
-        result = subprocess.run(
-            cmd, cwd=main_repo_path, capture_output=True, text=True, check=True
+        result = await loop.run_in_executor(
+            None,
+            functools.partial(
+                subprocess.run,
+                cmd, cwd=main_repo_path, capture_output=True, text=True, check=True, timeout=10
+            ),
         )
 
         if result.returncode != 0:
@@ -1332,8 +1340,12 @@ async def get_commit_diff_endpoint(
 
         # Get file stats from the correct repository
         cmd = ["git", "diff", "--numstat", f"{commit_sha}^", commit_sha]
-        result = subprocess.run(
-            cmd, cwd=main_repo_path, capture_output=True, text=True, check=True
+        result = await loop.run_in_executor(
+            None,
+            functools.partial(
+                subprocess.run,
+                cmd, cwd=main_repo_path, capture_output=True, text=True, check=True, timeout=10
+            ),
         )
 
         files_data = []
@@ -1356,8 +1368,12 @@ async def get_commit_diff_endpoint(
 
             # Get unified diff for this file from the correct repository
             cmd_diff = ["git", "diff", f"{commit_sha}^", commit_sha, "--", file_path]
-            diff_result = subprocess.run(
-                cmd_diff, cwd=main_repo_path, capture_output=True, text=True
+            diff_result = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    subprocess.run,
+                    cmd_diff, cwd=main_repo_path, capture_output=True, text=True, timeout=10
+                ),
             )
 
             # Determine file status

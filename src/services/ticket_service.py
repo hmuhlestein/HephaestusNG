@@ -136,7 +136,9 @@ class TicketService:
         """
         Check for circular blocking dependencies.
 
-        Prevents scenarios like: A blocks B, B blocks A
+        Prevents scenarios like: A blocks B, B blocks A -- and longer
+        chains (A blocks B, B blocks C, C blocks A), which a pairwise
+        direct-neighbor check misses entirely.
 
         Args:
             ticket_id: ID of the ticket being updated
@@ -146,19 +148,29 @@ class TicketService:
         Raises:
             ValueError: If circular blocking is detected
         """
-        for blocked_id in blocked_by_ids:
-            blocked_ticket = db.query(Ticket).filter_by(id=blocked_id).first()
-            if not blocked_ticket:
-                continue
-
-            # Check if the blocking ticket is itself blocked by this ticket
-            if (
-                blocked_ticket.blocked_by_ticket_ids
-                and ticket_id in blocked_ticket.blocked_by_ticket_ids
-            ):
+        # BFS over the "blocked_by" graph, starting from each candidate
+        # blocker. An edge here means "X is blocked_by Y" (X depends on Y).
+        # If following these edges transitively from any candidate ever
+        # reaches ticket_id again, adding this dependency would close a
+        # cycle of some length -- not just the direct A<->B case the old
+        # pairwise check caught. `visited` also guards against an
+        # already-existing cycle in the data sending this into an infinite
+        # loop.
+        visited = set()
+        queue = list(blocked_by_ids)
+        while queue:
+            current_id = queue.pop(0)
+            if current_id == ticket_id:
                 raise ValueError(
-                    f"Circular blocking detected: {blocked_id} is already blocked by this ticket ({ticket_id})"
+                    f"Circular blocking detected: adding this dependency "
+                    f"would create a cycle back to ticket {ticket_id}"
                 )
+            if current_id in visited:
+                continue
+            visited.add(current_id)
+            current_ticket = db.query(Ticket).filter_by(id=current_id).first()
+            if current_ticket and current_ticket.blocked_by_ticket_ids:
+                queue.extend(current_ticket.blocked_by_ticket_ids)
 
     @staticmethod
     async def create_ticket(

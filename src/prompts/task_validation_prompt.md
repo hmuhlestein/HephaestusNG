@@ -38,6 +38,8 @@ The task must satisfy these requirements:
 ```
 
 {previous_feedback_section}
+{workspace_changes_section}
+{agent_claims_section}
 
 ---
 

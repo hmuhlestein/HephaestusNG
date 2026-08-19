@@ -57,14 +57,21 @@ async def spawn_validator_agent(
             if task.phase_id:
                 session.query(Phase).filter_by(id=task.phase_id).first()
 
-            # Get workspace changes
-            branch_manager.get_workspace_changes(
+            # Get workspace changes -- fed into the validation prompt below
+            # so the validator starts with a pre-computed summary instead
+            # of only its own STEP 2 exploration. Unguarded, matching this
+            # call's pre-existing behavior: a real failure here (e.g. no
+            # worktree record for this agent) already failed the whole
+            # spawn before this fix, and still does -- this change only
+            # captures the return value, it doesn't change what happens
+            # when the call raises.
+            workspace_changes = branch_manager.get_workspace_changes(
                 agent_id=original_agent_id,
                 since_commit=None,  # Get all changes
             )
 
             # Get agent claims/results
-            get_agent_results(target_id, session)
+            agent_claims = get_agent_results(target_id, session)
 
             # Build task validation prompt using the new prompt loader
             from src.monitoring.prompt_loader import prompt_loader
@@ -86,6 +93,8 @@ async def spawn_validator_agent(
                 or "/tmp",
                 commit_sha=commit_sha,
                 previous_feedback=previous_feedback,
+                workspace_changes=workspace_changes,
+                agent_claims=agent_claims,
             )
 
             # Create validation task for task validator

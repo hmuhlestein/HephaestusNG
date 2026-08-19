@@ -2133,19 +2133,31 @@ class FrontendAPI:
             )
 
             terminated_count = 0
+            import asyncio
+
+            loop = asyncio.get_event_loop()
             for agent in agents:
                 _tmux_name = agent.tmux_session_name
                 if terminate_agent(agent.id, session=session):
                     terminated_count += 1
-                # Kill tmux session
+                # Kill tmux session -- offloaded to the executor, matching
+                # reset_phase's identical operation a few lines below.
+                # Un-offloaded, this blocks the whole event loop (every
+                # other request this process is serving) for as long as
+                # the tmux CLI takes to respond, once per agent.
                 if _tmux_name:
                     try:
+                        import functools
                         import subprocess
 
-                        subprocess.run(
-                            ["tmux", "kill-session", "-t", _tmux_name],
-                            capture_output=True,
-                            timeout=5,
+                        await loop.run_in_executor(
+                            None,
+                            functools.partial(
+                                subprocess.run,
+                                ["tmux", "kill-session", "-t", _tmux_name],
+                                capture_output=True,
+                                timeout=5,
+                            ),
                         )
                     except Exception:
                         pass
