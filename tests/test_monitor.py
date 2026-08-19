@@ -1840,6 +1840,39 @@ class TestUpdateAgentHealth:
         assert session.add.call_count == 2  # GuardianAnalysis + AgentLog
 
     @pytest.mark.asyncio
+    async def test_stores_steering_recommendation_from_renamed_key(
+        self, make_monitoring_loop, mock_db
+    ):
+        """Regression: analyze_agent_with_trajectory renames the LLM's
+        "steering_recommendation" key to "steering_message" before
+        returning (guardian.py) -- this write path used to read the old
+        key name, so GuardianAnalysis.steering_recommendation was always
+        None regardless of what Guardian actually recommended."""
+        from contextlib import contextmanager
+
+        agent = Agent(id="a1")
+        analysis = {
+            "trajectory_aligned": False,
+            "alignment_score": 0.2,
+            "needs_steering": True,
+            "steering_message": "Stop installing external libraries",
+        }
+        db_agent = Mock(id="a1", health_check_failures=0)
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = db_agent
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+
+        await make_monitoring_loop._update_agent_health_from_trajectory(agent, analysis)
+
+        guardian_analysis = session.add.call_args_list[0][0][0]
+        assert guardian_analysis.steering_recommendation == "Stop installing external libraries"
+
+    @pytest.mark.asyncio
     async def test_handles_no_agent(self, make_monitoring_loop, mock_db):
         from contextlib import contextmanager
 

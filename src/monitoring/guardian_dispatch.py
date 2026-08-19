@@ -392,7 +392,11 @@ class GuardianDispatcher:
                 alignment_score=analysis.get("alignment_score", 1.0),
                 needs_steering=analysis.get("needs_steering", False),
                 steering_type=analysis.get("steering_type"),
-                steering_recommendation=analysis.get("steering_recommendation"),
+                # Guardian's analyze_agent_with_trajectory renames the LLM's
+                # "steering_recommendation" key to "steering_message" before
+                # returning (guardian.py:262-264) -- reading the old key
+                # name here always returned None, silently.
+                steering_recommendation=analysis.get("steering_message"),
                 trajectory_summary=analysis.get("trajectory_summary", "No summary"),
                 last_claude_message_marker=analysis.get(
                     "last_claude_message_marker"
