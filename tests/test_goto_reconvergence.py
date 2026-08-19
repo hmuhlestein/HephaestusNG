@@ -146,6 +146,23 @@ def phase_ids(db_session):
         )
         db_session.add(execution)
 
+        # derive_workflow_status (called by PhaseManager._complete_workflow)
+        # returns the current status unchanged with zero Task rows for the
+        # workflow ("no tasks yet"), never reaching its own PhaseExecution
+        # check -- this test simulates the whole pipeline via direct
+        # PhaseExecution updates, with no Task rows, unlike a real run
+        # where each phase's actual work always has one.
+        db_session.add(
+            Task(
+                id=str(uuid.uuid4()),
+                raw_description=f"Phase {i} work",
+                done_definition=f"Phase {i} done",
+                status="done",
+                phase_id=phase.id,
+                workflow_id=workflow_id,
+            )
+        )
+
     db_session.commit()
     return ids
 

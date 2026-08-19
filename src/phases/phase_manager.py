@@ -1657,8 +1657,28 @@ class PhaseManager:
 
         workflow = session.query(Workflow).filter_by(id=self.workflow_id).first()
         if workflow and workflow.status == "active":
-            workflow.status = "completed"
-            session.commit()
+            # Don't unconditionally mark "completed" here -- this function's
+            # own guard above only checks that no higher-ORDER Phase remains,
+            # not that every PhaseExecution up to and including the current
+            # one is actually "completed"/"skipped" (SOLID review 2.1: the
+            # same bypass-the-single-source-of-truth issue already fixed for
+            # _populate_feature_folder's design-level rollup, below, applied
+            # here to the workflow's own status). derive_workflow_status is
+            # strictly more thorough: it requires every tracked PhaseExecution
+            # to be terminal, catching a phase that's within the checked
+            # order range but still stuck pending/in_progress for some other
+            # reason.
+            from src.core.status_derivation import derive_workflow_status
+
+            derived = derive_workflow_status(session, self.workflow_id, write_back=True)
+            if derived != "completed":
+                logger.warning(
+                    f"[PHASE] _complete_workflow's order check passed but "
+                    f"derive_workflow_status disagreed for workflow "
+                    f"{self.workflow_id[:8]} (derived {derived!r}) -- not "
+                    "marking completed"
+                )
+                return
             logger.info(f"Workflow {self.workflow_id} completed (all phases done)")
             self._populate_feature_folder(session, workflow)
 

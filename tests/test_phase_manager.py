@@ -1819,11 +1819,44 @@ class TestCompleteWorkflowRefusesWhenPhasesRemain:
             )
             session.add(
                 PhaseExecution(
+                    id="exec-pv", phase_id="phase-pv",
+                    workflow_execution_id="wf-1", status="completed",
+                )
+            )
+            session.add(
+                PhaseExecution(
                     id="exec-doc", phase_id="phase-doc",
                     workflow_execution_id="wf-1", status="pending",
                 )
             )
         return real_db
+
+    @pytest.fixture
+    def workflow_ready_to_complete(self, workflow_with_remaining_phase):
+        """Same as workflow_with_remaining_phase, but doc_review's own
+        PhaseExecution is "completed" -- derive_workflow_status requires
+        every tracked PhaseExecution to be terminal, not just that no
+        higher-order Phase remains, so the "genuinely completes" tests need
+        a fixture where that's actually true. Also adds a done Task --
+        derive_workflow_status returns the current status unchanged with
+        zero tasks for the workflow ("no tasks yet"), never reaching its
+        own PhaseExecution check at all."""
+        with workflow_with_remaining_phase.session_scope() as session:
+            from src.core.database import PhaseExecution, Task
+
+            exec_doc = session.query(PhaseExecution).filter_by(id="exec-doc").first()
+            exec_doc.status = "completed"
+            session.add(
+                Task(
+                    id="task-doc",
+                    raw_description="do work",
+                    done_definition="done",
+                    status="done",
+                    phase_id="phase-doc",
+                    workflow_id="wf-1",
+                )
+            )
+        return workflow_with_remaining_phase
 
     def test_refuses_to_complete_when_a_higher_order_phase_exists(
         self, workflow_with_remaining_phase
@@ -1844,14 +1877,14 @@ class TestCompleteWorkflowRefusesWhenPhasesRemain:
             assert wf.status == "active"
 
     def test_completes_when_current_phase_is_genuinely_last(
-        self, workflow_with_remaining_phase
+        self, workflow_ready_to_complete
     ):
         from src.core.database import Workflow
         from src.phases.phase_manager import PhaseManager
 
-        pm = PhaseManager(db_manager=workflow_with_remaining_phase)
+        pm = PhaseManager(db_manager=workflow_ready_to_complete)
         pm.workflow_id = "wf-1"
-        session = workflow_with_remaining_phase.get_session()
+        session = workflow_ready_to_complete.get_session()
         try:
             # doc_review (order 10) is the last phase here -- nothing has a
             # higher order than it.
@@ -1859,12 +1892,12 @@ class TestCompleteWorkflowRefusesWhenPhasesRemain:
         finally:
             session.close()
 
-        with workflow_with_remaining_phase.session_scope() as session:
+        with workflow_ready_to_complete.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "completed"
 
     def test_still_completes_when_no_current_phase_id_given(
-        self, workflow_with_remaining_phase
+        self, workflow_ready_to_complete
     ):
         """Backward-compatible default: callers that genuinely can't supply
         a phase_id (none currently do) must not be newly broken -- the
@@ -1872,14 +1905,43 @@ class TestCompleteWorkflowRefusesWhenPhasesRemain:
         from src.core.database import Workflow
         from src.phases.phase_manager import PhaseManager
 
-        pm = PhaseManager(db_manager=workflow_with_remaining_phase)
+        pm = PhaseManager(db_manager=workflow_ready_to_complete)
         pm.workflow_id = "wf-1"
-        session = workflow_with_remaining_phase.get_session()
+        session = workflow_ready_to_complete.get_session()
         try:
             pm._complete_workflow(session)
         finally:
             session.close()
 
-        with workflow_with_remaining_phase.session_scope() as session:
+        with workflow_ready_to_complete.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "completed"
+
+    def test_refuses_when_current_phase_own_execution_is_not_actually_done(
+        self, workflow_ready_to_complete
+    ):
+        """SOLID review 2.1: the order-only guard above (no higher-order
+        Phase remains) is necessary but not sufficient -- it says nothing
+        about whether the CURRENT phase's own PhaseExecution genuinely
+        finished. Route through derive_workflow_status (write_back=True)
+        instead of unconditionally marking "completed" once the order
+        check passes, so a phase still stuck in_progress for some other
+        reason doesn't get silently skipped over."""
+        from src.core.database import PhaseExecution, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with workflow_ready_to_complete.session_scope() as session:
+            exec_doc = session.query(PhaseExecution).filter_by(id="exec-doc").first()
+            exec_doc.status = "in_progress"
+
+        pm = PhaseManager(db_manager=workflow_ready_to_complete)
+        pm.workflow_id = "wf-1"
+        session = workflow_ready_to_complete.get_session()
+        try:
+            pm._complete_workflow(session, current_phase_id="phase-doc")
+        finally:
+            session.close()
+
+        with workflow_ready_to_complete.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"
