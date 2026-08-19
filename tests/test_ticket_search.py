@@ -4,8 +4,6 @@ import asyncio
 
 import pytest
 
-from src.services.embedding_service import EmbeddingService
-
 
 @pytest.fixture
 def event_loop():
@@ -21,62 +19,6 @@ async def setup_test_data():
     # This fixture would create test workflows, agents, board configs, and tickets
     # For now, this is a placeholder for the structure
     pass
-
-
-class TestEmbeddingService:
-    """Test embedding generation for tickets."""
-
-    @pytest.mark.asyncio
-    async def test_generate_ticket_embedding(self):
-        """Test weighted ticket embedding generation."""
-        # Note: This test requires OPENAI_API_KEY environment variable
-        try:
-            import os
-
-            if not os.getenv("OPENAI_API_KEY"):
-                pytest.skip("OPENAI_API_KEY not set")
-
-            service = EmbeddingService(os.getenv("OPENAI_API_KEY"))
-
-            embedding = await service.generate_ticket_embedding(
-                title="Fix authentication bug",
-                description="Users are experiencing timeout issues with OAuth login",
-                tags=["backend", "auth", "critical"],
-            )
-
-            # Verify embedding was generated
-            assert embedding is not None
-            assert isinstance(embedding, list)
-            # text-embedding-3-large returns 3072 dimensions
-            assert len(embedding) == 3072
-            # Verify all values are floats
-            assert all(isinstance(x, float) for x in embedding)
-
-        except Exception as e:
-            pytest.fail(f"Embedding generation failed: {e}")
-
-    @pytest.mark.asyncio
-    async def test_generate_query_embedding(self):
-        """Test query embedding generation."""
-        try:
-            import os
-
-            if not os.getenv("OPENAI_API_KEY"):
-                pytest.skip("OPENAI_API_KEY not set")
-
-            service = EmbeddingService(os.getenv("OPENAI_API_KEY"))
-
-            embedding = await service.generate_query_embedding(
-                "authentication timeout issues"
-            )
-
-            # Verify embedding was generated
-            assert embedding is not None
-            assert isinstance(embedding, list)
-            assert len(embedding) == 3072
-
-        except Exception as e:
-            pytest.fail(f"Query embedding generation failed: {e}")
 
 
 class TestTicketSearchService:

@@ -35,11 +35,11 @@ from src.mcp.messaging_api import router as messaging_router
 
 # Import routers at module level for test compatibility
 from src.mcp.tickets_api import router as tickets_router
+from src.memory.embedding_factory import EmbeddingProvider
 from src.memory.rag import RAGSystem
 from src.memory.store_factory import VectorStoreProtocol, create_vector_store
 from src.phases import PhaseManager
 from src.prompts.loader import get_prompt
-from src.services.embedding_service import EmbeddingService
 from src.services.queue_service import QueueService
 from src.services.result_validator_service import ResultValidatorService
 from src.services.task_similarity_service import TaskSimilarityService
@@ -242,7 +242,7 @@ class ServerState:
         self.phase_manager: Optional[PhaseManager] = None
         self.branch_manager: Optional[WorktreeManager] = None
         self.result_validator_service: Optional[ResultValidatorService] = None
-        self.embedding_service: Optional[EmbeddingService] = None
+        self.embedding_service: Optional[EmbeddingProvider] = None
         self.task_similarity_service: Optional[TaskSimilarityService] = None
         self.queue_service: Optional[QueueService] = None
         self.active_websockets: List[WebSocket] = []

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from src.core.database import DatabaseManager, Task
 from src.core.simple_config import get_config
-from src.services.embedding_service import EmbeddingService
+from src.memory.embedding_factory import EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ class TaskSimilarityService:
     """Service for detecting duplicate and related tasks."""
 
     def __init__(
-        self, db_manager: DatabaseManager, embedding_service: EmbeddingService
+        self, db_manager: DatabaseManager, embedding_service: EmbeddingProvider
     ):
         """Initialize the task similarity service.
 
