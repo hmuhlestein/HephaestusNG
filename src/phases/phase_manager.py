@@ -30,6 +30,12 @@ def _reset_stale_executions_on_goto(*args, **kwargs):
     return reset_stale_executions_on_goto(*args, **kwargs)
 
 
+def _reopen_phase_execution(*args, **kwargs):
+    """Lazy-import wrapper to avoid circular import."""
+    from src.autopilot.orchestrator.phase_transitions import reopen_phase_execution
+    return reopen_phase_execution(*args, **kwargs)
+
+
 def substitute_params(text: str, params: Dict[str, Any]) -> str:
     """Replace {param_name} placeholders with actual values.
 
@@ -883,13 +889,14 @@ class PhaseManager:
     def _handle_evaluation_retry(
         self, session, phase, execution, summary, evaluation
     ) -> Dict[str, Any]:
-        execution.status = "pending"
-        execution.started_at = None
-        # Same reset as _start_next_phase -- the task-creation/evaluation
-        # claim is one-time-per-cycle, not permanent. Without this, a
-        # retried phase would find its claim already set from the attempt
-        # just evaluated and never get a fresh task created for the retry.
-        execution.task_creation_claimed_at = None
+        # Reopens for a fresh cycle: "pending" so it's picked up as new
+        # work, started_at cleared so the retry's own duration starts
+        # fresh rather than inheriting the just-evaluated attempt's clock,
+        # and the one-time-per-cycle task-creation claim reset so a fresh
+        # task actually gets created for the retry. See
+        # reopen_phase_execution's docstring for why started_at differs
+        # from the other 3 call sites of this same write.
+        _reopen_phase_execution(execution, status="pending", started_at="clear")
         session.commit()
 
         logger.info(
@@ -1028,11 +1035,11 @@ class PhaseManager:
         # completely bypassing the phase actually awaiting arbitration.
         # "in_progress" (with a task already existing -- the arbitration
         # task) reads as a normal active phase to every other case.
-        execution.status = "in_progress"
-        # Same reset as _start_next_phase/_handle_evaluation_retry -- see
-        # those for why this one-time-per-cycle claim must not survive a
-        # phase being reopened for further work.
-        execution.task_creation_claimed_at = None
+        # started_at is left alone: the phase was already running when
+        # arbitration fired (this is the same execution, not a fresh
+        # start), so resetting it would understate how long it's
+        # actually been open.
+        _reopen_phase_execution(execution, status="in_progress", started_at="leave")
         session.commit()
         logger.warning(
             f"[ARBITRATE] Phase {phase.name} needs arbitration: {evaluation.reason}"
@@ -1593,14 +1600,14 @@ class PhaseManager:
             )
 
             if execution and execution.status in ("pending", "completed"):
-                execution.status = "in_progress"
-                execution.started_at = datetime.utcnow()
-                # Reset the task-creation/evaluation claim (see orchestrator.py's
-                # _claim_phase_task_creation) -- it's a one-time-per-cycle lock,
-                # not a permanent one. Without this reset, a phase re-run after
-                # goto reconvergence would find its claim already set from the
-                # PREVIOUS cycle and never let a new task get created for it.
-                execution.task_creation_claimed_at = None
+                # Fresh start for this cycle: stamp started_at now, and
+                # reset the task-creation/evaluation claim (see
+                # orchestrator.py's _claim_phase_task_creation) -- it's a
+                # one-time-per-cycle lock, not a permanent one. Without
+                # this reset, a phase re-run after goto reconvergence
+                # would find its claim already set from the PREVIOUS
+                # cycle and never let a new task get created for it.
+                _reopen_phase_execution(execution, status="in_progress", started_at="now")
                 session.commit()
 
                 logger.info(f"Started next phase: {next_phase.name}")

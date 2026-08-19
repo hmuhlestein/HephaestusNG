@@ -615,8 +615,15 @@ async def restart_task_endpoint(
                 if task.phase_id:
                     execution = session.query(PhaseExecution).filter_by(phase_id=task.phase_id).first()
                     if execution and execution.status != "in_progress":
-                        execution.status = "in_progress"
-                        execution.task_creation_claimed_at = None
+                        from src.autopilot.orchestrator.phase_transitions import reopen_phase_execution
+                        # started_at left alone: this reopens a task under
+                        # an execution that may already have been running
+                        # (a broader guard than _start_next_phase's --
+                        # this also reopens "skipped"/"failed" executions,
+                        # not just "pending"/"completed" ones), so
+                        # resetting it could understate how long the
+                        # phase has actually been open.
+                        reopen_phase_execution(execution, status="in_progress", started_at="leave")
 
             session.commit()
 

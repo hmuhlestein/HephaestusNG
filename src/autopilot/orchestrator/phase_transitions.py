@@ -7,7 +7,7 @@ import threading as _threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
 
 from src.autopilot.orchestrator.engine_client import (
     create_agent_for_task_direct,
@@ -135,6 +135,45 @@ def reset_stale_executions_on_goto(
     if stale:
         db.commit()
     return len(stale)
+
+
+def reopen_phase_execution(
+    execution: PhaseExecution,
+    *,
+    status: str,
+    started_at: Literal["clear", "now", "leave"] = "leave",
+) -> None:
+    """Reopen a PhaseExecution for a fresh cycle: write status and reset
+    the one-time-per-cycle task-creation claim together.
+
+    Extracted from 4 independent hand-copies of this exact write (see
+    docs/AUTOPILOT_REFACTOR_PLAN.md §4.1's "4th copy-family" note) --
+    without the reset, a reopened phase finds task_creation_claimed_at
+    already set from the prior cycle and never gets a fresh task created.
+
+    started_at is a third, independent axis this function does not
+    decide -- it only applies whichever the caller already determined is
+    correct for its own reopen reason (a retry cycle should start its
+    own clock fresh; arbitration/restart reopen a phase that was already
+    running and must not understate how long it's been open; a fresh
+    "next phase" start should stamp now). Modeled as a 3-way choice, not
+    a bool, because it is genuinely 3 distinct behaviors, not one
+    optional feature.
+
+    Deliberately does NOT decide *whether* to reopen, or what `status`
+    should be -- those differ meaningfully per call site (e.g.
+    arbitration must land on "in_progress", never "pending", or
+    _case_completed_with_successor's next-pending-phase-by-order picking
+    silently skips it -- see that call site's own comment) and are
+    call-site business logic, not part of the duplicated write.
+    """
+    execution.status = status
+    execution.task_creation_claimed_at = None
+    if started_at == "clear":
+        execution.started_at = None
+    elif started_at == "now":
+        execution.started_at = datetime.utcnow()
+    # "leave": no-op, by design -- not every reopen should touch it.
 
 
 _advance_phases_locks: Dict[str, "_threading.Lock"] = {}

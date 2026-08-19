@@ -528,6 +528,82 @@ def two_architect_phases(real_db):
     return real_db
 
 
+class TestHandleEvaluationRetryAndArbitrateReopenExecution:
+    """§4.1's 4th copy-family: _handle_evaluation_retry and
+    _handle_evaluation_arbitrate's status/started_at/task_creation_claimed_at
+    writes were extracted into reopen_phase_execution
+    (phase_transitions.py), shared with _start_next_phase (already covered
+    by test_goto_reconvergence.py's test_start_next_phase_resets_task_creation_claim)
+    and task_admin_routes.py's restart_task_endpoint (covered by
+    test_server_dispatch_endpoints.py). Pure extraction -- these
+    characterize the exact fields each handler must still write,
+    unchanged, after the refactor."""
+
+    def test_retry_resets_status_started_at_and_claim(self, seeded_workflow):
+        from datetime import datetime
+
+        from src.core.database import Phase, PhaseExecution
+        from src.phases.phase_manager import PhaseManager
+        from src.workflow_engine.orchestrator import EvaluationResult, OrchestrationAction
+
+        pm = PhaseManager(db_manager=seeded_workflow)
+        pm.workflow_id = "wf-1"
+
+        with seeded_workflow.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-dev").first()
+            execution = session.query(PhaseExecution).filter_by(id="exec-dev").first()
+            execution.status = "in_progress"
+            execution.started_at = datetime.utcnow()
+            execution.task_creation_claimed_at = datetime.utcnow()
+            session.flush()
+
+            evaluation = EvaluationResult(
+                action=OrchestrationAction.RETRY,
+                reason="score too low",
+                metadata={"retry_count": 1, "max_retries": 2},
+            )
+            pm._handle_evaluation_retry(session, phase, execution, "summary", evaluation)
+
+            assert execution.status == "pending"
+            assert execution.started_at is None
+            assert execution.task_creation_claimed_at is None
+
+    def test_arbitrate_sets_in_progress_and_preserves_started_at(self, seeded_workflow):
+        """Must NOT land on "pending" -- _case_completed_with_successor's
+        next-pending-by-order picking would skip a phase reopened as
+        pending while later phases are already completed (see this
+        handler's own comment). started_at must survive untouched: this
+        reopens the SAME already-running execution, not a fresh start."""
+        from datetime import datetime
+
+        from src.core.database import Phase, PhaseExecution
+        from src.phases.phase_manager import PhaseManager
+        from src.workflow_engine.orchestrator import EvaluationResult, OrchestrationAction
+
+        pm = PhaseManager(db_manager=seeded_workflow)
+        pm.workflow_id = "wf-1"
+
+        with seeded_workflow.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-dev").first()
+            execution = session.query(PhaseExecution).filter_by(id="exec-dev").first()
+            execution.status = "in_progress"
+            original_started_at = datetime.utcnow()
+            execution.started_at = original_started_at
+            execution.task_creation_claimed_at = datetime.utcnow()
+            session.flush()
+
+            evaluation = EvaluationResult(
+                action=OrchestrationAction.ARBITRATE,
+                reason="budget exhausted",
+                metadata={},
+            )
+            pm._handle_evaluation_arbitrate(session, phase, execution, "summary", evaluation)
+
+            assert execution.status == "in_progress"
+            assert execution.task_creation_claimed_at is None
+            assert execution.started_at == original_started_at
+
+
 class TestPhaseRolePreviouslyCompleted:
     """Regression: the resumed-session warning shown to agents used to be
     driven by a static check ("does this role appear more than once in the
