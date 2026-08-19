@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.autopilot.orchestrator.state import FeatureRunStatus
 from src.core.database import (
     AutopilotDesign,
     AutopilotProject,
@@ -392,7 +393,7 @@ class TestRunPhase0Tiers:
             d.phase0_workflow_id = real_workflow_id
             session.commit()
             session.close()
-            return "completed"
+            return FeatureRunStatus.COMPLETED
 
         with patch(
             "src.autopilot.orchestrator._create_integration_worktree",
@@ -468,7 +469,7 @@ class TestRunPhase0Tiers:
             )
             session.commit()
             session.close()
-            return "completed"
+            return FeatureRunStatus.COMPLETED
 
         with patch(
             "src.autopilot.orchestrator._create_integration_worktree",
@@ -538,7 +539,7 @@ class TestRunPhase0Tiers:
             )
             session.commit()
             session.close()
-            return "completed"
+            return FeatureRunStatus.COMPLETED
 
         with patch(
             "src.autopilot.orchestrator._create_integration_worktree",
@@ -603,7 +604,7 @@ class TestRunPhase0ReviewMode:
             )
             session.commit()
             session.close()
-            return "completed"
+            return FeatureRunStatus.COMPLETED
 
         return _fake
 
