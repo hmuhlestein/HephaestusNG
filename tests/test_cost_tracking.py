@@ -849,7 +849,12 @@ class TestInvokeAndRecord:
 
     @pytest.mark.asyncio
     async def test_openrouter_response_writes_cost_entry(self, llm_client):
-        """A response shaped like a real OpenRouter usage.include=true reply writes exactly one CostEntry."""
+        """A response shaped like a real OpenRouter usage.include=true reply writes exactly one CostEntry.
+
+        usage.cost is a plain float, not {"total": ...} -- confirmed live
+        2026-08-19 against the real API; the nested-dict shape this test
+        previously mocked never matched a real response, which is exactly
+        why the bug it encoded went undetected."""
         model = Mock()
         model.ainvoke = AsyncMock(
             return_value=Mock(
@@ -858,7 +863,7 @@ class TestInvokeAndRecord:
                         "prompt_tokens": 120,
                         "completion_tokens": 45,
                         "prompt_tokens_details": {"cached_tokens": 30},
-                        "cost": {"total": 0.0034},
+                        "cost": 0.0034,
                     },
                     "model_name": "anthropic/claude-sonnet-4",
                 }
@@ -895,7 +900,7 @@ class TestInvokeAndRecord:
                         "prompt_tokens": 100,
                         "completion_tokens": 20,
                         "prompt_tokens_details": None,
-                        "cost": {"total": 0.01},
+                        "cost": 0.01,
                     },
                     "model_name": "anthropic/claude-sonnet-4",
                 }
