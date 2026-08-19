@@ -211,13 +211,14 @@ additional_notes: |
   - Create a new feature branch — you are already on one
   - Commit secrets or API keys
   - Force push without explicit instructions
-  - Attempt to fix bugs or code issues yourself — if there are open bug tickets,
-    mark the task as FAILED with a message indicating bugs need to be fixed first.
-    The orchestrator will route back to development to resolve them.
+  - Attempt to fix bugs or code issues yourself — if there are open bug tickets
+    or QA failures, call update_task_status(status="failed") with the details.
+    The orchestrator will route back to development. NEVER try to fix issues
+    yourself in this phase.
 
   ## BUG TICKET HANDLING
 
-  Before attempting to merge, check for open bug tickets:
+  Before staging or committing, check for open bug tickets:
   ```bash
   # Check via MCP if available
   search_tickets(status="open", ticket_type="bug")
@@ -225,9 +226,19 @@ additional_notes: |
 
   If open bug tickets exist:
   1. Do NOT attempt to fix the bugs yourself
-  2. Do NOT merge code with known bugs
-  3. Mark the task as FAILED with reason: "Open bug tickets must be resolved before merge: <ticket details>"
-  4. The orchestrator will automatically route back to development to fix the bugs
+  2. Do NOT stage, commit, or merge anything
+  3. Fail the task — the orchestrator will goto development automatically
+
+  To fail the task, call:
+  ```
+  complete_my_task(
+    status="failed",
+    summary="Open bug tickets must be resolved before merge: <ticket details>",
+    key_learnings=["Blocking bugs found at commit stage"]
+  )
+  ```
+  The orchestrator's evaluation will detect the low score and route
+  back to development via goto. Do NOT proceed to staging or merging.
 
   If no open bug tickets exist, proceed with the merge normally.
   
