@@ -547,3 +547,56 @@ class TestHistoricalPauseSiteConsistency:
             assert wf.status == "active"
             assert wf.paused_by is None
             assert wf.paused_at is None
+
+
+class TestPauseReasonValidation:
+    """paused_by is consumed by exact-literal comparisons, never by a
+    catch-all. resume_workflow narrows on "system"; _wait_for_phase0_review_
+    clearance polls for "review"; the budget sweep filters on "budget". An
+    unrecognised reason therefore does not fail anywhere -- it silently makes
+    every one of those guards miss, and the workflow stays paused with no
+    path that can resume it. Validating at the single write site is what
+    makes that unrepresentable."""
+
+    @pytest.mark.parametrize(
+        "reason", ["user", "budget", "review", "system", "system-exhausted"]
+    )
+    def test_every_documented_reason_is_accepted(self, orch_db_env, reason):
+        from src.autopilot.orchestrator.engine_client import pause_workflow
+        from src.core.database import Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id=f"wf-{reason}", name="w", phases_folder_path="/tmp",
+                    status="active",
+                )
+            )
+
+        assert pause_workflow(f"wf-{reason}", reason=reason) is True
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id=f"wf-{reason}").first()
+            assert wf.paused_by == reason
+
+    @pytest.mark.parametrize("reason", ["users", "USER", "", "manual", "paused"])
+    def test_an_unrecognised_reason_raises_instead_of_writing_it(
+        self, orch_db_env, reason
+    ):
+        from src.autopilot.orchestrator.engine_client import pause_workflow
+        from src.core.database import Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-bad", name="w", phases_folder_path="/tmp", status="active"
+                )
+            )
+
+        with pytest.raises(ValueError, match="unknown reason"):
+            pause_workflow("wf-bad", reason=reason)
+
+        # And it must not have half-applied the pause on the way out.
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-bad").first()
+            assert wf.status == "active"
+            assert wf.paused_by is None

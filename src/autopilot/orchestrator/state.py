@@ -433,7 +433,7 @@ class PersistentPipelineState:
         set on every mid-run checkpoint.
         """
         state_data = state.to_dict()
-        state_data["saved_at"] = datetime.now().isoformat()
+        state_data["saved_at"] = datetime.utcnow().isoformat()
         try:
             with get_db() as db:
                 _set_project_context(db, self.STATE_KEY, state_data)
