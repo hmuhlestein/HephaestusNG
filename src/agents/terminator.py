@@ -64,6 +64,23 @@ class Terminator:
         Args:
             agent_id: ID of agent to terminate
         """
+        # The real work (_terminate_agent_sync) is a long synchronous
+        # chain: several tmux/git subprocess calls, a full capture-pane
+        # scrollback read, a time.sleep(1) between SIGINT and SIGKILL, and
+        # collect_task_cost's own DB+file cascade -- called directly here
+        # (no executor anywhere in this file, confirmed live 2026-08-19
+        # investigating intermittent multi-second /health stalls), every
+        # one of those blocks the single-threaded asyncio event loop for
+        # its full duration, on every task completion. Offloading the
+        # whole method to a worker thread also makes the time.sleep(1)
+        # harmless for free: blocking a worker thread is what it's for --
+        # the problem was only ever blocking the loop's own thread.
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._terminate_agent_sync, agent_id)
+
+    def _terminate_agent_sync(self, agent_id: str) -> None:
         logger.info(f"Terminating agent {agent_id}")
 
         session = self.db_manager.get_session()
