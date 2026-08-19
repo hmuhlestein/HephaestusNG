@@ -357,45 +357,57 @@ def _apply_enrichment_to_task(
     """Write enriched fields back to the task row, inheriting phase
     validation if enabled. Returns the task_data dict later steps need, or
     None if the task row is gone (log + let caller stop)."""
+    # try/finally around the whole body, not just the early "task not
+    # found" return: a commit() failure (e.g. the FK violation a
+    # not-yet-resolved phase_id used to cause) previously propagated out
+    # of this function with the session never closed or rolled back --
+    # leaking a connection holding a failed, uncommitted transaction. That
+    # leaked connection is a strong candidate for why the caller's own
+    # failure-recovery write (_handle_task_processing_failure, marking
+    # the task "failed") then silently failed too, leaving the task
+    # stuck at "pending" forever with no error visible anywhere.
     session = server_state.db_manager.get_session()
-    task = session.query(Task).filter_by(id=task_id).first()
-    if not task:
+    try:
+        task = session.query(Task).filter_by(id=task_id).first()
+        if not task:
+            logger.error(f"Task {task_id} not found after creation")
+            return None
+
+        enriched_desc = enriched_task["enriched_description"]
+        if isinstance(enriched_desc, dict):
+            import json
+
+            enriched_desc = json.dumps(enriched_desc, indent=2)
+        task.enriched_description = enriched_desc
+        task.phase_id = phase_id
+        # Prioritize request.workflow_id for multi-workflow support, fallback to phase context
+        task.workflow_id = request.workflow_id or workflow_id
+        task.estimated_complexity = enriched_task.get("estimated_complexity", 5)
+
+        if phase_id:
+            phase = session.query(Phase).filter_by(id=phase_id).first()
+            if phase and phase.validation:
+                if phase.validation.get("enabled", True):
+                    task.validation_enabled = True
+                    logger.info(f"Task {task_id} inheriting validation from phase {phase.name}")
+                else:
+                    logger.info(f"Task {task_id} validation explicitly disabled in phase {phase.name}")
+
+        session.commit()
+
+        return {
+            "id": task_id,
+            "raw_description": request.task_description,
+            "enriched_description": enriched_task["enriched_description"],
+            "done_definition": request.done_definition,
+            "phase_id": phase_id,
+            "workflow_id": request.workflow_id,
+        }
+    except Exception:
+        session.rollback()
+        raise
+    finally:
         session.close()
-        logger.error(f"Task {task_id} not found after creation")
-        return None
-
-    enriched_desc = enriched_task["enriched_description"]
-    if isinstance(enriched_desc, dict):
-        import json
-
-        enriched_desc = json.dumps(enriched_desc, indent=2)
-    task.enriched_description = enriched_desc
-    task.phase_id = phase_id
-    # Prioritize request.workflow_id for multi-workflow support, fallback to phase context
-    task.workflow_id = request.workflow_id or workflow_id
-    task.estimated_complexity = enriched_task.get("estimated_complexity", 5)
-
-    if phase_id:
-        phase = session.query(Phase).filter_by(id=phase_id).first()
-        if phase and phase.validation:
-            if phase.validation.get("enabled", True):
-                task.validation_enabled = True
-                logger.info(f"Task {task_id} inheriting validation from phase {phase.name}")
-            else:
-                logger.info(f"Task {task_id} validation explicitly disabled in phase {phase.name}")
-
-    session.commit()
-
-    task_data = {
-        "id": task_id,
-        "raw_description": request.task_description,
-        "enriched_description": enriched_task["enriched_description"],
-        "done_definition": request.done_definition,
-        "phase_id": phase_id,
-        "workflow_id": request.workflow_id,
-    }
-    session.close()
-    return task_data
 
 
 async def _check_for_duplicate_task(task_id: str, phase_id: Optional[str], enriched_task: dict) -> bool:
