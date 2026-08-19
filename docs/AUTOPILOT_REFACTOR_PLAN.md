@@ -445,6 +445,8 @@ Phase 1c (decompose server.py) ── runs here, after Phase 2's consolidations
    │  decomposed layout. Full plan: design_docs/phase_1c_server_decomposition.md
    │  Step 0 is deleting the duplicated rate-limit block (L1363-1378), whose
    │  correctness currently depends on definition order alone.
+   │  DONE (52af42e) — see §3.4's completion note and
+   │  design_docs/phase_1c_decomposition_findings.md for the full account.
    ▼
 Phase 4 (streamline: delete dead code) ── can interleave with Phase 2/3 once
    │  each deletion's zero-caller status is confirmed against post-Phase-1 code;
