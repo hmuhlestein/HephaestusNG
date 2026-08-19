@@ -203,9 +203,9 @@ class Terminator:
             # no longer see anything once it's gone.
             if agent.tmux_session_name:
                 try:
-                    transcript_dir = self._resolve_tmux_transcript_dir(agent)
+                    transcript_dir = self._output_capture._resolve_tmux_transcript_dir(agent)
                     if transcript_dir:
-                        self._flush_stable_transcript(
+                        self._output_capture._flush_stable_transcript(
                             agent.tmux_session_name,
                             transcript_dir / f"{agent.tmux_session_name}.clean.log",
                         )
