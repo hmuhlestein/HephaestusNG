@@ -206,6 +206,165 @@ class TestGetPhaseContextStr:
         assert wf_id is None
 
 
+class TestResolvePhaseIdNameLookup:
+    """Regression tests for the name-lookup branch added 2026-08-19.
+
+    Before this, resolve_phase_id's non-digit branch returned phase_id_raw
+    completely unvalidated -- any non-digit string was assumed to already
+    be a real Phase.id UUID. An agent passing a phase NAME (e.g.
+    "adversarial_review", the natural, common way to write a follow-up
+    task) sailed through unresolved, and the later `UPDATE tasks SET
+    phase_id=...` failed with a live FOREIGN KEY constraint violation --
+    silently, since that write happens inside a fire-and-forget
+    background task. Confirmed live: three tasks in the production DB
+    stuck permanently at status="pending" with phase_id empty, from
+    exactly this path.
+
+    These use a real db_manager (not a mocked session) because the fix's
+    entire job is a real DB query -- a mocked session's auto-truthy
+    MagicMock would make "phase exists" and "phase doesn't exist" return
+    the same thing, which is exactly how the old passthrough behavior
+    hid behind test_uuid_phase_id_returned_as_is without anyone noticing
+    it wasn't really validating anything.
+    """
+
+    def _make_workflow_and_phase(self, db_manager, *, workflow_id, phase_name, phase_id=None):
+        from src.core.database import Phase, Workflow
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id=workflow_id, name="w", phases_folder_path="/tmp", status="active",
+                )
+            )
+            phase_id = phase_id or str(uuid.uuid4())
+            session.add(
+                Phase(
+                    id=phase_id, workflow_id=workflow_id, order=1, name=phase_name,
+                    description="d", done_definitions=[],
+                )
+            )
+        return phase_id
+
+    def _mock_state(self, db_manager, *, phase_manager_workflow_id=None):
+        state = MagicMock()
+        state.db_manager = db_manager
+        state.phase_manager = MagicMock()
+        state.phase_manager.workflow_id = phase_manager_workflow_id
+        return state
+
+    @patch("src.core.app_context.get_app_state")
+    def test_a_real_phase_uuid_is_returned_without_a_name_lookup(self, mock_get_state, db_manager):
+        from src.services.task_enrichment_service import TaskEnrichmentService
+
+        phase_id = self._make_workflow_and_phase(
+            db_manager, workflow_id="wf-1", phase_name="development"
+        )
+        mock_get_state.return_value = self._mock_state(db_manager)
+
+        result = TaskEnrichmentService.resolve_phase_id(
+            phase_id_raw=phase_id, phase_order=None, workflow_id="wf-1",
+            requesting_agent_id="system",
+        )
+
+        assert result == phase_id
+
+    @patch("src.core.app_context.get_app_state")
+    def test_a_phase_name_resolves_to_its_uuid(self, mock_get_state, db_manager):
+        """The exact live bug: an agent passes "adversarial_review" (a
+        name), not a UUID."""
+        from src.services.task_enrichment_service import TaskEnrichmentService
+
+        phase_id = self._make_workflow_and_phase(
+            db_manager, workflow_id="wf-1", phase_name="adversarial_review"
+        )
+        mock_get_state.return_value = self._mock_state(db_manager)
+
+        result = TaskEnrichmentService.resolve_phase_id(
+            phase_id_raw="adversarial_review", phase_order=None, workflow_id="wf-1",
+            requesting_agent_id="system",
+        )
+
+        assert result == phase_id
+
+    @patch("src.core.app_context.get_app_state")
+    def test_a_phase_name_is_scoped_to_the_given_workflow_id(self, mock_get_state, db_manager):
+        """Two different workflows both have a "development" phase --
+        must resolve to the one in the workflow actually passed in, not
+        whichever row a plain name query happens to find first."""
+        from src.services.task_enrichment_service import TaskEnrichmentService
+
+        self._make_workflow_and_phase(db_manager, workflow_id="wf-a", phase_name="development")
+        phase_id_b = self._make_workflow_and_phase(
+            db_manager, workflow_id="wf-b", phase_name="development"
+        )
+        mock_get_state.return_value = self._mock_state(db_manager)
+
+        result = TaskEnrichmentService.resolve_phase_id(
+            phase_id_raw="development", phase_order=None, workflow_id="wf-b",
+            requesting_agent_id="system",
+        )
+
+        assert result == phase_id_b
+
+    @patch("src.core.app_context.get_app_state")
+    def test_a_phase_name_falls_back_to_the_phase_managers_workflow_when_none_given(
+        self, mock_get_state, db_manager
+    ):
+        from src.services.task_enrichment_service import TaskEnrichmentService
+
+        phase_id = self._make_workflow_and_phase(
+            db_manager, workflow_id="wf-current", phase_name="qa_validation"
+        )
+        mock_get_state.return_value = self._mock_state(
+            db_manager, phase_manager_workflow_id="wf-current"
+        )
+
+        result = TaskEnrichmentService.resolve_phase_id(
+            phase_id_raw="qa_validation", phase_order=None, workflow_id=None,
+            requesting_agent_id="system",
+        )
+
+        assert result == phase_id
+
+    @patch("src.core.app_context.get_app_state")
+    def test_an_unresolvable_name_returns_none_instead_of_the_raw_string(
+        self, mock_get_state, db_manager
+    ):
+        """The critical regression this whole fix is about: the old code
+        returned the raw string here, which then failed the FK constraint
+        downstream. Returning None makes the caller's own "no phase_id
+        determined" warning path handle it instead of a silent DB
+        failure three steps later."""
+        from src.services.task_enrichment_service import TaskEnrichmentService
+
+        mock_get_state.return_value = self._mock_state(db_manager)
+
+        result = TaskEnrichmentService.resolve_phase_id(
+            phase_id_raw="totally-not-a-real-phase", phase_order=None, workflow_id="wf-1",
+            requesting_agent_id="system",
+        )
+
+        assert result is None
+
+    @patch("src.core.app_context.get_app_state")
+    def test_an_ambiguous_name_with_no_workflow_scope_returns_none(self, mock_get_state, db_manager):
+        """Same name in two different workflows, no workflow_id to
+        narrow it -- refuse to guess rather than silently picking one."""
+        from src.services.task_enrichment_service import TaskEnrichmentService
+
+        self._make_workflow_and_phase(db_manager, workflow_id="wf-a", phase_name="development")
+        self._make_workflow_and_phase(db_manager, workflow_id="wf-b", phase_name="development")
+        mock_get_state.return_value = self._mock_state(db_manager)
+
+        result = TaskEnrichmentService.resolve_phase_id(
+            phase_id_raw="development", phase_order=None, workflow_id=None,
+            requesting_agent_id="system",
+        )
+
+        assert result is None
+
+
 class TestNormalizeEnrichedDescription:
     """Tests for TaskEnrichmentService._normalize_enriched_description."""
 
