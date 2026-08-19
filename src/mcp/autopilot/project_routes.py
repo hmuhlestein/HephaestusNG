@@ -415,7 +415,29 @@ async def create_project(
 
         _invalidate("queue", "status")
 
-        return ProjectItem(
+    # Initialize codegraph index if codegraph is installed and .codegraph
+    # doesn't already exist in the project directory.
+    try:
+        import subprocess as _sp
+        codegraph_dir = Path(resolved) / ".codegraph"
+        if not codegraph_dir.exists():
+            result = _sp.run(
+                ["codegraph", "init", "."],
+                cwd=resolved,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode == 0:
+                logger.info(f"CodeGraph initialized for project {proj.name} at {resolved}")
+            else:
+                logger.debug(f"CodeGraph init skipped/failed for {proj.name}: {result.stderr[:200]}")
+    except FileNotFoundError:
+        logger.debug("codegraph not installed, skipping index initialization")
+    except Exception as e:
+        logger.debug(f"CodeGraph init skipped for {proj.name}: {e}")
+
+    return ProjectItem(
             id=proj.id,
             name=proj.name,
             base_dir=proj.base_dir,
