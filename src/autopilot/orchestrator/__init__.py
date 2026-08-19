@@ -27,6 +27,7 @@ from src.autopilot.orchestrator.state import DesignEntry
 from src.autopilot.orchestrator.state import DesignStatus
 from typing import Dict
 from src.autopilot.orchestrator.state import FeatureReport
+from src.autopilot.orchestrator.state import FeatureRunStatus
 from typing import Optional
 from src.core.constants import PHASE0_DEFINITION_IDS
 from src.autopilot.orchestrator.phase_transitions import POLL_INTERVAL
@@ -648,7 +649,7 @@ def run_single_workflow(
     pause_existing: bool = True,
     existing_workflow_id: Optional[str] = None,
     project_id: Optional[str] = None,
-) -> str:
+) -> FeatureRunStatus:
     """Run a single workflow execution.
 
     Args:
@@ -906,7 +907,7 @@ def run_single_workflow(
                 logger.debug(f"Could not patch pipeline_metrics.json: {_pm_err}")
     except Exception as e:
         logger.error(f"Failed to launch workflow {workflow_id}: {e}")
-        return "failed"
+        return FeatureRunStatus.FAILED
 
     stuck_count = 0
     credit_stuck_count = 0
@@ -957,13 +958,13 @@ def run_single_workflow(
             # Check if in-process service requested a stop
             if _should_stop(project_id):
                 logger.info("Stop requested during workflow execution")
-                return "interrupted"
+                return FeatureRunStatus.INTERRUPTED
 
             # Timeout check
             elapsed = int(time.time() - start_time)
             if elapsed > timeout_seconds:
                 logger.error(f"Workflow timed out after {timeout_seconds}s")
-                return "timeout"
+                return FeatureRunStatus.TIMEOUT
 
             wf_status = get_workflow_status(exec_id)
             # Get agents for this workflow only
@@ -1041,7 +1042,7 @@ def run_single_workflow(
             wf_state = wf_status.get("status", "")
             if wf_state in ("completed", "failed", "paused"):
                 logger.info(f"Workflow {wf_state}: {exec_id}")
-                return wf_state
+                return FeatureRunStatus(wf_state)
 
             # Check if workflow should be considered complete:
             # No active agents AND no pending/in-progress/non-terminal tasks
@@ -1128,11 +1129,11 @@ def run_single_workflow(
 
                     if state:
                         state.current_workflow_id = None
-                    return "completed"
+                    return FeatureRunStatus.COMPLETED
                 elif elapsed > 300 and not done:
                     # No tasks AND no done tasks after 5 minutes — something is wrong
                     logger.error(f"No tasks exist after {elapsed}s — workflow appears broken")
-                    return "hard_error"
+                    return FeatureRunStatus.HARD_ERROR
 
             out_of_credits, credit_reason = check_api_credits()
             if out_of_credits:
@@ -1141,7 +1142,7 @@ def run_single_workflow(
                 if credit_stuck_count >= 1:
                     choice = prompt_human(credit_reason, logger)
                     if choice == "q":
-                        return "interrupted"
+                        return FeatureRunStatus.INTERRUPTED
                     elif choice == "s":
                         credit_stuck_count = 0
                 continue
@@ -1167,7 +1168,7 @@ def run_single_workflow(
             hard_error, error_reason = detect_hard_error(agents, failed, workflow_id=exec_id)
             if hard_error:
                 logger.error(f"Hard error detected: {error_reason}")
-                return "hard_error"
+                return FeatureRunStatus.HARD_ERROR
 
             impasse, impasse_reason = detect_impasse(agents, pending, in_progress, elapsed)
             # Enhancement 4: Monitor signals can also indicate impasse.
@@ -1184,7 +1185,7 @@ def run_single_workflow(
                 if stuck_count >= STUCK_THRESHOLD:
                     choice = prompt_human(impasse_reason, logger)
                     if choice == "q":
-                        return "interrupted"
+                        return FeatureRunStatus.INTERRUPTED
                     elif choice == "s":
                         stuck_count = 0
                         # Skip this design - terminate all active agents for this workflow
@@ -1195,7 +1196,7 @@ def run_single_workflow(
                                     logger.info(f"Terminated agent {a['id'][:8]} (skip)")
                                 except Exception:
                                     pass
-                        return "skipped"
+                        return FeatureRunStatus.SKIPPED
                     else:
                         # "c" (continue) or timeout — reset stuck count and keep watching
                         stuck_count = 0
@@ -1204,7 +1205,7 @@ def run_single_workflow(
 
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
-        return "interrupted"
+        return FeatureRunStatus.INTERRUPTED
     finally:
         _unregister_monitored_workflow(exec_id)
         # Clean up: terminate all agents for this workflow and mark as paused
@@ -1450,12 +1451,12 @@ def run_phase0(
             project_id=project_id,
         )
 
-        if wf_status != "completed":
-            logger.error(f"Phase 0 workflow failed with status: {wf_status}")
+        if wf_status != FeatureRunStatus.COMPLETED:
+            logger.error(f"Phase 0 workflow failed with status: {wf_status.value}")
             _update_design_status(
                 design_entry.db_id,
                 "failed",
-                error=f"Phase 0 failed: {wf_status}",
+                error=f"Phase 0 failed: {wf_status.value}",
                 logger=logger,
             )
             return None, None
@@ -2020,7 +2021,7 @@ def _run_one_feature(
     state: Optional[PipelineState] = None,
     max_iterations: int = 10,
     project_id: Optional[str] = None,
-) -> str:
+) -> FeatureRunStatus:
     """Run a single feature through the 12-phase pipeline.
 
     Args:
@@ -2067,10 +2068,10 @@ def _run_one_feature(
                 ).first()
                 if not dep_feature:
                     logger.warning(f"[DEPENDENCY] Feature {feature_key} depends on {dep_key} which doesn't exist — skipping")
-                    return "skipped"
+                    return FeatureRunStatus.SKIPPED
                 if dep_feature.status not in ("completed", "active"):
                     logger.warning(f"[DEPENDENCY] Feature {feature_key} depends on {dep_key} which is {dep_feature.status} — skipping")
-                    return "skipped"
+                    return FeatureRunStatus.SKIPPED
 
     # Set structured log context for this feature's lifetime
     from src.core.log_context import set_log_context
@@ -2086,7 +2087,7 @@ def _run_one_feature(
         # (inside same session to avoid race condition with concurrent cost writes)
         if project_id and not check_budget_before_new_work(db, project_id):
             logger.warning(f"[BUDGET] Cannot launch feature {feature_key} — project {project_id[:8]} over budget")
-            return "skipped"
+            return FeatureRunStatus.SKIPPED
 
         feat_record = (
             db.query(Feature)
@@ -2133,7 +2134,7 @@ def _run_one_feature(
                     )
                     if _wt:
                         _cleanup_worktree(_wt, _branch, project_path, logger)
-                    return "completed"
+                    return FeatureRunStatus.COMPLETED
                 if wf:
                     existing_workflow_id = wf.id
 
@@ -2149,7 +2150,7 @@ def _run_one_feature(
                     _update_feature_status(
                         feature_id, design_entry.db_id, "paused", "Budget limit reached", logger
                     )
-                    return "budget_blocked"
+                    return FeatureRunStatus.BUDGET_BLOCKED
 
             # Update status to active
             feat_record.status = "active"
@@ -2158,7 +2159,7 @@ def _run_one_feature(
 
     if not feature_id:
         logger.error(f"Feature record not found for {feature_key}")
-        return "failed"
+        return FeatureRunStatus.FAILED
 
     # Create feature record folder
     feature_record_path = designs_folder / "features" / feature_key
@@ -2173,7 +2174,7 @@ def _run_one_feature(
     if worktree is None:
         logger.error(f"Failed to create worktree for feature {feature_key}")
         _update_feature_status(feature_id, design_entry.db_id, "failed", "Worktree creation failed", logger)
-        return "failed"
+        return FeatureRunStatus.FAILED
 
     try:
         # Populate .hephaestus/ in worktree
@@ -2257,16 +2258,16 @@ def _run_one_feature(
             _relink_features_to_workflows(design_entry.db_id, logger)
 
         # Determine final status
-        if wf_status == "completed":
+        if wf_status == FeatureRunStatus.COMPLETED:
             # Check if product validation passed
             # For now, mark as completed if workflow completed
             # Review mode: pause for human approval BEFORE marking completed
             if project_id and feature_id and _should_pause_for_review(project_id):
                 _pause_feature_for_review(feature_id, logger)
                 _wait_for_review_clearance(feature_id, logger, project_id=project_id)
-            final_status = "completed"
-        elif wf_status == "paused":
-            # Not a failure -- run_single_workflow returns "paused" for a
+            final_status = FeatureRunStatus.COMPLETED
+        elif wf_status == FeatureRunStatus.PAUSED:
+            # Not a failure -- run_single_workflow returns PAUSED for a
             # deliberately-paused workflow, fully resumable later via
             # existing_workflow_id (same resumability the worktree-cleanup
             # guard below already grants "paused"). Marking the FEATURE
@@ -2279,14 +2280,33 @@ def _run_one_feature(
             # "failed" here, and the design could never be picked up as
             # "active" again even after an earlier group's feature that
             # WAS actively running went on to complete successfully.
-            final_status = "paused"
-        elif wf_status == "interrupted":
-            final_status = "failed"
+            final_status = FeatureRunStatus.PAUSED
+        elif not wf_status.is_terminal:
+            # INTERRUPTED/TIMEOUT mean this walk stopped watching, not
+            # that the feature reached a resolution -- see
+            # FeatureRunStatus's docstring. Previously collapsed into
+            # "failed" here, which silently defeated
+            # run_feature_pipelines' own non-terminal halt-early check one
+            # level up (it can never see a status this function never
+            # returns) and wrote Feature.status="failed" for a feature
+            # that may still be genuinely running or resumable via
+            # existing_workflow_id. Preserve it distinctly; the
+            # Feature.status write below is skipped entirely for this
+            # case, leaving it at whatever it already is ("active", set
+            # above) since nothing about this feature is actually known
+            # to have gone wrong.
+            final_status = wf_status
         else:
-            final_status = "failed"
+            final_status = FeatureRunStatus.FAILED
 
-        # Update feature status
-        _update_feature_status(feature_id, design_entry.db_id, final_status, logger=logger)
+        # Update feature status. Skipped when final_status is
+        # non-terminal (INTERRUPTED/TIMEOUT): Feature.status has no value
+        # for either, and writing "failed" is exactly the bug the branch
+        # above exists to avoid.
+        if final_status.is_terminal:
+            _update_feature_status(
+                feature_id, design_entry.db_id, final_status.value, logger=logger
+            )
 
         # Sweep artifacts to permanent record. Phase reports now live under
         # .hephaestus/ (git-excluded) -- some flat at the top level
@@ -2310,7 +2330,7 @@ def _run_one_feature(
                 if not dest.exists():
                     shutil.copy2(f, dest)
 
-        if wf_status == "completed":
+        if wf_status == FeatureRunStatus.COMPLETED:
             # Only clean up the worktree once the feature's pipeline has
             # genuinely, permanently finished. This used to run
             # unconditionally in a `finally:` block, so a "paused"/
@@ -2328,7 +2348,7 @@ def _run_one_feature(
         # Only pause for review if the feature completed successfully.
         # _wait_for_review_clearance polls every 30 s and respects the
         # pipeline's stop_event so Stop/restart work cleanly.
-        if project_id and feature_id and final_status == "completed" and _should_pause_for_review(project_id):
+        if project_id and feature_id and final_status == FeatureRunStatus.COMPLETED and _should_pause_for_review(project_id):
             _pause_feature_for_review(feature_id, logger)
             _wait_for_review_clearance(feature_id, logger, project_id=project_id)
 
@@ -2340,7 +2360,7 @@ def _run_one_feature(
         # Do not clean up the worktree here either -- an exception mid-
         # pipeline is exactly the case resume needs the worktree to still
         # exist for.
-        return "failed"
+        return FeatureRunStatus.FAILED
 
 
 def run_feature_pipelines(
@@ -2353,7 +2373,7 @@ def run_feature_pipelines(
     state: Optional[PipelineState] = None,
     max_iterations: int = 10,
     project_id: Optional[str] = None,
-) -> Dict[str, str]:
+) -> Dict[str, FeatureRunStatus]:
     """Run feature pipelines with parallel/sequential execution.
 
     Args:
@@ -2376,28 +2396,32 @@ def run_feature_pipelines(
     logger.info("=" * 70)
 
     features = features_json.get("features", [])
-    feature_results: Dict[str, str] = {}
+    feature_results: Dict[str, FeatureRunStatus] = {}
 
     # Resolve execution order
     execution_groups = _resolve_execution_order(features, logger)
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    # Statuses _run_one_feature/run_single_workflow can return that do NOT
-    # mean the feature actually reached a resolved state -- "interrupted"
-    # (an explicit stop/quit/KeyboardInterrupt) and "timeout" (this poll
-    # loop's own wall-clock budget expired, reset fresh on every resume --
-    # see run_single_workflow's start_time) both mean "we stopped watching,"
-    # not "this feature is done." Unlike "failed"/"skipped"/"hard_error"
-    # (genuine, if bad, resolutions -- see the comment below on why those
-    # don't block dependents), advancing to a later dependency layer after
-    # one of these is exactly how a still-in-progress dependency's
-    # dependents can start early: observed live, a feature whose dependency
-    # was still genuinely running (its own workflow status was "active", it
-    # simply hadn't finished within this walk's 2-hour polling window) had
-    # its dependent feature dispatched immediately after the dependency's
-    # run_single_workflow call returned "timeout".
-    NON_TERMINAL_STATUSES = {"interrupted", "timeout"}
+    # FeatureRunStatus members _run_one_feature/run_single_workflow can
+    # return that do NOT mean the feature actually reached a resolved
+    # state -- INTERRUPTED (an explicit stop/quit/KeyboardInterrupt) and
+    # TIMEOUT (this poll loop's own wall-clock budget expired, reset
+    # fresh on every resume -- see run_single_workflow's start_time) both
+    # mean "we stopped watching," not "this feature is done." Unlike
+    # FAILED/SKIPPED/HARD_ERROR (genuine, if bad, resolutions -- see the
+    # comment below on why those don't block dependents), advancing to a
+    # later dependency layer after one of these is exactly how a
+    # still-in-progress dependency's dependents can start early: observed
+    # live, a feature whose dependency was still genuinely running (its
+    # own workflow status was "active", it simply hadn't finished within
+    # this walk's 2-hour polling window) had its dependent feature
+    # dispatched immediately after the dependency's run_single_workflow
+    # call returned TIMEOUT. See FeatureRunStatus.is_terminal --
+    # previously this checked a raw {"interrupted", "timeout"} string set
+    # against a status _run_one_feature could never actually return (it
+    # collapsed both into "failed" before returning), so this halt never
+    # fired in production; _run_one_feature now preserves them distinctly.
     halted_early = False
 
     for group in execution_groups:
@@ -2436,7 +2460,7 @@ def run_feature_pipelines(
                 project_id,
             )
             feature_results[feature_key] = status
-            if status in NON_TERMINAL_STATUSES:
+            if not status.is_terminal:
                 halted_early = True
         else:
             # Multiple parallel features - use ThreadPoolExecutor
@@ -2465,11 +2489,11 @@ def run_feature_pipelines(
                     try:
                         status = future.result()
                         feature_results[feature_key] = status
-                        if status in NON_TERMINAL_STATUSES:
+                        if not status.is_terminal:
                             halted_early = True
                     except Exception as e:
                         logger.error(f"Feature {feature_key} failed: {e}")
-                        feature_results[feature_key] = "failed"
+                        feature_results[feature_key] = FeatureRunStatus.FAILED
 
         # Stop before starting the next dependency layer -- a non-terminal
         # result means at least one feature in this layer may still be
@@ -2490,14 +2514,14 @@ def run_feature_pipelines(
     # Log summary
     logger.info("Feature pipeline results:")
     for feat_key, status in feature_results.items():
-        logger.info(f"  {feat_key}: {status}")
+        logger.info(f"  {feat_key}: {status.value}")
 
     return feature_results
 
 
 def run_design_aggregate(
     design_entry: DesignEntry,
-    feature_results: Dict[str, str],
+    feature_results: Dict[str, FeatureRunStatus],
     designs_folder: Path,
     logger: OrchestratorLogger,
 ) -> Tuple[DesignStatus, FeatureReport]:
@@ -2518,14 +2542,26 @@ def run_design_aggregate(
 
     # Determine overall status
     results = list(feature_results.values())
-    all_completed = bool(results) and all(s == "completed" for s in results)
-    any_failed = any(s == "failed" for s in results)
-    any_completed = any(s == "completed" for s in results)
-    all_skipped = bool(results) and all(s == "skipped" for s in results)
+    all_completed = bool(results) and all(s == FeatureRunStatus.COMPLETED for s in results)
+    any_failed = any(s == FeatureRunStatus.FAILED for s in results)
+    any_completed = any(s == FeatureRunStatus.COMPLETED for s in results)
+    all_skipped = bool(results) and all(s == FeatureRunStatus.SKIPPED for s in results)
+    # A non-terminal result (INTERRUPTED/TIMEOUT) means at least one
+    # feature never reached a resolution this walk -- run_feature_pipelines
+    # halts dispatching further dependency layers when this happens, but
+    # the layer that was actually running still landed here in
+    # feature_results. Without this check, a mixed layer (one feature
+    # already COMPLETED, another still genuinely in progress) fell through
+    # to the "some skipped but >=1 completed -- partial success" branch
+    # below and got marked DesignStatus.COMPLETED even though real work
+    # was still outstanding -- same bucket as "not any_completed" already
+    # gets today (not a new design-level state), just no longer silently
+    # skipped past.
+    any_non_terminal = any(not s.is_terminal for s in results)
 
     if all_completed:
         status = DesignStatus.COMPLETED
-    elif any_failed or all_skipped or not any_completed or not results:
+    elif any_failed or all_skipped or any_non_terminal or not any_completed or not results:
         # An all-skipped run (e.g. first feature failed, rest cascaded) is not a success.
         status = DesignStatus.FAILED
     else:
@@ -2563,7 +2599,8 @@ def run_design_aggregate(
         "designs_folder": str(designs_folder),
         "total_time_seconds": total_time,
         "status": status.value,
-        "features": feature_results,
+        # FeatureRunStatus is a plain Enum, not json-serializable as-is.
+        "features": {k: v.value for k, v in feature_results.items()},
         "completed_at": datetime.utcnow().isoformat(),
     }
     metrics_path = designs_folder / "design_metrics.json"

@@ -44,6 +44,35 @@ class DesignStatus(Enum):
     SKIPPED = "skipped"
 
 
+class FeatureRunStatus(Enum):
+    """Outcome of running one feature's workflow as far as a single poll
+    walk (run_single_workflow) could observe it.
+
+    INTERRUPTED/TIMEOUT are non-terminal: they mean this walk stopped
+    watching, not that the feature reached a resolution -- the underlying
+    workflow may still be genuinely running, or may pick back up on the
+    next backend restart via its existing Workflow row. Conflating them
+    with a genuine resolution (previously: both collapsed into FAILED one
+    level up, in _run_one_feature) silently defeated
+    run_feature_pipelines' own non-terminal check -- see
+    docs/AUTOPILOT_REFACTOR_PLAN.md Phase 3 Tier 2 item 19. Every other
+    member is a real, if sometimes bad, resolution. See is_terminal.
+    """
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+    PAUSED = "paused"
+    SKIPPED = "skipped"
+    BUDGET_BLOCKED = "budget_blocked"
+    HARD_ERROR = "hard_error"
+    INTERRUPTED = "interrupted"
+    TIMEOUT = "timeout"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self not in (FeatureRunStatus.INTERRUPTED, FeatureRunStatus.TIMEOUT)
+
+
 @dataclass
 class DesignEntry:
     path: Path

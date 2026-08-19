@@ -17,7 +17,7 @@ import pytest
 
 from src.autopilot.orchestrator import run_feature_pipelines
 
-from src.autopilot.orchestrator.state import DesignEntry
+from src.autopilot.orchestrator.state import DesignEntry, FeatureRunStatus
 
 
 @pytest.fixture
@@ -63,10 +63,10 @@ class TestRunFeaturePipelinesHaltsOnNonTerminalStatus:
             feat_id = feat["id"]
             call_order.append(feat_id)
             if feat_id == "auth-fraud":
-                return "completed"
+                return FeatureRunStatus.COMPLETED
             if feat_id == "credit-system":
-                return "timeout"
-            return "completed"  # ai-generation -- should never actually be called
+                return FeatureRunStatus.TIMEOUT
+            return FeatureRunStatus.COMPLETED  # ai-generation -- should never actually be called
 
         with patch("src.autopilot.orchestrator._run_one_feature", side_effect=fake_run_one_feature):
             run_feature_pipelines(
@@ -90,8 +90,8 @@ class TestRunFeaturePipelinesHaltsOnNonTerminalStatus:
             feat_id = feat["id"]
             call_order.append(feat_id)
             if feat_id == "credit-system":
-                return "interrupted"
-            return "completed"
+                return FeatureRunStatus.INTERRUPTED
+            return FeatureRunStatus.COMPLETED
 
         with patch("src.autopilot.orchestrator._run_one_feature", side_effect=fake_run_one_feature):
             run_feature_pipelines(
@@ -119,8 +119,8 @@ class TestRunFeaturePipelinesHaltsOnNonTerminalStatus:
             feat_id = feat["id"]
             call_order.append(feat_id)
             if feat_id == "credit-system":
-                return "failed"
-            return "completed"
+                return FeatureRunStatus.FAILED
+            return FeatureRunStatus.COMPLETED
 
         with patch("src.autopilot.orchestrator._run_one_feature", side_effect=fake_run_one_feature):
             run_feature_pipelines(
@@ -153,8 +153,8 @@ class TestRunFeaturePipelinesHaltsOnNonTerminalStatus:
             feat_id = feat["id"]
             call_order.append(feat_id)
             if feat_id == "svc-b":
-                return "timeout"
-            return "completed"
+                return FeatureRunStatus.TIMEOUT
+            return FeatureRunStatus.COMPLETED
 
         with patch("src.autopilot.orchestrator._run_one_feature", side_effect=fake_run_one_feature):
             run_feature_pipelines(

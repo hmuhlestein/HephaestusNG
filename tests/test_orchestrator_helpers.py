@@ -8,6 +8,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from src.autopilot.orchestrator.state import FeatureRunStatus
+
 
 @pytest.fixture
 def orch_db_env(tmp_path, monkeypatch):
@@ -3277,7 +3279,7 @@ class TestRunOneFeatureStateIsolation:
             if passed_state:
                 passed_state.current_workflow_id = "wf-correct"
                 passed_state.current_workflow_id = None
-            return "completed"
+            return FeatureRunStatus.COMPLETED
 
         with patch(
             "src.autopilot.orchestrator._create_integration_worktree",
@@ -3296,7 +3298,7 @@ class TestRunOneFeatureStateIsolation:
                 state=PipelineState(),
             )
 
-        assert status == "completed"
+        assert status == FeatureRunStatus.COMPLETED
         with orch_db_env.session_scope() as session:
             feat = session.query(Feature).filter_by(id="feature-row-1").first()
             assert feat.workflow_id == "wf-correct"
@@ -3462,17 +3464,38 @@ class TestRunOneFeatureWorktreeCleanupTiming:
         return status, mock_cleanup
 
     def test_completed_status_cleans_up_worktree(self, orch_db_env, tmp_path):
-        status, mock_cleanup = self._run(orch_db_env, tmp_path, "completed")
-        assert status == "completed"
+        status, mock_cleanup = self._run(orch_db_env, tmp_path, FeatureRunStatus.COMPLETED)
+        assert status == FeatureRunStatus.COMPLETED
         mock_cleanup.assert_called_once()
 
-    @pytest.mark.parametrize("wf_status", ["interrupted", "timeout", "failed"])
-    def test_non_completed_statuses_never_clean_up_worktree(
+    def test_failed_status_never_cleans_up_worktree(self, orch_db_env, tmp_path):
+        status, mock_cleanup = self._run(orch_db_env, tmp_path, FeatureRunStatus.FAILED)
+        assert status == FeatureRunStatus.FAILED
+        mock_cleanup.assert_not_called()
+
+    @pytest.mark.parametrize("wf_status", [FeatureRunStatus.INTERRUPTED, FeatureRunStatus.TIMEOUT])
+    def test_non_terminal_statuses_never_clean_up_worktree_or_overwrite_feature_status(
         self, orch_db_env, tmp_path, wf_status
     ):
+        """Phase 3 Tier 2 item 19: INTERRUPTED/TIMEOUT used to be folded
+        into the same generic FAILED bucket as a genuine failure -- which
+        silently defeated run_feature_pipelines' own non-terminal
+        halt-early check one level up (it can never see a status this
+        function never returns), and overwrote Feature.status="failed"
+        for a feature that may still be genuinely running or resumable.
+        Both must now report distinctly and leave Feature.status alone."""
         status, mock_cleanup = self._run(orch_db_env, tmp_path, wf_status)
-        assert status == "failed"
+        assert status == wf_status
+        assert not status.is_terminal
         mock_cleanup.assert_not_called()
+
+        from src.core.database import Feature
+
+        with orch_db_env.session_scope() as session:
+            feature = session.query(Feature).filter_by(id="feature-row-1").first()
+            # feat_record.status = "active" is set before run_single_workflow
+            # is even called -- must survive untouched, not "failed".
+            assert feature.status == "active"
 
     def test_paused_status_reports_paused_not_failed(self, orch_db_env, tmp_path):
         """Regression: a "paused" wf_status used to be folded into the same
@@ -3484,8 +3507,8 @@ class TestRunOneFeatureWorktreeCleanupTiming:
         feature that was genuinely running went on to complete
         successfully. "paused" must report as "paused", a real
         FeatureStatus, not get collapsed into "failed"."""
-        status, mock_cleanup = self._run(orch_db_env, tmp_path, "paused")
-        assert status == "paused"
+        status, mock_cleanup = self._run(orch_db_env, tmp_path, FeatureRunStatus.PAUSED)
+        assert status == FeatureRunStatus.PAUSED
         mock_cleanup.assert_not_called()
 
         from src.core.database import Feature
@@ -3519,8 +3542,85 @@ class TestRunOneFeatureWorktreeCleanupTiming:
                 state=None,
             )
 
-        assert status == "failed"
+        assert status == FeatureRunStatus.FAILED
         mock_cleanup.assert_not_called()
+
+
+class TestRunDesignAggregateNonTerminalHandling:
+    """Phase 3 Tier 2 item 19: a mixed dependency layer (one feature
+    COMPLETED, another still genuinely in progress -- INTERRUPTED/TIMEOUT)
+    used to fall through to run_design_aggregate's "some skipped but >=1
+    completed -- partial success" branch and get marked
+    DesignStatus.COMPLETED, even though real work was still outstanding.
+    See FeatureRunStatus's docstring."""
+
+    def _run(self, tmp_path, feature_results):
+        from src.autopilot.orchestrator import OrchestratorLogger, run_design_aggregate
+        from src.autopilot.orchestrator.state import DesignEntry
+
+        design_path = tmp_path / "design.md"
+        design_path.write_text("# Design\n")
+        design_entry = DesignEntry(path=design_path, name="D", content_hash="h", db_id="des-1")
+        designs_folder = tmp_path / "designs"
+        designs_folder.mkdir()
+        status, _report = run_design_aggregate(
+            design_entry, feature_results, designs_folder, OrchestratorLogger(tmp_path)
+        )
+        return status
+
+    def test_all_completed_is_design_completed(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator.state import DesignStatus
+
+        status = self._run(
+            tmp_path,
+            {"f1": FeatureRunStatus.COMPLETED, "f2": FeatureRunStatus.COMPLETED},
+        )
+        assert status == DesignStatus.COMPLETED
+
+    @pytest.mark.parametrize("non_terminal", [FeatureRunStatus.INTERRUPTED, FeatureRunStatus.TIMEOUT])
+    def test_mixed_completed_and_non_terminal_is_not_completed(self, orch_db_env, tmp_path, non_terminal):
+        from src.autopilot.orchestrator.state import DesignStatus
+
+        status = self._run(
+            tmp_path,
+            {"f1": FeatureRunStatus.COMPLETED, "f2": non_terminal},
+        )
+        assert status != DesignStatus.COMPLETED
+        assert status == DesignStatus.FAILED
+
+    def test_partial_success_with_skipped_is_still_completed(self, orch_db_env, tmp_path):
+        """Regression guard: the non-terminal check above must not
+        over-trigger on the pre-existing, deliberate "some skipped but
+        >=1 completed" partial-success case."""
+        from src.autopilot.orchestrator.state import DesignStatus
+
+        status = self._run(
+            tmp_path,
+            {"f1": FeatureRunStatus.COMPLETED, "f2": FeatureRunStatus.SKIPPED},
+        )
+        assert status == DesignStatus.COMPLETED
+
+    def test_json_metrics_file_serializes_feature_statuses(self, orch_db_env, tmp_path):
+        """FeatureRunStatus is a plain Enum, not natively json-serializable
+        -- design_metrics.json must write the plain string value."""
+        import json
+
+        from src.autopilot.orchestrator import OrchestratorLogger, run_design_aggregate
+        from src.autopilot.orchestrator.state import DesignEntry
+
+        design_path = tmp_path / "design.md"
+        design_path.write_text("# Design\n")
+        design_entry = DesignEntry(path=design_path, name="D", content_hash="h", db_id="des-1")
+        designs_folder = tmp_path / "designs"
+        designs_folder.mkdir()
+        run_design_aggregate(
+            design_entry,
+            {"f1": FeatureRunStatus.COMPLETED, "f2": FeatureRunStatus.TIMEOUT},
+            designs_folder,
+            OrchestratorLogger(tmp_path),
+        )
+        metrics = json.loads((designs_folder / "design_metrics.json").read_text())
+        assert metrics["features"] == {"f1": "completed", "f2": "timeout"}
 
 
 class TestRunOneFeatureWithDependencies:
@@ -3593,7 +3693,7 @@ class TestRunOneFeatureWithDependencies:
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.run_single_workflow",
-            return_value="completed",
+            return_value=FeatureRunStatus.COMPLETED,
         ), patch(
             "src.autopilot.orchestrator._cleanup_worktree"
         ):
@@ -3607,7 +3707,7 @@ class TestRunOneFeatureWithDependencies:
                 state=None,
             )
 
-        assert status == "completed"
+        assert status == FeatureRunStatus.COMPLETED
 
     def test_feature_with_unsatisfied_dependency_is_skipped_not_crashed(
         self, orch_db_env, tmp_path
@@ -3648,7 +3748,7 @@ class TestRunOneFeatureWithDependencies:
             state=None,
         )
 
-        assert status == "skipped"
+        assert status == FeatureRunStatus.SKIPPED
 
 
 class TestRunOneFeatureThreadsProjectId:
@@ -3808,7 +3908,7 @@ class TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn:
                 state=None,
             )
 
-        assert status == "completed"
+        assert status == FeatureRunStatus.COMPLETED
         mock_run.assert_not_called()  # fast path never runs the pipeline again
 
         with orch_db_env.session_scope() as session:
