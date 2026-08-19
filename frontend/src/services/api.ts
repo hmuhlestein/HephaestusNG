@@ -879,31 +879,31 @@ export const apiService = {
 
   // Unified Projects
   getProjects: async (): Promise<any[]> => {
-    const { data } = await api.get('/projects');
+    const { data } = await api.get('/autopilot/projects');
     return data;
   },
 
   createProject: async (name: string, baseDir: string, isDefault: boolean = false): Promise<any> => {
-    const { data } = await api.post('/projects', { name, base_dir: baseDir, is_default: isDefault });
+    const { data } = await api.post('/autopilot/projects', { name, base_dir: baseDir, is_default: isDefault });
     return data;
   },
 
   activateProject: async (projectId: string): Promise<any> => {
-    const { data } = await api.post(`/projects/${encodeURIComponent(projectId)}/activate`);
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/activate`);
     return data;
   },
 
   deactivateProject: async (projectId: string): Promise<any> => {
-    const { data } = await api.post(`/projects/${encodeURIComponent(projectId)}/deactivate`);
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/deactivate`);
     return data;
   },
 
   deleteProject: async (projectId: string): Promise<void> => {
-    await api.delete(`/projects/${encodeURIComponent(projectId)}`);
+    await api.delete(`/autopilot/projects/${encodeURIComponent(projectId)}`);
   },
 
   updateProject: async (projectId: string, updates: Record<string, any>): Promise<any> => {
-    const { data } = await api.put(`/projects/${encodeURIComponent(projectId)}`, updates);
+    const { data } = await api.put(`/autopilot/projects/${encodeURIComponent(projectId)}`, updates);
     return data;
   },
 
