@@ -1,6 +1,7 @@
 """Agent launch pipeline — worktree resolution, tmux session creation, prompt delivery, and the create/restart orchestrators. Extracted from AgentManager per design_docs/manager_py_decomposition_prompt.md."""
 
 import asyncio
+import functools
 import logging
 import shlex
 import time
@@ -1617,8 +1618,20 @@ class LaunchPipeline:
 
         try:
             context_files = self._gather_worktree_context(task)
-            wt_resolution = self._resolve_worktree(
-                task, wt_mgr, create_if_missing=True, agent_id=agent_id, context_files=context_files
+            # _resolve_worktree does real git work (create_agent_worktree
+            # -> git branch + git worktree add, a full checkout) directly
+            # on the event loop -- confirmed live 2026-08-19 investigating
+            # intermittent multi-second /health stalls under concurrent
+            # dispatch, one of three blocking call sites found in this
+            # function via a systematic audit.
+            loop = asyncio.get_event_loop()
+            wt_resolution = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    self._resolve_worktree,
+                    task, wt_mgr, create_if_missing=True, agent_id=agent_id,
+                    context_files=context_files,
+                ),
             )
             branch_path = wt_resolution.branch_path
 
@@ -1655,8 +1668,19 @@ class LaunchPipeline:
             )
 
             session_name = f"{self.config.tmux_session_prefix}_{agent_id[:8]}"
-            tmux_session = self._prepare_launch_environment(
-                session_name, branch_path, env_vars, task, phase_name, cli_agent=cli_agent
+            # _prepare_launch_environment calls _ensure_codegraph_initialized
+            # (a `codegraph status .` subprocess with a 30s timeout -- 3.6s
+            # measured live during this same investigation) and
+            # _create_tmux_session (several tmux subprocess calls), both
+            # directly on the event loop. The other blocking call site in
+            # this function is at _resolve_worktree, above.
+            tmux_session = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    self._prepare_launch_environment,
+                    session_name, branch_path, env_vars, task, phase_name,
+                    cli_agent=cli_agent,
+                ),
             )
 
             phase_name_resolved, phase_order, thinking_level = self._resolve_phase_name_and_thinking(
