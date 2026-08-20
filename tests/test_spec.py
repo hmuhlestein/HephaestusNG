@@ -10,6 +10,7 @@ from src.autopilot.spec import (
     _clamp01,
     _pass_with_subjective,
     build_phase_output,
+    gate_finding_count,
     load_spec,
     read_okf_report,
     score_adversarial_review,
@@ -18,7 +19,6 @@ from src.autopilot.spec import (
     score_feature_review,
     score_product_validation,
     score_qa,
-    gate_finding_count,
     score_scope_review,
     score_security_review,
 )
@@ -873,6 +873,34 @@ class TestInputManifest:
                     assert filename in produced, (
                         f"{phase} declares input {filename!r}, which no phase in "
                         f"this workflow produces and nothing seeds"
+                    )
+
+    def test_no_phase_declares_its_own_output_as_an_input(self):
+        """A phase cannot consume what it has not produced yet, so such a
+        declaration renders a spurious [MISSING] line on every run. The
+        producer test above does not catch this: the file IS produced by
+        something in the workflow -- that something is just this same phase."""
+        import yaml
+
+        from src.autopilot.spec import _extract_declared_files
+        from src.workflow_registry import _WORKFLOWS_DIR
+
+        wf_dir = _WORKFLOWS_DIR / "autopilot"
+        cfg = yaml.safe_load((wf_dir / "workflow.yaml").read_text())
+        own_outputs = {}
+        for phase_file in wf_dir.glob("*.yaml"):
+            if phase_file.name == "workflow.yaml":
+                continue
+            pc = yaml.safe_load(phase_file.read_text()) or {}
+            if pc.get("name"):
+                own_outputs[pc["name"]] = {
+                    Path(e).name for e in _extract_declared_files(pc.get("outputs"))
+                }
+        for phase, declared in (cfg.get("phase_inputs") or {}).items():
+            for kind in ("required", "optional"):
+                for filename in declared.get(kind) or []:
+                    assert filename not in own_outputs.get(phase, set()), (
+                        f"{phase} declares its own output {filename!r} as an input"
                     )
 
     def test_declared_input_phases_all_exist(self):
