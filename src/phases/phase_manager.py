@@ -693,47 +693,6 @@ class PhaseManager:
         finally:
             session.close()
 
-    def check_phase_completion(self, phase_id: str) -> bool:
-        """Check if a phase is complete based on its done_definitions.
-
-        Args:
-            phase_id: Phase ID to check
-
-        Returns:
-            True if phase is complete
-        """
-        session = self.db_manager.get_session()
-        try:
-            phase = session.query(Phase).filter_by(id=phase_id).first()
-            if not phase:
-                return False
-
-            # Check if all tasks in phase are complete.
-            # "failed" is intentionally excluded: failed is a terminal state, and
-            # a phase that has some done + some failed tasks (but no active tasks)
-            # should still advance. The stalled-phase handler in the monitor covers
-            # the all-failed (done_tasks == 0) case separately.
-            incomplete_tasks = (
-                session.query(Task)
-                .filter_by(phase_id=phase_id)
-                .filter(Task.status.in_(["pending", "assigned", "in_progress"]))
-                .count()
-            )
-
-            if incomplete_tasks > 0:
-                return False
-
-            # Check if phase has any completed tasks
-            completed_tasks = (
-                session.query(Task).filter_by(phase_id=phase_id, status="done").count()
-            )
-
-            # Phase is complete if it has completed tasks and no incomplete ones
-            return completed_tasks > 0
-
-        finally:
-            session.close()
-
     @staticmethod
     def _close_execution(
         session, execution, status: str, summary: Optional[str] = None
