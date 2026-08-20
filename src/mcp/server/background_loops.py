@@ -40,6 +40,13 @@ async def process_queue(project_id: Optional[str] = None):
     # how far we got so the handler can put the task back (see below).
     dequeued_task_id = None
     agent = None
+    # get_next_queued_task takes this reservation, but the release below used
+    # to sit in a finally wrapping only the dispatch call -- enrichment and
+    # context-building happen in between and can raise, leaking the slot for
+    # the process's lifetime. Tracked here so every exit path releases it
+    # exactly once (release_cli_model_slot decrements, so a double release
+    # would hand out a slot another dispatch is holding).
+    reserved_cli_model = None
 
     try:
         # Check if we should queue (i.e., at capacity)
@@ -55,6 +62,8 @@ async def process_queue(project_id: Optional[str] = None):
             return
 
         logger.info(f"Processing queued task {next_task.id} (priority={next_task.priority}, boosted={next_task.priority_boosted})")
+
+        reserved_cli_model = getattr(next_task, "_reserved_cli_model", None)
 
         # Dequeue the task
         server_state.queue_service.dequeue_task(next_task.id)
@@ -197,8 +206,9 @@ async def process_queue(project_id: Optional[str] = None):
                 dispatch_context=dispatch_context,
             )
         finally:
-            if hasattr(next_task, "_reserved_cli_model"):
-                server_state.queue_service.release_cli_model_slot(*next_task._reserved_cli_model)
+            if reserved_cli_model:
+                server_state.queue_service.release_cli_model_slot(*reserved_cli_model)
+                reserved_cli_model = None
         logger.info(f"Created agent {agent.id} for queued task {next_task.id}")
 
         # Agent is now working — "in_progress" (not "assigned" like the
@@ -225,6 +235,12 @@ async def process_queue(project_id: Optional[str] = None):
         import traceback
 
         logger.error(traceback.format_exc())
+
+        # Failure before the dispatch call never reached the finally that
+        # normally releases this.
+        if reserved_cli_model:
+            server_state.queue_service.release_cli_model_slot(*reserved_cli_model)
+            reserved_cli_model = None
 
         # Compensate for the non-atomic dequeue-then-dispatch above. Without
         # this, a failure between dequeue_task and dispatch strands the task

@@ -128,6 +128,11 @@ async def bump_task_priority_endpoint(
     """
     logger.info(f"Priority bump & start request for task {task_id}")
 
+    # Same non-atomic dequeue-then-dispatch as process_queue: dequeue_task
+    # flips the task out of "queued" well before the dispatch that can fail.
+    dequeued = False
+    agent = None
+
     try:
         session = server_state.db_manager.get_session()
         try:
@@ -156,6 +161,7 @@ async def bump_task_priority_endpoint(
             task = session.query(Task).filter_by(id=task_id).first()
             # Dequeue the task
             server_state.queue_service.dequeue_task(task_id)
+            dequeued = True
         finally:
             session.close()
 
@@ -240,6 +246,23 @@ async def bump_task_priority_endpoint(
         import traceback
 
         logger.error(traceback.format_exc())
+
+        # Without this the task is stranded in "assigned" with
+        # assigned_agent_id=None -- get_next_queued_task only reads "queued"
+        # and every recovery sweep looks the task up by its agent, so nothing
+        # can reclaim it and the workflow waits on it forever. Skipped once
+        # dispatch succeeded: an agent is already running on the task.
+        if dequeued and agent is None:
+            try:
+                server_state.queue_service.enqueue_task(task_id)
+                logger.info(f"Requeued task {task_id} after failed bump dispatch")
+            except Exception as requeue_error:
+                logger.error(
+                    f"Failed to requeue task {task_id} after failed bump "
+                    f"dispatch -- it is now stranded in 'assigned' with no "
+                    f"agent: {requeue_error}"
+                )
+
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/api/tasks/{task_id}/cancel")
