@@ -35,25 +35,25 @@ class TestTaskDeduplicationFlow:
             from src.core.simple_config import Config
 
             config = Config()
-            config.openai_api_key = "test-key"
-            config.task_dedup_enabled = True
-            config.task_similarity_threshold = 0.7
-            config.task_related_threshold = 0.4
-            config.enable_cors = False
-            config.database_path = ":memory:"
-            config.qdrant_url = "http://localhost:6333"
-            config.qdrant_collection_prefix = "test"
-            config.llm_provider = "openai"
-            config.llm_model = "gpt-4"
-            config.embedding_model = "text-embedding-ada-002"
-            config.max_concurrent_agents = 10
+            config.llm.openai_api_key = "test-key"
+            config.task_dedup.task_dedup_enabled = True
+            config.task_dedup.task_similarity_threshold = 0.7
+            config.task_dedup.task_related_threshold = 0.4
+            config.server.enable_cors = False
+            config.paths.database_path = ":memory:"
+            config.vector_store.qdrant_url = "http://localhost:6333"
+            config.vector_store.qdrant_collection_prefix = "test"
+            config.llm.llm_provider = "openai"
+            config.llm.llm_model = "gpt-4"
+            config.llm.embedding_model = "text-embedding-ada-002"
+            config.mcp.max_concurrent_agents = 10
             # Must be a real CLI name, not left as an auto-Mock: dispatch
             # resolves the agent class through CLI_AGENTS and raises
             # "Unsupported CLI agent type" on anything else -- which the
             # create_task background handler swallows, so the request still
             # returns 200 and only the missing create_agent_for_task call
             # reveals it.
-            config.default_cli_tool = "claude"
+            config.agents.default_cli_tool = "claude"
             mock_config.return_value = config
             mock_config_shared.return_value = config
 
@@ -372,18 +372,18 @@ class TestTaskDeduplicationFlow:
             from src.core.simple_config import Config
 
             config = Config()
-            config.task_dedup_enabled = False  # Disabled
-            config.openai_api_key = "test-key"
-            config.enable_cors = False
-            config.database_path = ":memory:"
-            config.max_concurrent_agents = 10
+            config.task_dedup.task_dedup_enabled = False  # Disabled
+            config.llm.openai_api_key = "test-key"
+            config.server.enable_cors = False
+            config.paths.database_path = ":memory:"
+            config.mcp.max_concurrent_agents = 10
             # Must be a real CLI name, not left as an auto-Mock: dispatch
             # resolves the agent class through CLI_AGENTS and raises
             # "Unsupported CLI agent type" on anything else -- which the
             # create_task background handler swallows, so the request still
             # returns 200 and only the missing create_agent_for_task call
             # reveals it.
-            config.default_cli_tool = "claude"
+            config.agents.default_cli_tool = "claude"
             mock_config.return_value = config
             mock_config_shared.return_value = config
 

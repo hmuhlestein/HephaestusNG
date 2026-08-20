@@ -2274,12 +2274,12 @@ class DatabaseManager:
             try:
                 from src.core.simple_config import get_config
                 cfg = get_config()
-                if cfg.default_fallback_cli_tool:
+                if cfg.agents.default_fallback_cli_tool:
                     with self.engine.connect() as conn:
                         result = conn.execute(text(
                             "UPDATE phases SET fallback_cli_tool = :tool, fallback_cli_model = :model "
                             "WHERE fallback_cli_tool IS NULL OR fallback_cli_tool = ''"
-                        ), {"tool": cfg.default_fallback_cli_tool, "model": cfg.default_fallback_cli_model})
+                        ), {"tool": cfg.agents.default_fallback_cli_tool, "model": cfg.agents.default_fallback_cli_model})
                         conn.commit()
                         if result.rowcount > 0:
                             logger.info(f"Populated fallback for {result.rowcount} phases from global config")

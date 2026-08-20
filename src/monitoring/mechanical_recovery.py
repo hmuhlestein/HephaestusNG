@@ -194,9 +194,9 @@ class MechanicalRecoveryDetector:
 
                             # Fall back to global config defaults
                             if not fallback_tool:
-                                if cfg.default_fallback_cli_tool and (cfg.default_fallback_cli_tool != agent.cli_type or cfg.default_fallback_cli_model != agent.cli_model):
-                                    fallback_tool = cfg.default_fallback_cli_tool
-                                    fallback_model = cfg.default_fallback_cli_model
+                                if cfg.agents.default_fallback_cli_tool and (cfg.agents.default_fallback_cli_tool != agent.cli_type or cfg.agents.default_fallback_cli_model != agent.cli_model):
+                                    fallback_tool = cfg.agents.default_fallback_cli_tool
+                                    fallback_model = cfg.agents.default_fallback_cli_model
 
                             # Last resort: default_fallback_cli_tool/_model can
                             # resolve to the exact same cli+model that just hit
@@ -219,9 +219,9 @@ class MechanicalRecoveryDetector:
                             if (
                                 not fallback_tool
                                 or (fallback_tool == agent.cli_type and fallback_model == agent.cli_model)
-                            ) and cfg.secondary_cli_model_fallback and cfg.secondary_cli_model_fallback != agent.cli_model:
+                            ) and cfg.agents.secondary_cli_model_fallback and cfg.agents.secondary_cli_model_fallback != agent.cli_model:
                                 fallback_tool = agent.cli_type
-                                fallback_model = cfg.secondary_cli_model_fallback
+                                fallback_model = cfg.agents.secondary_cli_model_fallback
 
                             if fallback_tool and (fallback_tool != agent.cli_type or fallback_model != agent.cli_model):
                                 logger.warning(
@@ -386,9 +386,9 @@ class MechanicalRecoveryDetector:
                                 fallback_model = getattr(phase, "fallback_cli_model", None)
                         if not fallback_tool:
                             cfg = get_config()
-                            if cfg.default_fallback_cli_tool and (cfg.default_fallback_cli_tool != agent.cli_type or cfg.default_fallback_cli_model != agent.cli_model):
-                                fallback_tool = cfg.default_fallback_cli_tool
-                                fallback_model = cfg.default_fallback_cli_model
+                            if cfg.agents.default_fallback_cli_tool and (cfg.agents.default_fallback_cli_tool != agent.cli_type or cfg.agents.default_fallback_cli_model != agent.cli_model):
+                                fallback_tool = cfg.agents.default_fallback_cli_tool
+                                fallback_model = cfg.agents.default_fallback_cli_model
 
                         if fallback_tool and fallback_tool != agent.cli_type:
                             logger.info(
@@ -615,7 +615,7 @@ class MechanicalRecoveryDetector:
             # Claude as primary against a local model, pi as the fallback
             # tier) doesn't silently keep either check pinned to the old
             # role.
-            is_primary = agent.cli_type == getattr(self.config, "default_cli_tool", None)
+            is_primary = agent.cli_type == getattr(self.config.agents, "default_cli_tool", None)
             fallback = cli_agent.fallback_model(self.config, is_primary)
             if not fallback:
                 return False
@@ -646,7 +646,7 @@ class MechanicalRecoveryDetector:
             # ineligible) or match a deliberate phase-level override that
             # isn't actually "stuck on the default" at all.
             default_for_cli = (
-                getattr(self.config, "cli_model", None)
+                getattr(self.config.agents, "cli_model", None)
                 if is_primary
                 else cli_agent.default_model
             )
@@ -705,7 +705,7 @@ class MechanicalRecoveryDetector:
             st = getattr(self, "_stuck_state", {}).get(agent.id)
             if not st or st.get("since") is None:
                 return False
-            wait_seconds = getattr(self.config, "cli_model_fallback_wait_seconds", 120)
+            wait_seconds = getattr(self.config.agents, "cli_model_fallback_wait_seconds", 120)
             frozen_for = time.time() - st["since"]
             if frozen_for < wait_seconds:
                 return False
@@ -873,7 +873,7 @@ class MechanicalRecoveryDetector:
                 )
                 pending.pop(agent.id, None)
                 return
-            grace_seconds = 2 * getattr(self.config, "monitoring_interval_seconds", 60)
+            grace_seconds = 2 * getattr(self.config.monitoring, "monitoring_interval_seconds", 60)
             if time.time() - switched_at >= grace_seconds:
                 attempt_count = getattr(self, "_fallback_attempt_count", {}).get(agent.id, 1)
                 gave_up = attempt_count >= MAX_FALLBACK_ATTEMPTS
@@ -1471,9 +1471,9 @@ class MechanicalRecoveryDetector:
                         fallback_model = getattr(phase, "fallback_cli_model", None)
                 if not fallback_tool:
                     cfg = get_config()
-                    if cfg.default_fallback_cli_tool and (cfg.default_fallback_cli_tool != agent.cli_type or cfg.default_fallback_cli_model != agent.cli_model):
-                        fallback_tool = cfg.default_fallback_cli_tool
-                        fallback_model = cfg.default_fallback_cli_model
+                    if cfg.agents.default_fallback_cli_tool and (cfg.agents.default_fallback_cli_tool != agent.cli_type or cfg.agents.default_fallback_cli_model != agent.cli_model):
+                        fallback_tool = cfg.agents.default_fallback_cli_tool
+                        fallback_model = cfg.agents.default_fallback_cli_model
 
                 if fallback_tool and fallback_tool != agent.cli_type:
                     logger.warning(
@@ -1609,7 +1609,7 @@ class MechanicalRecoveryDetector:
             # of Claude Code's own model aliases -- sending it to Claude via
             # /model would be nonsensical to it. secondary_cli_model_fallback is
             # Claude's own configured recovery target instead.
-            fix_model = getattr(self.config, "secondary_cli_model_fallback", None) or "sonnet"
+            fix_model = getattr(self.config.agents, "secondary_cli_model_fallback", None) or "sonnet"
             logger.warning(
                 f"[BAD-MODEL] Agent {agent.id[:8]} (claude) rejected its "
                 f"launch model — sending '/model {fix_model}' directly"

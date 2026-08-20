@@ -25,9 +25,9 @@ async def test_rag_retrieval():
     config = Config()
     vector_store = VectorStoreManager()
     llm_provider = OpenAIProvider(
-        api_key=config.openai_api_key,
-        model=config.llm_model,
-        embedding_model=config.embedding_model,
+        api_key=config.llm.openai_api_key,
+        model=config.llm.llm_model,
+        embedding_model=config.llm.embedding_model,
     )
     rag_system = RAGSystem(vector_store, llm_provider)
 

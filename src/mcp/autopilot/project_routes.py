@@ -59,8 +59,8 @@ def _apply_active_project(proj):
         )
 
     # Update config immediately — no git reload here
-    config.main_repo_path = new_path
-    config.project_root = new_path
+    config.git.main_repo_path = new_path
+    config.paths.project_root = new_path
 
 
 def _design_id(project_id: str, filename: str) -> str:
@@ -519,7 +519,7 @@ async def activate_project(project_id: str):
             active_projects = (
                 db.query(AutopilotProject).filter_by(is_active=True).all()
             )
-            max_concurrent = get_config().max_concurrent_projects
+            max_concurrent = get_config().autopilot.max_concurrent_projects
             if len(active_projects) >= max_concurrent:
                 names = ", ".join(p.name for p in active_projects)
                 raise HTTPException(

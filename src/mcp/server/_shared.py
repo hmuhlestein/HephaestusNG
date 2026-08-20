@@ -92,7 +92,7 @@ app = FastAPI(
 
 config = get_config()
 
-if config.enable_cors:
+if config.server.enable_cors:
     # SECURITY: Use explicit origins instead of wildcard '*' when credentials are allowed.
     # Wildcard + credentials is a security risk (allows credential theft from any origin).
     # Default to localhost origins for development; set CORS_ORIGINS env var for production.
@@ -104,8 +104,8 @@ if config.enable_cors:
     else:
         # Development defaults: localhost only
         _config = get_config()
-        _frontend_port = _config.frontend_port
-        _backend_port = _config.mcp_port
+        _frontend_port = _config.server.frontend_port
+        _backend_port = _config.server.mcp_port
         _cors_origins = [f"http://localhost:{_frontend_port}",
                          "http://localhost:3000",
                          f"http://localhost:{_backend_port}",
@@ -254,7 +254,7 @@ class ServerState:
         config = get_config()
 
         # Initialize database
-        self.db_manager = DatabaseManager(str(config.database_path))
+        self.db_manager = DatabaseManager(str(config.paths.database_path))
         self.db_manager.create_tables()
 
         # Migrate: add is_active column to existing autopilot_projects table
@@ -299,7 +299,7 @@ class ServerState:
         # configurable embedding provider (fastembed by default — no OpenAI key needed).
         # Previously this was gated on config.openai_api_key, which silently disabled
         # dedup for python-only (openrouter) setups even though it's enabled by config.
-        if config.task_dedup_enabled:
+        if config.task_dedup.task_dedup_enabled:
             try:
                 from src.memory.embedding_factory import create_embedding_provider
                 from src.memory.store_factory import validate_embedding_dimension_compatibility
@@ -338,14 +338,14 @@ class ServerState:
         # Initialize queue service
         self.queue_service = QueueService(
             db_manager=self.db_manager,
-            max_concurrent_agents=config.max_concurrent_agents,
-            cli_model_concurrency_limits=config.cli_model_concurrency_limits,
-            default_cli_tool=config.default_cli_tool,
-            default_cli_model=config.cli_model,
-            cli_model_fallback=config.cli_model_fallback,
-            secondary_cli_model_fallback=config.secondary_cli_model_fallback,
+            max_concurrent_agents=config.mcp.max_concurrent_agents,
+            cli_model_concurrency_limits=config.agents.cli_model_concurrency_limits,
+            default_cli_tool=config.agents.default_cli_tool,
+            default_cli_model=config.agents.cli_model,
+            cli_model_fallback=config.agents.cli_model_fallback,
+            secondary_cli_model_fallback=config.agents.secondary_cli_model_fallback,
         )
-        logger.info(f"Queue service initialized with max_concurrent_agents={config.max_concurrent_agents}")
+        logger.info(f"Queue service initialized with max_concurrent_agents={config.mcp.max_concurrent_agents}")
 
         logger.info("Server state initialized successfully")
 
@@ -371,8 +371,8 @@ class ServerState:
                 if active:
                     from pathlib import Path
 
-                    config.main_repo_path = Path(active.base_dir)
-                    config.project_root = Path(active.base_dir)
+                    config.git.main_repo_path = Path(active.base_dir)
+                    config.paths.project_root = Path(active.base_dir)
                     logger.info(f"Active project loaded: {active.name} ({active.base_dir})")
                 else:
                     # Auto-activate the default or first project
@@ -384,8 +384,8 @@ class ServerState:
                         session.commit()
                         from pathlib import Path
 
-                        config.main_repo_path = Path(proj.base_dir)
-                        config.project_root = Path(proj.base_dir)
+                        config.git.main_repo_path = Path(proj.base_dir)
+                        config.paths.project_root = Path(proj.base_dir)
                         logger.info(f"Auto-activated project: {proj.name} ({proj.base_dir})")
         except Exception as e:
             logger.warning(f"Could not load active project: {e}")
@@ -575,7 +575,7 @@ def _git_expert_already_landed(session, task, config) -> bool:
         # would be merged into.
         base_repo = Path(wd).parent.parent
         result = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", branch, config.base_branch],
+            ["git", "merge-base", "--is-ancestor", branch, config.git.base_branch],
             cwd=base_repo, capture_output=True, timeout=10,
         )
         return result.returncode == 0

@@ -138,7 +138,7 @@ def main(argv=None):
     # Resolve port from config if not explicitly passed
     if args.port is None:
         try:
-            args.port = _get_config().mcp_port
+            args.port = _get_config().server.mcp_port
         except Exception:
             args.port = 8300
 

@@ -1505,7 +1505,7 @@ class TicketService:
                     main_repo_path = proj.base_dir
         if main_repo_path is None:
             config = get_config()
-            main_repo_path = str(config.main_repo_path)
+            main_repo_path = str(config.git.main_repo_path)
         # _get_commit_stats shells out to `git show --numstat` --
         # blocking, offloaded so it doesn't stall the event loop.
         loop = asyncio.get_event_loop()

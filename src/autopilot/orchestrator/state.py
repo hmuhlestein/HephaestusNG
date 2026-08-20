@@ -302,7 +302,7 @@ def _get_or_create_project_id(project_path: str) -> str:
             from src.core.simple_config import get_config
 
             active_count = db.query(AutopilotProject).filter_by(is_active=True).count()
-            max_concurrent = get_config().max_concurrent_projects
+            max_concurrent = get_config().autopilot.max_concurrent_projects
             if active_count < max_concurrent:
                 proj.is_active = True
                 logger.info(f"Activated project '{proj.name}' for pipeline")

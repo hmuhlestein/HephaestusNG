@@ -29,7 +29,7 @@ router = APIRouter()
 async def oauth_server_metadata():
     """OAuth server metadata with DCR support."""
     config = get_config()
-    base_url = f"http://localhost:{config.mcp_port}"
+    base_url = f"http://localhost:{config.server.mcp_port}"
     return {
         "issuer": base_url,
         "authorization_endpoint": f"{base_url}/oauth/authorize",
@@ -47,7 +47,7 @@ async def oauth_server_metadata():
 async def openid_config():
     """OpenID configuration - tells Claude no auth needed."""
     config = get_config()
-    base_url = f"http://localhost:{config.mcp_port}"
+    base_url = f"http://localhost:{config.server.mcp_port}"
     return {
         "issuer": base_url,
         "authorization_endpoint": f"{base_url}/authorize",

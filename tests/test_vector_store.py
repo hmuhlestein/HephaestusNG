@@ -48,9 +48,9 @@ async def test_vector_store_operations():
     config = Config()
     vector_store = VectorStoreManager()
     llm_provider = OpenAIProvider(
-        api_key=config.openai_api_key,
-        model=config.llm_model,
-        embedding_model=config.embedding_model,
+        api_key=config.llm.openai_api_key,
+        model=config.llm.llm_model,
+        embedding_model=config.llm.embedding_model,
     )
 
     test_collection = "agent_memories"

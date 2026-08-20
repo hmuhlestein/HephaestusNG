@@ -17,25 +17,25 @@ from src.core.constants import CONTEXT_DIR_NAME
 
 @pytest.fixture(autouse=True)
 def _isolated_config(tmp_path, monkeypatch):
-    """_cleanup_worktree does `db = DbManager(str(cfg.database_path))` before
-    ever reaching the archiving step this file tests. get_config() is
+    """_cleanup_worktree does `db = DbManager(str(cfg.paths.database_path))`
+    before ever reaching the archiving step this file tests. get_config() is
     imported locally inside the function
     (`from src.core.simple_config import get_config`), so unlike
     worktree_integration's other tests (see
     test_heal_orphaned_agent_branches.py), patching the definition site here
     is sufficient -- the import re-resolves at call time.
 
-    Without this, cfg.database_path defaults to the real "hephaestus.db":
-    every test in this file was constructing a DatabaseManager against the
-    production database. Harmless only because WorktreeManager itself is
-    mocked below and nothing reads from `db` afterward -- but a silent
-    isolation bypass all the same, exactly the class tests/conftest.py's
-    _forbid_production_database guard now catches.
+    Without this, cfg.paths.database_path defaults to the real
+    "hephaestus.db": every test in this file was constructing a
+    DatabaseManager against the production database. Harmless only because
+    WorktreeManager itself is mocked below and nothing reads from `db`
+    afterward -- but a silent isolation bypass all the same, exactly the
+    class tests/conftest.py's _forbid_production_database guard now catches.
     """
     import src.core.simple_config as sc
 
     cfg = sc.Config()
-    cfg.database_path = str(tmp_path / "isolated_test.db")
+    cfg.paths.database_path = str(tmp_path / "isolated_test.db")
     monkeypatch.setattr(sc, "get_config", lambda: cfg)
     return cfg
 

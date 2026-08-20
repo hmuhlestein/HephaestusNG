@@ -44,7 +44,7 @@ def _make_project(db_manager, tmp_path, id_, is_active=False):
 
 def _mock_config(max_concurrent=2):
     config = MagicMock()
-    config.max_concurrent_projects = max_concurrent
+    config.autopilot.max_concurrent_projects = max_concurrent
     return config
 
 
