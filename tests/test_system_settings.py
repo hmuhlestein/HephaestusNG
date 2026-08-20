@@ -107,9 +107,77 @@ class TestDefaultCostLimit:
             session.close()
 
 
+class TestReadFailsSoft:
+    """Project creation worked before this setting existed. It must not start
+    failing because a settings lookup did."""
+
+    def test_a_broken_store_reads_as_no_default(self, db, caplog):
+        from unittest.mock import patch
+
+        with patch.object(ss, "_get", side_effect=RuntimeError("table missing")):
+            assert ss.get_default_cost_limit() is None
+        assert "treating as no default" in caplog.text
+
+    def test_the_write_path_still_raises(self, db):
+        """Asymmetric on purpose: the caller explicitly asked to save, and
+        swallowing that would be silent data loss."""
+        from unittest.mock import patch
+
+        with patch.object(ss, "_set", side_effect=RuntimeError("db locked")):
+            with pytest.raises(RuntimeError):
+                ss.set_default_cost_limit(10.0)
+
+
+class TestSeedsNewProjectsOnly:
+    """The whole contract: raising or clearing the default must never reach
+    back and change a project someone deliberately configured."""
+
+    @staticmethod
+    def _create(mgr, name):
+        """Mirrors the real creation sites -- read inside the in-flight session."""
+        import uuid
+
+        from src.core.database import AutopilotProject
+
+        session = mgr.get_session()
+        try:
+            proj = AutopilotProject(
+                id=f"proj-{uuid.uuid4().hex[:12]}",
+                name=name,
+                base_dir=f"/tmp/{name}",
+                cost_limit_usd=ss.get_default_cost_limit(session),
+            )
+            session.add(proj)
+            session.commit()
+            return proj.cost_limit_usd
+        finally:
+            session.close()
+
+    @staticmethod
+    def _cap(mgr, name):
+        from src.core.database import AutopilotProject
+
+        session = mgr.get_session()
+        try:
+            return session.query(AutopilotProject).filter_by(name=name).first().cost_limit_usd
+        finally:
+            session.close()
+
+    def test_seeding_and_isolation(self, db):
+        assert self._create(db, "before") is None       # no default yet
+
+        ss.set_default_cost_limit(50.0)
+        assert self._create(db, "after") == 50.0        # seeded
+        assert self._cap(db, "before") is None          # earlier project untouched
+
+        ss.set_default_cost_limit(None)
+        assert self._create(db, "cleared") is None      # new ones unlimited again
+        assert self._cap(db, "after") == 50.0           # the capped one stays capped
+
+
 class TestAppliedAtProjectCreation:
     def test_every_construction_site_passes_the_default(self):
-        """Five places construct AutopilotProject. A site that forgets this
+        """Four places construct AutopilotProject. A site that forgets this
         silently creates an uncapped project, which is exactly the case the
         setting exists to prevent -- and it would only show up as a surprise
         bill."""
