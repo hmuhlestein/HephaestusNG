@@ -446,7 +446,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
         # is what keeps it off a dispatch still in flight: queued_at is
         # refreshed by enqueue_task immediately before every dequeue, so it
         # measures time since this dispatch attempt began, not task age.
-        grace_seconds = get_config().stranded_task_grace_seconds
+        grace_seconds = get_config().monitoring.stranded_task_grace_seconds
         cutoff = datetime.utcnow() - timedelta(seconds=grace_seconds)
         stranded = (
             db.query(Task)
