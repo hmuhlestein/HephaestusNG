@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -44,6 +44,16 @@ const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
     details: false,
     message: false,
   });
+
+  // This modal never unmounts across every mount site (see the
+  // `if (!agentId) return null` guard below, after all hooks) -- switching
+  // straight from one agent to another otherwise leaves the previous
+  // agent's typed-but-unsent message draft (and selected task) sitting in
+  // state, invisible until it might get sent against the wrong agent.
+  useEffect(() => {
+    setSelectedTaskId(null);
+    setMessageText('');
+  }, [agentId]);
 
   const terminateMutation = useMutation({
     mutationFn: () => apiService.terminateAgent(agentId!, 'Manual termination from UI'),

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, CheckCircle2, RotateCcw, Clock, DollarSign, Layers, Eye, FileText, ListChecks, GitPullRequest } from 'lucide-react';
@@ -20,6 +20,17 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
   const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState('');
   const [activeTab, setActiveTab] = useState<'report' | 'requirements'>('report');
+
+  // This modal never unmounts (see the `if (!featureId) return null` guard
+  // below, after all hooks) -- it just renders nothing while closed. So
+  // switching from one feature straight to another leaves the previous
+  // feature's typed feedback (and active tab) sitting in state, unseen by
+  // the user until they'd already submitted it against the wrong feature.
+  // Reset both whenever the feature being reviewed actually changes.
+  useEffect(() => {
+    setFeedback('');
+    setActiveTab('report');
+  }, [featureId]);
 
   // Phase 0 (Feature Architect) pseudo-features have no Feature DB row --
   // the feature-records docs endpoints below 404 for them, so their report

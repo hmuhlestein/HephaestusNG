@@ -82,6 +82,16 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     relatedTickets: false,
   });
 
+  // This modal never unmounts across every mount site (see the
+  // `if (!taskId) return null` guard below, after all hooks) -- switching
+  // straight from one task to another otherwise leaves a stale nested
+  // ticket modal open (pointing at the previous task's ticket) and the
+  // previous task's expanded-output toggle carried over.
+  useEffect(() => {
+    setShowAgentOutput(false);
+    setSelectedTicketId(null);
+  }, [taskId]);
+
   const {
     data: taskDetails,
     isLoading,

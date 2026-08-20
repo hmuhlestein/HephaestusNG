@@ -56,6 +56,12 @@ const FeatureRecordDetailModal: React.FC<FeatureRecordDetailModalProps> = ({ fea
   const [tasks, setTasks] = useState<any[]>(feature?.tasks || []);
   useEffect(() => {
     setTasks(feature?.tasks || []);
+    // This modal never unmounts (see the `if (!feature) return null` guard
+    // below, after all hooks) -- switching straight from one feature to
+    // another otherwise leaves you on the previous feature's tab with a
+    // selected doc id that won't match the new feature's own docs.
+    setActiveTab('overview');
+    setSelectedDoc(null);
   }, [feature]);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
