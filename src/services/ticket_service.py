@@ -1241,6 +1241,18 @@ class TicketService:
         Returns:
             List of ticket dictionaries
         """
+        # Offloaded -- callers loop this per-workflow for a project-wide
+        # fetch (tickets_api.py's get_tickets_endpoint), so each iteration
+        # would otherwise block the event loop for its own DB round-trip.
+        return await asyncio.to_thread(
+            TicketService._get_tickets_by_workflow_sync, workflow_id, filters
+        )
+
+    @staticmethod
+    def _get_tickets_by_workflow_sync(
+        workflow_id: str, filters: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """Sync body of get_tickets_by_workflow -- run via asyncio.to_thread."""
         filters = filters or {}
 
         with get_db() as db:
