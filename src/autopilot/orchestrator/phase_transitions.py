@@ -265,21 +265,6 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
         task_id = task.get("id")
         phase_id = task.get("phase_id")
 
-        # Never feed the human-only Git hand-off back into the agent retry
-        # path while review mode actually requires one -- its intentional
-        # dispatch rejection is a hand-off signal there, not an agent
-        # failure. In full autopilot (review_mode off), git_commit_push
-        # dispatches like any other phase, so a real failure there is a
-        # real failure and should retry normally.
-        try:
-            with get_db() as phase_db:
-                failed_phase = phase_db.query(Phase).filter_by(id=phase_id).first()
-                if failed_phase and failed_phase.name in MANUAL_ONLY_PHASES and _manual_handoff_required(workflow_id):
-                    logger.info(f"  Skipping retry for manual-only phase task {task_id[:8]}")
-                    continue
-        except Exception as exc:
-            logger.debug(f"  Could not inspect phase for failed task {task_id[:8]}: {exc}")
-
         # Arbitration tasks carry a one-off custom prompt
         # (enriched_data["validation_prompt"], see _trigger_arbitration) that
         # this generic retry path has no way to reconstruct -- re-creating
@@ -649,19 +634,19 @@ def _advance_phases(workflow_id: str, logger: "OrchestratorLogger") -> bool:
                 if wf.status == "paused" and wf.paused_by != "review":
                     return False  # Still paused, nothing to do
 
-                # paused_by="review" only means one specific phase
-                # (MANUAL_ONLY_PHASES) is waiting on a human -- the
-                # per-phase check inside _case_in_progress_complete
-                # (phase.name in MANUAL_ONLY_PHASES) already skips just
-                # that phase and leaves it paused. Every other in-progress
-                # phase must keep advancing/self-healing normally, or this
-                # workflow-wide gate silently freezes them too. Observed
-                # live: task a1efdda6 (adversarial_review, phase 6) sat
-                # orphaned and was never retried while the workflow was
-                # paused for git_commit_push (phase 13) needing approval --
-                # two unrelated phases, one review gate. Other pause
-                # reasons (user, budget, system) are genuine full stops and
-                # still hard-return above.
+                # paused_by="review" is also used for the final human-
+                # review gate (PhaseManager._complete_workflow, once every
+                # phase including git_commit_push has finished) -- by that
+                # point there's nothing left to advance anyway, but this
+                # carve-out stays generically correct for any paused_by=
+                # "review" state: unrelated in-progress phases must keep
+                # advancing/self-healing normally rather than a workflow-
+                # wide pause silently freezing them too. Observed live:
+                # task a1efdda6 (adversarial_review, phase 6) sat orphaned
+                # and was never retried while an unrelated phase's own
+                # review-mode pause blocked this whole function. Other
+                # pause reasons (user, budget, system) are genuine full
+                # stops and still hard-return above.
 
             # Self-heal any abandoned task-creation claim before reading
             # phase statuses below, so the dispatch that follows sees the
@@ -1263,59 +1248,6 @@ def _case_completed_with_successor(db, workflow_id: str, completed: list, pendin
     return None
 
 
-MANUAL_ONLY_PHASES = {"git_commit_push"}
-
-
-def _manual_handoff_required(workflow_id: str) -> bool:
-    """Whether MANUAL_ONLY_PHASES should actually block autonomous dispatch
-    for this workflow's project.
-
-    Full autopilot (the default: AutopilotProject.review_mode is False)
-    keeps git_commit_push exactly as autonomous as every other phase -- a
-    real agent commits, pushes, and opens the PR, same as before this
-    gate existed. review_mode=True is what actually asks for a human in
-    the loop, so that's the only case this reuses _should_pause_for_review
-    for: same project-level toggle, same paused_by='review' convention,
-    one flag rather than a second, independent "is this phase manual"
-    concept a project would have to separately configure.
-    """
-    from src.autopilot.orchestrator import _should_pause_for_review
-    from src.core.database import resolve_project_for_workflow
-
-    project_id, _ = resolve_project_for_workflow(workflow_id)
-    return bool(project_id) and _should_pause_for_review(project_id)
-
-
-def _pause_for_manual_handoff(db, workflow_id: str, phase_name: str, logger: "OrchestratorLogger") -> None:
-    """Park the workflow for an operator instead of treating a manual-only
-    phase's failed tasks as ordinary agent failures.
-
-    Only called once _manual_handoff_required has already confirmed this
-    project is in review mode. AgentManager.create_agent_for_task raises
-    PermissionError for any phase in MANUAL_ONLY_PHASES under the same
-    condition (the pipeline must never commit, push, or merge on its own
-    while a human is meant to be reviewing) -- create_agent_for_task_direct
-    converts that into a normal "dispatch failed" None return, so without
-    this, both the per-task retry sweep and the phase-completion retry path
-    would treat the intentional rejection as an agent failure and retry
-    forever, starving the design queue. Idempotent: a no-op past the first
-    call for a given pause (checked here so every caller can call this
-    unconditionally without re-querying wf.status itself).
-    """
-    wf = db.query(Workflow).filter_by(id=workflow_id).first()
-    if wf and wf.status != "paused":
-        from src.autopilot.orchestrator.engine_client import pause_workflow
-
-        pause_workflow(
-            workflow_id,
-            reason="review",
-            status_reason=f"{phase_name} is manual-only; human approval is required",
-            session=db,
-        )
-        db.commit()
-    logger.info(f"[PHASE-ADVANCE] {phase_name} is manual-only; pausing for human hand-off")
-
-
 def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: "OrchestratorLogger") -> Optional[bool]:
     """Case 2: In-progress phase that is now complete.
 
@@ -1389,27 +1321,6 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
         # unscoped (the prior behavior) if started_at was never set.
         cycle_start = execution.started_at if execution else None
         cycle_filter = (Task.created_at >= cycle_start,) if cycle_start else ()
-
-        # A manual-only phase (git_commit_push) under review mode rejects
-        # dispatch with PermissionError every cycle -- create_agent_for_
-        # task_direct converts that into an ordinary "dispatch failed"
-        # None return, so the task never gets an agent and just sits
-        # "pending" like any other undispatched task. Without this check,
-        # the orphan-staleness sweep below has no way to tell that apart
-        # from a genuinely abandoned task: it marks it failed with the
-        # generic "Orphaned: never dispatched to an agent" reason after 1
-        # minute -- and only THEN, once failed_count > 0 lets a later pass
-        # reach _maybe_retry_failed_tasks's own manual-only check, does the
-        # workflow actually pause for review. The pause happens either
-        # way, but only as an indirect side effect of a misleading failure
-        # the operator sees first. Observed live: task 2ffbcab0 sat pending
-        # 36 minutes, then failed as "orphaned", before the workflow paused
-        # (paused_by="review") on the very next sweep tick. Checking this
-        # here, before the generic orphan detection, gives the correct
-        # pause -- and its correct reason -- immediately instead.
-        if phase.name in MANUAL_ONLY_PHASES and _manual_handoff_required(workflow_id):
-            _pause_for_manual_handoff(db, workflow_id, phase.name, logger)
-            continue
 
         orphan_cutoff = datetime.utcnow() - timedelta(minutes=1)
         stale_pending_candidates = (
@@ -1585,9 +1496,6 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             .count()
         )
         if failed_count > 0:
-            if phase.name in MANUAL_ONLY_PHASES and _manual_handoff_required(workflow_id):
-                _pause_for_manual_handoff(db, workflow_id, phase.name, logger)
-                continue
             # Has failed tasks — try to retry them before marking complete
             if not _claim_phase_task_creation(db, phase.id):
                 continue
@@ -1754,14 +1662,6 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
 
     Returns None if no retry was needed, True if tasks were reset for retry.
     """
-    # Git hand-off is human-only in review mode -- see _pause_for_manual_
-    # handoff's own docstring for why that case can't be treated as an
-    # ordinary agent failure. In full autopilot this phase retries like any
-    # other.
-    if phase.name in MANUAL_ONLY_PHASES and _manual_handoff_required(phase.workflow_id):
-        _pause_for_manual_handoff(db, phase.workflow_id, phase.name, logger)
-        return None
-
     cycle_filter = (Task.created_at >= cycle_start,) if cycle_start else ()
     failed_count = db.query(Task).filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter).count()
     total_count = db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
@@ -2299,29 +2199,6 @@ def _create_phase_task(
                     if not deploy_md.exists():
                         logger.info(f"[PHASE-TASK] deploy skipped — DEPLOY.md not found in {wf.working_directory}")
                         return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
-
-            # A manual-only phase (git_commit_push) under review mode must
-            # pause for a human, not attempt dispatch at all -- this is the
-            # THIRD, previously-unguarded place that could otherwise reach
-            # create_agent_for_task_direct for it (the other two,
-            # _case_in_progress_complete's orphan-check and
-            # _maybe_retry_failed_tasks, already carry this same guard).
-            # Without it: this function creates a fresh "pending" task,
-            # immediately calls create_agent_for_task_direct, which invokes
-            # AgentManager.create_agent_for_task, which raises PermissionError
-            # for git_commit_push in review mode -- caught by create_agent_
-            # for_task_direct's own generic `except Exception: return None`,
-            # landing right back here at the "Agent creation failed" branch
-            # below, which marks the task "failed" with NO failure_reason at
-            # all (unlike every other orphan/failure path in this file).
-            # Observed live: task ed85f8ec was marked failed this exact way,
-            # with a blank failure_reason, on the very first attempt to
-            # reach git_commit_push -- before either of the other two guards
-            # ever got a chance to run. Checking here, before creating any
-            # task, avoids manufacturing a misleading failure at all.
-            if phase_name in MANUAL_ONLY_PHASES and _manual_handoff_required(workflow_id):
-                _pause_for_manual_handoff(db, workflow_id, phase_name, logger)
-                return False
 
             # Check if phase already has an active task
             existing = (

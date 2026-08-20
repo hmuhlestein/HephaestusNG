@@ -1534,27 +1534,16 @@ class LaunchPipeline:
                 "task is REQUIRED for create_agent_for_task \u2014 cannot create agent without a task"
             )
 
-        # Git history and remotes are external state. In review mode
-        # (AutopilotProject.review_mode), a pipeline may prepare a Git
-        # hand-off, but must never autonomously launch an agent that can
-        # commit, push, open a PR, or merge -- an operator explicitly
-        # performs those actions after reviewing the validated worktree.
-        if task.phase_id:
-            from src.core.database import AutopilotProject, Phase, resolve_project_for_workflow
-
-            with self.db_manager.get_session() as _phase_session:
-                phase = _phase_session.query(Phase).filter_by(id=task.phase_id).first()
-                if phase and phase.name == "git_commit_push":
-                    project_id, _ = resolve_project_for_workflow(task.workflow_id)
-                    review_mode = False
-                    if project_id:
-                        proj = _phase_session.query(AutopilotProject).get(project_id)
-                        review_mode = bool(proj and proj.review_mode)
-                    if review_mode:
-                        raise PermissionError(
-                            "git_commit_push is manual-only in review mode: explicit "
-                            "human approval is required before any commit, push, PR, or merge"
-                        )
+        # git_commit_push dispatches like any other phase, in review mode
+        # or not -- the agent-safe-bin/git wrapper on every agent's PATH
+        # (scripts/agent-safe-bin/git) is the actual guardrail: it blocks
+        # `git merge` and any push targeting main/master until
+        # .hephaestus/review_approved exists, but allows commit/push-to-
+        # feature-branch/`gh pr create` unconditionally. The pipeline
+        # itself pauses for final human review once the whole workflow
+        # would otherwise be complete (see PhaseManager._complete_workflow's
+        # review_mode check) -- that's the actual human-in-the-loop gate,
+        # not a blanket dispatch-time block on this one phase.
 
         existing = self._check_duplicate_active_agent(task)
         if existing:

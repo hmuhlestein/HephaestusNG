@@ -121,12 +121,16 @@ class TestCreateAgentForTask:
             )
 
     @pytest.mark.asyncio
-    async def test_rejects_git_commit_push_without_human_approval_in_review_mode(
+    async def test_dispatches_git_commit_push_normally_in_review_mode(
         self, mock_agent_manager, sample_task, db_manager
     ):
-        """Git actions must never be dispatched by the autonomous pipeline
-        while the project is actually in review mode (see the companion
-        full-autopilot test below for the review_mode-off case)."""
+        """git_commit_push dispatches like any other phase under review
+        mode too -- the agent commits, pushes, and opens a PR;
+        scripts/agent-safe-bin/git (not this dispatch path) is the actual
+        guardrail blocking `git merge`/push-to-main until a human
+        approves (see PhaseManager._complete_workflow's review-mode
+        pause). Confirms the earlier unconditional PermissionError here
+        was reverted -- see the companion full-autopilot test below."""
         with db_manager.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1", review_mode=True))
             session.query(Workflow).filter_by(id=sample_task.workflow_id).update(
@@ -136,25 +140,22 @@ class TestCreateAgentForTask:
                 {"name": "git_commit_push"}
             )
 
-        with pytest.raises(PermissionError, match="manual-only"):
-            await mock_agent_manager.create_agent_for_task(
-                task=sample_task,
-                enriched_data={},
-                memories=[],
-                project_context="",
-            )
-
-        with db_manager.session_scope() as session:
-            assert session.query(Agent).count() == 0
+        sentinel = RuntimeError("sentinel: reached worktree setup, past the review-mode check")
+        with patch.object(mock_agent_manager._launch, "_scoped_worktree_manager", side_effect=sentinel):
+            with pytest.raises(RuntimeError, match="sentinel"):
+                await mock_agent_manager.create_agent_for_task(
+                    task=sample_task,
+                    enriched_data={},
+                    memories=[],
+                    project_context="",
+                )
 
     @pytest.mark.asyncio
     async def test_does_not_reject_git_commit_push_in_full_autopilot(
         self, mock_agent_manager, sample_task, db_manager
     ):
-        """Regression: full autopilot (no project, or review_mode off) must
-        retain the original autonomous git_commit_push behavior -- the
-        pipeline dispatches a real agent for it same as any other phase.
-        Only review_mode actually asks for a human in the loop."""
+        """Full autopilot (no project, or review_mode off) dispatches
+        git_commit_push the same way -- same as any other phase."""
         with db_manager.session_scope() as session:
             session.query(Phase).filter_by(id=sample_task.phase_id).update(
                 {"name": "git_commit_push"}

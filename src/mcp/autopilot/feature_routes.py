@@ -345,13 +345,6 @@ async def resume_feature(feature_id: str):
         # assigned/in_progress whose agent was terminated (errored/orphaned
         # rather than cleanly failed) — pressing resume should retry all of these.
         #
-        # A manual-only phase (git_commit_push) task under review mode is
-        # excluded: dispatching it re-raises the same PermissionError
-        # every time regardless of workflow status (AgentManager.
-        # create_agent_for_task's own review_mode check is independent of
-        # wf.status), so treating it as "restartable" just re-fails it
-        # identically and silently occupies a restart slot that should go
-        # to genuinely resumable work.
         # "pending" must be included here -- an hours-old, never-dispatched
         # pending task (no assigned_agent_id, nobody working it) is exactly
         # as "restartable" as a failed one. Without it, such a task is
@@ -364,15 +357,10 @@ async def resume_feature(feature_id: str):
         # agent", even though nothing was ever actually wrong with it
         # beyond this endpoint failing to notice it existed. Confirmed
         # live: task 146d191d.
-        from src.autopilot.orchestrator.phase_transitions import MANUAL_ONLY_PHASES, _manual_handoff_required
         candidates_query = db.query(Task).filter(
             Task.workflow_id == workflow_id,
             Task.status.in_(["blocked", "failed", "assigned", "in_progress", "pending"]),
         )
-        if _manual_handoff_required(workflow_id):
-            candidates_query = candidates_query.join(Phase, Task.phase_id == Phase.id).filter(
-                ~Phase.name.in_(MANUAL_ONLY_PHASES)
-            )
         candidates = candidates_query.all()
         restartable = []
         for t in candidates:
@@ -719,18 +707,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
 
         # Find restartable tasks, or create a new one if all are done.
         #
-        # A manual-only phase (git_commit_push) task under review mode is
-        # excluded here too: without this, when it's the workflow's ONLY
-        # blocked/failed task, it gets swept up as "restartable" and the
-        # "if not restartable: create a new development task" branch below
-        # never runs at all -- the human's feedback goes nowhere, and no
-        # developer ever gets launched to act on it, because this endpoint
-        # thinks it already found something to restart. Confirmed live:
-        # exactly this happened to task 2ffbcab0 after a "request changes"
-        # review action, twice in a row (see the stacked feedback entries
-        # this left in its TaskPromptOverride).
-        #
-        # "pending" must be included too -- an hours-old, never-dispatched
+        # "pending" must be included -- an hours-old, never-dispatched
         # pending task (no assigned_agent_id) is exactly as restartable as
         # a failed one. Without it, such a task is invisible here,
         # `restartable` looks empty, and the "create a new development
@@ -741,15 +718,10 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
         # staleness check and marked "Orphaned: never dispatched to an
         # agent", even though nothing was ever wrong with it beyond this
         # query failing to see it. Confirmed live: task 146d191d.
-        from src.autopilot.orchestrator.phase_transitions import MANUAL_ONLY_PHASES, _manual_handoff_required
         candidates_query = db.query(Task).filter(
             Task.workflow_id == workflow_id,
             Task.status.in_(["blocked", "failed", "assigned", "in_progress", "pending"]),
         )
-        if _manual_handoff_required(workflow_id):
-            candidates_query = candidates_query.join(Phase, Task.phase_id == Phase.id).filter(
-                ~Phase.name.in_(MANUAL_ONLY_PHASES)
-            )
         candidates = candidates_query.all()
         restartable = []
         for t in candidates:
@@ -1001,7 +973,7 @@ async def delete_feature(feature_id: str):
 async def _spawn_agent_for_task(task_id: str, phase_id: Optional[str]) -> None:
     """Create an agent for a task, mirroring /api/create_agent_for_task in server.py."""
     from src.core.app_context import get_app_state
-    from src.core.database import Phase, Task
+    from src.core.database import Task
 
     server_state = get_app_state()
 
@@ -1011,32 +983,6 @@ async def _spawn_agent_for_task(task_id: str, phase_id: Optional[str]) -> None:
         if not task:
             logger.warning(f"[RESUME] Task {task_id} not found, cannot restart")
             return
-
-        # A manual-only phase (git_commit_push) under review mode must
-        # pause for a human, not attempt dispatch -- resume_feature and
-        # review_feature's request_changes path both call this function
-        # directly for whatever tasks their own "restartable" query
-        # picked up, with no MANUAL_ONLY_PHASES awareness of their own.
-        # Without this, dispatch here raises PermissionError (review mode
-        # blocks autonomous commit/push), landing in the except block
-        # below, which marks the task "failed" with a misleading "Resume
-        # failed to spawn agent: ..." reason -- the same class of bug
-        # already fixed in _create_phase_task (phase_transitions.py),
-        # just reached through this file's own separate dispatch path.
-        # Confirmed live: task 2ffbcab0 was marked failed exactly this
-        # way after a "request changes" review action swept it up as a
-        # restartable candidate.
-        if phase_id:
-            phase = session.query(Phase).filter_by(id=phase_id).first()
-            if phase:
-                from src.autopilot.orchestrator.phase_transitions import (
-                    MANUAL_ONLY_PHASES,
-                    _manual_handoff_required,
-                    _pause_for_manual_handoff,
-                )
-                if phase.name in MANUAL_ONLY_PHASES and _manual_handoff_required(task.workflow_id):
-                    _pause_for_manual_handoff(session, task.workflow_id, phase.name, logger)
-                    return
 
         enriched_data = {}
         if task.enriched_description:
