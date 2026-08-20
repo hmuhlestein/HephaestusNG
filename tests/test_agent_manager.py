@@ -33,7 +33,7 @@ def db_manager(tmp_path, monkeypatch):
 
     Also points HEPHAESTUS_TEST_DB at this same file -- code under test that
     calls get_db() directly (e.g. resolve_project_for_workflow, used by the
-    git_commit_push review-mode guard) must see this fixture's data, not the
+    git_expert review-mode guard) must see this fixture's data, not the
     untracked, table-less ":memory:" db conftest.py sets as the module-level
     default.
     """
@@ -121,10 +121,10 @@ class TestCreateAgentForTask:
             )
 
     @pytest.mark.asyncio
-    async def test_dispatches_git_commit_push_normally_in_review_mode(
+    async def test_dispatches_git_expert_normally_in_review_mode(
         self, mock_agent_manager, sample_task, db_manager
     ):
-        """git_commit_push dispatches like any other phase under review
+        """git_expert dispatches like any other phase under review
         mode too -- the agent commits, pushes, and opens a PR;
         scripts/agent-safe-bin/git (not this dispatch path) is the actual
         guardrail blocking `git merge`/push-to-main until a human
@@ -137,7 +137,7 @@ class TestCreateAgentForTask:
                 {"project_id": "proj-1"}
             )
             session.query(Phase).filter_by(id=sample_task.phase_id).update(
-                {"name": "git_commit_push"}
+                {"name": "git_expert"}
             )
 
         sentinel = RuntimeError("sentinel: reached worktree setup, past the review-mode check")
@@ -151,14 +151,14 @@ class TestCreateAgentForTask:
                 )
 
     @pytest.mark.asyncio
-    async def test_does_not_reject_git_commit_push_in_full_autopilot(
+    async def test_does_not_reject_git_expert_in_full_autopilot(
         self, mock_agent_manager, sample_task, db_manager
     ):
         """Full autopilot (no project, or review_mode off) dispatches
-        git_commit_push the same way -- same as any other phase."""
+        git_expert the same way -- same as any other phase."""
         with db_manager.session_scope() as session:
             session.query(Phase).filter_by(id=sample_task.phase_id).update(
-                {"name": "git_commit_push"}
+                {"name": "git_expert"}
             )
 
         sentinel = RuntimeError("sentinel: reached worktree setup, past the review-mode guard")

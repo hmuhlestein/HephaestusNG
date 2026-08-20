@@ -557,7 +557,7 @@ class PhaseManager:
                 # agent, via this exact text (PhaseContext.to_prompt_context's
                 # "Outputs:" line), to produce the OLD file(s) for every
                 # phase, for its entire remaining run. Phases with no
-                # override (development, git_commit_push, ...) keep using
+                # override (development, git_expert, ...) keep using
                 # Phase.outputs unchanged, including non-file descriptive
                 # text like "source code in project path" that a strict
                 # required-files check would otherwise filter out.
@@ -1628,7 +1628,7 @@ class PhaseManager:
         real, unstarted work, not a finished pipeline. Observed live: a
         goto-limit-exceeded forced "continue" past product_validation got
         treated as full workflow completion while doc_review,
-        forensics_analysis, git_commit_push, and deploy were all still
+        forensics_analysis, git_expert, and deploy were all still
         "pending" and had never run -- the workflow never actually reached
         the phase that merges to main.
         """
@@ -1684,7 +1684,7 @@ class PhaseManager:
                 )
                 return
 
-            # Every phase (including git_commit_push -- it dispatches like
+            # Every phase (including git_expert -- it dispatches like
             # any other phase now; the agent commits, pushes, and opens a
             # PR, but scripts/agent-safe-bin/git on its own PATH blocks
             # `git merge`/push-to-main) has finished, but under review mode
@@ -1770,7 +1770,7 @@ class PhaseManager:
     def _populate_feature_folder(self, session, workflow) -> None:
         """Create .hephaestus/features/<dir>/ and copy all run artifacts into it.
 
-        The worktree is intentionally kept after git_commit_push merges so the
+        The worktree is intentionally kept after git_expert merges so the
         agent-written .hephaestus/ reports and tmux/ logs are still available here.
         """
         try:
@@ -1893,7 +1893,7 @@ class PhaseManager:
                     break
 
             # 3. Tmux logs — written to project root's .hephaestus/tmux/ so they
-            #    survive worktree removal by git_commit_push. Also check the
+            #    survive worktree removal by git_expert. Also check the
             #    worktree itself as a fallback for any stragglers.
             tmux_dest = feature_dir / "tmux"
             for tmux_src in [

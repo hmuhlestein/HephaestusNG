@@ -636,7 +636,7 @@ def _advance_phases(workflow_id: str, logger: "OrchestratorLogger") -> bool:
 
                 # paused_by="review" is also used for the final human-
                 # review gate (PhaseManager._complete_workflow, once every
-                # phase including git_commit_push has finished) -- by that
+                # phase including git_expert has finished) -- by that
                 # point there's nothing left to advance anyway, but this
                 # carve-out stays generically correct for any paused_by=
                 # "review" state: unrelated in-progress phases must keep
@@ -917,7 +917,7 @@ def _release_pending_phases_with_orphaned_task(db, workflow_id: str, logger: "Or
     non-terminal task instead of a done one) -- kept separate rather than
     merged into it because that function's "skip entirely if ANY phase is
     already in_progress" guard doesn't hold here: a manual-only phase
-    (git_commit_push) sitting "in_progress" only because it's paused
+    (git_expert) sitting "in_progress" only because it's paused
     waiting on a human, with its own task already failed (not actively
     consuming an agent), must not block this repair for an unrelated
     phase behind it. Guards against real concurrency instead by checking
@@ -926,10 +926,10 @@ def _release_pending_phases_with_orphaned_task(db, workflow_id: str, logger: "Or
 
     Observed live: development (task 66e7c1ff) sat "pending" -- reverted
     by an earlier goto cycle -- for the entire time its workflow was
-    paused for git_commit_push review, invisible to every dispatch case,
+    paused for git_expert review, invisible to every dispatch case,
     because _release_pending_phases_with_done_tasks only matches a done
     task and unconditionally skips whenever any phase (including the
-    parked git_commit_push one) is "in_progress".
+    parked git_expert one) is "in_progress".
     """
     live_task = (
         db.query(Task)

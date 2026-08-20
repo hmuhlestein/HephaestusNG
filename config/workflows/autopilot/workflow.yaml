@@ -19,7 +19,7 @@ session_roles:
   qa_validation: qa
   product_validation: product-requirements
   doc_review: doc-reviewer
-  git_commit_push: git
+  git_expert: git
   forensics_analysis: forensics
   deploy: deployer
 
@@ -40,7 +40,7 @@ required_output:
 # the workflow enters impasse (paused for human review).
 optional_phases:
   - forensics_analysis
-  - git_commit_push
+  - git_expert
   - deploy
 
 orchestrator:
@@ -248,7 +248,7 @@ orchestrator:
           action: continue
           reason: "Forensics complete, proceeding to commit"
 
-    - after_phase: git_commit_push
+    - after_phase: git_expert
       evaluator: heuristic
       max_retries: 2
       conditions:

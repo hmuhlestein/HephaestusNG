@@ -98,9 +98,9 @@ class TestOptionalPhases:
         """Test that optional phases are loaded from configuration."""
         from src.autopilot.spec import OPTIONAL_PHASES, load_optional_phases
 
-        # Default optional phases should include forensics and git_commit_push
+        # Default optional phases should include forensics and git_expert
         assert "forensics_analysis" in OPTIONAL_PHASES
-        assert "git_commit_push" in OPTIONAL_PHASES
+        assert "git_expert" in OPTIONAL_PHASES
 
         # Test loading with None workflow_id (returns defaults)
         result = load_optional_phases(None)

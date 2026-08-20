@@ -1534,7 +1534,7 @@ class LaunchPipeline:
                 "task is REQUIRED for create_agent_for_task \u2014 cannot create agent without a task"
             )
 
-        # git_commit_push dispatches like any other phase, in review mode
+        # git_expert dispatches like any other phase, in review mode
         # or not -- the agent-safe-bin/git wrapper on every agent's PATH
         # (scripts/agent-safe-bin/git) is the actual guardrail: it blocks
         # `git merge` and any push targeting main/master until

@@ -1145,7 +1145,7 @@ class Feature(Base):
     reviewed_at = Column(DateTime, nullable=True)
     reviewed_by = Column(String(100), nullable=True, default=None)
 
-    # Pull request URL — populated by git_commit_push phase after creating PR
+    # Pull request URL — populated by git_expert phase after creating PR
     pr_url = Column(Text, nullable=True)
 
     # Relationships

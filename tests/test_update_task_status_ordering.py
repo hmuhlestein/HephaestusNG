@@ -426,12 +426,12 @@ class TestCompleteTaskAsUserCommitsWorktree:
     for a task whose agent can't report back) skipped commit_and_link_
     ticket/verify_output_survived_commit entirely -- unlike update_task_
     status, which always commits the worktree before advancing. Used for
-    any failed/blocked task, not just git_commit_push, a human confirming
+    any failed/blocked task, not just git_expert, a human confirming
     "done" on e.g. a development task could mark it done while the agent's
     actual code changes sat uncommitted in the worktree, and the pipeline
     would advance later phases against a worktree missing that work."""
 
-    def test_commits_worktree_for_non_git_commit_push_phase(self, test_db, test_client, tmp_path):
+    def test_commits_worktree_for_non_git_expert_phase(self, test_db, test_client, tmp_path):
         task_id = _seed_failed(test_db, tmp_path, phase_name="development")
         tcs = "src.services.task_completion_service.TaskCompletionService"
 
@@ -452,11 +452,11 @@ class TestCompleteTaskAsUserCommitsWorktree:
         task = session.query(Task).filter_by(id=task_id).first()
         assert task.status == "done"
 
-    def test_skips_commit_for_git_commit_push_phase(self, test_db, test_client, tmp_path):
-        """git_commit_push is the one phase whose whole job IS the git
+    def test_skips_commit_for_git_expert_phase(self, test_db, test_client, tmp_path):
+        """git_expert is the one phase whose whole job IS the git
         commit/push -- an operator completing it manually has already done
         that outside Hephaestus, so this must not also try to commit."""
-        task_id = _seed_failed(test_db, tmp_path, phase_name="git_commit_push")
+        task_id = _seed_failed(test_db, tmp_path, phase_name="git_expert")
         tcs = "src.services.task_completion_service.TaskCompletionService"
 
         with patch(f"{tcs}.verify_output_artifact", return_value=None), \

@@ -532,7 +532,7 @@ class TestOrphanReapFlushesCleanTranscript:
 class TestReviewPausedWorkflowIsNotOrphaned:
     """Regression: the active-workflow set used to gate off ONLY
     Workflow.status == "active" -- a workflow paused_by="review" (one
-    specific manual-only phase, e.g. git_commit_push, waiting on a human)
+    specific manual-only phase, e.g. git_expert, waiting on a human)
     was treated exactly like a genuinely dead/abandoned one, even though
     _advance_phases's own paused_by=="review" carve-out (phase_
     transitions.py) means every OTHER phase keeps advancing/dispatching

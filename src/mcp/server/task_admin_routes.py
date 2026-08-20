@@ -434,13 +434,12 @@ async def complete_task_as_user(
 
         # Mirror update_task_status's normal completion path: commit the
         # worktree and re-verify the declared output(s) survived the commit
-        # before advancing the pipeline. Skipped for git_commit_push itself
-        # -- the operator completing this phase manually has already done
-        # the actual commit/push/PR outside Hephaestus; the pipeline must
-        # never commit on its own here (see AgentManager.create_agent_for_
-        # task's PermissionError guard for the same phase).
+        # before advancing the pipeline. Skipped for git_expert itself --
+        # that phase's own git work (commit/push/PR or merge) already IS
+        # the phase's actual output; committing the worktree again here
+        # would be a redundant, unrelated commit on top of it.
         output_lost_rejection = None
-        if not phase or phase.name != "git_commit_push":
+        if not phase or phase.name != "git_expert":
             await TaskCompletionService.commit_and_link_ticket(
                 session, task.assigned_agent_id or "human-operator", task, summary.strip()
             )

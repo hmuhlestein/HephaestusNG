@@ -655,7 +655,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 marker.write_text(f"Approved at {datetime.utcnow().isoformat()}\n")
                 logger.info(f"[REVIEW] Created review_approved marker at {marker}")
 
-            # In review mode, git_commit_push created a PR but didn't merge.
+            # In review mode, git_expert created a PR but didn't merge.
             # Merge it now that the feature is approved.
             pr_url = feature.pr_url or _extract_pr_url(db, wf.id, {})
             if pr_url:
@@ -682,7 +682,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 except Exception as e:
                     logger.warning(f"[REVIEW] Failed to merge PR: {e}")
             elif wf.working_directory:
-                # No PR to merge -- git_commit_push couldn't create one
+                # No PR to merge -- git_expert couldn't create one
                 # (gh not installed/authenticated, no remote configured,
                 # etc; see its own "or local merge if gh unavailable"
                 # fallback instruction). The reviewed work already sits

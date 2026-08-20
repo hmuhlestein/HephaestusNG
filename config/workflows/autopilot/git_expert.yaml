@@ -1,5 +1,5 @@
 id: 13
-name: git_commit_push
+name: git_expert
 thinking_level: low
 description: |
   Autonomous Git hand-off, with the merge step gated by review_mode. The
