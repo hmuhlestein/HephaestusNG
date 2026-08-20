@@ -315,7 +315,14 @@ async def get_agent_output(agent_id: str, lines: int = 200, request: Request = N
             lines = min(lines, 30000)
 
         try:
-            output = server_state.agent_manager.get_agent_output(agent_id, lines=lines)
+            # to_thread: reads/filters the whole transcript file (or shells
+            # out to tmux capture-pane) -- documented up to ~4s for a large
+            # transcript, and this is a hot path the dashboard polls
+            # repeatedly per active agent. Same treatment as this file's
+            # sibling children/logs routes.
+            output = await asyncio.to_thread(
+                server_state.agent_manager.get_agent_output, agent_id, lines=lines
+            )
             return {"output": output or ""}
         except Exception:
             return {"output": ""}
