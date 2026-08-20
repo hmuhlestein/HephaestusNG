@@ -1,5 +1,6 @@
 """Unit tests for the Conductor system orchestration."""
 
+from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -13,6 +14,22 @@ def mock_db_manager():
     """Create mock database manager."""
     mock = Mock()
     mock.get_session = Mock()
+
+    @contextmanager
+    def _session_scope():
+        # Conductor production code uses session_scope() rather than raw
+        # get_session()/close() for writes (SOLID review 3.10) -- route
+        # through the same mocked session so tests that configure
+        # get_session.return_value keep working, and mirror
+        # DatabaseManager.session_scope()'s real commit/close semantics.
+        session = mock.get_session()
+        try:
+            yield session
+            session.commit()
+        finally:
+            session.close()
+
+    mock.session_scope = Mock(side_effect=_session_scope)
     return mock
 
 

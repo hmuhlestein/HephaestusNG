@@ -266,8 +266,7 @@ class Conductor:
             logger.info(f"Terminating duplicate agent {agent_id}: {reason}")
 
             # Log the termination
-            session = self.db_manager.get_session()
-            try:
+            with self.db_manager.session_scope() as session:
                 log_entry = AgentLog(
                     agent_id=agent_id,
                     log_type="termination",
@@ -275,9 +274,6 @@ class Conductor:
                     details=decision,
                 )
                 session.add(log_entry)
-                session.commit()
-            finally:
-                session.close()
 
             # Terminate the agent
             await self.agent_manager.terminate_agent(agent_id)
