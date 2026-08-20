@@ -123,7 +123,7 @@ or relocated, same problem) · **WORSE** (regressed since the original review) �
 | 1.15 | Manual `get_session()` vs. context manager | **PARTIAL, 2026-08-19** | 45 manual vs. 3 `with` in `server/` alone. Fixed 5 sites missing `try/finally`/`try/except/finally` around a manual session (leaked connection on any mid-transaction failure): `_create_task_steps.py`'s `_persist_new_task`, `_resolve_phase_and_enrich`, `_check_for_duplicate_task`, `_handle_task_processing_failure` (4 sites, one file), and `launch_pipeline.py`'s `create_agent_for_task` stub-Agent-row block. Zero behavior change on the success path; on failure, sessions now roll back and close instead of leaking. 56 targeted tests pass. Most other manual-session sites already correctly wrap in `try/finally` — see 1.13's survey doc for the full picture |
 | 1.16 | Circular-import workaround for project activation | **FIXED** | `src/core/app_context.py`'s `get_app_state()`; zero remaining `from src.mcp.server import server_state` outside `server/` itself |
 | 1.17 | Validation-outcome duplicated across 4 closures | **OPEN** | Same 4 closures, relocated to `_update_task_status_steps.py`/`memory_api.py` |
-| 1.18 | Three "stop a workflow" implementations | **OPEN, worse** | 4 divergent implementations now, differing on whether tasks get force-failed |
+| 1.18 | Three "stop a workflow" implementations | **PARTIAL, 2026-08-20** | Root-caused the divergence: the CLI's `heph workflow stop` hit `/api/workflows/{id}/stop` → `FrontendAPI.stop_workflow`, which force-failed every in-flight task; the dashboard's "Stop" button hits a *different* endpoint, `/api/workflow-executions/{id}/stop` → `workflow_execution_routes.stop_workflow`, which pauses the workflow and resets tasks to "pending" for retry instead — same verb, opposite (destructive vs. resumable) behavior. `FrontendAPI.stop_workflow` had exactly one real caller (the CLI; the dashboard never called it) plus its own offloading regression test, whose coverage is already independently provided for the canonical endpoint by `test_workflow_stop_cancel_tmux_offloading.py`. Fix: repointed the CLI's 2 call sites to `/api/workflow-executions/{id}/stop`, deleted `FrontendAPI.stop_workflow` and its route, deleted the now-subject-less `test_stop_workflow_offloading.py`, updated `test_frontend_api_routes_guardrail.py`'s pinned route set (40→39). Down to 3 implementations: the canonical user-facing `stop` (pause+resume) and `cancel` (force-fail) in `workflow_execution_routes.py`, plus `WorkflowTerminationHandler.terminate_workflow` — a genuinely distinct feature (automatic termination when a result is validated, not a user-initiated action) left untouched. 83 targeted tests pass |
 | 1.19 | Duplicate trusted-agent allowlists | **OPEN** | Byte-for-byte unchanged, same file (`server/_shared.py:454-463` vs. `:639-648`) |
 | 1.20 | `TicketService` lazy-singleton instead of DI | **OPEN** | Unchanged, ~15 call sites |
 | 4.10 | `auth_api.py` business logic in routes | **OPEN** | Untouched by this refactor; see §1's live-bug note above for a new defect in the same file |
@@ -346,4 +346,14 @@ correctness risk over pure style:
 4. **`TicketService`/`ConductorService`/`auth_api.py`** — three areas this refactor never
    touched at all; still carry their original-review findings unchanged or worse.
    **Done, 2026-08-19** — 3.9, 3.11, 3.12, 3.13, and 4.10 all fixed (see §2 above).
-5. Everything else in §3 above, roughly in the order listed.
+5. Everything else in §3 above, roughly in the order listed. **Done, 2026-08-20** — 3.1
+   (re-verified as a deliberate final boundary, not unfinished), 3.4 (`_monitoring_cycle`'s
+   inline DB-query blocks extracted to 2 named methods), 3.5 (12-check hardcoded chain
+   replaced with list iteration), 3.6 (`steer_agent`'s side effects split into
+   `_apply_steering`), 3.10 (`libtmux.Server` DIP half fixed via constructor injection),
+   3.14 (`QueueService`'s 4x-duplicated priority expression consolidated). Remaining open
+   items now live entirely in §1/§2/§4 — see those tables for current status, including
+   one finding the refactor had made *worse* than the original review found it: 1.18
+   (stop-workflow implementations had grown from 3 to 4, diverging on task force-failure
+   — root-caused and fixed 2026-08-20, see §1 above) — and one still open: 2.3
+   (`run_single_workflow`/`run_continuous_pipeline` god functions grew larger).
