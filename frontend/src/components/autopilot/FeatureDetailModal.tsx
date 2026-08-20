@@ -22,6 +22,16 @@ const FeatureDetailModal: React.FC<FeatureDetailModalProps> = ({ featureId, onCl
   const [selectedDoc, setSelectedDoc] = useState<string | null>(null);
   const [selectedLog, setSelectedLog] = useState<string | null>(null);
 
+  // This modal never unmounts (see the `if (!featureId) return null` guard
+  // below, after all hooks) -- switching straight from one feature to
+  // another otherwise leaves you on the previous feature's tab with a
+  // selected doc/log id that won't match the new feature's own docs/logs.
+  useEffect(() => {
+    setActiveTab('overview');
+    setSelectedDoc(null);
+    setSelectedLog(null);
+  }, [featureId]);
+
   const { data: detail, isLoading } = useQuery({
     queryKey: ['autopilot-feature', featureId],
     queryFn: () => apiService.getAutopilotFeatureDetail(featureId!),
