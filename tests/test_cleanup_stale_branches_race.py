@@ -49,14 +49,14 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
     import src.core.simple_config
 
     config = src.core.simple_config.Config()
-    config.worktree_base_path = Path(tempfile.mkdtemp())
-    config.main_repo_path = Path(temp_repo.working_dir)
-    config.base_branch = temp_repo.active_branch.name
+    config.paths.worktree_base_path = Path(tempfile.mkdtemp())
+    config.git.main_repo_path = Path(temp_repo.working_dir)
+    config.git.base_branch = temp_repo.active_branch.name
     config.worktree_branch_prefix = "test-agent-"
     config.conflict_resolution_strategy = "newest_file_wins"
     config.prefer_child_on_tie = True
     config.auto_merge_enabled = True
-    config.branch_retention_hours = {
+    config.git.branch_retention_hours = {
         "merged": 1,
         "failed": 24,
         "abandoned": 6,
@@ -68,7 +68,7 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
 
     manager = WorktreeManager(test_db)
     yield manager
-    shutil.rmtree(str(config.worktree_base_path), ignore_errors=True)
+    shutil.rmtree(str(config.paths.worktree_base_path), ignore_errors=True)
 
 
 def _add_worktree(temp_repo, base_path: Path, branch: str) -> Path:
@@ -87,7 +87,7 @@ class TestCleanupDoesNotRemoveActiveWorktree:
     ):
         import src.core.simple_config
 
-        base_path = src.core.simple_config.get_config().worktree_base_path
+        base_path = src.core.simple_config.get_config().paths.worktree_base_path
 
         # An old, genuinely-stale worktree with no tracking Workflow row.
         stale_path = _add_worktree(temp_repo, base_path, "feature_architect/old-design")
@@ -143,7 +143,7 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         workflow's DB status says."""
         import src.core.simple_config
 
-        base_path = src.core.simple_config.get_config().worktree_base_path
+        base_path = src.core.simple_config.get_config().paths.worktree_base_path
 
         dirty_path = _add_worktree(temp_repo, base_path, "feature_architect/mid-task")
         (dirty_path / "uncommitted_fix.py").write_text("# real, unsaved work\n")
@@ -178,7 +178,7 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         branch-merge-and-delete race this whole fix exists to close."""
         import src.core.simple_config
 
-        base_path = src.core.simple_config.get_config().worktree_base_path
+        base_path = src.core.simple_config.get_config().paths.worktree_base_path
         paused_path = _add_worktree(temp_repo, base_path, "feature_architect/paused-design")
 
         session = test_db.get_session()
@@ -223,7 +223,7 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         main and deleted mid-task."""
         import src.core.simple_config
 
-        base_path = src.core.simple_config.get_config().worktree_base_path
+        base_path = src.core.simple_config.get_config().paths.worktree_base_path
         working_path = _add_worktree(temp_repo, base_path, "agent-still-working")
 
         session = test_db.get_session()
@@ -278,7 +278,7 @@ class TestCleanupHandlesLegacyBranchPrefix:
     ):
         import src.core.simple_config
 
-        base_path = src.core.simple_config.get_config().worktree_base_path
+        base_path = src.core.simple_config.get_config().paths.worktree_base_path
         legacy_path = _add_worktree(
             temp_repo, base_path, "autopilot-phase0/pre-rename-design"
         )
@@ -319,7 +319,7 @@ class TestCleanupNeverTouchesMainRepo:
         if str(main_repo_path) == str(main_repo_path.resolve()):
             pytest.skip("main repo path has no symlink component on this platform")
 
-        base_path = src.core.simple_config.get_config().worktree_base_path
+        base_path = src.core.simple_config.get_config().paths.worktree_base_path
         _add_worktree(temp_repo, base_path, "feature_architect/some-design")
 
         worktree_manager.cleanup_all_stale_branches()

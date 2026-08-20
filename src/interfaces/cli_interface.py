@@ -274,7 +274,7 @@ class CLIAgentInterface(ABC):
         its own gate check, so it's passed in rather than re-derived here).
         """
         key = "cli_model_fallback" if is_primary else "secondary_cli_model_fallback"
-        return getattr(config, key, None)
+        return getattr(config.agents, key, None)
 
     def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
         """Literal pane inputs (not chat messages) to switch this CLI's
@@ -555,7 +555,7 @@ class ClaudeCodeAgent(CLIAgentInterface):
         thinking = (
             str(
                 kwargs.get("thinking_level")
-                or getattr(config, "cli_thinking_level", "medium")
+                or getattr(config.agents, "cli_thinking_level", "medium")
             )
             .lower()
             .strip()
@@ -966,7 +966,7 @@ class PiAgent(CLIAgentInterface):
         # Thinking budget
         valid_thinking = {"off", "minimal", "low", "medium", "high", "xhigh"}
         thinking = kwargs.get("thinking_level") or getattr(
-            config, "cli_thinking_level", "medium"
+            config.agents, "cli_thinking_level", "medium"
         )
         thinking = str(thinking).lower().strip()
         thinking_flag = f" --thinking {thinking}" if thinking in valid_thinking else ""

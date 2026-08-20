@@ -47,8 +47,8 @@ def make_monitoring_loop(mock_db, mock_agent_manager, mock_llm):
 
     with patch("src.monitoring.monitor.get_config") as mock_cfg:
         mock_cfg.return_value = Mock(
-            stuck_detection_minutes=10,
-            agent_timeout_minutes=60,
+            monitoring=Mock(stuck_detection_minutes=10),
+            agents=Mock(agent_timeout_minutes=60),
         )
         ml = MonitoringLoop(
             db_manager=mock_db,
@@ -1143,7 +1143,7 @@ class TestDetectBadModelError:
         Claude Code's own /model."""
         agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
-        make_monitoring_loop.config.secondary_cli_model_fallback = "opus"
+        make_monitoring_loop.config.agents.secondary_cli_model_fallback = "opus"
 
         result = await make_monitoring_loop._detect_bad_model_error(agent)
 
@@ -1156,7 +1156,7 @@ class TestDetectBadModelError:
     ):
         agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
-        make_monitoring_loop.config.secondary_cli_model_fallback = None
+        make_monitoring_loop.config.agents.secondary_cli_model_fallback = None
 
         result = await make_monitoring_loop._detect_bad_model_error(agent)
 
@@ -1172,7 +1172,7 @@ class TestDetectBadModelError:
         reloading with the new model would just be noise."""
         agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
-        make_monitoring_loop.config.secondary_cli_model_fallback = "opus"
+        make_monitoring_loop.config.agents.secondary_cli_model_fallback = "opus"
 
         await make_monitoring_loop._detect_bad_model_error(agent)
         await make_monitoring_loop._detect_bad_model_error(agent)
@@ -1193,10 +1193,10 @@ class TestDetectCliModelFallback:
 
     def _frozen_agent(self, make_monitoring_loop, frozen_for_seconds, cli_type="pi", cli_model="Qwen3.8-27B-UD-Q4_K_XL.gguf"):
         agent = Agent(id="a1", cli_type=cli_type, cli_model=cli_model, current_task_id="t1")
-        make_monitoring_loop.config.default_cli_tool = "pi"
-        make_monitoring_loop.config.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
-        make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
-        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.agents.default_cli_tool = "pi"
+        make_monitoring_loop.config.agents.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.agents.cli_model_fallback = "mimo-v2.5-pro"
+        make_monitoring_loop.config.agents.cli_model_fallback_wait_seconds = 120
         make_monitoring_loop._stuck_state = {
             "a1": {"sig": "same output", "since": time.time() - frozen_for_seconds, "recov": 0}
         }
@@ -1209,7 +1209,7 @@ class TestDetectCliModelFallback:
         and None) -- must be a no-op regardless of how long it's been
         frozen, for any CLI that hasn't opted in."""
         agent = self._frozen_agent(make_monitoring_loop, 200, cli_type="opencode", cli_model="anthropic/claude-sonnet-4")
-        make_monitoring_loop.config.cli_model = "anthropic/claude-sonnet-4"
+        make_monitoring_loop.config.agents.cli_model = "anthropic/claude-sonnet-4"
 
         result = await make_monitoring_loop._detect_cli_model_fallback(agent)
 
@@ -1227,10 +1227,10 @@ class TestDetectCliModelFallback:
         meaningless to Claude Code's /model), and not blocked by a gate
         that only recognizes pi's global default model."""
         agent = Agent(id="a1", cli_type="claude", cli_model="sonnet", current_task_id="t1")
-        make_monitoring_loop.config.default_cli_tool = "pi"
-        make_monitoring_loop.config.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
-        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
-        make_monitoring_loop.config.secondary_cli_model_fallback = "opus"
+        make_monitoring_loop.config.agents.default_cli_tool = "pi"
+        make_monitoring_loop.config.agents.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.agents.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.agents.secondary_cli_model_fallback = "opus"
         make_monitoring_loop._stuck_state = {
             "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
         }
@@ -1254,10 +1254,10 @@ class TestDetectCliModelFallback:
         secondary_cli_model_fallback, the mirror image of the default
         pi-primary test above."""
         agent = Agent(id="a1", cli_type="claude", cli_model="local-claude-model", current_task_id="t1")
-        make_monitoring_loop.config.default_cli_tool = "claude"
-        make_monitoring_loop.config.cli_model = "local-claude-model"
-        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
-        make_monitoring_loop.config.cli_model_fallback = "opus"
+        make_monitoring_loop.config.agents.default_cli_tool = "claude"
+        make_monitoring_loop.config.agents.cli_model = "local-claude-model"
+        make_monitoring_loop.config.agents.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.agents.cli_model_fallback = "opus"
         make_monitoring_loop._stuck_state = {
             "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
         }
@@ -1279,10 +1279,10 @@ class TestDetectCliModelFallback:
         in-memory one-shot set would otherwise have prevented a repeat, and
         that doesn't survive a restart."""
         agent = Agent(id="a1", cli_type="claude", cli_model="sonnet", current_task_id="t1")
-        make_monitoring_loop.config.default_cli_tool = "pi"
-        make_monitoring_loop.config.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
-        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
-        make_monitoring_loop.config.secondary_cli_model_fallback = "sonnet"
+        make_monitoring_loop.config.agents.default_cli_tool = "pi"
+        make_monitoring_loop.config.agents.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.agents.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.agents.secondary_cli_model_fallback = "sonnet"
         make_monitoring_loop._stuck_state = {
             "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
         }
@@ -1302,10 +1302,10 @@ class TestDetectCliModelFallback:
         default_model, not config.cli_model (which is Claude's local model
         here, meaningless to pi)."""
         agent = Agent(id="a1", cli_type="pi", cli_model="Qwen3.8-27B-UD-Q4_K_XL.gguf", current_task_id="t1")
-        make_monitoring_loop.config.default_cli_tool = "claude"
-        make_monitoring_loop.config.cli_model = "local-claude-model"
-        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
-        make_monitoring_loop.config.secondary_cli_model_fallback = "mimo-v2.5-pro"
+        make_monitoring_loop.config.agents.default_cli_tool = "claude"
+        make_monitoring_loop.config.agents.cli_model = "local-claude-model"
+        make_monitoring_loop.config.agents.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.agents.secondary_cli_model_fallback = "mimo-v2.5-pro"
         make_monitoring_loop._stuck_state = {
             "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
         }
@@ -1331,10 +1331,10 @@ class TestDetectCliModelFallback:
         pi's standard local default, so the baseline-default gate must
         exclude it rather than attempt a further in-session switch on it."""
         agent = Agent(id="a1", cli_type="pi", cli_model="openrouter/mimo-v2.5-pro", current_task_id="t1")
-        make_monitoring_loop.config.default_cli_tool = "pi"
-        make_monitoring_loop.config.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
-        make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
-        make_monitoring_loop.config.cli_model_fallback_wait_seconds = 120
+        make_monitoring_loop.config.agents.default_cli_tool = "pi"
+        make_monitoring_loop.config.agents.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.agents.cli_model_fallback = "mimo-v2.5-pro"
+        make_monitoring_loop.config.agents.cli_model_fallback_wait_seconds = 120
         make_monitoring_loop._stuck_state = {
             "a1": {"sig": "same output", "since": time.time() - 200, "recov": 0}
         }
@@ -1374,7 +1374,7 @@ class TestDetectCliModelFallback:
     @pytest.mark.asyncio
     async def test_no_fallback_configured_disables_feature(self, make_monitoring_loop, mock_agent_manager):
         agent = self._frozen_agent(make_monitoring_loop, 200)
-        make_monitoring_loop.config.cli_model_fallback = None
+        make_monitoring_loop.config.agents.cli_model_fallback = None
 
         result = await make_monitoring_loop._detect_cli_model_fallback(agent)
 
@@ -1398,8 +1398,8 @@ class TestDetectCliModelFallback:
         """No _stuck_state entry at all -- _mechanical_recovery_for_agent
         hasn't observed a repeated signature for this agent yet."""
         agent = Agent(id="a1", cli_type="pi", cli_model="Qwen3.8-27B-UD-Q4_K_XL.gguf", current_task_id="t1")
-        make_monitoring_loop.config.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
-        make_monitoring_loop.config.cli_model_fallback = "mimo-v2.5-pro"
+        make_monitoring_loop.config.agents.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
+        make_monitoring_loop.config.agents.cli_model_fallback = "mimo-v2.5-pro"
         make_monitoring_loop._stuck_state = {}
 
         result = await make_monitoring_loop._detect_cli_model_fallback(agent)
@@ -1668,7 +1668,7 @@ class TestVerifyCliModelFallback:
     async def test_unconfirmed_within_grace_period_stays_pending_no_warning(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
-        make_monitoring_loop.config.monitoring_interval_seconds = 60
+        make_monitoring_loop.config.monitoring.monitoring_interval_seconds = 60
         agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = "still on the old model"
         make_monitoring_loop._pending_fallback_verification = {
@@ -1693,7 +1693,7 @@ class TestVerifyCliModelFallback:
             yield session
 
         mock_db.session_scope = mock_session_scope
-        make_monitoring_loop.config.monitoring_interval_seconds = 60
+        make_monitoring_loop.config.monitoring.monitoring_interval_seconds = 60
         agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = "still on the old model"
         make_monitoring_loop._pending_fallback_verification = {
@@ -1727,7 +1727,7 @@ class TestVerifyCliModelFallback:
             yield session
 
         mock_db.session_scope = mock_session_scope
-        make_monitoring_loop.config.monitoring_interval_seconds = 60
+        make_monitoring_loop.config.monitoring.monitoring_interval_seconds = 60
         agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = "still on the old model"
         make_monitoring_loop._switched_to_fallback_model = {"a1"}
@@ -1768,7 +1768,7 @@ class TestVerifyCliModelFallback:
             yield session
 
         mock_db.session_scope = mock_session_scope
-        make_monitoring_loop.config.monitoring_interval_seconds = 60
+        make_monitoring_loop.config.monitoring.monitoring_interval_seconds = 60
         agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = "still on the old model"
         make_monitoring_loop._switched_to_fallback_model = {"a1"}
@@ -2384,7 +2384,7 @@ class TestSessionLimitPause:
         # different model and use it -- silently defeating "no fallback"
         # unless explicitly nulled out.
         with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
-            mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
+            mock_cfg.return_value = Mock(agents=Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None))
 
             # Unlike the frozen/stuck detection elsewhere in this function,
             # the spend/session-limit check fires immediately on the first
@@ -2481,9 +2481,11 @@ class TestSessionLimitPause:
 
         with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
             mock_cfg.return_value = Mock(
-                default_fallback_cli_tool="pi",
-                default_fallback_cli_model="openrouter/xiaomi/mimo-v2.5-pro",
-                secondary_cli_model_fallback="sonnet",
+                agents=Mock(
+                    default_fallback_cli_tool="pi",
+                    default_fallback_cli_model="openrouter/xiaomi/mimo-v2.5-pro",
+                    secondary_cli_model_fallback="sonnet",
+                ),
             )
             await make_monitoring_loop._mechanical_recovery_for_agent(agent)
             await make_monitoring_loop._mechanical_recovery_for_agent(agent)
@@ -2585,7 +2587,7 @@ class TestSessionLimitPause:
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
         with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
-            mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
+            mock_cfg.return_value = Mock(agents=Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None))
             await make_monitoring_loop._mechanical_recovery_for_agent(agent)
             await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
@@ -2727,7 +2729,7 @@ class TestDetectConnectionErrors:
         mock_db.session_scope = mock_session_scope
 
         with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
-            mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
+            mock_cfg.return_value = Mock(agents=Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None))
             result = await make_monitoring_loop._detect_connection_errors(agent)
 
         assert result is True
@@ -2749,7 +2751,7 @@ class TestDetectConnectionErrors:
         mock_db.session_scope = mock_session_scope
 
         with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
-            mock_cfg.return_value = Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None)
+            mock_cfg.return_value = Mock(agents=Mock(default_fallback_cli_tool=None, secondary_cli_model_fallback=None))
             result = await make_monitoring_loop._detect_connection_errors(agent)
 
         assert result is True
@@ -3036,7 +3038,10 @@ class TestStuckTaskNudgeCap:
         from src.monitoring.monitor import MonitoringLoop
 
         with patch("src.monitoring.monitor.get_config") as mock_cfg:
-            mock_cfg.return_value = Mock(stuck_detection_minutes=10, agent_timeout_minutes=60)
+            mock_cfg.return_value = Mock(
+                monitoring=Mock(stuck_detection_minutes=10),
+                agents=Mock(agent_timeout_minutes=60),
+            )
             m = MonitoringLoop(
                 db_manager=real_db,
                 agent_manager=mock_agent_manager,
@@ -3193,7 +3198,10 @@ class TestStuckTaskPromotionClearsStaleFailureReason:
         from src.monitoring.monitor import MonitoringLoop
 
         with patch("src.monitoring.monitor.get_config") as mock_cfg:
-            mock_cfg.return_value = Mock(stuck_detection_minutes=10, agent_timeout_minutes=60)
+            mock_cfg.return_value = Mock(
+                monitoring=Mock(stuck_detection_minutes=10),
+                agents=Mock(agent_timeout_minutes=60),
+            )
             m = MonitoringLoop(
                 db_manager=real_db,
                 agent_manager=mock_agent_manager,

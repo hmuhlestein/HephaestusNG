@@ -65,10 +65,10 @@ class GuardianDispatcher:
         try:
             # Skip agents that are too young (grace period for spin-up)
             agent_age_seconds = (datetime.utcnow() - agent.created_at).total_seconds()
-            if agent_age_seconds < self.config.guardian_min_agent_age_seconds:
+            if agent_age_seconds < self.config.monitoring.guardian_min_agent_age_seconds:
                 logger.debug(
                     f"Skipping Guardian analysis for agent {agent.id} "
-                    f"(age: {agent_age_seconds:.0f}s, min: {self.config.guardian_min_agent_age_seconds}s)"
+                    f"(age: {agent_age_seconds:.0f}s, min: {self.config.monitoring.guardian_min_agent_age_seconds}s)"
                 )
                 return None
 
@@ -112,7 +112,7 @@ class GuardianDispatcher:
             # Get agent output
             tmux_output = self.agent_manager.get_agent_output(
                 agent.id,
-                lines=self.config.tmux_output_lines,
+                lines=self.config.agents.tmux_output_lines,
             )
 
             if not tmux_output:
@@ -258,7 +258,7 @@ class GuardianDispatcher:
                 )
 
                 # Auto-restart if agent keeps ignoring steering
-                if consecutive_stuck >= self.config.max_ignored_steering:
+                if consecutive_stuck >= self.config.monitoring.max_ignored_steering:
                     # Check if agent has recent activity before restarting
                     if agent.last_activity:
                         idle_seconds = (

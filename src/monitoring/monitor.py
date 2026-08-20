@@ -244,7 +244,7 @@ class MonitoringLoop:
                 logger.error(f"Error in monitoring cycle: {e}", exc_info=True)
 
             # Wait for next cycle
-            await asyncio.sleep(self.config.monitoring_interval_seconds)
+            await asyncio.sleep(self.config.monitoring.monitoring_interval_seconds)
 
     async def stop(self):
         """Stop the monitoring loop."""

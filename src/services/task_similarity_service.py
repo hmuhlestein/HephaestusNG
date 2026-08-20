@@ -28,8 +28,8 @@ class TaskSimilarityService:
         self.config = get_config()
         logger.info(
             f"Initialized TaskSimilarityService with thresholds: "
-            f"duplicate={self.config.task_similarity_threshold}, "
-            f"related={self.config.task_related_threshold}"
+            f"duplicate={self.config.task_dedup.task_similarity_threshold}, "
+            f"related={self.config.task_dedup.task_related_threshold}"
         )
 
     async def check_for_duplicates(
@@ -135,13 +135,13 @@ class TaskSimilarityService:
                 for task, similarity in zip(valid_tasks, similarities):
                     if similarity > max_similarity:
                         max_similarity = similarity
-                        if similarity > self.config.task_similarity_threshold:
+                        if similarity > self.config.task_dedup.task_similarity_threshold:
                             duplicate_task = task
 
                     # Check for related tasks (not duplicates)
                     if (
-                        similarity > self.config.task_related_threshold
-                        and similarity <= self.config.task_similarity_threshold
+                        similarity > self.config.task_dedup.task_related_threshold
+                        and similarity <= self.config.task_dedup.task_similarity_threshold
                     ):
                         related_tasks.append(
                             {
@@ -181,7 +181,7 @@ class TaskSimilarityService:
                         f"Found duplicate task: {result['duplicate_of']} "
                         f"with similarity {max_similarity:.3f} in phase {phase_id}"
                     )
-                elif max_similarity > self.config.task_similarity_threshold:
+                elif max_similarity > self.config.task_dedup.task_similarity_threshold:
                     logger.info(
                         f"High similarity ({max_similarity:.3f}) found but not in same phase "
                         f"(current phase: {phase_id})"

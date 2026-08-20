@@ -50,8 +50,8 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
     import src.core.simple_config
 
     config = src.core.simple_config.Config()
-    config.worktree_base_path = Path(tempfile.mkdtemp())
-    config.main_repo_path = Path(temp_repo.working_dir)
+    config.paths.worktree_base_path = Path(tempfile.mkdtemp())
+    config.git.main_repo_path = Path(temp_repo.working_dir)
     config.worktree_branch_prefix = "test-agent-"
     config.conflict_resolution_strategy = "newest_file_wins"
     config.prefer_child_on_tie = True
@@ -64,7 +64,7 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
     yield manager
 
     # Cleanup worktrees
-    shutil.rmtree(config.worktree_base_path, ignore_errors=True)
+    shutil.rmtree(config.paths.worktree_base_path, ignore_errors=True)
 
 
 def test_create_agent_worktree(worktree_manager, test_db):
@@ -312,9 +312,9 @@ class TestReloadInstanceIsolation:
         import src.core.simple_config as simple_config
 
         config = simple_config.get_config()
-        original_main_repo_path = config.main_repo_path
-        original_worktree_base_path = config.worktree_base_path
-        config.worktree_base_path = None  # exercise the _project_root fallback
+        original_main_repo_path = config.git.main_repo_path
+        original_worktree_base_path = config.paths.worktree_base_path
+        config.paths.worktree_base_path = None  # exercise the _project_root fallback
         try:
             other_repo_dir = tmp_path / "other-repo"
             self._make_repo(other_repo_dir)
@@ -322,9 +322,9 @@ class TestReloadInstanceIsolation:
             worktree_manager.reload(other_repo_dir)
 
             assert worktree_manager.worktree_base == other_repo_dir / ".worktrees"
-            assert config.main_repo_path == original_main_repo_path
+            assert config.git.main_repo_path == original_main_repo_path
         finally:
-            config.worktree_base_path = original_worktree_base_path
+            config.paths.worktree_base_path = original_worktree_base_path
 
     def test_two_instances_scoped_to_different_projects_dont_interfere(
         self, test_db, tmp_path, monkeypatch
@@ -332,9 +332,9 @@ class TestReloadInstanceIsolation:
         import src.core.simple_config as simple_config
 
         config = simple_config.Config()
-        config.worktree_base_path = None
-        config.main_repo_path = tmp_path / "default"
-        self._make_repo(config.main_repo_path)
+        config.paths.worktree_base_path = None
+        config.git.main_repo_path = tmp_path / "default"
+        self._make_repo(config.git.main_repo_path)
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
         monkeypatch.setattr("src.core.worktree_manager.get_config", lambda: config)
 

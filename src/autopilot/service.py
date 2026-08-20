@@ -550,7 +550,7 @@ def get_registry() -> AutopilotServiceRegistry:
             if _registry is None:
                 from src.core.simple_config import get_config
 
-                _registry = AutopilotServiceRegistry(get_config().max_concurrent_projects)
+                _registry = AutopilotServiceRegistry(get_config().autopilot.max_concurrent_projects)
     return _registry
 
 

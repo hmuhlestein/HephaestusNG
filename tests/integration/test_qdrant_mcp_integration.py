@@ -16,7 +16,7 @@ def _qdrant_available():
     try:
         import httpx
         config = get_config()
-        resp = httpx.get(f"{config.qdrant_url}/healthz", timeout=2)
+        resp = httpx.get(f"{config.vector_store.qdrant_url}/healthz", timeout=2)
         return resp.status_code == 200
     except Exception:
         return False
@@ -42,7 +42,7 @@ def vector_store():
     """Create vector store manager."""
     config = get_config()
     return VectorStoreManager(
-        qdrant_url=config.qdrant_url, collection_prefix="test_qdrant_mcp"
+        qdrant_url=config.vector_store.qdrant_url, collection_prefix="test_qdrant_mcp"
     )
 
 

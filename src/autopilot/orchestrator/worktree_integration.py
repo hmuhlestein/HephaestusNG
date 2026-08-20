@@ -81,7 +81,7 @@ def _create_integration_worktree(
         from src.core.worktree_manager import WorktreeManager
 
         cfg = get_config()
-        db = DbManager(str(cfg.database_path))
+        db = DbManager(str(cfg.paths.database_path))
         try:
             wt_mgr = WorktreeManager(db_manager=db)
             wt_mgr.reload(project_path)
@@ -146,7 +146,7 @@ def _cleanup_worktree(
         from src.core.worktree_manager import WorktreeManager
 
         cfg = get_config()
-        db = DbManager(str(cfg.database_path))
+        db = DbManager(str(cfg.paths.database_path))
         try:
             wt_mgr = WorktreeManager(db_manager=db)
             wt_mgr.reload(project_path)
@@ -259,7 +259,7 @@ def sweep_completed_workflow_worktrees(logger: "OrchestratorLogger") -> int:
     from src.core.simple_config import get_config
 
     cfg = get_config()
-    db = DbManager(str(cfg.database_path))
+    db = DbManager(str(cfg.paths.database_path))
     removed = 0
     try:
         with db.session_scope() as session:
@@ -383,7 +383,7 @@ def heal_orphaned_agent_branches(logger: "OrchestratorLogger") -> int:
     from src.core.database import DatabaseManager as DbManager
 
     cfg = get_config()
-    db = DbManager(str(cfg.database_path))
+    db = DbManager(str(cfg.paths.database_path))
     healed = 0
     try:
         with db.session_scope() as session:
@@ -409,8 +409,8 @@ def _heal_orphaned_branches_for_project(project_dir: Path, cfg, logger: "Orchest
     except Exception:
         return 0
 
-    base_branch = cfg.base_branch
-    prefix = cfg.branch_prefix
+    base_branch = cfg.git.base_branch
+    prefix = cfg.git.branch_prefix
     if base_branch not in repo.heads:
         return 0
     base_sha = repo.heads[base_branch].commit.hexsha

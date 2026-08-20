@@ -45,8 +45,8 @@ def config(main_repo, test_db):
     import src.core.simple_config
 
     cfg = src.core.simple_config.Config()
-    cfg.database_path = test_db.engine.url.database
-    cfg.main_repo_path = Path(main_repo.working_dir)
+    cfg.paths.database_path = test_db.engine.url.database
+    cfg.git.main_repo_path = Path(main_repo.working_dir)
     return cfg
 
 

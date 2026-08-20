@@ -426,7 +426,7 @@ def _apply_enrichment_to_task(
 async def _check_for_duplicate_task(task_id: str, phase_id: Optional[str], enriched_task: dict) -> bool:
     """Embedding-based dedup (only if enabled and services are available).
     Returns True if the task was marked duplicated (caller should stop)."""
-    if not (server_state.embedding_service and server_state.task_similarity_service and get_config().task_dedup_enabled):
+    if not (server_state.embedding_service and server_state.task_similarity_service and get_config().task_dedup.task_dedup_enabled):
         return False
 
     try:

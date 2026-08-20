@@ -151,7 +151,7 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
         if proj and proj.base_dir:
             project_base_dir = proj.base_dir
 
-    feature_dir = _Path(project_base_dir or config.project_root) / CONTEXT_DIR_NAME / "features"
+    feature_dir = _Path(project_base_dir or config.paths.project_root) / CONTEXT_DIR_NAME / "features"
     missing = []
     invalid_frontmatter = []
     for declared_output in required_files:

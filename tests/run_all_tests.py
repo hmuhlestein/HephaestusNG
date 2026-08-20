@@ -69,13 +69,13 @@ async def check_prerequisites():
 
     config = Config()
 
-    if not config.openai_api_key or config.openai_api_key.startswith("sk-"):
+    if not config.llm.openai_api_key or config.llm.openai_api_key.startswith("sk-"):
         print("   ✅ OpenAI API key is configured")
     else:
         issues.append("OpenAI API key is not configured in .env file")
 
-    print(f"   ℹ️  LLM Model: {config.llm_model}")
-    print(f"   ℹ️  Embedding Model: {config.embedding_model}")
+    print(f"   ℹ️  LLM Model: {config.llm.llm_model}")
+    print(f"   ℹ️  Embedding Model: {config.llm.embedding_model}")
 
     if issues:
         print("\n❌ Prerequisites check failed:")
@@ -201,9 +201,9 @@ def run_quick_test():
         print("   ✅ Vector store initialized")
 
         OpenAIProvider(
-            api_key=config.openai_api_key,
-            model=config.llm_model,
-            embedding_model=config.embedding_model,
+            api_key=config.llm.openai_api_key,
+            model=config.llm.llm_model,
+            embedding_model=config.llm.embedding_model,
         )
         print("   ✅ LLM provider initialized")
 

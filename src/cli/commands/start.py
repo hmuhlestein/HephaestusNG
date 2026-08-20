@@ -580,7 +580,7 @@ def _start_frontend() -> bool:
     if not (frontend_dir / "package.json").exists():
         return False
     config = _get_config()
-    frontend_port = config.frontend_port
+    frontend_port = config.server.frontend_port
     _kill_port(frontend_port)
     log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -588,7 +588,7 @@ def _start_frontend() -> bool:
     try:
         env = os.environ.copy()
         env["FRONTEND_PORT"] = str(frontend_port)
-        env["BACKEND_PORT"] = str(config.mcp_port)
+        env["BACKEND_PORT"] = str(config.server.mcp_port)
         proc = subprocess.Popen(
             ["npm", "run", "dev"],
             cwd=str(frontend_dir),
@@ -624,7 +624,7 @@ def _print_results(results, port):
         print(f"  {service:12s} {icon:4s} {status}")
     print()
     config = _get_config()
-    print(f"  Frontend:  http://localhost:{config.frontend_port}")
+    print(f"  Frontend:  http://localhost:{config.server.frontend_port}")
     print(f"  Backend:   http://127.0.0.1:{port}")
     print(f"  Health:    http://127.0.0.1:{port}/health")
 
