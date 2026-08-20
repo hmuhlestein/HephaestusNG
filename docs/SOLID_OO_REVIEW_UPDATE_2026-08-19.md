@@ -184,6 +184,51 @@ or relocated, same problem) · **WORSE** (regressed since the original review) �
 
 ## 3. New findings, by area
 
+### Tooling — mypy was silently disabled repo-wide (found and fixed 2026-08-20)
+
+`src/autopilot/spec.py` contained a prose comment beginning `# type: matches
+validate_gate_result_schema's ...`. mypy parses `# type: ...` as a legacy PEP 484
+annotation, fails on the prose, and reports `Invalid syntax` — an error it treats as
+fatal (`errors prevented further checking`). `mypy src/`, one of the lint commands
+CLAUDE.md documents, was therefore checking **nothing at all**, for as long as that
+comment existed. Rewording it (`c38f143`) restored the gate; a note on the comment
+records the trap, since the failure mode names neither the file's real problem nor
+prose as the cause.
+
+Two live bugs surfaced within minutes of the gate coming back, both of the
+"silently swallowed, so nobody noticed" shape this review keeps finding:
+
+- **`OrchestratorLogger.debug()` never existed** (`16ea4d1`). Three call sites already
+  used it; the class defines only `log/info/warning/error/event/save_state`, has no
+  `__getattr__`, and inherits from `object`, so each raised `AttributeError`. The worst
+  sat in `run_single_workflow`'s handler for a failed `pipeline_metrics.json` patch —
+  the `AttributeError` escaped into the enclosing `except Exception`, which logs
+  "Failed to launch workflow" and returns `FAILED`, so an unreadable metrics file
+  killed the whole launch and misreported why. `_pause_feature_for_review`'s site
+  likewise skipped the `return` immediately following it.
+- **`orchestrator.max_task_retries` was inert** (`1e9d95a`). All four retry paths read it
+  via `spec.load_workflow_definition(...)`, which has never existed; every call site
+  wrapped the import in `except Exception: max_retry = 5`, so the `ImportError` was
+  swallowed and the hardcoded default always won. `AUTOPILOT_REFACTOR_ANALYSIS.md`
+  documents both paths as reading this setting — the code did not. It looked functional
+  only because the shipped config specifies exactly 5, the same as the fallback; editing
+  `workflow.yaml` did nothing. Same shape as the inert worktree conflict-resolution
+  config already recorded in §1. Replaced with a real `spec.get_max_task_retries()`
+  modelled on its neighbour `get_max_review_runs()`.
+
+**Baseline for whoever picks this up: 901 errors across 106 of 197 source files.** That
+is a backlog, not a to-do list, and it should not be attacked wholesale. The
+high-signal category is `[attr-defined]` (67) — the same class as both bugs above and
+as the `worktree.branch_path` defect found by hand in §2.14 — and it is worth mining
+first. `[union-attr]` (126) is dominated by `DatabaseManager | None` access, which is a
+real nullability question rather than noise. `[arg-type]` (265) and `[assignment]` (145)
+are mostly annotation debt. Several remaining `[attr-defined]` hits look like genuine
+bugs and are deliberately left unclaimed here: `devtools.py`'s `ConsoleEntry`
+attributes, `vector_store.py`'s `QdrantClient.search` (removed in newer
+qdrant-client), and `llm_interface.py`'s `"None" has no attribute "model_dump"`.
+`PipelineState._recovery_attempts`/`_design_branch`/`_design_worktree` are the dynamic
+undeclared attributes §2.3 already records, now confirmed by the type checker.
+
 ### MCP/API layer
 
 **`project_routes.py` (2098 lines) is a new god-file bundling 4 unrelated domains.**
