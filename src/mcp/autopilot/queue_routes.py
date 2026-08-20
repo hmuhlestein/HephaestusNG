@@ -17,11 +17,10 @@ from src.core.constants import (
     DESIGN_CONTEXT_SUBDIR,
     DESIGN_WORKFLOW_DEFINITION_IDS,
 )
+from src.mcp.autopilot._shared import ALLOWED_EXTENSIONS, DesignQueueAdd, DesignQueueItem, _cached, _get_effective_queue_dir, _invalidate, _safe_path, _store
 
 # Import authentication function from server module
 from src.prompts.loader import get_prompt
-
-from src.mcp.autopilot._shared import ALLOWED_EXTENSIONS, DesignQueueAdd, DesignQueueItem, _cached, _get_effective_queue_dir, _invalidate, _safe_path, _store
 
 logger = logging.getLogger(__name__)
 
@@ -553,10 +552,16 @@ async def rerun_design(request: dict):
 
     # Step 3: Clean up branches (non-blocking)
     try:
-        from src.core.database import DatabaseManager
+        from src.core.app_context import get_app_state
         from src.core.worktree_manager import WorktreeManager
 
-        db_manager = DatabaseManager(None)
+        # A fresh WorktreeManager instance is deliberate here (not the
+        # shared server_state.branch_manager) -- .reload(project) below
+        # points it at an arbitrary project, and reload()ing the shared
+        # long-lived instance would race with any other concurrent request
+        # relying on it pointing at a different project. Only db_manager
+        # itself should be the shared instance (see SOLID review 1.12).
+        db_manager = get_app_state().db_manager
         bm = WorktreeManager(db_manager)
         # Without this, WorktreeManager operates on whatever project happens
         # to be config.main_repo_path's current global default -- wrong
