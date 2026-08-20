@@ -28,8 +28,16 @@ class AutoRestart:
         self.agent_manager = agent_manager
         self.guardian = guardian
 
-    async def restart_agent(self, agent: Agent) -> None:
-        """Kill a stuck agent's tmux session and mark it for restart.
+    async def requeue_and_terminate(self, agent: Agent) -> None:
+        """Kill a stuck agent's tmux session, terminate it, and requeue its
+        task for a DIFFERENT agent to pick up later.
+
+        Renamed from restart_agent (SOLID review, agents/monitoring "new
+        findings"): AgentManager.restart_agent (src/agents/manager.py) is an
+        unrelated method that does something incompatible -- it kills the
+        tmux session and relaunches IN PLACE, reusing the same agent
+        row/worktree. guardian_dispatch.py calls both, for genuinely
+        different scenarios; the identical name made that easy to misread.
 
         Resets the agent's current task back to "pending" (cleared
         assigned_agent_id) BEFORE killing the session and marking the
