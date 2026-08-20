@@ -45,7 +45,15 @@ from src.autopilot.orchestrator.state import _delete_project_context
 from src.autopilot.orchestrator.reporting import _empty_report
 from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
 from src.autopilot.orchestrator.reporting import _generate_design_report_html
+from src.autopilot.orchestrator.config import (
+    _get_paused_workflow_max_retry_cycles as _get_paused_workflow_max_retry_cycles,
+)
+from src.autopilot.orchestrator.config import (
+    _get_paused_workflow_retry_cooldown_seconds as _get_paused_workflow_retry_cooldown_seconds,
+)
 from src.autopilot.orchestrator.queue import _get_phase0_completion
+from src.autopilot.orchestrator.config import _get_phase0_timeout
+from src.autopilot.orchestrator.config import _get_workflow_timeout
 from src.autopilot.orchestrator.queue import _has_resumable_active_design
 from src.autopilot.orchestrator.phase_transitions import _negotiate_validation_fix
 from src.autopilot.orchestrator.features import _relink_features_to_workflows
@@ -76,6 +84,7 @@ import os
 from src.autopilot.orchestrator.engine_client import pause_workflow_direct
 from src.autopilot.orchestrator.engine_client import peek_agent_output
 from src.autopilot.orchestrator.queue import pick_next_design
+from src.autopilot.orchestrator.human_escalation import prompt_human
 from src.autopilot.orchestrator.engine_client import terminate_agent, terminate_agent_direct
 import threading
 import time
@@ -89,46 +98,6 @@ import time
 logger = logging.getLogger(__name__)
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent  # one .parent deeper: now a package __init__
-
-
-def _get_workflow_timeout() -> int:
-    """Get workflow timeout from config, with fallback to default."""
-    try:
-        from src.core.simple_config import get_config
-
-        return get_config().workflow_timeout_seconds
-    except Exception:
-        return 7200  # 2 hours default
-
-
-def _get_phase0_timeout() -> int:
-    """Get Phase 0 timeout from config, with fallback to default."""
-    try:
-        from src.core.simple_config import get_config
-
-        return get_config().phase0_timeout_seconds
-    except Exception:
-        return 3600  # 1 hour default
-
-
-def _get_paused_workflow_retry_cooldown_seconds() -> int:
-    """Get the exhausted-retry-pause cooldown from config, with fallback to default."""
-    try:
-        from src.core.simple_config import get_config
-
-        return get_config().paused_workflow_retry_cooldown_seconds
-    except Exception:
-        return 300  # 5 min default
-
-
-def _get_paused_workflow_max_retry_cycles() -> int:
-    """Get the exhausted-retry-pause retry cycle cap from config, with fallback to default."""
-    try:
-        from src.core.simple_config import get_config
-
-        return get_config().paused_workflow_max_retry_cycles
-    except Exception:
-        return 10  # default
 
 
 STUCK_THRESHOLD = 3
@@ -328,161 +297,6 @@ class OrchestratorLogger:
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) -> str:
-    """Prompt for human input. Auto-continues after timeout seconds."""
-    import sys
-    import uuid
-
-    logger.warning(f"DECISION POINT: {reason}")
-
-    input_dir = Path(AUTOPILOT_STATE_DIR)
-    input_dir.mkdir(parents=True, exist_ok=True)
-
-    request_id = str(uuid.uuid4())[:8]
-    request_file = input_dir / f"input_request_{request_id}.json"
-    response_file = input_dir / f"input_response_{request_id}.json"
-
-    # Atomic write via temp+rename
-    payload = json.dumps(
-        {
-            "id": request_id,
-            "reason": reason,
-            # utcnow: intervention_routes._find_first_non_stale_input_request
-            # parses this back, sees tzinfo is None, and ASSUMES UTC
-            # (ts.replace(tzinfo=timezone.utc)) before comparing against
-            # datetime.now(timezone.utc). A local-time stamp here is
-            # therefore misread by the host's UTC offset: west of UTC the
-            # request looks hours older than it is and is deleted as stale
-            # (threshold 1h) before the human ever sees the prompt; east of
-            # UTC the age goes negative and it is never cleaned up.
-            "timestamp": datetime.utcnow().isoformat(),
-            "options": ["c", "s", "q"],
-            "labels": {"c": "Continue", "s": "Skip design", "q": "Quit pipeline"},
-            "timeout_seconds": timeout,
-        },
-        indent=2,
-    )
-    tmp = request_file.with_suffix(".tmp")
-    tmp.write_text(payload)
-    os.rename(tmp, request_file)
-
-    logger.event("human_input_required", {"reason": reason, "request_id": request_id})
-
-    start = time.time()
-    while time.time() - start < timeout:
-        # Check if request file was dismissed (deleted by API)
-        if not request_file.exists():
-            logger.warning("Input request was dismissed (auto-continuing)")
-            response_file.unlink(missing_ok=True)
-            return "c"  # Auto-continue when dismissed
-
-        # Check file response
-        if response_file.exists():
-            try:
-                data = json.loads(response_file.read_text())
-                choice = data.get("choice", "").strip().lower()
-                message = data.get("message", "")
-
-                if choice == "m" and message:
-                    # Log the message and continue waiting for actual decision
-                    logger.info(f"Human message: {message}")
-                    logger.event(
-                        "human_input",
-                        {
-                            "choice": "m",
-                            "message": message,
-                            "reason": reason,
-                            "source": "web",
-                            "request_id": request_id,
-                        },
-                    )
-                    response_file.unlink(missing_ok=True)  # Delete response, keep waiting
-                    continue
-
-                if choice in ("c", "s", "q"):
-                    logger.event(
-                        "human_input",
-                        {
-                            "choice": choice,
-                            "reason": reason,
-                            "source": "web",
-                            "request_id": request_id,
-                        },
-                    )
-                    request_file.unlink(missing_ok=True)
-                    response_file.unlink(missing_ok=True)
-                    return choice
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning(f"Error reading response file: {e}")
-
-        # Check terminal input (non-blocking on Unix only)
-        try:
-            if sys.platform != "win32" and sys.stdin.isatty():
-                import select as select_mod
-
-                rlist, _, _ = select_mod.select([sys.stdin], [], [], 1.0)
-                if rlist:
-                    choice = sys.stdin.readline().strip().lower()
-                    if choice in ("c", "s", "q"):
-                        logger.event(
-                            "human_input",
-                            {
-                                "choice": choice,
-                                "reason": reason,
-                                "source": "terminal",
-                                "request_id": request_id,
-                            },
-                        )
-                        request_file.unlink(missing_ok=True)
-                        response_file.unlink(missing_ok=True)
-                        return choice
-            else:
-                time.sleep(2)
-        except (OSError, ValueError):
-            time.sleep(2)
-
-    # Timeout - auto-continue
-    logger.warning(f"Human input timed out after {timeout}s, auto-continuing")
-    logger.event("human_input", {"choice": "timeout", "reason": reason, "request_id": request_id})
-    request_file.unlink(missing_ok=True)
-    return "c"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ── Feature Model Helper Functions ─────────────────────────────────
 
 
 
