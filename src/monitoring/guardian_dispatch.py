@@ -81,13 +81,21 @@ class GuardianDispatcher:
                 )
                 return None
 
-            # Special handling for agents with missing tmux sessions
-            if (
-                agent.tmux_session_name
-                and not self.agent_manager.tmux_server.has_session(
-                    agent.tmux_session_name
+            # Special handling for agents with missing tmux sessions.
+            # has_session shells out to the tmux binary -- offloaded, since
+            # this method is fanned out per-agent via asyncio.create_task
+            # specifically to run concurrently (monitor.py); a blocking
+            # call here serializes that per-agent analysis right back into
+            # one at a time.
+            has_missing_session = False
+            if agent.tmux_session_name:
+                import asyncio
+
+                loop = asyncio.get_event_loop()
+                has_missing_session = not await loop.run_in_executor(
+                    None, self.agent_manager.tmux_server.has_session, agent.tmux_session_name
                 )
-            ):
+            if has_missing_session:
                 # Check if task is already done before restarting
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
                 if task and task.status == "done":

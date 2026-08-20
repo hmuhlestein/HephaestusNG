@@ -76,14 +76,16 @@ class TestOrphanSessionReaper:
     @pytest.mark.asyncio
     async def test_kills_orphaned_tmux_sessions_after_grace_period(self, reaper):
         """Tmux sessions with no corresponding DB agent should be killed
-        after the grace period expires."""
+        once THEY (not the reaper's own run cadence) have been orphaned
+        for at least the grace period -- first observed on one call,
+        killed on a later call once its own grace period has elapsed."""
         # Agent session exists in tmux but NOT in DB
         orphan_session = MagicMock()
         orphan_session.name = "agent-orphan-999"
         orphan_session.kill_session = MagicMock()
         reaper.agent_manager.tmux_server.sessions = [orphan_session]
 
-        # Set last_check_time to bypass grace period
+        # Past the "very first call ever" short-circuit.
         reaper.last_check_time = datetime.utcnow() - timedelta(seconds=200)
 
         # Mock DB session with no active agents
@@ -107,9 +109,72 @@ class TestOrphanSessionReaper:
 
         mock_db_session.query.side_effect = query_side_effect
 
+        # First call: newly seen as an orphan candidate -- not killed yet.
         await reaper.cleanup_orphaned_tmux_sessions()
+        orphan_session.kill_session.assert_not_called()
+        assert "agent-orphan-999" in reaper._first_seen_orphan
 
-        # Orphan session should be killed
+        # Backdate its own first-seen time past the grace period, then
+        # check again -- now it should be killed.
+        reaper._first_seen_orphan["agent-orphan-999"] = datetime.utcnow() - timedelta(seconds=200)
+        await reaper.cleanup_orphaned_tmux_sessions()
+        orphan_session.kill_session.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_eventually_kills_under_realistic_steady_state_polling(self, reaper, monkeypatch):
+        """Regression for the actual production bug: the grace period used
+        to be timed from how long it had been since the REAPER's own last
+        run, not from how long any given session had genuinely been
+        orphaned. Under this monitor's default ~60s run cadence, that gap
+        is always well under GRACE_PERIOD_SECONDS (120s), so the old grace
+        check was true on essentially every cycle -- orphaned sessions were
+        never actually killed in normal steady-state operation, no matter
+        how long they'd truly been orphaned. Simulate 5 consecutive checks
+        60s apart (a realistic default-config polling sequence) and confirm
+        the session is eventually killed once ITS OWN elapsed time crosses
+        the grace period, not left orphaned forever."""
+        from src.monitoring import orphan_reaper as orphan_reaper_module
+
+        orphan_session = MagicMock()
+        orphan_session.name = "agent-steady-state-orphan"
+        reaper.agent_manager.tmux_server.sessions = [orphan_session]
+
+        mock_db_session = MagicMock()
+        reaper.db_manager.get_session.return_value = mock_db_session
+        agent_query = MagicMock()
+        agent_query.filter.return_value.all.return_value = []
+        wf_query = MagicMock()
+        wf_query.filter.return_value.all.return_value = []
+
+        def query_side_effect(model):
+            from src.core.database import Agent, Workflow
+            if model == Agent:
+                return agent_query
+            elif model == Workflow:
+                return wf_query
+            return MagicMock()
+
+        mock_db_session.query.side_effect = query_side_effect
+
+        clock = {"now": datetime(2026, 1, 1, 12, 0, 0)}
+
+        class _FakeDatetime:
+            @staticmethod
+            def utcnow():
+                return clock["now"]
+
+        monkeypatch.setattr(orphan_reaper_module, "datetime", _FakeDatetime)
+
+        # First call establishes the baseline (no candidates tracked yet).
+        reaper.last_check_time = clock["now"]
+        clock["now"] += timedelta(seconds=60)
+
+        for _ in range(5):
+            await reaper.cleanup_orphaned_tmux_sessions()
+            if orphan_session.kill_session.called:
+                break
+            clock["now"] += timedelta(seconds=60)
+
         orphan_session.kill_session.assert_called_once()
 
     @pytest.mark.asyncio
@@ -253,13 +318,18 @@ class TestOrphanSessionReaper:
 
     @pytest.mark.asyncio
     async def test_grace_period_uses_utc_not_local_time(self, reaper, monkeypatch):
-        """The grace-period clock must be UTC throughout, not the host's
-        local time -- CLAUDE.md's utc-only invariant, and the exact bug
-        class this reaper's own inline comment documents (west of UTC, a
-        local-time cutoff compared against a UTC timestamp silently never
-        matches). Simulate a host where local time is wildly different from
-        UTC (not just offset by a few hours) and confirm the grace-period
-        decision still follows datetime.utcnow(), not datetime.now()."""
+        """The per-session grace-period clock must be UTC throughout, not
+        the host's local time -- CLAUDE.md's utc-only invariant, and the
+        exact bug class this reaper's own inline comments document (west
+        of UTC, a local-time value compared against a UTC-stamped one goes
+        negative). A session first seen as an orphan candidate 200s ago
+        (per UTC, past the 120s grace period) must be killed. Simulate a
+        host where local time is wildly different from UTC and confirm the
+        kill decision still follows datetime.utcnow(), not datetime.now()
+        -- if it regressed to local time, "now" would read as far EARLIER
+        than the UTC-stamped first-seen time, making the elapsed duration
+        deeply negative and so always "still within grace," silently
+        leaving every genuinely orphaned session un-killed forever."""
         from src.monitoring import orphan_reaper as orphan_reaper_module
 
         fixed_utc_now = datetime(2026, 1, 1, 12, 0, 10)
@@ -272,19 +342,22 @@ class TestOrphanSessionReaper:
             @staticmethod
             def now():
                 # A "local" clock wildly different from UTC. If the source
-                # used this instead of utcnow(), time_since_last_check would
-                # be computed against the wrong epoch entirely.
+                # used this instead of utcnow(), the elapsed-orphaned
+                # duration would be computed against the wrong epoch
+                # entirely (deeply negative, never past the grace period).
                 return datetime(2000, 1, 1, 0, 0, 0)
 
         monkeypatch.setattr(orphan_reaper_module, "datetime", _FakeDatetime)
 
-        # 10 seconds before fixed_utc_now -- well within GRACE_PERIOD_SECONDS
-        # (120s) if and only if the reaper compares against utcnow().
+        # Past the "very first call ever" short-circuit.
         reaper.last_check_time = fixed_utc_now - timedelta(seconds=10)
-
+        # This session was already first seen as an orphan 200s ago (per
+        # UTC) -- past GRACE_PERIOD_SECONDS (120s) -- so this call should
+        # kill it, if and only if "now" is computed via utcnow().
         new_session = MagicMock()
         new_session.name = "agent-new-utc-check"
         reaper.agent_manager.tmux_server.sessions = [new_session]
+        reaper._first_seen_orphan["agent-new-utc-check"] = fixed_utc_now - timedelta(seconds=200)
 
         mock_db_session = MagicMock()
         reaper.db_manager.get_session.return_value = mock_db_session
@@ -306,11 +379,11 @@ class TestOrphanSessionReaper:
 
         await reaper.cleanup_orphaned_tmux_sessions()
 
-        # Still within the (UTC-computed) grace period -- must not be killed.
-        # If the source regressed to datetime.now(), time_since_last_check
-        # would be ~26 years, blowing past the grace period, and this
-        # assertion would fail.
-        new_session.kill_session.assert_not_called()
+        # Past its own (UTC-computed) grace period -- must be killed. If
+        # the source regressed to datetime.now(), "now" would read as ~26
+        # years before the UTC-stamped first-seen time, staying "within
+        # grace" forever, and this assertion would fail.
+        new_session.kill_session.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_terminates_agent_with_inactive_workflow(self, reaper):
@@ -516,6 +589,13 @@ class TestOrphanReapFlushesCleanTranscript:
         )
         reaper.agent_manager._flush_stable_transcript = MagicMock()
 
+        # First call: newly seen as an orphan candidate -- not killed yet.
+        await reaper.cleanup_orphaned_tmux_sessions()
+        orphan_session.kill_session.assert_not_called()
+
+        # Backdate its own first-seen time past the grace period, then
+        # check again -- now it should be flushed and killed.
+        reaper._first_seen_orphan["agent-orphan-999"] = datetime.utcnow() - timedelta(seconds=200)
         await reaper.cleanup_orphaned_tmux_sessions()
 
         reaper.agent_manager._resolve_tmux_transcript_dir.assert_called_once_with(last_agent)

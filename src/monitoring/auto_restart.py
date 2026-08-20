@@ -89,7 +89,15 @@ class AutoRestart:
                 except Exception as e:
                     logger.error(f"[STABLE-TRANSCRIPT] Final flush before auto-restart failed: {e}")
 
-                self.agent_manager.tmux_server.kill_session(agent.tmux_session_name)
+                # libtmux's kill_session shells out to the tmux binary --
+                # blocking, offloaded so it doesn't stall this process's
+                # event loop.
+                import asyncio
+
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None, self.agent_manager.tmux_server.kill_session, agent.tmux_session_name
+                )
                 logger.info(f"Killed tmux session {agent.tmux_session_name}")
 
             with self.db_manager.session_scope() as session:

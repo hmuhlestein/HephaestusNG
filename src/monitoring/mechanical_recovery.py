@@ -23,6 +23,20 @@ from src.prompts.loader import get_monitor_nudge
 
 logger = logging.getLogger(__name__)
 
+# Statuses a task can hold while a live agent is still meaningfully tied to
+# it -- used throughout this file's detectors to find "the task this stuck/
+# frozen/disconnected agent is holding" so it can be failed/reset/reassigned.
+# Includes under_review/needs_work, not just assigned/in_progress: an agent
+# kept alive for validation (its own status stays "working"/"idle" while its
+# task flips to under_review, or to needs_work once a validator sends
+# feedback back to it) still holds that task via assigned_agent_id. Without
+# these two, any detector below that then fires on that same agent (session
+# limit, context overflow, frozen timeout, MCP disconnect, dispatch-failure
+# fallback, never-started) can't find its task, so the task is left
+# permanently pointing at a terminated agent with no other sweep watching
+# this exact combination.
+STUCK_TASK_STATUSES = ["assigned", "in_progress", "under_review", "needs_work"]
+
 # Regex patterns and constants from monitor.py module level.
 # Imported lazily (inside methods) to avoid circular import at module load,
 # since monitor.py will import MechanicalRecoveryDetector inside __init__.
@@ -152,7 +166,7 @@ class MechanicalRecoveryDetector:
                         stuck_task = (
                             session.query(Task)
                             .filter_by(assigned_agent_id=agent.id)
-                            .filter(Task.status.in_(["assigned", "in_progress"]))
+                            .filter(Task.status.in_(STUCK_TASK_STATUSES))
                             .first()
                         )
                         if stuck_task:
@@ -353,7 +367,7 @@ class MechanicalRecoveryDetector:
                     stuck_task = (
                         session.query(Task)
                         .filter_by(assigned_agent_id=agent.id)
-                        .filter(Task.status.in_(["assigned", "in_progress"]))
+                        .filter(Task.status.in_(STUCK_TASK_STATUSES))
                         .first()
                     )
                     if stuck_task:
@@ -432,24 +446,29 @@ class MechanicalRecoveryDetector:
                     if session_name:
                         import subprocess as _sp
 
-                        _sp.run(
+                        # Offloaded -- subprocess.run blocks the event loop
+                        # for however long tmux takes to respond, same
+                        # class of issue fixed elsewhere in this codebase
+                        # today.
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(
+                            None, _sp.run,
                             ["tmux", "send-keys", "-t", session_name, "Escape", ""],
-                            check=False,
                         )
                         await asyncio.sleep(0.5)
-                        _sp.run(
+                        await loop.run_in_executor(
+                            None, _sp.run,
                             ["tmux", "send-keys", "-t", session_name, "/mcp", "Enter"],
-                            check=False,
                         )
                         await asyncio.sleep(2.0)
-                        _sp.run(
+                        await loop.run_in_executor(
+                            None, _sp.run,
                             ["tmux", "send-keys", "-t", session_name, "C-r", ""],
-                            check=False,
                         )
                         await asyncio.sleep(3.0)
-                        _sp.run(
+                        await loop.run_in_executor(
+                            None, _sp.run,
                             ["tmux", "send-keys", "-t", session_name, "Escape", ""],
-                            check=False,
                         )
                         await asyncio.sleep(0.5)
                 if await self.agent_manager.send_recovery_keystrokes(agent.id):
@@ -517,7 +536,7 @@ class MechanicalRecoveryDetector:
                     stuck_task = (
                         session.query(_Task)
                         .filter_by(assigned_agent_id=agent.id)
-                        .filter(_Task.status.in_(["assigned", "in_progress"]))
+                        .filter(_Task.status.in_(STUCK_TASK_STATUSES))
                         .first()
                     )
                     if stuck_task:
@@ -1326,7 +1345,7 @@ class MechanicalRecoveryDetector:
                     stuck_tasks = (
                         session.query(_Task)
                         .filter_by(assigned_agent_id=agent.id)
-                        .filter(_Task.status.in_(["assigned", "in_progress"]))
+                        .filter(_Task.status.in_(STUCK_TASK_STATUSES))
                         .all()
                     )
                     for t in stuck_tasks:
@@ -1430,7 +1449,7 @@ class MechanicalRecoveryDetector:
                 stuck_task = (
                     session.query(_Task)
                     .filter_by(assigned_agent_id=agent.id)
-                    .filter(_Task.status.in_(["assigned", "in_progress"]))
+                    .filter(_Task.status.in_(STUCK_TASK_STATUSES))
                     .first()
                 )
                 if not stuck_task:
@@ -1782,7 +1801,7 @@ class MechanicalRecoveryDetector:
                 stuck_task = (
                     session.query(_Task)
                     .filter_by(id=task_id)
-                    .filter(_Task.status.in_(["assigned", "in_progress"]))
+                    .filter(_Task.status.in_(STUCK_TASK_STATUSES))
                     .first()
                 )
                 if stuck_task:
