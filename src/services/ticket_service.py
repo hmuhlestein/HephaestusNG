@@ -965,6 +965,7 @@ class TicketService:
                     commit_sha=commit_sha,
                     commit_message=f"Status change: {old_status} -> {new_status}",
                     link_method="status_change",
+                    db=db,
                 )
 
             db.commit()
@@ -1424,6 +1425,7 @@ class TicketService:
         commit_sha: str,
         commit_message: str,
         link_method: str = "manual",
+        db=None,
     ) -> Dict[str, Any]:
         """
         Link a git commit to a ticket.
@@ -1434,6 +1436,14 @@ class TicketService:
             commit_sha: Git commit SHA
             commit_message: Commit message
             link_method: How the commit was linked (manual, auto_detected, worktree, status_change)
+            db: optional existing session to participate in the caller's
+                own transaction (change_status/resolve_ticket) instead of
+                opening a separate one that commits independently.
+                Without this, an exception in the caller's own transaction
+                *after* this call returns leaves a permanently-persisted
+                commit link + history row pointing at a ticket status
+                change that itself rolled back -- the two were never
+                actually atomic despite reading that way at the call site.
 
         Returns:
             Dictionary with link status
@@ -1441,82 +1451,97 @@ class TicketService:
         Raises:
             ValueError: If validation fails
         """
+        if db is not None:
+            return await TicketService._link_commit_impl(
+                db, ticket_id, agent_id, commit_sha, commit_message, link_method
+            )
+        with get_db() as db:
+            return await TicketService._link_commit_impl(
+                db, ticket_id, agent_id, commit_sha, commit_message, link_method
+            )
+
+    @staticmethod
+    async def _link_commit_impl(
+        db,
+        ticket_id: str,
+        agent_id: str,
+        commit_sha: str,
+        commit_message: str,
+        link_method: str,
+    ) -> Dict[str, Any]:
         from src.core.simple_config import get_config
 
-        with get_db() as db:
-            ticket = db.query(Ticket).filter_by(id=ticket_id).first()
-            if not ticket:
-                raise ValueError(f"Ticket not found: {ticket_id}")
+        ticket = db.query(Ticket).filter_by(id=ticket_id).first()
+        if not ticket:
+            raise ValueError(f"Ticket not found: {ticket_id}")
 
-            # Check if commit already linked
-            existing = (
-                db.query(TicketCommit)
-                .filter_by(ticket_id=ticket_id, commit_sha=commit_sha)
-                .first()
-            )
-            if existing:
-                return {
-                    "success": True,
-                    "ticket_id": ticket_id,
-                    "commit_sha": commit_sha,
-                    "message": "Commit already linked to this ticket",
-                }
-
-            # Get real commit stats from git -- resolve the ticket's own
-            # project repo rather than assuming it's whichever project the
-            # process-wide singleton currently points at (only one project
-            # could ever be active before multi-project concurrency).
-            main_repo_path = None
-            if ticket.workflow_id:
-                wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
-                if wf and wf.project_id:
-                    from src.core.database import AutopilotProject
-
-                    proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
-                    if proj and proj.base_dir:
-                        main_repo_path = proj.base_dir
-            if main_repo_path is None:
-                config = get_config()
-                main_repo_path = str(config.main_repo_path)
-            # _get_commit_stats shells out to `git show --numstat` --
-            # blocking, offloaded so it doesn't stall the event loop.
-            loop = asyncio.get_event_loop()
-            commit_stats = await loop.run_in_executor(
-                None, TicketService._get_commit_stats, commit_sha, main_repo_path
-            )
-
-            # Create commit link with real stats
-            commit_id = f"tc-{uuid.uuid4()}"
-            ticket_commit = TicketCommit(
-                id=commit_id,
-                ticket_id=ticket_id,
-                agent_id=agent_id,
-                commit_sha=commit_sha,
-                commit_message=commit_message,
-                commit_timestamp=datetime.utcnow(),
-                link_method=link_method,
-                files_changed=commit_stats["files_changed"],
-                insertions=commit_stats["insertions"],
-                deletions=commit_stats["deletions"],
-                files_list=commit_stats["files_list"],
-            )
-
-            db.add(ticket_commit)
-
-            # Record in history
-            await TicketHistoryService.link_commit(
-                ticket_id=ticket_id,
-                commit_sha=commit_sha,
-                message=commit_message,
-                db=db,
-            )
-
-            db.commit()
-
+        # Check if commit already linked
+        existing = (
+            db.query(TicketCommit)
+            .filter_by(ticket_id=ticket_id, commit_sha=commit_sha)
+            .first()
+        )
+        if existing:
             return {
                 "success": True,
                 "ticket_id": ticket_id,
                 "commit_sha": commit_sha,
+                "message": "Commit already linked to this ticket",
+            }
+
+        # Get real commit stats from git -- resolve the ticket's own
+        # project repo rather than assuming it's whichever project the
+        # process-wide singleton currently points at (only one project
+        # could ever be active before multi-project concurrency).
+        main_repo_path = None
+        if ticket.workflow_id:
+            wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
+            if wf and wf.project_id:
+                from src.core.database import AutopilotProject
+
+                proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
+                if proj and proj.base_dir:
+                    main_repo_path = proj.base_dir
+        if main_repo_path is None:
+            config = get_config()
+            main_repo_path = str(config.main_repo_path)
+        # _get_commit_stats shells out to `git show --numstat` --
+        # blocking, offloaded so it doesn't stall the event loop.
+        loop = asyncio.get_event_loop()
+        commit_stats = await loop.run_in_executor(
+            None, TicketService._get_commit_stats, commit_sha, main_repo_path
+        )
+
+        # Create commit link with real stats
+        commit_id = f"tc-{uuid.uuid4()}"
+        ticket_commit = TicketCommit(
+            id=commit_id,
+            ticket_id=ticket_id,
+            agent_id=agent_id,
+            commit_sha=commit_sha,
+            commit_message=commit_message,
+            commit_timestamp=datetime.utcnow(),
+            link_method=link_method,
+            files_changed=commit_stats["files_changed"],
+            insertions=commit_stats["insertions"],
+            deletions=commit_stats["deletions"],
+            files_list=commit_stats["files_list"],
+        )
+
+        db.add(ticket_commit)
+
+        # Record in history
+        await TicketHistoryService.link_commit(
+            ticket_id=ticket_id,
+            commit_sha=commit_sha,
+            message=commit_message,
+            db=db,
+        )
+
+        return {
+            "success": True,
+            "ticket_id": ticket_id,
+            "commit_sha": commit_sha,
                 "message": "Commit linked successfully",
             }
 
@@ -1574,6 +1599,7 @@ class TicketService:
                     commit_sha=commit_sha,
                     commit_message="Ticket resolution",
                     link_method="resolution",
+                    db=db,
                 )
 
             # Find all tickets blocked by this ticket
@@ -1619,6 +1645,7 @@ class TicketService:
                         old_value=json.dumps([ticket_id]),
                         new_value=None,
                         metadata={"resolved_ticket_id": ticket_id},
+                        db=db,
                     )
 
                     unblocked_ticket_ids.append(dependent_ticket.id)
