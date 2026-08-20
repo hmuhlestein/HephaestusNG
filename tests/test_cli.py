@@ -391,6 +391,14 @@ class TestWorkflowCommand:
         assert result == 1
 
     def test_stop_single_workflow_success(self, args, capsys):
+        """Reports what /api/workflow-executions/{id}/stop actually did.
+
+        That endpoint pauses the workflow (resetting in-flight tasks to
+        pending for a later resume) and returns status/agents_terminated
+        with no "message" key. Printing a bare "Workflow stopped" here --
+        the old fallback -- would tell the operator a reversible pause was
+        a terminal stop.
+        """
         from src.cli.commands.workflow import stop_workflow
 
         args.all = False
@@ -405,14 +413,46 @@ class TestWorkflowCommand:
             patch("src.cli.commands.workflow.api_get", side_effect=mock_api_get),
             patch(
                 "src.cli.commands.workflow.api_post",
-                return_value={"message": "Workflow stopped"},
+                return_value={
+                    "status": "paused",
+                    "workflow_id": "wf-1",
+                    "agents_terminated": 2,
+                },
             ),
             patch("src.cli.commands.workflow.require_backend", return_value=True),
         ):
             result = stop_workflow(args)
 
         assert result == 0
-        assert "Workflow stopped" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "paused" in out
+        assert "2 agent(s) terminated" in out
+
+    def test_stop_single_workflow_reports_already_stopped_message(self, args, capsys):
+        """The endpoint's early return for an already-terminal workflow does
+        carry a message; it must win over the derived description."""
+        from src.cli.commands.workflow import stop_workflow
+
+        args.all = False
+        args.workflow_id = "wf-1"
+
+        def mock_api_get(a, endpoint, **kw):
+            if endpoint == "/api/agents":
+                return {"agents": []}
+            return {}
+
+        with (
+            patch("src.cli.commands.workflow.api_get", side_effect=mock_api_get),
+            patch(
+                "src.cli.commands.workflow.api_post",
+                return_value={"status": "completed", "message": "Already stopped"},
+            ),
+            patch("src.cli.commands.workflow.require_backend", return_value=True),
+        ):
+            result = stop_workflow(args)
+
+        assert result == 0
+        assert "Already stopped" in capsys.readouterr().out
 
     def test_stop_single_workflow_prints_warning_on_agent_termination_failure(
         self, args, capsys

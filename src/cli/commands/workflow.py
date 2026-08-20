@@ -129,6 +129,26 @@ def _print_single_execution(e):
     print(f"Created:     {time_ago(e.get('created_at', ''))}")
 
 
+def _describe_stop_result(result) -> str:
+    """Render /api/workflow-executions/{id}/stop's response for the operator.
+
+    That endpoint pauses the workflow and resets its in-flight tasks to
+    pending so it can be resumed -- it does not fail them. Reporting a bare
+    "stopped" would misdescribe a reversible operation as a terminal one.
+    Its success payload carries status/agents_terminated rather than a
+    message; only the already-stopped early return supplies one.
+    """
+    if not isinstance(result, dict):
+        return "stopped"
+    if result.get("message"):
+        return result["message"]
+    status = result.get("status", "stopped")
+    terminated = result.get("agents_terminated")
+    if terminated:
+        return f"{status} ({terminated} agent(s) terminated)"
+    return status
+
+
 def stop_workflow(args):
     if not require_backend(args):
         return 1
@@ -195,12 +215,7 @@ def stop_workflow(args):
             elif isinstance(result, dict) and "error" in result:
                 print(f"  {eid[:12]}... {result.get('detail', result['error'])}")
             else:
-                msg = (
-                    result.get("message", "stopped")
-                    if isinstance(result, dict)
-                    else "stopped"
-                )
-                print(f"  {eid[:12]}... {msg}")
+                print(f"  {eid[:12]}... {_describe_stop_result(result)}")
         return 0
 
     if not args.workflow_id:
@@ -244,5 +259,5 @@ def stop_workflow(args):
     if isinstance(data, dict) and "error" in data:
         print(f"Error: {data.get('detail', data['error'])}")
         return 1
-    print(data.get("message", "Workflow stopped"))
+    print(_describe_stop_result(data))
     return 0
