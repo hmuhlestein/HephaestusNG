@@ -702,6 +702,69 @@ class TestScoreSecurityReview:
         assert score >= 0.7
 
 
+class TestResolveDeclaredOutputSubdirPrefixed:
+    """Phase.outputs is snapshotted into the DB when a workflow is created
+    and never re-read from YAML, but GATED_PHASES is read from YAML at
+    import. So the moment security_review became a gated phase, every
+    workflow ALREADY IN FLIGHT kept its old "security_review/security.md"
+    declaration -- and resolve_declared_output_path's flat-.hephaestus/
+    exclusion (which applies to gated phases) rejected it, reporting a
+    report sitting in exactly the right place as missing. Correcting the
+    YAML fixes new workflows; only this fixes the ones already running.
+
+    The exclusion is about the FLAT location, so it must test the path the
+    candidate actually produces, not the phase's gated-ness alone."""
+
+    def test_subdir_prefixed_name_resolves_for_a_gated_phase(self, tmp_path):
+        from src.autopilot.spec import resolve_declared_output_path
+
+        report = tmp_path / ".hephaestus" / "security_review" / "security.md"
+        report.parent.mkdir(parents=True)
+        report.write_text("---\ntype: security_review_report\n---\nbody\n")
+
+        # Both the stale in-flight declaration and the corrected one must
+        # land on the same file.
+        assert (
+            resolve_declared_output_path(
+                str(tmp_path), "security_review", "security_review/security.md"
+            )
+            == report
+        )
+        assert (
+            resolve_declared_output_path(str(tmp_path), "security_review", "security.md")
+            == report
+        )
+
+    def test_genuinely_flat_report_is_still_rejected_for_a_gated_phase(self, tmp_path):
+        """The bug the exclusion exists to prevent must stay prevented: a
+        gated phase's report at flat .hephaestus/qa.md passes an existence
+        check but then scores as "no report", since read_okf_report only
+        looks in .hephaestus/<phase_name>/ and the worktree root."""
+        from src.autopilot.spec import read_okf_report, resolve_declared_output_path
+
+        flat = tmp_path / ".hephaestus" / "qa.md"
+        flat.parent.mkdir(parents=True)
+        flat.write_text("---\ntype: qa_validation\n---\nbody\n")
+
+        assert resolve_declared_output_path(str(tmp_path), "qa_validation", "qa.md") is None
+        # The two must agree -- that agreement is the whole point.
+        assert read_okf_report(str(tmp_path), "qa.md", phase_name="qa_validation") == (
+            None,
+            None,
+        )
+
+    def test_flat_report_still_accepted_for_a_non_gated_phase(self, tmp_path):
+        from src.autopilot.spec import resolve_declared_output_path
+
+        flat = tmp_path / ".hephaestus" / "docs.md"
+        flat.parent.mkdir(parents=True)
+        flat.write_text("---\ntype: doc_review_report\n---\nbody\n")
+
+        assert (
+            resolve_declared_output_path(str(tmp_path), "doc_review", "docs.md") == flat
+        )
+
+
 class TestSecurityReviewClassificationSteps:
     """STEP 1 gates which later steps apply, by NUMBER. Those numbers drifted
     once already: the ash scan was inserted at position 2 and the skip lists

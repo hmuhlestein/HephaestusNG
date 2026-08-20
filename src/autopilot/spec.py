@@ -229,16 +229,33 @@ def resolve_declared_output_path(
     # only a real scoring-time location for a non-gated phase, or a gated
     # phase whose GATE_RESULT_SUBDIR override IS that flat location (none
     # currently -- kept for a future phase that might genuinely need it).
-    include_flat_hephaestus = (
-        phase_name not in GATED_PHASES
-        or GATE_RESULT_SUBDIR.get(phase_name) == CONTEXT_DIR_NAME
+    gate_excludes_flat = (
+        phase_name in GATED_PHASES
+        and GATE_RESULT_SUBDIR.get(phase_name) != CONTEXT_DIR_NAME
     )
     for name in names_to_check:
         candidates = [
             base / CONTEXT_DIR_NAME / phase_name / name,
             base / name,
         ]
-        if include_flat_hephaestus:
+        # The exclusion above is about the FLAT location, so test the path
+        # this candidate actually produces rather than the phase's gated-ness
+        # alone. A declared name that already carries its own subdirectory
+        # ("security_review/security.md") makes this candidate
+        # .hephaestus/security_review/security.md -- not flat at all, and
+        # exactly the file read_okf_report scores -- so excluding it creates
+        # the opposite of the bug the exclusion exists to prevent: the report
+        # sits in the right place and is reported missing.
+        #
+        # This is not hypothetical. Phase.outputs is snapshotted into the DB
+        # when a workflow is created and never re-read from YAML, while
+        # GATED_PHASES is read from YAML at import -- so the moment
+        # security_review became a gated phase, every workflow already
+        # in flight kept its old "security_review/security.md" declaration
+        # and could no longer complete the phase at all. Correcting the YAML
+        # to the bare filename fixes new workflows; only this fixes the ones
+        # already running.
+        if not (gate_excludes_flat and Path(name).parent == Path(".")):
             candidates.append(base / CONTEXT_DIR_NAME / name)
         for candidate in candidates:
             if candidate.exists():
