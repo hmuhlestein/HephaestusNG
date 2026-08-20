@@ -1668,9 +1668,13 @@ class PhaseManager:
             # to be terminal, catching a phase that's within the checked
             # order range but still stuck pending/in_progress for some other
             # reason.
+            #
+            # write_back=False here -- the review-mode check below decides
+            # whether to actually persist "completed" or pause instead, so
+            # writing it back unconditionally first would need undoing.
             from src.core.status_derivation import derive_workflow_status
 
-            derived = derive_workflow_status(session, self.workflow_id, write_back=True)
+            derived = derive_workflow_status(session, self.workflow_id, write_back=False)
             if derived != "completed":
                 logger.warning(
                     f"[PHASE] _complete_workflow's order check passed but "
@@ -1679,6 +1683,37 @@ class PhaseManager:
                     "marking completed"
                 )
                 return
+
+            # Every phase (including git_commit_push -- it dispatches like
+            # any other phase now; the agent commits, pushes, and opens a
+            # PR, but scripts/agent-safe-bin/git on its own PATH blocks
+            # `git merge`/push-to-main) has finished, but under review mode
+            # a human still needs to review the PR and approve the merge.
+            # Pause instead of completing. review_feature's approve branch
+            # (src/mcp/autopilot/feature_routes.py) resumes the workflow
+            # AND re-derives/marks it completed itself once approved, so
+            # this only ever needs to fire once -- the "workflow.status ==
+            # active" guard above skips this entire block on any later
+            # call while still paused, the same idempotency pattern every
+            # other pause site in this codebase relies on.
+            from src.autopilot.orchestrator import _should_pause_for_review
+            from src.core.database import resolve_project_for_workflow
+
+            project_id, _ = resolve_project_for_workflow(self.workflow_id)
+            if project_id and _should_pause_for_review(project_id):
+                from src.autopilot.orchestrator.engine_client import pause_workflow
+
+                pause_workflow(
+                    self.workflow_id,
+                    reason="review",
+                    status_reason="All phases complete -- awaiting human review and merge approval",
+                    session=session,
+                )
+                session.commit()
+                logger.info(f"[PHASE] Workflow {self.workflow_id} complete but paused for final review (review_mode)")
+                return
+
+            derive_workflow_status(session, self.workflow_id, write_back=True)
             logger.info(f"Workflow {self.workflow_id} completed (all phases done)")
             self._populate_feature_folder(session, workflow)
 

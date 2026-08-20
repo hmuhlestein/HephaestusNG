@@ -1945,3 +1945,135 @@ class TestCompleteWorkflowRefusesWhenPhasesRemain:
         with workflow_ready_to_complete.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "active"
+
+
+class TestCompleteWorkflowPausesForReviewMode:
+    """Regression: under review_mode, git_commit_push now dispatches like
+    any other phase (the agent commits, pushes, and opens a PR --
+    scripts/agent-safe-bin/git blocks only `git merge`/push-to-main until
+    approved), so a workflow can genuinely reach "every phase done"
+    without a human ever having reviewed/merged anything. Before this
+    fix, _complete_workflow had no review-mode awareness at all and would
+    mark the workflow "completed" outright the moment the last phase
+    (e.g. git_commit_push, having opened but not merged a PR) finished --
+    nothing would ever prompt the human to merge it.
+
+    review_feature's approve branch (feature_routes.py) is what actually
+    clears this pause and completes the workflow for real, once the human
+    approves -- see its own resume_workflow + derive_workflow_status call.
+    """
+
+    @pytest.fixture
+    def review_mode_env(self, real_db, monkeypatch):
+        """A workflow with a single, genuinely-last, genuinely-completed
+        phase (mirrors TestCompleteWorkflowRefusesWhenPhasesRemain's own
+        workflow_ready_to_complete, duplicated here since pytest doesn't
+        share method-scoped fixtures across classes), linked to a
+        review_mode=True project. Also points get_db() (used internally
+        by _should_pause_for_review) at the same sqlite file this
+        fixture's own session_scope calls use."""
+        from src.core.database import AutopilotProject, Phase, PhaseExecution, Task, Workflow
+
+        db_path = str(real_db.engine.url.database)
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", db_path)
+
+        with real_db.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp", review_mode=True))
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp", status="active",
+                project_id="proj-1",
+            ))
+            session.add(Phase(
+                id="phase-doc", workflow_id="wf-1", order=10,
+                name="doc_review", description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-doc", phase_id="phase-doc",
+                workflow_execution_id="wf-1", status="completed",
+            ))
+            session.add(Task(
+                id="task-doc", raw_description="do work", done_definition="done",
+                status="done", phase_id="phase-doc", workflow_id="wf-1",
+            ))
+
+        return real_db
+
+    def test_pauses_instead_of_completing_when_review_mode_is_on(self, review_mode_env):
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=review_mode_env)
+        pm.workflow_id = "wf-1"
+        session = review_mode_env.get_session()
+        try:
+            pm._complete_workflow(session, current_phase_id="phase-doc")
+        finally:
+            session.close()
+
+        with review_mode_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "review"
+
+    def test_does_not_re_pause_on_a_later_call(self, review_mode_env):
+        """The "workflow.status == active" guard must make this a one-shot
+        pause -- a later sweep tick re-evaluating the same terminal state
+        must not error or re-process it."""
+        from src.core.database import Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=review_mode_env)
+        pm.workflow_id = "wf-1"
+
+        session = review_mode_env.get_session()
+        try:
+            pm._complete_workflow(session, current_phase_id="phase-doc")
+        finally:
+            session.close()
+
+        session = review_mode_env.get_session()
+        try:
+            pm._complete_workflow(session, current_phase_id="phase-doc")
+        finally:
+            session.close()
+
+        with review_mode_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "review"
+
+    def test_still_completes_normally_when_review_mode_is_off(self, real_db):
+        """No AutopilotProject/review_mode involved at all -- must behave
+        exactly as before this fix (matches the sibling
+        test_completes_when_current_phase_is_genuinely_last)."""
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with real_db.session_scope() as session:
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp", status="active",
+            ))
+            session.add(Phase(
+                id="phase-doc", workflow_id="wf-1", order=10,
+                name="doc_review", description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-doc", phase_id="phase-doc",
+                workflow_execution_id="wf-1", status="completed",
+            ))
+            session.add(Task(
+                id="task-doc", raw_description="do work", done_definition="done",
+                status="done", phase_id="phase-doc", workflow_id="wf-1",
+            ))
+
+        pm = PhaseManager(db_manager=real_db)
+        pm.workflow_id = "wf-1"
+        session = real_db.get_session()
+        try:
+            pm._complete_workflow(session, current_phase_id="phase-doc")
+        finally:
+            session.close()
+
+        with real_db.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "completed"
