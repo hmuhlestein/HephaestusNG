@@ -16,6 +16,7 @@ import yaml
 
 from src.services.prompt_proposal_service import (
     EDITABLE_FIELDS,
+    SELF_EDIT_BLOCKED,
     apply_edit,
     apply_proposal,
     commit_file,
@@ -238,6 +239,50 @@ class TestSafetyAllowlist:
         assert current_value("autopilot", "development", "done_definitions") == (
             on_disk["done_definitions"]
         )
+
+
+class TestDocumentationMatchesTheGuards:
+    """docs/autopilot.md tells operators which fields a proposal can and cannot
+    reach. That is a safety claim about a self-modifying system, and this whole
+    subsystem exists because of prose contracts nothing enforced -- a doc that
+    drifts from EDITABLE_FIELDS would be the same bug in a new place.
+
+    Pins only the claims that matter if wrong; the prose around them is free to
+    change."""
+
+    @staticmethod
+    def _section():
+        doc = Path(__file__).resolve().parents[1] / "docs" / "autopilot.md"
+        text = doc.read_text()
+        assert "## Reviewing prompt changes" in text, "the feature section is gone"
+        return text.split("## Reviewing prompt changes")[1].split("\n## ")[0]
+
+    def test_every_editable_field_is_documented(self):
+        section = self._section()
+        for field in EDITABLE_FIELDS:
+            assert f"`{field}`" in section, (
+                f"{field} is editable but docs/autopilot.md does not say so"
+            )
+
+    def test_no_undocumented_field_is_editable(self):
+        """The reverse direction: widening EDITABLE_FIELDS without updating the
+        doc would leave operators believing a guard exists that does not."""
+        section = self._section()
+        documented = {f for f in ("description", "done_definitions", "additional_notes")
+                      if f"`{f}`" in section}
+        assert set(EDITABLE_FIELDS) == documented, (
+            f"EDITABLE_FIELDS is {set(EDITABLE_FIELDS)} but the doc describes {documented}"
+        )
+
+    def test_the_refused_wiring_is_documented(self):
+        section = self._section()
+        for refused in ("spec_gate", "outputs", "workflow.yaml"):
+            assert refused in section, f"{refused} is refused but the doc omits it"
+
+    def test_the_self_edit_block_is_documented(self):
+        section = self._section()
+        for phase in SELF_EDIT_BLOCKED:
+            assert phase in section, f"{phase} cannot self-edit but the doc omits it"
 
 
 class TestConcurrentApplies:
