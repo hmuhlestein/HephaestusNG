@@ -133,3 +133,64 @@ async def test_validation_failed_offloads_send_feedback_to_agent(db_manager, fak
     assert func_arg.func.__name__ == "send_feedback_to_agent"
     assert func_arg.keywords["agent_id"] == "agent-1"
     assert func_arg.keywords["feedback"] == "needs work"
+
+
+@pytest.mark.asyncio
+async def test_validation_passed_shares_session_with_result_service(
+    db_manager, fake_state, monkeypatch
+):
+    """Regression: give_validation_review opened its own session and, when
+    a task had results, called ResultService.get_results_for_task/
+    verify_result -- each of which opened and committed its OWN
+    independent session against AgentResult rows. A failure in the
+    caller's own transaction after that point (e.g. the follow-up-task
+    creation, or the final session.commit()) couldn't roll back an
+    AgentResult already marked "verified" against a ValidationReview that
+    was never actually persisted."""
+    import contextlib
+
+    from src.core.database import AgentResult, get_db as real_get_db
+    from src.mcp.memory_api import GiveValidationReviewRequest, give_validation_review
+
+    async def noop_process_queue():
+        pass
+
+    monkeypatch.setattr("src.mcp.server.background_loops.process_queue", noop_process_queue)
+    _seed(db_manager)
+
+    with db_manager.session_scope() as session:
+        task = session.query(Task).filter_by(id="task-1").first()
+        task.has_results = True
+        session.add(AgentResult(
+            id="result-1", agent_id="agent-1", task_id="task-1",
+            markdown_content="x", markdown_file_path="/tmp/x.md",
+            result_type="implementation", summary="did the thing",
+        ))
+
+    call_count = 0
+
+    @contextlib.contextmanager
+    def counting_get_db(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        with real_get_db(*args, **kwargs) as db:
+            yield db
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = AsyncMock(return_value=True)
+
+    request = GiveValidationReviewRequest(
+        task_id="task-1", validator_agent_id="validator-1",
+        validation_passed=True, feedback="looks good",
+    )
+    with patch("asyncio.get_event_loop", return_value=fake_loop), patch(
+        "src.services.result_service.get_db", side_effect=counting_get_db
+    ):
+        response = await give_validation_review(request=request, agent_id="validator-1")
+
+    assert response.status == "completed"
+    assert call_count == 0
+
+    with db_manager.session_scope() as session:
+        result = session.query(AgentResult).filter_by(id="result-1").first()
+        assert result.verification_status == "verified"
