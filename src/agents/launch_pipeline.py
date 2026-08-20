@@ -275,7 +275,8 @@ class LaunchPipeline:
             logger.warning(f"[CODEGRAPH] Pre-warm failed (non-fatal): {e}")
 
     async def _check_termination_race(
-        self, agent_id: str, task_id: str, session_name: str, agent_id_to_return: str
+        self, agent_id: str, task_id: str, session_name: str, agent_id_to_return: str,
+        task: Optional[Task] = None,
     ) -> Optional[object]:
         """Check whether the agent or task was terminated/cancelled during
         the CLI-init sleep. Returns an AgentInfo if launch should be
@@ -283,6 +284,25 @@ class LaunchPipeline:
 
         Currently create-only but called by both create and restart after
         extraction (documented gap-closing for restart).
+
+        task: the create path's in-memory Task object, already speculatively
+        mutated (assigned_agent_id/status/started_at set to "in_progress")
+        a few lines before this check runs, by a caller session that won't
+        commit until well after this function returns. If we detect the
+        agent was terminated in the meantime (e.g. a workflow pause) but
+        only kill the tmux session, that stale optimistic mutation is still
+        sitting on `task` -- create_agent_for_task_direct's later
+        session.commit() persists it anyway, since an aborted launch
+        returns the exact same AgentInfo shape as a real success and the
+        caller has no way to tell the difference. The task ends up
+        "in_progress" pointing at an agent that was killed seconds after
+        creation, invisible to every sweep until health_audit's 30-minute
+        stuck-timeout finally notices -- with a failure_reason that reads
+        like the agent hung, when it was actually killed almost
+        immediately by something else. Restart's call site never mutates
+        `task` before calling this, so passing it there would be a no-op;
+        left as the default None rather than threading it through for no
+        reason.
         """
         with self.db_manager.get_session() as _term_check:
             _current = _term_check.query(Agent).filter_by(id=agent_id).first()
@@ -314,6 +334,11 @@ class LaunchPipeline:
                 )
                 if self.tmux_server.has_session(session_name):
                     self.tmux_server.kill_session(session_name)
+
+                if task is not None and _fresh_task is not None:
+                    task.assigned_agent_id = _fresh_task.assigned_agent_id
+                    task.status = _fresh_task.status
+                    task.started_at = _fresh_task.started_at
 
                 class AgentInfo:
                     def __init__(self, id):
@@ -1912,6 +1937,7 @@ class LaunchPipeline:
             # Termination race check
             term_race_result = await self._check_termination_race(
                 agent_id, task.id, session_name, agent_id_to_return=agent_id_to_return,
+                task=task,
             )
             if term_race_result is not None:
                 return term_race_result
