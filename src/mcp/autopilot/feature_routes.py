@@ -681,6 +681,62 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                         logger.warning(f"[REVIEW] gh pr merge failed: {result.stderr}")
                 except Exception as e:
                     logger.warning(f"[REVIEW] Failed to merge PR: {e}")
+            elif wf.working_directory:
+                # No PR to merge -- git_commit_push couldn't create one
+                # (gh not installed/authenticated, no remote configured,
+                # etc; see its own "or local merge if gh unavailable"
+                # fallback instruction). The reviewed work already sits
+                # committed on the pushed feature branch with
+                # review_approved now written -- merge it locally into
+                # the project's main branch instead of silently
+                # completing the workflow with real, approved work never
+                # landing on main.
+                #
+                # Resolved against THIS workflow's own project root
+                # (AutopilotProject.base_dir), not server_state.
+                # branch_manager's single global WorktreeManager instance
+                # -- that instance is fixed to whichever project it
+                # happened to be constructed against and unsafe to assume
+                # matches this workflow's project under this app's
+                # concurrent-active-projects support (see CLAUDE.md's
+                # concurrent-active-projects invariant).
+                try:
+                    from git import GitCommandError, Repo
+
+                    from src.core.database import AutopilotProject, resolve_project_for_workflow
+
+                    project_id, _ = resolve_project_for_workflow(wf.id)
+                    project = db.query(AutopilotProject).get(project_id) if project_id else None
+                    if project and project.base_dir:
+                        wt_repo = Repo(wf.working_directory)
+                        branch_name = wt_repo.active_branch.name
+                        merge_message = f"Merge {branch_name} into main after human review approval"
+
+                        def _local_merge():
+                            # Mirrors WorktreeManager.merge_shared_branch's
+                            # own semantics (no_ff, abort-and-preserve on
+                            # conflict -- never auto-resolve), just against
+                            # this workflow's own project path instead of
+                            # a shared global instance's fixed one.
+                            main_repo = Repo(project.base_dir)
+                            try:
+                                main_repo.git.merge(branch_name, no_ff=True, m=merge_message)
+                                return {"action": "merged", "branch": branch_name}
+                            except GitCommandError as e:
+                                if "CONFLICT" in str(e):
+                                    try:
+                                        main_repo.git.merge("--abort")
+                                    except GitCommandError:
+                                        pass
+                                    return {"action": "preserved", "branch": branch_name}
+                                raise
+
+                        import functools
+                        loop = asyncio.get_event_loop()
+                        merge_result = await loop.run_in_executor(None, _local_merge)
+                        logger.info(f"[REVIEW] Local merge fallback for {branch_name}: {merge_result}")
+                except Exception as e:
+                    logger.warning(f"[REVIEW] Local merge fallback failed: {e}")
 
             # Check if all tasks are done — use derive_workflow_status
             # instead of hand-rolling this check. The "all tasks done ≠

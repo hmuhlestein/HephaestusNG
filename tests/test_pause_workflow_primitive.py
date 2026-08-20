@@ -807,3 +807,109 @@ class TestReviewAndResumeReuseOldPendingTasks:
         assert result["success"] is True
 
         spawn_mock.assert_called_once_with("task-old-pending", "wf-1-dev")
+
+
+class TestReviewFeatureApproveLocalMergeFallback:
+    """When git_commit_push couldn't create a PR (gh not installed/
+    authenticated, no remote, etc -- its own instructions already say
+    "or local merge if gh unavailable"), the reviewed work sits committed
+    and pushed on the feature branch with nothing to merge it into main.
+    review_feature's approve branch must fall back to a local merge
+    instead of silently marking the workflow "completed" with real,
+    approved work never landing on main.
+
+    Uses real git repos (a git worktree of the project, matching
+    production) rather than mocking GitPython -- the merge itself is the
+    thing under test."""
+
+    @pytest.fixture
+    def git_project_with_feature_branch(self, tmp_path):
+        import subprocess
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        def _git(*args, cwd):
+            subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+        _git("init", "-b", "main", cwd=project_dir)
+        _git("config", "user.email", "t@t.com", cwd=project_dir)
+        _git("config", "user.name", "t", cwd=project_dir)
+        (project_dir / "README.md").write_text("hello\n")
+        _git("add", "-A", cwd=project_dir)
+        _git("commit", "-m", "init", cwd=project_dir)
+
+        worktree_dir = tmp_path / "worktree"
+        _git("worktree", "add", "-b", "feature/test-branch", str(worktree_dir), cwd=project_dir)
+        (worktree_dir / "new_file.txt").write_text("feature work\n")
+        _git("add", "-A", cwd=worktree_dir)
+        _git("commit", "-m", "feature work", cwd=worktree_dir)
+
+        return project_dir, worktree_dir
+
+    @pytest.mark.asyncio
+    async def test_approve_merges_locally_when_no_pr_exists(
+        self, orch_db_env, git_project_with_feature_branch,
+    ):
+        project_dir, worktree_dir = git_project_with_feature_branch
+        from src.core.database import AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(project_dir)))
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", project_id="proj-1",
+                working_directory=str(worktree_dir),
+            ))
+            session.add(Feature(
+                id="feat-1", design_id="des-1", feature_key="k", name="n",
+                scope="s", workflow_id="wf-1", status="paused", pr_url=None,
+            ))
+
+        from src.mcp.autopilot.feature_routes import FeatureReviewRequest, review_feature
+        result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
+        assert result["success"] is True
+
+        assert (project_dir / "new_file.txt").exists(), (
+            "the feature branch's work must be merged into the project's "
+            "main branch when no PR exists to merge instead"
+        )
+
+    @pytest.mark.asyncio
+    async def test_does_not_attempt_local_merge_when_a_pr_exists(
+        self, orch_db_env, git_project_with_feature_branch, monkeypatch,
+    ):
+        """The gh pr merge path stays authoritative when a PR actually
+        exists -- the local-merge fallback must not also run and double-
+        merge."""
+        project_dir, worktree_dir = git_project_with_feature_branch
+        from src.core.database import AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(project_dir)))
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", project_id="proj-1",
+                working_directory=str(worktree_dir),
+            ))
+            session.add(Feature(
+                id="feat-1", design_id="des-1", feature_key="k", name="n",
+                scope="s", workflow_id="wf-1", status="paused",
+                pr_url="https://github.com/org/repo/pull/1",
+            ))
+
+        from unittest.mock import MagicMock, patch
+
+        with patch(
+            "subprocess.run",
+            return_value=MagicMock(returncode=0, stdout="", stderr=""),
+        ) as mock_run:
+            from src.mcp.autopilot.feature_routes import FeatureReviewRequest, review_feature
+            result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
+        assert result["success"] is True
+        mock_run.assert_called_once()
+        assert mock_run.call_args.args[0][:3] == ["gh", "pr", "merge"]
+
+        assert not (project_dir / "new_file.txt").exists(), (
+            "no local merge should happen when a PR already exists to merge"
+        )
