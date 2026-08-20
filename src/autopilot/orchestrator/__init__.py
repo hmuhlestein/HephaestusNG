@@ -2558,6 +2558,179 @@ def run_single_design(
     return status, report
 
 
+def _build_and_start_pipeline_sdk(args, project_path: Path, logger: OrchestratorLogger) -> Tuple[Any, str]:
+    """Construct the SDK with every known workflow definition and start it.
+
+    Returns the started SDK and the resolved CLI tool (needed by the caller
+    to register the orchestrator agent). Exits the process if startup fails
+    -- there is no pipeline to run without it.
+    """
+    sys.path.insert(0, str(HEPHAESTUS_DIR))
+    from src.autopilot.phases import (
+        AUTOPILOT_LAUNCH_TEMPLATE,
+        AUTOPILOT_PHASES,
+        AUTOPILOT_WORKFLOW_CONFIG,
+    )
+    from src.sdk import HephaestusSDK
+    from src.sdk.models import WorkflowDefinition
+
+    config = get_config()
+    cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL") or config.default_cli_tool
+
+    autopilot_def = WorkflowDefinition(
+        id="autopilot",
+        name="Autopilot Multi-Agent Pipeline",
+        description="Continuous automated pipeline",
+        phases=AUTOPILOT_PHASES,
+        config=AUTOPILOT_WORKFLOW_CONFIG,
+        launch_template=AUTOPILOT_LAUNCH_TEMPLATE,
+    )
+
+    # Load all workflow definitions from registry (including feature_architect)
+    from src.workflow_registry import get_all_workflow_definitions
+
+    extra_defs = [d for d in get_all_workflow_definitions() if d.id != autopilot_def.id]
+    workflow_defs = [autopilot_def] + extra_defs
+    if extra_defs:
+        logger.info(f"Loaded extra workflow definitions: {[d.id for d in extra_defs]}")
+
+    logger.info("Initializing SDK...")
+    sdk = HephaestusSDK(
+        workflow_definitions=workflow_defs,
+        database_path=os.environ.get("DATABASE_PATH", str(HEPHAESTUS_DIR / "hephaestus.db")),
+        qdrant_url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
+        working_directory=str(project_path),
+        mcp_port=int(os.environ.get("MCP_PORT", "8300")),
+        monitoring_interval=60,
+        llm_provider=os.environ.get("LLM_PROVIDER", "openrouter"),
+        llm_model=os.environ.get("LLM_MODEL", "xiaomi/mimo-v2.5"),
+        default_cli_tool=cli_tool,
+        main_repo_path=str(project_path),
+        project_root=str(project_path),
+        auto_commit=True,
+        conflict_resolution="newest_file_wins",
+        branch_prefix="agent-",
+    )
+
+    logger.info("Starting services...")
+    try:
+        # assume_backend_running: set when args came from AutopilotService's
+        # in-process pipeline (see service.py's args.in_process), which is
+        # itself part of the running backend process -- there is no scenario
+        # where that path executes and the backend *isn't* already up.
+        # Without this, sdk.start()'s pre-check is a single 2s-timeout
+        # self-referential HTTP call to this same process's /health endpoint;
+        # under load it can spuriously time out and conclude "not running",
+        # spawning a second run_server.py that also binds port 8300 and
+        # drives its own AutopilotService against the same DB (observed
+        # live: two processes racing, one pausing a workflow the other had
+        # just launched). Left False for the standalone
+        # `python -m src.autopilot.orchestrator` CLI path (scripts/
+        # autopilot.sh), where the backend genuinely may need spawning.
+        sdk.start(
+            enable_tui=False,
+            timeout=60,
+            assume_backend_running=getattr(args, "in_process", False),
+        )
+    except Exception as e:
+        logger.error(f"Failed to start: {e}")
+        sys.exit(1)
+
+    logger.info("Services started.")
+    return sdk, cli_tool
+
+
+def _persist_design_outcome(
+    design, status, current_project_id: Optional[str], logger: OrchestratorLogger
+) -> None:
+    """Write a finished design's status back to the DB.
+
+    Best-effort: a failure here must not stop the pipeline from moving on to
+    the next design, since the authoritative record of what ran is the
+    processed-hashes file the caller has already updated.
+    """
+    try:
+        from src.core.database import AutopilotDesign, AutopilotProject
+        from src.core.database import get_db as _get_db
+
+        with _get_db() as _db:
+            if current_project_id:
+                _proj = _db.query(AutopilotProject).filter_by(id=current_project_id).first()
+            else:
+                _proj = _db.query(AutopilotProject).filter_by(is_active=True).first()
+            if not _proj:
+                return
+            _des = _db.query(AutopilotDesign).filter_by(project_id=_proj.id, filename=design.path.name).first()
+            if not _des:
+                return
+            _des.status = status.value if hasattr(status, "value") else str(status)
+            _des.feature_folder = str(design.feature_folder) if design.feature_folder else None
+            if status == DesignStatus.COMPLETED:
+                _des.completed_at = datetime.utcnow()
+                # Clear retry counter on success
+                _delete_project_context(_db, f"autopilot_retry_{_des.id}")
+            _db.commit()
+    except Exception as _db_err:
+        logger.warning(f"Failed to update DB design status: {_db_err}")
+
+
+def _shutdown_pipeline(
+    sdk,
+    state: PipelineState,
+    persistent_state,
+    processed_hashes: set,
+    project_path: Path,
+    current_project_id: Optional[str],
+    log_dir: Path,
+    logger: OrchestratorLogger,
+) -> None:
+    """Final accounting, workflow pausing, and SDK shutdown."""
+    state.total_elapsed = int(time.time() - state.start_time)
+    state.queue_status = {"status": "stopped"}
+
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("PIPELINE STOPPED")
+    logger.info("=" * 70)
+    logger.info(f"Total Time: {state.total_elapsed}s")
+    logger.info(f"Designs Processed: {state.designs_processed}")
+    logger.info(f"  Succeeded: {state.designs_succeeded}")
+    logger.info(f"  Failed: {state.designs_failed}")
+    logger.info(f"Logs: {log_dir}")
+    logger.info("=" * 70)
+
+    logger.save_state(state)
+    persistent_state.save(state, processed_hashes)
+    logger.event(
+        "pipeline_stop",
+        {
+            "total_designs": state.designs_processed,
+            "succeeded": state.designs_succeeded,
+            "failed": state.designs_failed,
+            "elapsed_seconds": state.total_elapsed,
+        },
+    )
+    _update_orchestrator_status("terminated")
+
+    # Pause all active autopilot workflows belonging to THIS project.
+    # Unscoped, this would forcibly pause an unrelated active workflow
+    # in a different project just because this project's pipeline
+    # stopped -- same class of cross-project collateral damage as the
+    # stale current_workflow_id bug fixed alongside this.
+    try:
+        for wf in get_active_workflows(str(project_path), project_id=current_project_id):
+            try:
+                pause_workflow_direct(wf.get("id", ""))
+                logger.info(f"Paused workflow {wf.get('id', '')[:8]}")
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"Failed to pause workflows: {e}")
+
+    if sdk is not None:
+        sdk.shutdown(graceful=True, timeout=15)
+
+
 def run_continuous_pipeline(args) -> None:
     log_dir = Path(AUTOPILOT_STATE_DIR) / datetime.now().strftime("run-%Y%m%d-%H%M%S")
     logger = OrchestratorLogger(log_dir)
@@ -2630,81 +2803,7 @@ def run_continuous_pipeline(args) -> None:
 
     processed_file = log_dir / "processed.json"
 
-    sys.path.insert(0, str(HEPHAESTUS_DIR))
-    from src.autopilot.phases import (
-        AUTOPILOT_LAUNCH_TEMPLATE,
-        AUTOPILOT_PHASES,
-        AUTOPILOT_WORKFLOW_CONFIG,
-    )
-    from src.sdk import HephaestusSDK
-    from src.sdk.models import WorkflowDefinition
-
-    config = get_config()
-    cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL") or config.default_cli_tool
-
-    autopilot_def = WorkflowDefinition(
-        id="autopilot",
-        name="Autopilot Multi-Agent Pipeline",
-        description="Continuous automated pipeline",
-        phases=AUTOPILOT_PHASES,
-        config=AUTOPILOT_WORKFLOW_CONFIG,
-        launch_template=AUTOPILOT_LAUNCH_TEMPLATE,
-    )
-
-    # Load all workflow definitions from registry (including feature_architect)
-    from src.workflow_registry import get_all_workflow_definitions
-
-    all_defs = get_all_workflow_definitions()
-    # Add any definitions not already in our list
-    known_ids = {autopilot_def.id}
-    extra_defs = [d for d in all_defs if d.id not in known_ids]
-    workflow_defs = [autopilot_def] + extra_defs
-    if extra_defs:
-        logger.info(f"Loaded extra workflow definitions: {[d.id for d in extra_defs]}")
-
-    logger.info("Initializing SDK...")
-    sdk = HephaestusSDK(
-        workflow_definitions=workflow_defs,
-        database_path=os.environ.get("DATABASE_PATH", str(HEPHAESTUS_DIR / "hephaestus.db")),
-        qdrant_url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
-        working_directory=str(project_path),
-        mcp_port=int(os.environ.get("MCP_PORT", "8300")),
-        monitoring_interval=60,
-        llm_provider=os.environ.get("LLM_PROVIDER", "openrouter"),
-        llm_model=os.environ.get("LLM_MODEL", "xiaomi/mimo-v2.5"),
-        default_cli_tool=cli_tool,
-        main_repo_path=str(project_path),
-        project_root=str(project_path),
-        auto_commit=True,
-        conflict_resolution="newest_file_wins",
-        branch_prefix="agent-",
-    )
-
-    logger.info("Starting services...")
-    try:
-        # assume_backend_running: set when args came from AutopilotService's
-        # in-process pipeline (see service.py's args.in_process), which is
-        # itself part of the running backend process -- there is no scenario
-        # where that path executes and the backend *isn't* already up.
-        # Without this, sdk.start()'s pre-check is a single 2s-timeout
-        # self-referential HTTP call to this same process's /health endpoint;
-        # under load it can spuriously time out and conclude "not running",
-        # spawning a second run_server.py that also binds port 8300 and
-        # drives its own AutopilotService against the same DB (observed
-        # live: two processes racing, one pausing a workflow the other had
-        # just launched). Left False for the standalone
-        # `python -m src.autopilot.orchestrator` CLI path (scripts/
-        # autopilot.sh), where the backend genuinely may need spawning.
-        sdk.start(
-            enable_tui=False,
-            timeout=60,
-            assume_backend_running=getattr(args, "in_process", False),
-        )
-    except Exception as e:
-        logger.error(f"Failed to start: {e}")
-        sys.exit(1)
-
-    logger.info("Services started.")
+    sdk, cli_tool = _build_and_start_pipeline_sdk(args, project_path, logger)
 
     # Register orchestrator as an agent
     global _orchestrator_agent_id
@@ -3009,31 +3108,7 @@ def run_continuous_pipeline(args) -> None:
                 processed_hashes.add(next_design.content_hash)
                 processed_file.write_text(json.dumps(list(processed_hashes)))
 
-                # Update DB design status
-                try:
-                    from src.core.database import AutopilotDesign, AutopilotProject
-                    from src.core.database import get_db as _get_db
-
-                    with _get_db() as _db:
-                        if current_project_id:
-                            _proj = _db.query(AutopilotProject).filter_by(id=current_project_id).first()
-                        else:
-                            _proj = _db.query(AutopilotProject).filter_by(is_active=True).first()
-                        if _proj:
-                            _des = _db.query(AutopilotDesign).filter_by(project_id=_proj.id, filename=next_design.path.name).first()
-                            if _des:
-                                _des.status = status.value if hasattr(status, "value") else str(status)
-                                _des.feature_folder = str(next_design.feature_folder) if next_design.feature_folder else None
-                                if status == DesignStatus.COMPLETED:
-                                    _des.completed_at = datetime.utcnow()
-                                    # Clear retry counter on success
-                                    _delete_project_context(
-                                        _db,
-                                        f"autopilot_retry_{_des.id}",
-                                    )
-                                _db.commit()
-                except Exception as _db_err:
-                    logger.warning(f"Failed to update DB design status: {_db_err}")
+                _persist_design_outcome(next_design, status, current_project_id, logger)
 
                 state.designs_processed += 1
                 if status == DesignStatus.COMPLETED:
@@ -3081,52 +3156,16 @@ def run_continuous_pipeline(args) -> None:
         logger.info("")
         logger.info("Pipeline interrupted by user")
     finally:
-        state.total_elapsed = int(time.time() - state.start_time)
-        state.queue_status = {"status": "stopped"}
-
-        logger.info("")
-        logger.info("=" * 70)
-        logger.info("PIPELINE STOPPED")
-        logger.info("=" * 70)
-        logger.info(f"Total Time: {state.total_elapsed}s")
-        logger.info(f"Designs Processed: {state.designs_processed}")
-        logger.info(f"  Succeeded: {state.designs_succeeded}")
-        logger.info(f"  Failed: {state.designs_failed}")
-        logger.info(f"Logs: {log_dir}")
-        logger.info("=" * 70)
-
-        logger.save_state(state)
-        persistent_state.save(state, processed_hashes)
-        logger.event(
-            "pipeline_stop",
-            {
-                "total_designs": state.designs_processed,
-                "succeeded": state.designs_succeeded,
-                "failed": state.designs_failed,
-                "elapsed_seconds": state.total_elapsed,
-            },
+        _shutdown_pipeline(
+            sdk,
+            state,
+            persistent_state,
+            processed_hashes,
+            project_path,
+            current_project_id,
+            log_dir,
+            logger,
         )
-        _update_orchestrator_status("terminated")
-
-        # Pause all active autopilot workflows belonging to THIS project.
-        # Unscoped, this would forcibly pause an unrelated active workflow
-        # in a different project just because this project's pipeline
-        # stopped -- same class of cross-project collateral damage as the
-        # stale current_workflow_id bug fixed alongside this.
-        try:
-            active_workflows = get_active_workflows(str(project_path), project_id=current_project_id)
-            for wf in active_workflows:
-                wf_id = wf.get("id", "")
-                try:
-                    pause_workflow_direct(wf_id)
-                    logger.info(f"Paused workflow {wf_id[:8]}")
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning(f"Failed to pause workflows: {e}")
-
-        if sdk is not None:
-            sdk.shutdown(graceful=True, timeout=15)
 
 
 def main():
