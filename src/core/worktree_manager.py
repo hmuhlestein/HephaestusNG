@@ -13,10 +13,7 @@ Agents never read out-of-tree paths. Curated inbound context (design doc, qa_spe
 task framing) is copied into a git-excluded ``<worktree>/.hephaestus/`` directory.
 """
 
-import fcntl
 import logging
-import shutil
-import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -32,11 +29,13 @@ from src.core.constants import CONTEXT_DIR_NAME, WORKTREES_SUBDIR
 from src.core.database import (
     AgentBranch,
     DatabaseManager,
-    MergeConflictResolution,
     Workflow,
     WorktreeCommit,
 )
 from src.core.simple_config import get_config
+from src.core.worktree_conflict_resolution import ConflictResolver
+from src.core.worktree_merge_lock import MergeLockManager
+from src.core.worktree_removal import WorktreeRemover
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +117,9 @@ class WorktreeManager:
         self.merge_lock_path = (
             Path(self.main_repo.working_dir) / ".git" / ".hephaestus_merge_lock"
         )
+        self._merge_lock = MergeLockManager(self.merge_lock_path)
+        self._conflict_resolver = ConflictResolver()
+        self._worktree_remover = WorktreeRemover()
         self._ensure_excludes()
         logger.info(f"WorktreeManager initialized for repo: {self._project_root}")
 
@@ -139,6 +141,7 @@ class WorktreeManager:
             raise ValueError(f"Not a git repository: {new_path}")
         self._project_root = new_path
         self.merge_lock_path = Path(new_path) / ".git" / ".hephaestus_merge_lock"
+        self._merge_lock = MergeLockManager(self.merge_lock_path)
         self._ensure_excludes()
         logger.info(f"WorktreeManager reloaded with repo: {new_path}")
 
@@ -194,47 +197,6 @@ class WorktreeManager:
             return Repo(record.worktree_path)
         finally:
             session.close()
-
-    # ── Lock management ──────────────────────────────────────────
-
-    def _acquire_merge_lock(self, agent_id: str, timeout: int = 300):
-        """Acquire exclusive lock for merge operations."""
-        logger.info(f"[WORKTREE:{agent_id}] Acquiring merge lock (timeout={timeout}s)")
-        self.merge_lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self.merge_lock_path.touch(exist_ok=True)
-
-        lock_file = open(self.merge_lock_path, "w")
-        start_time = time.time()
-
-        while True:
-            try:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                elapsed = time.time() - start_time
-                logger.info(
-                    f"[WORKTREE:{agent_id}] Merge lock acquired after {elapsed:.2f}s"
-                )
-                return lock_file
-            except IOError:
-                elapsed = time.time() - start_time
-                if elapsed > timeout:
-                    lock_file.close()
-                    raise TimeoutError(
-                        f"[WORKTREE:{agent_id}] Failed to acquire merge lock after {timeout}s"
-                    )
-                if int(elapsed) % 10 == 0:
-                    logger.info(
-                        f"[WORKTREE:{agent_id}] Waiting for merge lock... ({elapsed:.0f}s)"
-                    )
-                time.sleep(0.5)
-
-    def _release_merge_lock(self, lock_file, agent_id: str):
-        """Release merge lock."""
-        logger.info(f"[WORKTREE:{agent_id}] Releasing merge lock")
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            lock_file.close()
-        except Exception as e:
-            logger.error(f"[WORKTREE:{agent_id}] Error releasing lock: {e}")
 
     # ── Worktree creation ────────────────────────────────────────
 
@@ -406,8 +368,7 @@ class WorktreeManager:
         commit = repo.head.commit
         stats = commit.stats.total
 
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             session.add(
                 WorktreeCommit(
                     id=str(uuid.uuid4()),
@@ -420,9 +381,6 @@ class WorktreeManager:
                     deletions=stats.get("deletions", 0),
                 )
             )
-            session.commit()
-        finally:
-            session.close()
 
         return {
             "commit_sha": commit.hexsha,
@@ -459,7 +417,7 @@ class WorktreeManager:
 
         session = self.db_manager.get_session()
         try:
-            lock_file = self._acquire_merge_lock(agent_id)
+            lock_file = self._merge_lock.acquire(agent_id)
 
             record = self._agent_record(session, agent_id)
             if not record:
@@ -538,7 +496,7 @@ class WorktreeManager:
                     logger.info(
                         f"[WORKTREE:{agent_id}] Conflicts detected, resolving (newest-file-wins)"
                     )
-                    conflicts_resolved = self._resolve_conflicts(
+                    conflicts_resolved = self._conflict_resolver.resolve(
                         agent_id, session, self.main_repo
                     )
                     self.main_repo.git.commit(
@@ -573,7 +531,7 @@ class WorktreeManager:
                 "merged_to": target_branch,
                 "commit_sha": merge_commit_sha,
                 "conflicts_resolved": conflicts_resolved,
-                # _resolve_conflicts always runs newest-file-wins,
+                # ConflictResolver always runs newest-file-wins,
                 # unconditionally -- this used to echo
                 # self.config.conflict_resolution_strategy, a config field
                 # that was never actually branched on anywhere (removed).
@@ -593,65 +551,8 @@ class WorktreeManager:
             raise
         finally:
             if lock_file:
-                self._release_merge_lock(lock_file, agent_id)
+                self._merge_lock.release(lock_file, agent_id)
             session.close()
-
-    # ── Conflict resolution ──────────────────────────────────────
-
-    def _resolve_conflicts(
-        self, agent_id: str, session: Session, repo: Optional[Repo] = None
-    ) -> List[Dict]:
-        """Resolve merge conflicts using newest-file-wins strategy.
-
-        Args:
-            repo: Repo where the merge is in progress (defaults to main repo).
-        """
-        repo = repo or self.main_repo
-        conflicted = repo.git.diff("--name-only", "--diff-filter=U").splitlines()
-        logger.info(f"[WORKTREE:{agent_id}] Resolving {len(conflicted)} conflicts")
-
-        resolved = []
-        for file_path in conflicted:
-            parent_ts = self._get_file_timestamp(repo, file_path, "HEAD")
-            child_ts = self._get_file_timestamp(repo, file_path, "MERGE_HEAD")
-
-            if parent_ts is None:
-                parent_ts = datetime.utcnow()
-            if child_ts is None:
-                child_ts = datetime.utcnow()
-
-            if child_ts > parent_ts:
-                choice = "child"
-                content = self._get_file_content(repo, file_path, "MERGE_HEAD")
-            elif parent_ts > child_ts:
-                choice = "parent"
-                content = self._get_file_content(repo, file_path, "HEAD")
-            else:
-                choice = "tie_child"
-                content = self._get_file_content(repo, file_path, "MERGE_HEAD")
-
-            try:
-                repo.git.rm("--cached", "-f", file_path)
-            except GitCommandError:
-                pass
-            self._write_file_content(repo.working_dir, file_path, content)
-            repo.git.add(file_path)
-
-            session.add(
-                MergeConflictResolution(
-                    id=str(uuid.uuid4()),
-                    agent_id=agent_id,
-                    file_path=file_path,
-                    parent_modified_at=parent_ts,
-                    child_modified_at=child_ts,
-                    resolution_choice=choice,
-                )
-            )
-
-            resolved.append({"file": file_path, "resolution": choice})
-
-        session.flush()
-        return resolved
 
     # ── Helpers ──────────────────────────────────────────────────
 
@@ -696,36 +597,6 @@ class WorktreeManager:
 
         # Parent merged/cleaned — branch from its recorded commit or main HEAD
         return parent.parent_commit_sha or self.main_repo.head.commit.hexsha
-
-    def _get_file_timestamp(
-        self, repo: Repo, file_path: str, ref: str = "HEAD"
-    ) -> Optional[datetime]:
-        try:
-            commits = list(repo.iter_commits(ref, paths=file_path, max_count=1))
-            if commits:
-                return datetime.fromtimestamp(commits[0].committed_date)
-        except Exception:
-            pass
-        return None
-
-    def _get_file_content(self, repo: Repo, file_path: str, ref: str = "HEAD") -> str:
-        """Get content of a file from a specific git ref (never from working dir)."""
-        try:
-            return repo.git.show(f"{ref}:{file_path}")
-        except Exception:
-            try:
-                full_path = Path(repo.working_dir) / file_path
-                if full_path.exists():
-                    return full_path.read_text()
-            except Exception:
-                pass
-            return ""
-
-    def _write_file_content(self, repo_dir: str, file_path: str, content: str):
-        full_path = Path(repo_dir) / file_path
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        # Sanitize surrogate characters from garbled tmux output
-        full_path.write_text(content.encode("utf-8", errors="replace").decode("utf-8"))
 
     def get_workspace_changes(
         self, agent_id: str, since_commit: Optional[str] = None
@@ -804,88 +675,12 @@ class WorktreeManager:
     def _remove_worktree(self, worktree_path: str, require_clean: bool = True) -> None:
         """Remove a git worktree and its directory.
 
-        Hard safety guard: refuses to touch the main repo, regardless of
-        what any caller's own path-matching logic decided. This is the sole
-        choke point every removal (git worktree remove, and its shutil.rmtree
-        fallback) goes through -- putting the check here means a future bug
-        in a caller's "is this the main repo" comparison (like the resolved-
-        vs-unresolved path mismatch found and fixed in
-        cleanup_all_stale_branches, which let this exact function attempt to
-        delete the main repository) can't reach shutil.rmtree on it again.
-
-        require_clean: refuses to remove a worktree carrying uncommitted
-        changes (modified, staged, or untracked) unless the caller
-        explicitly opts out. Workflow.status is not a reliable enough
-        signal to gate a destructive delete on: a workflow can be marked
-        "failed" by an unrelated self-heal (e.g. "abandoned: no activity"
-        firing because the *backend itself* crashed and stopped recording
-        activity, not because the agent actually stopped working) while an
-        agent is still genuinely mid-task with real, uncommitted fixes
-        sitting in this exact worktree. Every phase already commits its
-        own work here as a matter of course (see this module's own
-        docstring), so a worktree that's truly done has nothing uncommitted
-        left to lose -- this check only ever blocks the exact case it's
-        meant to. Observed live: a security_review agent's uncommitted
-        fixes (C-1/H-1/H-2, a written report) were permanently destroyed
-        this way when a crash-induced false "abandoned" marking let the
-        generic stale-worktree sweep (cleanup_all_stale_branches) delete
-        the worktree out from under it.
+        Delegates to WorktreeRemover (SOLID review 4.5) -- kept as a thin
+        method here, not inlined at call sites, since
+        tests/test_cleanup_stale_branches_race.py patches/calls this method
+        by name directly.
         """
-        try:
-            target = Path(worktree_path).resolve()
-        except OSError:
-            target = Path(worktree_path)
-        try:
-            main_repo_path = Path(self.main_repo.working_dir).resolve()
-        except OSError:
-            main_repo_path = Path(self.main_repo.working_dir)
-        if target == main_repo_path:
-            logger.error(
-                f"[WORKTREE] Refusing to remove {worktree_path} -- resolves to "
-                "the main repository, not a linked worktree. This should never "
-                "be reached; a caller's path-matching logic has a bug."
-            )
-            return
-
-        if require_clean and target.is_dir():
-            try:
-                wt_repo = Repo(target)
-                dirty = wt_repo.is_dirty(untracked_files=True)
-            except Exception as e:
-                # Can't prove it's clean -- and "assume clean" is exactly the
-                # failure mode this guard exists to close. Refuse rather
-                # than silently fall through to a force-delete.
-                logger.error(
-                    f"[WORKTREE] Refusing to remove {worktree_path} -- could "
-                    f"not verify it has no uncommitted changes ({e}). Pass "
-                    "require_clean=False to force removal if this worktree "
-                    "is genuinely being discarded."
-                )
-                return
-            if dirty:
-                logger.error(
-                    f"[WORKTREE] Refusing to remove {worktree_path} -- has "
-                    "uncommitted changes (modified, staged, or untracked "
-                    "files). A worktree that's genuinely done has already "
-                    "committed everything; this one hasn't, so treating it "
-                    "as stale would destroy real, unrecovered work. Pass "
-                    "require_clean=False to force removal if this worktree "
-                    "is genuinely being discarded."
-                )
-                return
-
-        try:
-            self.main_repo.git.worktree("remove", worktree_path, "--force")
-        except GitCommandError:
-            # Fall back to manual removal + prune
-            try:
-                if Path(worktree_path).exists():
-                    shutil.rmtree(worktree_path, ignore_errors=True)
-                self.main_repo.git.worktree("prune")
-            except Exception as e:
-                logger.warning(
-                    f"[WORKTREE] Could not remove worktree {worktree_path}: {e}"
-                )
+        self._worktree_remover.remove(self.main_repo, worktree_path, require_clean)
 
     def cleanup_worktree(
         self, agent_id: str, delete_branch: bool = False
@@ -897,8 +692,7 @@ class WorktreeManager:
                 use for failed agents or after a successful merge). If False
                 (default), the branch is preserved for history.
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             record = self._agent_record(session, agent_id)
             if not record:
                 return {"status": "not_found"}
@@ -919,14 +713,11 @@ class WorktreeManager:
                     logger.warning(f"[WORKTREE] Could not delete branch: {e}")
 
             record.merge_status = "cleaned"
-            session.commit()
             return {
                 "status": "cleaned",
                 "branch": record.branch_name,
                 "branch_preserved": not delete_branch,
             }
-        finally:
-            session.close()
 
     def discard_agent(self, agent_id: str) -> Dict[str, Any]:
         """Discard a failed agent: remove worktree + branch, nothing merged.
@@ -1291,7 +1082,9 @@ class WorktreeManager:
                 resolved = str(d.resolve())
                 if resolved in tracked_paths or resolved == main_repo_path:
                     continue
-                why = self._orphan_worktree_blocker(d)
+                why = self._worktree_remover.orphan_blocker(
+                    self.main_repo, self.config.base_branch, d
+                )
                 if why:
                     preserved += 1
                     logger.warning(
@@ -1333,28 +1126,6 @@ class WorktreeManager:
             )
 
         return reclaimed, preserved, rows_fixed
-
-    def _orphan_worktree_blocker(self, path: Path) -> Optional[str]:
-        """Why this orphaned worktree must not be reclaimed, or None."""
-        try:
-            repo = Repo(str(path))
-        except Exception as e:
-            return f"not a readable git worktree: {e}"
-        try:
-            if repo.is_dirty(untracked_files=True):
-                return "uncommitted or untracked changes"
-            branch = repo.active_branch.name
-        except Exception as e:
-            return f"could not determine state: {e}"
-        try:
-            unmerged = self.main_repo.git.rev_list(
-                "--count", f"{self.config.base_branch}..{branch}"
-            ).strip()
-            if unmerged not in ("", "0"):
-                return f"{unmerged} commit(s) not in {self.config.base_branch}"
-        except Exception as e:
-            return f"could not compare against base branch: {e}"
-        return None
 
 
 # Backward-compatible alias for call sites that still import WorktreeManager.
