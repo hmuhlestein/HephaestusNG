@@ -611,44 +611,7 @@ class MonitoringLoop:
             except Exception as e:
                 logger.warning(f"[AUTO-DISCOVER] Failed to load active workflow: {e}")
 
-        # Check if tracked workflow is still the most recent active one.
-        # When the pipeline restarts with a new design, it launches a new workflow.
-        # The monitor should switch to track the new workflow instead of the old one.
-        if self.phase_manager and self.phase_manager.workflow_id:
-            try:
-                session = self.db_manager.get_session()
-                from src.core.database import Workflow
-                try:
-                    # Get the tracked workflow's status
-                    tracked_wf = session.query(Workflow).filter_by(id=self.phase_manager.workflow_id).first()
-                    # Find the most recent active workflow
-                    latest_active = (
-                        session.query(Workflow)
-                        .filter_by(status="active")
-                        .order_by(Workflow.created_at.desc())
-                        .first()
-                    )
-                    if latest_active and latest_active.id != self.phase_manager.workflow_id:
-                        # A newer active workflow exists — switch to it
-                        logger.info(
-                            f"[WORKFLOW-SWITCH] Tracked workflow {self.phase_manager.workflow_id[:8]} "
-                            f"is {tracked_wf.status if tracked_wf else 'unknown'}, "
-                            f"switching to newer active workflow {latest_active.id[:8]}"
-                        )
-                        self.phase_manager.workflow_id = latest_active.id
-                        self.phase_manager.active_workflow = None  # Force reload
-                        self.phase_manager.load_active_workflow()
-                    elif tracked_wf and tracked_wf.status in ("completed", "failed", "paused") and not latest_active:
-                        # Tracked workflow is done and no new active workflow — clear
-                        logger.info(
-                            f"[WORKFLOW-SWITCH] Tracked workflow {self.phase_manager.workflow_id[:8]} "
-                            f"is {tracked_wf.status} with no active workflows — clearing"
-                        )
-                        self.phase_manager.workflow_id = None
-                finally:
-                    session.close()
-            except Exception as e:
-                logger.error(f"[WORKFLOW-SWITCH] Check failed: {e}")
+        self._maybe_switch_tracked_workflow()
 
         # Propagate phase_manager to agent_manager so spawned agents get phase context
         if self.phase_manager and self.agent_manager and not self.agent_manager.phase_manager:
@@ -672,7 +635,79 @@ class MonitoringLoop:
         except Exception as e:
             logger.error(f"Error in system health audit: {e}")
 
-        # DEBUG: Check database for active workflows
+        self._log_active_workflow_diagnostics()
+
+        if self.phase_manager and self.phase_manager.workflow_id:
+            logger.info(
+                f"[DIAGNOSTIC] ✅ Conditions met - running diagnostic check for workflow {self.phase_manager.workflow_id[:8]}"
+            )
+            try:
+                await self._check_workflow_stuck_state()
+            except Exception as e:
+                logger.error(f"[DIAGNOSTIC] Error checking workflow stuck state: {e}")
+        else:
+            if not self.phase_manager:
+                logger.warning("[DIAGNOSTIC] ❌ SKIPPED - No phase_manager")
+            elif not self.phase_manager.workflow_id:
+                logger.warning(
+                    "[DIAGNOSTIC] ❌ SKIPPED - phase_manager.workflow_id is None"
+                )
+                logger.warning(
+                    "[DIAGNOSTIC] 💡 This likely means there's an active workflow in the DB that wasn't loaded on startup"
+                )
+
+    def _maybe_switch_tracked_workflow(self) -> None:
+        """Check if tracked workflow is still the most recent active one.
+
+        When the pipeline restarts with a new design, it launches a new
+        workflow. The monitor should switch to track the new workflow
+        instead of the old one. Extracted from _monitoring_cycle (SOLID
+        review 3.4) -- inline DB-querying business logic that had grown
+        alongside the method's scheduling/coordination role.
+        """
+        if not (self.phase_manager and self.phase_manager.workflow_id):
+            return
+        try:
+            session = self.db_manager.get_session()
+            from src.core.database import Workflow
+            try:
+                # Get the tracked workflow's status
+                tracked_wf = session.query(Workflow).filter_by(id=self.phase_manager.workflow_id).first()
+                # Find the most recent active workflow
+                latest_active = (
+                    session.query(Workflow)
+                    .filter_by(status="active")
+                    .order_by(Workflow.created_at.desc())
+                    .first()
+                )
+                if latest_active and latest_active.id != self.phase_manager.workflow_id:
+                    # A newer active workflow exists — switch to it
+                    logger.info(
+                        f"[WORKFLOW-SWITCH] Tracked workflow {self.phase_manager.workflow_id[:8]} "
+                        f"is {tracked_wf.status if tracked_wf else 'unknown'}, "
+                        f"switching to newer active workflow {latest_active.id[:8]}"
+                    )
+                    self.phase_manager.workflow_id = latest_active.id
+                    self.phase_manager.active_workflow = None  # Force reload
+                    self.phase_manager.load_active_workflow()
+                elif tracked_wf and tracked_wf.status in ("completed", "failed", "paused") and not latest_active:
+                    # Tracked workflow is done and no new active workflow — clear
+                    logger.info(
+                        f"[WORKFLOW-SWITCH] Tracked workflow {self.phase_manager.workflow_id[:8]} "
+                        f"is {tracked_wf.status} with no active workflows — clearing"
+                    )
+                    self.phase_manager.workflow_id = None
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"[WORKFLOW-SWITCH] Check failed: {e}")
+
+    def _log_active_workflow_diagnostics(self) -> None:
+        """Log per-workflow task-status counts for every active workflow.
+        Diagnostic only -- no decisions made here. Extracted from
+        _monitoring_cycle (SOLID review 3.4), same rationale as
+        _maybe_switch_tracked_workflow above.
+        """
         session = self.db_manager.get_session()
         try:
             from src.core.database import Workflow
@@ -706,25 +741,6 @@ class MonitoringLoop:
                 )
         finally:
             session.close()
-
-        if self.phase_manager and self.phase_manager.workflow_id:
-            logger.info(
-                f"[DIAGNOSTIC] ✅ Conditions met - running diagnostic check for workflow {self.phase_manager.workflow_id[:8]}"
-            )
-            try:
-                await self._check_workflow_stuck_state()
-            except Exception as e:
-                logger.error(f"[DIAGNOSTIC] Error checking workflow stuck state: {e}")
-        else:
-            if not self.phase_manager:
-                logger.warning("[DIAGNOSTIC] ❌ SKIPPED - No phase_manager")
-            elif not self.phase_manager.workflow_id:
-                logger.warning(
-                    "[DIAGNOSTIC] ❌ SKIPPED - phase_manager.workflow_id is None"
-                )
-                logger.warning(
-                    "[DIAGNOSTIC] 💡 This likely means there's an active workflow in the DB that wasn't loaded on startup"
-                )
 
     async def _guardian_analysis_for_agent(self, *args, **kwargs):
         """Delegator to _guardian_dispatch.guardian_analysis_for_agent()."""
