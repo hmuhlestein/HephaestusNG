@@ -1427,6 +1427,30 @@ class TestProjects:
         )
         assert resp.status_code == 409
 
+    def test_create_project_offloads_codegraph_init(self, project_client):
+        """Regression: codegraph init ran subprocess.run(...) with a 120s
+        timeout directly on the event loop -- blocking every other
+        in-flight request for up to that long on a single POST /projects
+        call. Must go through run_in_executor instead."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        client, dirs = project_client
+
+        fake_loop = MagicMock()
+        fake_loop.run_in_executor = AsyncMock(return_value=None)
+
+        with patch("asyncio.get_event_loop", return_value=fake_loop):
+            resp = client.post(
+                "/api/autopilot/projects",
+                json={"name": "Test", "base_dir": str(dirs["project_dir"])},
+            )
+
+        assert resp.status_code == 200
+        fake_loop.run_in_executor.assert_called_once()
+        executor_arg, func_arg = fake_loop.run_in_executor.call_args.args[:2]
+        assert executor_arg is None
+        assert func_arg.__name__ == "_init_codegraph_index"
+
     def test_list_projects(self, project_client):
         client, dirs = project_client
         client.post(

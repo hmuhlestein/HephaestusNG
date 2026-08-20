@@ -270,7 +270,10 @@ async def pause_feature(feature_id: str):
             db.query(Task)
             .filter(
                 Task.workflow_id == feature.workflow_id,
-                Task.status.in_(["pending", "queued", "assigned", "in_progress"]),
+                Task.status.in_([
+                    "pending", "queued", "assigned", "in_progress",
+                    "under_review", "validation_in_progress", "needs_work",
+                ]),
             )
             .all()
         )
@@ -359,7 +362,13 @@ async def resume_feature(feature_id: str):
         # live: task 146d191d.
         candidates_query = db.query(Task).filter(
             Task.workflow_id == workflow_id,
-            Task.status.in_(["blocked", "failed", "assigned", "in_progress", "pending"]),
+            # needs_work included: set when a validator rejects a task and
+            # sends feedback back to the same agent (assigned_agent_id
+            # still points at it) -- if that agent then dies before acting
+            # on the feedback, the task must still reach the
+            # assigned_agent_id/dead-agent check below, or it's invisible
+            # to every resume path here.
+            Task.status.in_(["blocked", "failed", "assigned", "in_progress", "pending", "needs_work"]),
         )
         candidates = candidates_query.all()
         restartable = []
@@ -531,7 +540,13 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
             .filter(
                 Task.workflow_id == workflow_id,
                 Task.phase_id == arch_phase.id,
-                Task.status.in_(["blocked", "failed", "assigned", "in_progress", "pending"]),
+                # needs_work included: set when a validator rejects a task
+                # and sends feedback back to the same agent
+                # (assigned_agent_id still points at it) -- if that agent
+                # then dies before acting on the feedback, the task must
+                # still reach the assigned_agent_id/dead-agent check
+                # below, or it's invisible to every resume path here.
+                Task.status.in_(["blocked", "failed", "assigned", "in_progress", "pending", "needs_work"]),
             )
             .all()
         )
@@ -776,7 +791,13 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
         # query failing to see it. Confirmed live: task 146d191d.
         candidates_query = db.query(Task).filter(
             Task.workflow_id == workflow_id,
-            Task.status.in_(["blocked", "failed", "assigned", "in_progress", "pending"]),
+            # needs_work included: set when a validator rejects a task and
+            # sends feedback back to the same agent (assigned_agent_id
+            # still points at it) -- if that agent then dies before acting
+            # on the feedback, the task must still reach the
+            # assigned_agent_id/dead-agent check below, or it's invisible
+            # to every resume path here.
+            Task.status.in_(["blocked", "failed", "assigned", "in_progress", "pending", "needs_work"]),
         )
         candidates = candidates_query.all()
         restartable = []
@@ -1014,7 +1035,12 @@ async def delete_feature(feature_id: str):
                     # _cleanup_worktree only calls .info/.warning -- this
                     # module's own logger satisfies that without needing
                     # OrchestratorLogger's real log-file machinery here.
-                    _cleanup_worktree(wt_path, branch, Path(project_path_str), logger)
+                    # Offloaded -- real git/filesystem work, would
+                    # otherwise block the event loop.
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(
+                        None, _cleanup_worktree, wt_path, branch, Path(project_path_str), logger
+                    )
                 else:
                     logger.warning(
                         f"[DELETE-FEATURE] {feature_id}'s worktree {wt_path} has no "

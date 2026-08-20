@@ -509,7 +509,11 @@ async def startup_event():
     try:
         from src.autopilot.orchestrator.worktree_integration import sweep_completed_workflow_worktrees
 
-        swept = sweep_completed_workflow_worktrees(logger)
+        # Loops over every orphaned worktree doing `git worktree remove
+        # --force` -- offloaded so it doesn't add real git-removal time,
+        # per stale worktree, to the server's startup latency.
+        loop = asyncio.get_event_loop()
+        swept = await loop.run_in_executor(None, sweep_completed_workflow_worktrees, logger)
         if swept:
             logger.info(f"[SWEEP] Cleaned up {swept} orphaned completed-workflow worktree(s)")
     except Exception as e:

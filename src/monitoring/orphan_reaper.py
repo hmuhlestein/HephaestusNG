@@ -58,13 +58,16 @@ class OrphanSessionReaper:
             try:
                 # "pending"/"assigned" are Task.status values, not
                 # Agent.status ones -- Agent.status's CheckConstraint only
-                # allows idle/working/stuck/terminated, so those two never
-                # matched anything here. List every non-terminated status
-                # instead of just "working" so this stays correct if
-                # idle/stuck ever start actually being set.
+                # allows idle/working/stuck/terminated/starting, so those
+                # two never matched anything here. List every
+                # non-terminated status instead of just "working" so this
+                # stays correct if idle/stuck ever start actually being
+                # set. "starting" included too -- a freshly-created agent
+                # still in that state can already have a live tmux
+                # session, which would otherwise be misjudged as orphaned.
                 active_agents = (
                     session.query(Agent)
-                    .filter(Agent.status.in_(["working", "idle", "stuck"]))
+                    .filter(Agent.status.in_(["working", "idle", "stuck", "starting"]))
                     .all()
                 )
 
