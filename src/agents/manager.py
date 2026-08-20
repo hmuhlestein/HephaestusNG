@@ -530,14 +530,16 @@ class AgentManager:
         finally:
             session.close()
 
-    async def send_message_to_agent(self, agent_id: str, message: str):
+    async def send_message_to_agent(self, agent_id: str, message: str, session=None):
         """Send a message to an agent's tmux session.
 
         Delegates to AgentMessenger (SOLID review 3.1) — kept as a public
         method here since guardian.py, monitor.py, and others depend on
         AgentManager exposing this directly.
         """
-        return await self._messenger.send_message_to_agent(agent_id, message)
+        return await self._messenger.send_message_to_agent(
+            agent_id, message, session=session
+        )
 
     async def broadcast_message_to_all_agents(
         self, sender_agent_id: str, message: str
@@ -584,7 +586,9 @@ class AgentManager:
             recipient_count = 0
             for agent in active_agents:
                 try:
-                    await self.send_message_to_agent(agent.id, formatted_message)
+                    await self.send_message_to_agent(
+                        agent.id, formatted_message, session=session
+                    )
                     recipient_count += 1
 
                     # Log the broadcast
@@ -654,7 +658,9 @@ class AgentManager:
             formatted_message = f"\n[AGENT {sender_agent_id[:8]} TO AGENT {recipient_agent_id[:8]}]: {message}\n"
 
             # Send the message
-            await self.send_message_to_agent(recipient_agent_id, formatted_message)
+            await self.send_message_to_agent(
+                recipient_agent_id, formatted_message, session=session
+            )
 
             # Log the communication
             log_entry = AgentLog(
