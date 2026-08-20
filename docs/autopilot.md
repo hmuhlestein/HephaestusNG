@@ -609,14 +609,17 @@ worktrees/
 │               └── scope.md
 │
 ├── <design-id>-auth/                  ← auth feature worktree (Phases 1–14)
-│   ├── .hephaestus/
-│   │   ├── features.json              ← copied from Phase 0 worktree at creation
-│   │   └── features/
-│   │       └── auth/
-│   │           └── scope.md           ← copied from Phase 0 worktree at creation
-│   └── docs/
-│       ├── requirements.md
-│       ├── architecture.md
+│   └── .hephaestus/                   ← ALL phase reports land here, never in docs/
+│       ├── features.json              ← copied from Phase 0 worktree at creation
+│       ├── features/
+│       │   └── auth/
+│       │       └── scope.md           ← copied from Phase 0 worktree at creation
+│       ├── design.md                  ← copy of the design doc, seeded at creation
+│       ├── requirements.md            ← product_requirements writes flat
+│       ├── architecture_design/
+│       │   └── architecture.md        ← every gated phase writes to its own
+│       ├── qa_validation/             ←   .hephaestus/<phase_name>/ subdirectory
+│       │   └── qa.md
 │       └── ...
 │
 ├── <design-id>-session/               ← session feature worktree (Phases 1–14)
@@ -643,17 +646,21 @@ designs/
         ├── auth/                      ← per-feature folder
         │   ├── scope.md               ← copy of feature scope doc
         │   ├── feature_report.html
-        │   └── docs/
-        │       ├── requirements.md
+        │   └── docs/                  ← phase reports, swept from the worktree's
+        │       ├── requirements.md    ←   .hephaestus/ after the pipeline finishes
+        │       ├── scope.md
         │       ├── architecture.md
+        │       ├── challenge.md
         │       ├── adversarial.md
-        │       ├── docs.md
+        │       ├── review.md
         │       ├── security.md
         │       ├── qa.md
         │       ├── validation.md
-        │       ├── forensics.md
-        │       ├── pipeline_metrics.json
-        │       └── phase_prompts/
+        │       ├── docs.md
+        │       ├── summary.md
+        │       ├── forensics.md       ← only when the run was not clean
+        │       ├── deploy.md          ← only when DEPLOY.md exists
+        │       └── pipeline_metrics.json  ← written here at assembly time
         ├── session/
         │   └── ...
         └── admin/
