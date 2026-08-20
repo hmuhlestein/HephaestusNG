@@ -288,12 +288,9 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
         # the retry cap and not the third, for the same condition.
         is_orphan = "orphaned" in (task.get("failure_reason") or "").lower()
         # Read max_task_retries from workflow config, default to 5
-        try:
-            from src.autopilot.spec import load_workflow_definition
-            wf_def = load_workflow_definition(workflow_id)
-            max_retry = wf_def.get("orchestrator", {}).get("max_task_retries", 5)
-        except Exception:
-            max_retry = 5
+        from src.autopilot.spec import get_max_task_retries
+
+        max_retry = get_max_task_retries(workflow_id)
         if retry_count >= max_retry and not is_orphan:
             logger.info(
                 f"  Task {task_id[:8]} failed {retry_count} times - skipping retry"
@@ -1407,12 +1404,9 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
 
         # Mark pending tasks with retry_count past cap as failed
         # These are stuck in pending state but have been retried too many times
-        try:
-            from src.autopilot.spec import load_workflow_definition
-            _wf_def = load_workflow_definition(phase.workflow_id)
-            _max_retry = _wf_def.get("orchestrator", {}).get("max_task_retries", 5)
-        except Exception:
-            _max_retry = 5
+        from src.autopilot.spec import get_max_task_retries
+
+        _max_retry = get_max_task_retries(phase.workflow_id)
         stale_retry_tasks = (
             db.query(Task)
             .filter(
@@ -1531,12 +1525,9 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                 )
                 # Filter to retryable tasks (orphaned, session limits, and stuck tasks are always retryable)
                 # Read max_task_retries from workflow config, default to 5
-                try:
-                    from src.autopilot.spec import load_workflow_definition
-                    wf_def = load_workflow_definition(phase.workflow_id)
-                    max_retry_count = wf_def.get("orchestrator", {}).get("max_task_retries", 5)
-                except Exception:
-                    max_retry_count = 5
+                from src.autopilot.spec import get_max_task_retries
+
+                max_retry_count = get_max_task_retries(phase.workflow_id)
                 def _limit_failure(r):
                     return "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
                 def _stuck_failure(r):
@@ -1692,12 +1683,9 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
         # every few seconds indefinitely and starving every other
         # workflow's turn in the same poll loop. Observed live.
         # Read max_task_retries from workflow config, default to 5
-        try:
-            from src.autopilot.spec import load_workflow_definition
-            wf_def = load_workflow_definition(phase.workflow_id)
-            max_retry_count = wf_def.get("orchestrator", {}).get("max_task_retries", 5)
-        except Exception:
-            max_retry_count = 5
+        from src.autopilot.spec import get_max_task_retries
+
+        max_retry_count = get_max_task_retries(phase.workflow_id)
         failed_tasks = (
             db.query(Task)
             .filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter)
@@ -2951,10 +2939,21 @@ async def fire_spec_gate_if_ready(session, task) -> None:
         logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
         pm = PhaseManager(DatabaseManager(None))
         pm.workflow_id = task.workflow_id
-        result = pm.mark_phase_complete(
-            phase.id,
-            "Phase completed (spec gate fired from update_task_status)",
-            phase_output=phase_output,
+        # mark_phase_complete can itself run an LLM evaluate() call and,
+        # on completing the whole workflow, cascade into
+        # _populate_feature_folder's recursive filesystem copies of the
+        # worktree's .hephaestus/ directory -- offloaded, same reasoning
+        # as build_phase_output above. Operates on its own fresh
+        # PhaseManager/DatabaseManager, not this function's `session`, so
+        # running it in a different thread doesn't share a transaction.
+        result = await loop.run_in_executor(
+            None,
+            functools.partial(
+                pm.mark_phase_complete,
+                phase.id,
+                "Phase completed (spec gate fired from update_task_status)",
+                phase_output=phase_output,
+            ),
         )
     finally:
         # Release only the claim -- not via _release_phase_task_
