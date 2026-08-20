@@ -19,7 +19,7 @@ outputs:
   - ".hephaestus/features.json"
   - ".hephaestus/features/<id>/scope.md"
 
-description: |
+additional_notes: |
   You are the Feature Architect. Your job is to analyze a design document and decompose it into
   discrete, implementable features with clear boundaries, dependencies, and scope documents.
 
