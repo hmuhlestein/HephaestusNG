@@ -10,17 +10,18 @@ pipeline to produce validated, committed, shipped software.
 DB queue                   Phase 0 (once)        per-feature pipeline      project/
   ├── auth-system.md  ──► [Feature Architect] ──► auth    (parallel) ──►    ├── src/
   │   (anywhere)            │                 ──► session (parallel) ──►    ├── tests/
-  ├── dashboard.md          ▼                ──► admin   (sequential) ──►   └── designs/
-  └── api-v2.md        features.json              (phases 1–14 each)             └── 20260612_auth_system_fb36c8e3/
-                                                                                     ├── design_report.html
-                                                                                     ├── features.json
-                                                                                     └── features/
-                                                                                         ├── auth/
-                                                                                         │   └── docs/...
-                                                                                         ├── session/
-                                                                                         │   └── docs/...
-                                                                                         └── admin/
-                                                                                             └── docs/...
+  ├── dashboard.md          ▼                ──► admin   (sequential) ──►   └── .hephaestus/
+  └── api-v2.md        features.json              (phases 1–14 each)             ├── designs/
+                                                                                 │   └── 20260612_auth_system_fb36c8e3/
+                                                                                 │       ├── design_report.html
+                                                                                 │       ├── design_metrics.json
+                                                                                 │       ├── features.json
+                                                                                 │       └── features/<slug>/scope.md
+                                                                                 └── features/          ← sibling, not nested
+                                                                                     └── 20260612_auth_system/
+                                                                                         ├── feature_report.html
+                                                                                         ├── docs/       ← the phase reports
+                                                                                         └── tmux/
 ```
 
 ---
@@ -631,41 +632,59 @@ worktrees/
 
 ### Permanent record
 
-Design folders live under `designs/`. Each folder is named
-`<timestamp>_<design-name>_<design-id>` so it can be looked up from the DB
-record by ID and is human-readable by name.
+Two SIBLING trees under the project's `.hephaestus/`, not one nested tree. The
+design folder is keyed by design; the feature records are keyed by timestamp and
+carry the phase reports.
 
 ```
-designs/
-└── 20260612_auth_system_fb36c8e3/     ← design folder (timestamp_name_id)
-    ├── design.md                      ← copy of original design doc
-    ├── design_report.html             ← aggregated design-level report
-    ├── design_metrics.json            ← totals: time, cost, iterations
-    ├── features.json                  ← copy of feature decomposition
-    └── features/
-        ├── auth/                      ← per-feature folder
-        │   ├── scope.md               ← copy of feature scope doc
-        │   ├── feature_report.html
-        │   └── docs/                  ← phase reports, swept from the worktree's
-        │       ├── requirements.md    ←   .hephaestus/ after the pipeline finishes
-        │       ├── scope.md
-        │       ├── architecture.md
-        │       ├── challenge.md
-        │       ├── adversarial.md
-        │       ├── review.md
-        │       ├── security.md
-        │       ├── qa.md
-        │       ├── validation.md
-        │       ├── docs.md
-        │       ├── summary.md
-        │       ├── forensics.md       ← only when the run was not clean
-        │       ├── deploy.md          ← only when DEPLOY.md exists
-        │       └── pipeline_metrics.json  ← written here at assembly time
-        ├── session/
-        │   └── ...
-        └── admin/
-            └── ...
+<project>/.hephaestus/
+├── designs/
+│   └── 20260612_auth_system_fb36c8e3/   ← <timestamp>_<design-name>_<design-id>
+│       ├── auth-system.md               ← copy of the original design doc
+│       ├── features.json                ← copy of the feature decomposition
+│       ├── design_metrics.json          ← design_name, total_time_seconds, status,
+│       │                                    features{}, completed_at (NO cost field)
+│       ├── design_report.html           ← aggregated design-level report
+│       └── features/
+│           ├── auth/                    ← keyed by the feature SLUG from features.json
+│           │   └── scope.md             ← scope.md ONLY; no phase reports here
+│           ├── session/
+│           │   └── scope.md
+│           └── admin/
+│               └── scope.md
+│
+└── features/                            ← the feature records — a SIBLING of designs/
+    └── 20260612_auth_system/            ← <timestamp>_<design-name>, one per workflow
+        ├── feature_report.html          ←   run, so sibling features of one design
+        ├── docs/                        ←   differ only by timestamp
+        │   ├── requirements.md          ← swept from the worktree's .hephaestus/
+        │   ├── scope.md                 ←   after the pipeline finishes
+        │   ├── architecture.md
+        │   ├── challenge.md
+        │   ├── adversarial.md
+        │   ├── review.md
+        │   ├── security.md
+        │   ├── qa.md
+        │   ├── validation.md
+        │   ├── docs.md
+        │   ├── summary.md
+        │   ├── forensics.md             ← only when the run was not clean
+        │   ├── deploy.md                ← only when DEPLOY.md exists
+        │   └── pipeline_metrics.json    ← design_name, workflow_id, project_path,
+        │                                    docs_dir, feature_folder, completed_at,
+        │                                    stop_reason, qa_passed, product_validated
+        └── tmux/                        ← per-agent session logs
 ```
+
+The two are built by different code and at different times:
+`_create_designs_folder` makes the design folder when the design is picked up
+(and `run_phase0` copies each feature's `scope.md` into it), while
+`_populate_feature_folder` makes a feature record when that feature's workflow
+finishes. Nothing nests one inside the other — a `docs/` directory holding phase
+reports exists only under `features/<timestamp>_<name>/`.
+
+Neither metrics file carries cost. The feature-record API reads
+`Workflow.cost_total_usd` from the DB instead; see Cost Tracking.
 
 ---
 
