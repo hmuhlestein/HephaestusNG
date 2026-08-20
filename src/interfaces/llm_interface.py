@@ -342,8 +342,19 @@ Ensure the enriched description is actionable and the completion criteria are sp
 
                 response = await self.client.beta.chat.completions.parse(**kwargs)
 
-                # Return the parsed Pydantic model as dict
-                return response.choices[0].message.parsed.model_dump()
+                # parsed is Optional -- the SDK leaves it None when the model
+                # refuses or the response doesn't validate. Calling
+                # .model_dump() on that raised AttributeError, which the
+                # handler below reported as "'NoneType' object has no
+                # attribute 'model_dump'" three times over before falling
+                # back, hiding what actually happened.
+                parsed = response.choices[0].message.parsed
+                if parsed is None:
+                    raise ValueError(
+                        "model returned no parsed structured output "
+                        f"(refusal: {response.choices[0].message.refusal!r})"
+                    )
+                return parsed.model_dump()
 
             except Exception as e:
                 logger.error(
@@ -403,8 +414,19 @@ Ensure the enriched description is actionable and the completion criteria are sp
 
                 response = await self.client.beta.chat.completions.parse(**kwargs)
 
-                # Return the parsed Pydantic model as dict
-                return response.choices[0].message.parsed.model_dump()
+                # parsed is Optional -- the SDK leaves it None when the model
+                # refuses or the response doesn't validate. Calling
+                # .model_dump() on that raised AttributeError, which the
+                # handler below reported as "'NoneType' object has no
+                # attribute 'model_dump'" three times over before falling
+                # back, hiding what actually happened.
+                parsed = response.choices[0].message.parsed
+                if parsed is None:
+                    raise ValueError(
+                        "model returned no parsed structured output "
+                        f"(refusal: {response.choices[0].message.refusal!r})"
+                    )
+                return parsed.model_dump()
 
             except Exception as e:
                 logger.error(
