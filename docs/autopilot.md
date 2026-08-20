@@ -399,15 +399,27 @@ Produces: `doc_review_report.md` with findings and fixes applied.
 
 **Agent:** Forensics Analyst
 
-Pipeline self-improvement for this feature run:
-- Reads `pipeline_metrics.json` for real timing/iteration data
-- Reads `phase_prompts/` for actual agent prompt text
+Pipeline self-improvement for this feature run. Skipped entirely on a clean
+run — the orchestrator only dispatches it when the run had tmux errors — so its
+presence in a run's history is itself a signal.
+
+- Reads `run_health.json` for GOTO counts, the orchestrator's own gate
+  decisions, and which phases produced errors
+- Reads `phase_prompts/` for the actual agent prompt text
 - Compares prompts against outcomes
 - Identifies patterns in issues found across phases
-- Proposes specific prompt rewrites with before/after text
+- **Files prompt rewrites as proposals** for human review (see
+  [Reviewing prompt changes](#reviewing-prompt-changes-improvements-tab))
 - Saves feature-scoped learnings to memory for future runs
 
-Produces: `forensics_report.md` with evidence-based improvement recommendations.
+Both `run_health.json` and `phase_prompts/` are staged into the worktree's
+`.hephaestus/` by the orchestrator when it dispatches this phase. There is no
+`pipeline_metrics.json` to read at this point: that file is written when the
+feature record is assembled, which happens after the whole workflow finishes —
+after this phase. Timing and iteration data comes from `run_health.json` and the
+tmux logs instead.
+
+Produces: `forensics.md` with evidence-based improvement recommendations.
 
 ### Phase 13: Git Commit & Push
 
@@ -450,6 +462,85 @@ aggregation step:
 - Marks the `AutopilotDesign` as `completed` in the database
 
 ---
+
+## Reviewing prompt changes (Improvements tab)
+
+Forensics proposes prompt rewrites; it does not make them. Proposals land in
+**Autopilot → Improvements**, where you approve or reject each one against a
+real before/after diff. Nothing reaches a prompt file without that approval.
+
+### The loop
+
+```
+forensics_analysis                 files a proposal via heph_propose_prompt_change
+        ↓
+Improvements tab                   before/after diff, rationale, evidence
+        ↓
+  approve ──────────────────────►  phase YAML written + committed, SHA recorded
+  reject  ──────────────────────►  recorded with your note, file untouched
+        ↓
+  revert (on an applied one) ────► restores the value captured at apply time
+```
+
+### What a proposal may change, and what it may not
+
+Only three prose fields are editable: `description`, `done_definitions`, and
+`additional_notes`. Everything that wires a phase into the orchestrator is
+refused at the API — `spec_gate`, `outputs`, `id`, `name`, and all of
+`workflow.yaml` (evaluation points, thresholds, `required_output`,
+`phase_inputs`).
+
+This is not a UI convenience. An approved proposal that could drop
+`spec_gate: true` or lower a continue threshold would silently disable a
+pipeline gate while appearing in the review queue as a routine improvement —
+and a disabled gate is invisible precisely because everything keeps passing. If
+forensics believes a threshold is wrong it says so in `forensics.md`, for a
+human to act on directly.
+
+A phase also cannot rewrite its own prompt, which is why `forensics_analysis`
+cannot propose against `forensics_analysis.yaml`. Without that, the loop has no
+fixed point outside itself.
+
+### When an approved change takes effect
+
+**Workflows started afterwards — not runs already in flight.**
+
+There are three copies of any phase prompt:
+
+| Copy | Written when | Read by |
+|---|---|---|
+| `config/workflows/<def>/<phase>.yaml` | edited by hand, or by an approved proposal | workflow creation, once |
+| The `Phase` DB row | snapshotted from the template when a workflow is created | the agent, at every dispatch |
+| `PhasePromptVersion` rows | the phase-prompt draft/publish UI | overwrites that workflow's `Phase` row |
+
+A proposal edits the **template**. A running workflow already has its snapshot,
+so approving changes nothing about it. That is deliberate — forensics exists to
+improve future runs, and rewriting a prompt out from under a running agent would
+be worse than useless — but it means "approve" will look like it did nothing if
+you are watching the current run. To change a prompt for a run in progress, use
+that phase's prompt versions instead. The two mechanisms are complementary: per
+definition here, per running workflow there.
+
+### Reading the diff
+
+The "before" side is read live from the file at the moment you open the tab, not
+echoed from what the agent quoted when it filed the proposal. If the file has
+changed since, the proposal is flagged **stale** — approving replaces what is
+there *now*, not what forensics originally read.
+
+Resolved proposals in History show `previous value → proposed value`, which is
+what the change actually did when it landed.
+
+### Operational notes
+
+- Approvals are committed one file at a time, so an approval never sweeps up
+  unrelated working-tree changes.
+- Revert restores the value recorded at apply time rather than `git revert`-ing
+  the commit, so it does not fight anything else that touched the file since.
+- A proposal that fails to apply is kept and marked `failed` with the reason,
+  rather than disappearing into an error response.
+- Applies and reverts are serialized, so two approvals landing together cannot
+  interleave and silently lose one.
 
 ## Iteration Loop
 
@@ -543,7 +634,7 @@ designs/
         │       ├── security_report.md
         │       ├── qa_report.md
         │       ├── product_validation.md
-        │       ├── forensics_report.md
+        │       ├── forensics.md
         │       ├── pipeline_metrics.json
         │       └── phase_prompts/
         ├── session/
@@ -583,6 +674,12 @@ Key points:
 - `Feature.depends_on` is a list of feature IDs; the orchestrator enforces ordering at Workflow launch time
 - Phase 0 runs in a `DesignWorkflow` scoped to the design, separate from any Feature's workflow
 - Single-feature designs have one `Feature` record and one `Workflow` — functionally equivalent to the old model
+- `PromptProposal` sits deliberately **outside** this hierarchy. It is keyed on
+  `workflow_definition` + `phase_name`, not on a Workflow, because it targets the
+  phase *template* that future workflows are created from rather than any one
+  run — see [Reviewing prompt changes](#reviewing-prompt-changes-improvements-tab).
+  (`PhasePromptVersion`, by contrast, is keyed on a `Phase` row and so belongs to
+  exactly one Workflow.)
 
 ---
 
@@ -835,7 +932,7 @@ The `CostTracker` module (`src/interfaces/cost_tracker.py`) queries:
 | 9  | Feature | requirements_analysis.md, architecture.md, all review reports | qa_report.md |
 | 10 | Feature | scope.md, design.md, requirements_analysis.md, architecture.md, qa_report.md | product_validation.md |
 | 11 | Feature | All reports, source code | doc_review_report.md, doc fixes |
-| 12 | Feature | All docs, pipeline_metrics.json, phase_prompts/ | forensics_report.md, memory entries |
-| 13 | Feature | Committed source, forensics_report.md | Git commit, PR, merge |
+| 12 | Feature | All docs, run_health.json, phase_prompts/ | forensics.md, prompt proposals, memory entries |
+| 13 | Feature | Committed source, forensics.md | Git commit, PR, merge |
 | 14 | Feature | Merged code, deployment config | Deployment output/logs |
 | —  | Design  | All feature outputs | design_report.html, design_metrics.json |
