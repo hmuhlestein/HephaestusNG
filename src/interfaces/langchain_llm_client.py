@@ -69,6 +69,208 @@ class ComponentType(Enum):
 CONDUCTOR_LLM_TIMEOUT = 90
 
 
+def _build_openai_model(assignment: "ModelAssignment", provider_config, api_key: str):
+    kwargs = {
+        "model": assignment.model,
+        "max_tokens": assignment.max_tokens,
+        "openai_api_key": api_key,
+    }
+
+    # GPT-5 models only support temperature=1.0 (no other values allowed)
+    # For other models, use the configured temperature
+    if assignment.model.startswith("gpt-5"):
+        kwargs["temperature"] = 1.0
+    else:
+        kwargs["temperature"] = assignment.temperature
+
+    return ChatOpenAI(**kwargs)
+
+
+def _build_groq_model(assignment: "ModelAssignment", provider_config, api_key: str):
+    return ChatGroq(
+        model=assignment.model,
+        temperature=assignment.temperature,
+        max_tokens=assignment.max_tokens,
+        groq_api_key=api_key,
+    )
+
+
+def _build_openrouter_model(assignment: "ModelAssignment", provider_config, api_key: str):
+    # OpenRouter uses the model name directly
+    model_name = assignment.model
+
+    # Build extra_body for OpenRouter: provider routing + reasoning cap.
+    # extra_body passes custom params through to OpenRouter without the
+    # OpenAI SDK rejecting them.
+    model_kwargs = {}
+    extra_body = {}
+    if assignment.openrouter_provider:
+        # Capitalize provider name (e.g., "cerebras" -> "Cerebras")
+        provider_name = assignment.openrouter_provider.capitalize()
+        extra_body["provider"] = {
+            "order": [provider_name],
+            "allow_fallbacks": False,  # Force only the specified provider
+        }
+        logger.info(f"OpenRouter configured with provider routing: {provider_name} (order: [{provider_name}], fallbacks: disabled)")
+    if assignment.reasoning_effort:
+        # Cap reasoning for reasoning models. "off" disables it entirely;
+        # otherwise pass the effort level. (Ignored harmlessly by models
+        # that don't support reasoning.)
+        if assignment.reasoning_effort.lower() == "off":
+            extra_body["reasoning"] = {"enabled": False}
+        else:
+            extra_body["reasoning"] = {"effort": assignment.reasoning_effort.lower()}
+        logger.info(f"OpenRouter reasoning capped: {assignment.reasoning_effort} for {assignment.model}")
+    # Include usage/cost data in responses for cost tracking
+    extra_body["usage"] = {"include": True}
+    if extra_body:
+        model_kwargs["extra_body"] = extra_body
+
+    # Use config base_url, then env var, then default
+    base_url = provider_config.base_url or os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+
+    return ChatOpenAI(
+        model=model_name,
+        temperature=assignment.temperature,
+        max_tokens=assignment.max_tokens,
+        openai_api_key=api_key,
+        base_url=base_url,
+        max_retries=1,  # one retry only — slow/over-streaming models shouldn't retry-loop for minutes
+        default_headers={
+            "HTTP-Referer": "https://github.com/Ido-Levi/Hephaestus",
+            "X-Title": "Hephaestus - Semi Structured Agentic Framework",
+        },
+        model_kwargs=model_kwargs,  # extra_body gets passed through to the API
+    )
+
+
+def _build_azure_openai_model(assignment: "ModelAssignment", provider_config, api_key: str):
+    # Azure OpenAI uses deployment names (configured in Azure portal) instead of model names
+    # Requires azure_endpoint, api_version, and azure_deployment parameters
+    azure_endpoint = provider_config.base_url
+    if not azure_endpoint:
+        logger.error("Azure OpenAI requires base_url (azure_endpoint) in configuration")
+        return None
+
+    api_version = provider_config.api_version or "2024-02-01"
+    logger.info(f"Creating Azure OpenAI model with deployment: {assignment.model}, endpoint: {azure_endpoint}, api_version: {api_version}")
+
+    return AzureChatOpenAI(
+        model=assignment.model,  # This is the deployment name in Azure
+        azure_deployment=assignment.model,
+        api_version=api_version,
+        azure_endpoint=azure_endpoint,
+        api_key=api_key,
+        temperature=assignment.temperature,
+        max_tokens=assignment.max_tokens,
+    )
+
+
+def _build_google_ai_model(assignment: "ModelAssignment", provider_config, api_key: str):
+    # Google AI Studio (Gemini) - simpler than Vertex AI, just needs API key
+    logger.info(f"Creating Google AI model: {assignment.model}")
+
+    return ChatGoogleGenerativeAI(
+        model=assignment.model,  # e.g., "gemini-2.5-flash", "gemini-1.5-pro"
+        google_api_key=api_key,
+        temperature=assignment.temperature,
+        max_tokens=assignment.max_tokens,
+    )
+
+
+# Chat-model construction, one builder per provider. Adding a provider means
+# adding a builder and one entry here, rather than extending an if/elif chain
+# (SOLID review 4.8). Builders reference their LangChain classes as module
+# globals deliberately -- every provider package is a hard dependency in
+# pyproject.toml, so deferring the imports would buy nothing while breaking
+# the module-scope patch points the test suite relies on.
+_MODEL_BUILDERS = {
+    "openai": _build_openai_model,
+    "groq": _build_groq_model,
+    "openrouter": _build_openrouter_model,
+    "azure_openai": _build_azure_openai_model,
+    "google_ai": _build_google_ai_model,
+}
+
+
+def _build_openai_embeddings(config, providers):
+    openai_provider = providers.get("openai")
+    if not openai_provider:
+        return None
+    openai_key = os.getenv(openai_provider.api_key_env)
+    if not openai_key:
+        return None
+    model = OpenAIEmbeddings(model=config.embedding_model, openai_api_key=openai_key)
+    logger.info(f"  ✓ Embedding model initialized: OpenAI {config.embedding_model}")
+    return model
+
+
+def _build_azure_openai_embeddings(config, providers):
+    azure_provider = providers.get("azure_openai")
+    if not azure_provider:
+        return None
+    azure_key = os.getenv(azure_provider.api_key_env)
+    azure_endpoint = azure_provider.base_url
+    if not (azure_key and azure_endpoint):
+        logger.warning("Azure OpenAI embedding configuration incomplete (key or endpoint missing)")
+        return None
+    api_version = azure_provider.api_version or "2024-02-01"
+    model = AzureOpenAIEmbeddings(
+        model=config.embedding_model,
+        azure_deployment=config.embedding_model,
+        azure_endpoint=azure_endpoint,
+        api_version=api_version,
+        api_key=azure_key,
+    )
+    logger.info(f"  ✓ Embedding model initialized: Azure OpenAI {config.embedding_model}")
+    return model
+
+
+def _build_google_ai_embeddings(config, providers):
+    google_provider = providers.get("google_ai")
+    if not google_provider:
+        return None
+    google_key = os.getenv(google_provider.api_key_env)
+    if not google_key:
+        logger.warning("Google AI embedding configuration incomplete (key missing)")
+        return None
+    model = GoogleGenerativeAIEmbeddings(
+        model=config.embedding_model,  # e.g., "models/embedding-001"
+        google_api_key=google_key,
+    )
+    logger.info(f"  ✓ Embedding model initialized: Google AI {config.embedding_model}")
+    return model
+
+
+def _build_fastembed_embeddings(config, providers):
+    # OpenRouter (and most chat-only providers) have no embeddings API.
+    # Use the python-only FastEmbed backend — no API key, no Qdrant/server.
+    # Default bge-small = 384-dim, matching the vector store dimension.
+    try:
+        from langchain_community.embeddings import FastEmbedEmbeddings
+
+        fe_model = os.getenv("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")
+        model = FastEmbedEmbeddings(model_name=fe_model)
+        logger.info(f"  ✓ Embedding model initialized: FastEmbed {fe_model} (python-only, no API key)")
+        return model
+    except Exception as e:
+        logger.warning(f"FastEmbed embedding init failed: {e}")
+        return None
+
+
+# Embedding-model construction, keyed the same way as _MODEL_BUILDERS. The
+# three chat-only providers share the FastEmbed builder because none of them
+# expose an embeddings API.
+_EMBEDDING_BUILDERS = {
+    "openai": _build_openai_embeddings,
+    "azure_openai": _build_azure_openai_embeddings,
+    "google_ai": _build_google_ai_embeddings,
+    "fastembed": _build_fastembed_embeddings,
+    "local": _build_fastembed_embeddings,
+    "openrouter": _build_fastembed_embeddings,
+}
+
+
 class LangChainLLMClient:
     """Multi-provider LLM client using LangChain."""
 
@@ -96,57 +298,9 @@ class LangChainLLMClient:
         embedding_provider = getattr(self.config, "embedding_provider", "openai")
         logger.info(f"Initializing embedding model: {self.config.embedding_model} (provider: {embedding_provider})")
 
-        if embedding_provider == "openai":
-            openai_provider = self.config.providers.get("openai")
-            if openai_provider:
-                openai_key = os.getenv(openai_provider.api_key_env)
-                if openai_key:
-                    self._embedding_model = OpenAIEmbeddings(model=self.config.embedding_model, openai_api_key=openai_key)
-                    logger.info(f"  ✓ Embedding model initialized: OpenAI {self.config.embedding_model}")
-
-        elif embedding_provider == "azure_openai":
-            azure_provider = self.config.providers.get("azure_openai")
-            if azure_provider:
-                azure_key = os.getenv(azure_provider.api_key_env)
-                azure_endpoint = azure_provider.base_url
-                if azure_key and azure_endpoint:
-                    api_version = azure_provider.api_version or "2024-02-01"
-                    self._embedding_model = AzureOpenAIEmbeddings(
-                        model=self.config.embedding_model,
-                        azure_deployment=self.config.embedding_model,
-                        azure_endpoint=azure_endpoint,
-                        api_version=api_version,
-                        api_key=azure_key,
-                    )
-                    logger.info(f"  ✓ Embedding model initialized: Azure OpenAI {self.config.embedding_model}")
-                else:
-                    logger.warning("Azure OpenAI embedding configuration incomplete (key or endpoint missing)")
-
-        elif embedding_provider == "google_ai":
-            google_provider = self.config.providers.get("google_ai")
-            if google_provider:
-                google_key = os.getenv(google_provider.api_key_env)
-                if google_key:
-                    self._embedding_model = GoogleGenerativeAIEmbeddings(
-                        model=self.config.embedding_model,  # e.g., "models/embedding-001"
-                        google_api_key=google_key,
-                    )
-                    logger.info(f"  ✓ Embedding model initialized: Google AI {self.config.embedding_model}")
-                else:
-                    logger.warning("Google AI embedding configuration incomplete (key missing)")
-
-        elif embedding_provider in ("fastembed", "local", "openrouter"):
-            # OpenRouter (and most chat-only providers) have no embeddings API.
-            # Use the python-only FastEmbed backend — no API key, no Qdrant/server.
-            # Default bge-small = 384-dim, matching the vector store dimension.
-            try:
-                from langchain_community.embeddings import FastEmbedEmbeddings
-
-                fe_model = os.getenv("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")
-                self._embedding_model = FastEmbedEmbeddings(model_name=fe_model)
-                logger.info(f"  ✓ Embedding model initialized: FastEmbed {fe_model} (python-only, no API key)")
-            except Exception as e:
-                logger.warning(f"FastEmbed embedding init failed: {e}")
+        embedding_builder = _EMBEDDING_BUILDERS.get(embedding_provider)
+        if embedding_builder:
+            self._embedding_model = embedding_builder(self.config, self.config.providers)
 
         if not self._embedding_model:
             logger.warning(f"Embedding model not initialized for provider: {embedding_provider}")
@@ -187,115 +341,13 @@ class LangChainLLMClient:
             logger.error(f"API key not found for {provider}")
             return None
 
+        builder = _MODEL_BUILDERS.get(provider)
+        if builder is None:
+            logger.error(f"Unknown provider: {provider}")
+            return None
+
         try:
-            if provider == "openai":
-                kwargs = {
-                    "model": assignment.model,
-                    "max_tokens": assignment.max_tokens,
-                    "openai_api_key": api_key,
-                }
-
-                # GPT-5 models only support temperature=1.0 (no other values allowed)
-                # For other models, use the configured temperature
-                if assignment.model.startswith("gpt-5"):
-                    kwargs["temperature"] = 1.0
-                else:
-                    kwargs["temperature"] = assignment.temperature
-
-                return ChatOpenAI(**kwargs)
-
-            elif provider == "groq":
-                return ChatGroq(
-                    model=assignment.model,
-                    temperature=assignment.temperature,
-                    max_tokens=assignment.max_tokens,
-                    groq_api_key=api_key,
-                )
-
-            elif provider == "openrouter":
-                # OpenRouter uses the model name directly
-                model_name = assignment.model
-
-                # Build extra_body for OpenRouter: provider routing + reasoning cap.
-                # extra_body passes custom params through to OpenRouter without the
-                # OpenAI SDK rejecting them.
-                model_kwargs = {}
-                extra_body = {}
-                if assignment.openrouter_provider:
-                    # Capitalize provider name (e.g., "cerebras" -> "Cerebras")
-                    provider_name = assignment.openrouter_provider.capitalize()
-                    extra_body["provider"] = {
-                        "order": [provider_name],
-                        "allow_fallbacks": False,  # Force only the specified provider
-                    }
-                    logger.info(f"OpenRouter configured with provider routing: {provider_name} (order: [{provider_name}], fallbacks: disabled)")
-                if assignment.reasoning_effort:
-                    # Cap reasoning for reasoning models. "off" disables it entirely;
-                    # otherwise pass the effort level. (Ignored harmlessly by models
-                    # that don't support reasoning.)
-                    if assignment.reasoning_effort.lower() == "off":
-                        extra_body["reasoning"] = {"enabled": False}
-                    else:
-                        extra_body["reasoning"] = {"effort": assignment.reasoning_effort.lower()}
-                    logger.info(f"OpenRouter reasoning capped: {assignment.reasoning_effort} for {assignment.model}")
-                # Include usage/cost data in responses for cost tracking
-                extra_body["usage"] = {"include": True}
-                if extra_body:
-                    model_kwargs["extra_body"] = extra_body
-
-                # Use config base_url, then env var, then default
-                base_url = provider_config.base_url or os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
-
-                return ChatOpenAI(
-                    model=model_name,
-                    temperature=assignment.temperature,
-                    max_tokens=assignment.max_tokens,
-                    openai_api_key=api_key,
-                    base_url=base_url,
-                    max_retries=1,  # one retry only — slow/over-streaming models shouldn't retry-loop for minutes
-                    default_headers={
-                        "HTTP-Referer": "https://github.com/Ido-Levi/Hephaestus",
-                        "X-Title": "Hephaestus - Semi Structured Agentic Framework",
-                    },
-                    model_kwargs=model_kwargs,  # extra_body gets passed through to the API
-                )
-
-            elif provider == "azure_openai":
-                # Azure OpenAI uses deployment names (configured in Azure portal) instead of model names
-                # Requires azure_endpoint, api_version, and azure_deployment parameters
-                azure_endpoint = provider_config.base_url
-                if not azure_endpoint:
-                    logger.error("Azure OpenAI requires base_url (azure_endpoint) in configuration")
-                    return None
-
-                api_version = provider_config.api_version or "2024-02-01"
-                logger.info(f"Creating Azure OpenAI model with deployment: {assignment.model}, endpoint: {azure_endpoint}, api_version: {api_version}")
-
-                return AzureChatOpenAI(
-                    model=assignment.model,  # This is the deployment name in Azure
-                    azure_deployment=assignment.model,
-                    api_version=api_version,
-                    azure_endpoint=azure_endpoint,
-                    api_key=api_key,
-                    temperature=assignment.temperature,
-                    max_tokens=assignment.max_tokens,
-                )
-
-            elif provider == "google_ai":
-                # Google AI Studio (Gemini) - simpler than Vertex AI, just needs API key
-                logger.info(f"Creating Google AI model: {assignment.model}")
-
-                return ChatGoogleGenerativeAI(
-                    model=assignment.model,  # e.g., "gemini-2.5-flash", "gemini-1.5-pro"
-                    google_api_key=api_key,
-                    temperature=assignment.temperature,
-                    max_tokens=assignment.max_tokens,
-                )
-
-            else:
-                logger.error(f"Unknown provider: {provider}")
-                return None
-
+            return builder(assignment, provider_config, api_key)
         except Exception as e:
             logger.error(f"Failed to create model for {provider}: {e}")
             return None
