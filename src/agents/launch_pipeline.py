@@ -365,6 +365,70 @@ class LaunchPipeline:
                     "command was not found"
                 )
 
+    async def _wait_for_cli_ready(
+        self,
+        pane,
+        cli_agent,
+        cli_type: str,
+        agent_id: str,
+        floor: float = 3.0,
+        timeout: float = 25.0,
+        poll_interval: float = 0.5,
+    ) -> None:
+        """Wait for the CLI tool itself (not just the shell -- see
+        _wait_for_shell_ready for that earlier stage) to finish starting up
+        and render its ready-for-input UI, instead of always blocking for a
+        flat `timeout` regardless of how long that actually takes.
+
+        `floor` is a mandatory minimum wait before polling starts: right
+        after the launch command is sent, the CLI process hasn't even
+        begun rendering yet, so an immediate capture-pane would just poll a
+        blank/mid-startup pane repeatedly for no benefit. `timeout` is the
+        same ceiling the previous flat sleep always paid up front -- kept
+        as a safety net so a CLI whose ready pattern never appears (a
+        genuinely slow start, or a pattern mismatch) waits no longer than
+        today's behavior already did, not longer.
+
+        Uses cli_agent.get_health_check_pattern() -- already defined per
+        CLI type for exactly this "is it ready" signal, previously unused
+        anywhere in the codebase.
+        """
+        import re
+
+        logger.info(f"Waiting up to {timeout:.0f}s for {cli_type} agent {agent_id} to become ready (floor {floor:.0f}s)...")
+        start = time.monotonic()
+        await asyncio.sleep(floor)
+
+        pattern = cli_agent.get_health_check_pattern()
+        loop = asyncio.get_event_loop()
+        # Poll-count loop, not a time.monotonic() deadline: this codebase's
+        # own launch_pipeline tests broadly mock asyncio.sleep to return
+        # instantly (to keep the suite fast), which would otherwise leave
+        # nothing to gate a wall-clock deadline and turn every non-matching
+        # poll into a real, un-mocked ~timeout-second busy loop -- a
+        # regression from the old flat `await asyncio.sleep(25)`, which
+        # those same mocks made free. A fixed poll count keeps this
+        # function's total wait bounded by asyncio.sleep alone, exactly
+        # like the code it replaces.
+        max_polls = max(1, int((timeout - floor) / poll_interval))
+        for _ in range(max_polls):
+            try:
+                captured = await loop.run_in_executor(
+                    None, pane.cmd, "capture-pane", "-p", "-S", "-10"
+                )
+                text = "\n".join(captured.stdout) if captured.stdout else ""
+            except Exception:
+                text = ""
+            if text and re.search(pattern, text):
+                logger.info(f"{cli_type} agent {agent_id} ready after {time.monotonic() - start:.1f}s")
+                return
+            await asyncio.sleep(poll_interval)
+
+        logger.warning(
+            f"{cli_type} agent {agent_id} did not match its ready pattern within {timeout:.0f}s -- "
+            "proceeding anyway (same ceiling as the previous flat wait)"
+        )
+
     def _check_duplicate_active_agent(self, task: Task) -> Optional[Agent]:
         """Guard: don't create a second agent for a task that already has one.
 
@@ -1828,9 +1892,7 @@ class LaunchPipeline:
                 self._write_task_instructions(branch_path, task.id, initial_message)
 
             logger.info(f"Initial message length: {len(initial_message)} characters")
-            wait_time = 25
-            logger.info(f"Waiting {wait_time} seconds for {cli_type} agent {agent_id} to initialize...")
-            await asyncio.sleep(wait_time)
+            await self._wait_for_cli_ready(pane, cli_agent, cli_type, agent_id)
 
             # Termination race check
             term_race_result = await self._check_termination_race(
