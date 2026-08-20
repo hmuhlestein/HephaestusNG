@@ -56,13 +56,22 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   // Poll agent status every 3 seconds
   useEffect(() => {
     if (!agent?.id) return;
+    // Guards against a poll for the PREVIOUS agent resolving after this
+    // effect already cleaned up (e.g. the modal is closed and reopened on
+    // a different agent within the 3s window) -- without it, the stale
+    // response's setCurrentStatus could overwrite the new agent's just-set
+    // status.
+    let cancelled = false;
     const interval = setInterval(async () => {
       try {
         const updated = await apiService.getAgent(agent.id);
-        if (updated) setCurrentStatus(updated.status);
+        if (updated && !cancelled) setCurrentStatus(updated.status);
       } catch {}
     }, 3000);
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [agent?.id]);
 
   // Update status when agent prop changes

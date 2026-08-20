@@ -1887,10 +1887,19 @@ class FrontendAPI:
 
     async def sync_blocking_status(self) -> Dict[str, Any]:
         """Manually trigger sync of task blocking status."""
+        import asyncio
+
         from src.services.task_blocking_service import TaskBlockingService
 
         try:
-            result = TaskBlockingService.sync_task_blocking_status()
+            # Offloaded -- sync_task_blocking_status does N+1 blocking DB
+            # round trips (one query for all tasks, then a get_db() session
+            # per task), which would otherwise stall the event loop for the
+            # full duration of the sync.
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, TaskBlockingService.sync_task_blocking_status
+            )
             return result
         except Exception as e:
             logger.error(f"Failed to sync blocking status: {e}")
@@ -2212,7 +2221,7 @@ class FrontendAPI:
         self, phase_id: str, data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Create a new prompt version for a phase."""
-        import time
+        import asyncio
 
         from sqlalchemy.exc import IntegrityError
 
@@ -2312,7 +2321,7 @@ class FrontendAPI:
             except IntegrityError:
                 session.rollback()
                 last_error = "Version conflict"
-                time.sleep(0.05 * (attempt + 1))
+                await asyncio.sleep(0.05 * (attempt + 1))
                 continue
             except HTTPException:
                 session.close()
@@ -2382,7 +2391,7 @@ class FrontendAPI:
         self, phase_id: str, version: int
     ) -> Dict[str, Any]:
         """Restore an older version as a new active version."""
-        import time
+        import asyncio
 
         from sqlalchemy.exc import IntegrityError
 
@@ -2451,7 +2460,7 @@ class FrontendAPI:
             except IntegrityError:
                 session.rollback()
                 last_error = "Version conflict"
-                time.sleep(0.05 * (attempt + 1))
+                await asyncio.sleep(0.05 * (attempt + 1))
                 continue
             except HTTPException:
                 session.close()

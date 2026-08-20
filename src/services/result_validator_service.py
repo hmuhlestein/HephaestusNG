@@ -107,6 +107,7 @@ class ResultValidatorService:
                 feedback=feedback,
                 evidence=evidence,
                 validator_agent_id=validator_agent_id,
+                db=session,
             )
 
             # If validation passed, check workflow termination action

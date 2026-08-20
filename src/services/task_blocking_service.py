@@ -286,8 +286,13 @@ class TaskBlockingService:
         tasks_unblocked = 0
         errors = []
 
+        # Fetch the task list in its own short-lived session, then release
+        # it before looping -- check_task_blocked/block_task/unblock_task
+        # each open their own get_db() session per task, so holding this
+        # outer one open for the whole loop just serializes N+1 SQLite
+        # connections against each other for no benefit (nothing is ever
+        # written through `db` itself here).
         with get_db() as db:
-            # Get all tasks that have tickets (excluding done/failed/duplicated)
             tasks = (
                 db.query(Task)
                 .filter(
@@ -299,33 +304,33 @@ class TaskBlockingService:
                 .all()
             )
 
-            logger.info(f"Checking {len(tasks)} tasks for blocking status sync")
+        logger.info(f"Checking {len(tasks)} tasks for blocking status sync")
 
-            for task in tasks:
-                try:
-                    # Check if task should be blocked
-                    blocking_info = TaskBlockingService.check_task_blocked(task.id)
+        for task in tasks:
+            try:
+                # Check if task should be blocked
+                blocking_info = TaskBlockingService.check_task_blocked(task.id)
 
-                    if blocking_info["is_blocked"] and task.status != "blocked":
-                        # Task should be blocked but isn't
-                        blocker_titles = [
-                            t["title"] for t in blocking_info["blocking_tickets"]
-                        ]
-                        reason = f"Blocked by: {', '.join(blocker_titles)}"
+                if blocking_info["is_blocked"] and task.status != "blocked":
+                    # Task should be blocked but isn't
+                    blocker_titles = [
+                        t["title"] for t in blocking_info["blocking_tickets"]
+                    ]
+                    reason = f"Blocked by: {', '.join(blocker_titles)}"
 
-                        TaskBlockingService.block_task(task.id, reason)
-                        tasks_blocked += 1
-                        logger.info(f"Blocked task {task.id}")
+                    TaskBlockingService.block_task(task.id, reason)
+                    tasks_blocked += 1
+                    logger.info(f"Blocked task {task.id}")
 
-                    elif not blocking_info["is_blocked"] and task.status == "blocked":
-                        # Task is blocked but shouldn't be
-                        TaskBlockingService.unblock_task(task.id)
-                        tasks_unblocked += 1
-                        logger.info(f"Unblocked task {task.id}")
+                elif not blocking_info["is_blocked"] and task.status == "blocked":
+                    # Task is blocked but shouldn't be
+                    TaskBlockingService.unblock_task(task.id)
+                    tasks_unblocked += 1
+                    logger.info(f"Unblocked task {task.id}")
 
-                except Exception as e:
-                    logger.error(f"Error syncing task {task.id}: {e}")
-                    errors.append({"task_id": task.id, "error": str(e)})
+            except Exception as e:
+                logger.error(f"Error syncing task {task.id}: {e}")
+                errors.append({"task_id": task.id, "error": str(e)})
 
         logger.info(
             f"Task blocking sync complete: {tasks_blocked} blocked, {tasks_unblocked} unblocked"
