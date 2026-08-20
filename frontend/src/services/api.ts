@@ -655,6 +655,19 @@ export const apiService = {
     return data;
   },
 
+  // System-wide default spend cap seeded onto newly created projects.
+  getDefaultBudget: async (): Promise<{ default_cost_limit_usd: number | null }> => {
+    const { data } = await api.get('/autopilot/settings/default-budget');
+    return data;
+  },
+
+  setDefaultBudget: async (value: number | null): Promise<{ default_cost_limit_usd: number | null }> => {
+    const { data } = await api.put('/autopilot/settings/default-budget', {
+      default_cost_limit_usd: value,
+    });
+    return data;
+  },
+
   // Prompt proposals (forensics-proposed prompt rewrites awaiting review).
   getPromptProposals: async (status?: string): Promise<any> => {
     const qs = status ? `?status=${encodeURIComponent(status)}` : '';

@@ -998,11 +998,17 @@ async def add_design_by_path(req: DesignAddByPath):
                     f"Not auto-activating new project {project_path.name!r}: "
                     f"max_concurrent_projects ({max_concurrent}) already reached"
                 )
+            from src.services.system_settings import get_default_cost_limit
+
+            # Apply the system default spend cap (settings:default_cost_limit_usd).
+            # Passed the in-flight session deliberately: opening a nested get_db()
+            # mid-flush is how SQLite deadlocks.
             project = AutopilotProject(
                 id=f"proj-{uuid.uuid4().hex[:12]}",
                 name=project_path.name,
                 base_dir=str(project_path),
                 is_active=want_active,
+                cost_limit_usd=get_default_cost_limit(db),
             )
             db.add(project)
             db.flush()

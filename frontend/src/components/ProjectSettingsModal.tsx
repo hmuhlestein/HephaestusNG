@@ -23,9 +23,46 @@ interface ProjectSettingsModalProps {
 
 const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onClose }) => {
   const queryClient = useQueryClient();
+  const [defaultBudgetValue, setDefaultBudgetValue] = useState('');
+  const [editingDefaultBudget, setEditingDefaultBudget] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectPath, setNewProjectPath] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
+
+  // System-wide default spend cap, seeded onto projects created afterwards.
+  const { data: defaultBudget } = useQuery({
+    queryKey: ['default-budget'],
+    queryFn: () => apiService.getDefaultBudget(),
+  });
+
+  const updateDefaultBudgetMutation = useMutation({
+    mutationFn: (value: number | null) => apiService.setDefaultBudget(value),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['default-budget'] });
+      setEditingDefaultBudget(false);
+      toast.success(
+        data.default_cost_limit_usd == null
+          ? 'Default budget cleared — new projects start unlimited'
+          : `Default budget set to $${data.default_cost_limit_usd.toFixed(2)}`
+      );
+    },
+    onError: (e: any) =>
+      toast.error(e?.response?.data?.detail || 'Failed to update the default budget'),
+  });
+
+  const handleSaveDefaultBudget = () => {
+    const raw = defaultBudgetValue.trim();
+    if (!raw) {
+      updateDefaultBudgetMutation.mutate(null);
+      return;
+    }
+    const parsed = parseFloat(raw);
+    if (isNaN(parsed) || parsed <= 0) {
+      toast.error('Enter an amount greater than 0, or leave blank to clear');
+      return;
+    }
+    updateDefaultBudgetMutation.mutate(parsed);
+  };
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [editingBudget, setEditingBudget] = useState<string | null>(null);
   const [budgetValue, setBudgetValue] = useState('');
@@ -227,6 +264,69 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* System default budget */}
+            <div className="mb-6 p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <DollarSign className="w-4 h-4" />
+                    Default budget for new projects
+                  </h4>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Applied when a project is created. Existing projects are not
+                    changed — set those individually below.
+                  </p>
+                </div>
+
+                {editingDefaultBudget ? (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div className="relative">
+                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        autoFocus
+                        value={defaultBudgetValue}
+                        onChange={(e) => setDefaultBudgetValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleSaveDefaultBudget();
+                          if (e.key === 'Escape') setEditingDefaultBudget(false);
+                        }}
+                        placeholder="blank = none"
+                        className="w-32 pl-5 pr-2 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                      />
+                    </div>
+                    <button
+                      onClick={handleSaveDefaultBudget}
+                      disabled={updateDefaultBudgetMutation.isPending}
+                      className="px-3 py-1.5 text-sm font-medium rounded-md bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white transition-colors"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => setEditingDefaultBudget(false)}
+                      className="px-3 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setDefaultBudgetValue(defaultBudget?.default_cost_limit_usd?.toString() || '');
+                      setEditingDefaultBudget(true);
+                    }}
+                    className="shrink-0 px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    {defaultBudget?.default_cost_limit_usd != null
+                      ? `$${defaultBudget.default_cost_limit_usd.toFixed(2)}`
+                      : 'No default'}
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Projects List */}
