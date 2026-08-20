@@ -231,16 +231,51 @@ Two live bugs surfaced within minutes of the gate coming back, both of the
   `_ticket_text` indexes tags into the searchable document. 13 tests, 9 of which fail
   against the pre-fix code in a clean worktree.
 
-**Baseline for whoever picks this up: 901 errors across 106 of 197 source files.** That
+- **Qdrant semantic search silently returned nothing** (`585210b`). `QdrantClient.search`
+  was removed in qdrant-client 1.x (1.18 is the installed pin) in favour of
+  `query_points`. The call raised `AttributeError`, the surrounding `except Exception`
+  logged "Search failed in collection ..." and returned `[]` — indistinguishable to
+  callers from "nothing matched", so memory/RAG lookups degraded to zero context instead
+  of failing visibly. Only affects deployments using the documented
+  `VECTOR_STORE_BACKEND=qdrant` fallback; turbovec is the default. The one existing
+  vector-store test is an integration test gated on an OpenAI key, so this path had no
+  coverage at all — 7 tests added against a mocked client.
+- **`devtools.is_connected` crashed exactly when connected** (`729c167`). It read
+  `self.ws.open`, which websockets removed from its asyncio `ClientConnection` (16.1
+  installed). The two preceding terms short-circuit while disconnected, so the
+  `AttributeError` fired only once the connection was live — the single case the property
+  exists to report. Now uses `close_code`.
+- **Four `AgentManager` delegators were mangled by the extraction script** (`a2f1304`).
+  Each forwards to `LaunchPipeline`; the mechanical split renamed the target's real first
+  parameter to `self` (`_ensure_codegraph_initialized(self: str)`,
+  `_build_instructions_pointer(self: str, ...)`) and/or flattened keyword-only arguments
+  into positional ones (`_build_and_send_launch_command` passing 13 positionals,
+  `_resolve_worktree`, `_resolve_session_id`). None has a caller, which is why none ever
+  surfaced. Repaired rather than deleted, given this class's documented history of an
+  earlier extraction silently dropping four working methods.
+- **Queue positions were never recalculated after unblocking a task** (`9603de4`).
+  `QueueService(db_manager)` omits the required `max_concurrent_agents`, so it raised
+  `TypeError` into an `except` that logged "Could not recalculate queue positions" and
+  continued. Queued tasks kept stale positions after every unblock.
+- **`llm_interface` misreported structured-output refusals** (`20f6884`). The OpenAI SDK
+  leaves `message.parsed` as `None` on refusal; both trajectory and coherence analysis
+  called `.model_dump()` on it, so a refusal surfaced as `'NoneType' object has no
+  attribute 'model_dump'` three times over as the retry loop re-ran an unretryable
+  condition. Control flow unchanged; the diagnostic now names the refusal.
+
+**Baseline for whoever picks this up: 870 errors across 106 of 197 source files** (was 901
+before this pass).** That
 is a backlog, not a to-do list, and it should not be attacked wholesale. The
 high-signal category is `[attr-defined]` (67) — the same class as both bugs above and
 as the `worktree.branch_path` defect found by hand in §2.14 — and it is worth mining
 first. `[union-attr]` (126) is dominated by `DatabaseManager | None` access, which is a
 real nullability question rather than noise. `[arg-type]` (265) and `[assignment]` (145)
-are mostly annotation debt. Two of the flagged `[attr-defined]` hits turned out to be the dead MCP tools above.
-Three remain unclaimed and still look like genuine bugs: `devtools.py`'s `ConsoleEntry`
-attributes (7 sites), `vector_store.py`'s `QdrantClient.search` (removed in newer
-qdrant-client), and `llm_interface.py`'s `"None" has no attribute "model_dump"`. The
+are mostly annotation debt. Every `[attr-defined]` hit flagged in this section has now been triaged to completion.
+The `ConsoleEntry` hits were not a bug: `network_logs` is correctly typed, but `entry` was
+bound to a `ConsoleEntry` earlier in the same function and Python scopes it function-wide,
+so the NetworkEntry branches were renamed to `net_entry`. The same one-name-two-types
+pattern accounts for `agents_api.py`'s `dict` / `.append` hit (`result` is a dict in one
+branch and a list in another) — also not a runtime bug, and left alone. The
 ~35 `"None" has no attribute ...` hits across `mcp/frontend/*_routes.py` are NOT bugs —
 they are the module-level `frontend_api = None` placeholder assigned at startup, i.e.
 annotation debt.
