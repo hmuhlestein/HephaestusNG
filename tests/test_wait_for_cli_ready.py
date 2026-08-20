@@ -37,7 +37,7 @@ async def test_returns_as_soon_as_ready_pattern_matches(launch_pipeline):
         pane, cli_agent, "claude", "agent-1", floor=0.01, timeout=2.0, poll_interval=0.01
     )
 
-    pane.cmd.assert_called_with("capture-pane", "-p", "-S", "-15")
+    pane.cmd.assert_called_with("capture-pane", "-p", "-S", "-10")
 
 
 @pytest.mark.asyncio
