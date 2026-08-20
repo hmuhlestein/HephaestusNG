@@ -67,12 +67,20 @@ class AgentMessenger:
                 return bool(_SHELL_CONTINUATION_RE.match(stripped))
         return False
 
-    async def send_message_to_agent(self, agent_id: str, message: str) -> None:
+    async def send_message_to_agent(
+        self, agent_id: str, message: str, session=None
+    ) -> None:
         """Send a message to an agent's tmux session.
 
         Args:
             agent_id: Agent ID
             message: Message to send
+            session: optional existing session to participate in the
+                caller's own transaction (e.g. AgentManager.
+                broadcast_message_to_all_agents/send_direct_message, which
+                add an AgentLog entry per recipient in their own session)
+                instead of opening/committing/closing a separate one. When
+                supplied, the caller owns commit/rollback/close.
         """
         import asyncio
         import functools
@@ -88,7 +96,9 @@ class AgentMessenger:
         # coroutines keep running during those waits.
         loop = asyncio.get_event_loop()
 
-        session = self.db_manager.get_session()
+        owns_session = session is None
+        if owns_session:
+            session = self.db_manager.get_session()
         try:
             agent = await loop.run_in_executor(
                 None, lambda: session.query(Agent).filter_by(id=agent_id).first()
@@ -166,12 +176,17 @@ class AgentMessenger:
 
             # Update last activity
             agent.last_activity = datetime.utcnow()
-            await loop.run_in_executor(None, session.commit)
+            if owns_session:
+                await loop.run_in_executor(None, session.commit)
 
             logger.debug(f"Sent message to agent {agent_id}")
 
         except Exception as e:
             logger.error(f"Failed to send message to agent: {e}")
-            await loop.run_in_executor(None, session.rollback)
+            if owns_session:
+                await loop.run_in_executor(None, session.rollback)
+            else:
+                raise
         finally:
-            await loop.run_in_executor(None, session.close)
+            if owns_session:
+                await loop.run_in_executor(None, session.close)
