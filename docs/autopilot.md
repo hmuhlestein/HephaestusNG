@@ -801,10 +801,17 @@ heph autopilot start --project-path ~/my-project
 ```
 
 Costs appear in:
-- The HTML feature report (Cost Tracking section)
-- `pipeline_metrics.json` (`cost_total` field, per feature)
-- `design_metrics.json` (`cost_total` field, summed across all features including Phase 0)
+- The dashboard, from the `CostEntry` ledger rolled up to `cost_total_usd`
+  (see Budget Enforcement below) — this is the authoritative source
 - LiteLLM dashboard (grouped by `user` field)
+
+They do **not** appear in `pipeline_metrics.json` or `design_metrics.json`.
+Neither writer emits a cost field: `design_metrics.json` carries
+design_name / design_document / project_path / designs_folder /
+total_time_seconds / status / features / completed_at, and
+`pipeline_metrics.json` carries design_name / workflow_id / project_path /
+docs_dir / feature_folder / completed_at / stop_reason / qa_passed /
+product_validated. Use the DB rollups for cost, not these files.
 
 ### Budget Enforcement
 
