@@ -390,6 +390,79 @@ class TestWorkflowCommand:
         result = launch(args)
         assert result == 1
 
+    def test_stop_single_workflow_success(self, args, capsys):
+        from src.cli.commands.workflow import stop_workflow
+
+        args.all = False
+        args.workflow_id = "wf-1"
+
+        def mock_api_get(a, endpoint, **kw):
+            if endpoint == "/api/agents":
+                return {"agents": []}
+            return {}
+
+        with (
+            patch("src.cli.commands.workflow.api_get", side_effect=mock_api_get),
+            patch(
+                "src.cli.commands.workflow.api_post",
+                return_value={"message": "Workflow stopped"},
+            ),
+            patch("src.cli.commands.workflow.require_backend", return_value=True),
+        ):
+            result = stop_workflow(args)
+
+        assert result == 0
+        assert "Workflow stopped" in capsys.readouterr().out
+
+    def test_stop_single_workflow_prints_warning_on_agent_termination_failure(
+        self, args, capsys
+    ):
+        """Regression (SOLID review Theme D, 2026-08-20): a failed
+        terminate_agent call for this workflow's agents used to be
+        swallowed silently (except Exception: pass, no output) -- the
+        operator got no signal an agent might still be running and
+        writing to the shared worktree even though the command reported
+        success. Must now print a warning, matching the sibling --all
+        path's existing per-agent status output."""
+        from src.cli.commands.workflow import stop_workflow
+
+        args.all = False
+        args.workflow_id = "wf-1"
+
+        def mock_api_get(a, endpoint, **kw):
+            if endpoint == "/api/agents":
+                return {
+                    "agents": [
+                        {
+                            "id": "agent-1",
+                            "status": "working",
+                            "workflow": {"id": "wf-1"},
+                        }
+                    ]
+                }
+            return {}
+
+        def mock_api_post(a, endpoint, *rest, **kw):
+            if endpoint == "/api/terminate_agent":
+                raise ConnectionError("simulated connection failure")
+            return {"message": "Workflow stopped"}
+
+        with (
+            patch("src.cli.commands.workflow.api_get", side_effect=mock_api_get),
+            patch("src.cli.commands.workflow.api_post", side_effect=mock_api_post),
+            patch("src.cli.commands.workflow.require_backend", return_value=True),
+        ):
+            result = stop_workflow(args)
+
+        out = capsys.readouterr().out
+        assert "agent-1" in out
+        assert "could not terminate" in out.lower()
+        # The workflow stop itself still proceeds despite the agent-
+        # termination warning -- matches this function's pre-existing
+        # behavior of not letting agent-cleanup issues block the stop.
+        assert result == 0
+        assert "Workflow stopped" in out
+
 
 # ─── Agent Command Tests ────────────────────────────────────────────
 

@@ -539,8 +539,13 @@ class HephaestusSDK:
             try:
                 response = requests.post(url, json=payload, timeout=10)
                 response.raise_for_status()
-            except Exception:
-                pass
+            except Exception as e:
+                # Previously silent (no log at all): a failed registration
+                # here surfaces much later and far less clearly, as an
+                # opaque "not found" from start_workflow(definition_id=...)
+                # with no trace back to why the definition was never
+                # registered in the first place.
+                logger.error(f"Failed to register workflow definition '{def_id}': {e}")
 
     def _start_with_tui(self, timeout: int):
         """Start with TUI interface."""
@@ -776,7 +781,11 @@ class HephaestusSDK:
 
             return tasks
 
-        except Exception:
+        except Exception as e:
+            # A caller can't tell "genuinely no matching tasks" apart from
+            # "the query failed" from the empty list alone -- at least log
+            # it so a failure is visible somewhere.
+            logger.error(f"Failed to fetch tasks: {e}")
             return []
 
     # ==================== Multi-Workflow Methods ====================
@@ -906,7 +915,11 @@ class HephaestusSDK:
 
             return executions
 
-        except Exception:
+        except Exception as e:
+            # A caller can't tell "genuinely no matching executions" apart
+            # from "the query failed" from the empty list alone -- at
+            # least log it so a failure is visible somewhere.
+            logger.error(f"Failed to fetch workflow executions: {e}")
             return []
 
     def get_workflow_execution(self, workflow_id: str) -> Optional[WorkflowExecution]:

@@ -230,10 +230,10 @@ def stop_workflow(args):
                 api_post(
                     args, "/api/terminate_agent", {"agent_id": agent_id}, timeout=10
                 )
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as e:
+                print(f"  Warning: could not terminate agent {agent_id[:8]}: {e}")
+    except Exception as e:
+        print(f"  Warning: could not check/terminate this workflow's agents: {e}")
 
     data = api_post(args, f"/api/workflows/{args.workflow_id}/stop", timeout=15)
     if data is None:
