@@ -26,7 +26,7 @@ from src.mcp.server._shared import (
     _resolve_worktree_path,
     server_state,
 )
-from src.mcp.server.background_loops import process_queue
+from src.mcp.server.background_loops import terminate_agents_and_process_queue
 
 logger = logging.getLogger("src.mcp.server._update_task_status_steps")
 
@@ -321,11 +321,9 @@ async def _complete_task_normally(
             None, functools.partial(TaskCompletionService.verify_output_survived_commit, session, task, phase=phase)
         )
 
-    async def terminate_and_process_queue():
-        await server_state.agent_manager.terminate_agent(agent_id)
-        await process_queue()
-
-    asyncio.create_task(terminate_and_process_queue())
+    asyncio.create_task(
+        terminate_agents_and_process_queue(server_state.agent_manager, [agent_id])
+    )
 
     return output_lost_rejection
 
