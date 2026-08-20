@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -35,10 +35,9 @@ class TestAgentOutputCapture:
     @pytest.fixture
     def agent_manager(self, mock_db_manager, mock_llm_provider, mock_tmux_server):
         """Create an agent manager with mocked dependencies."""
-        with patch("src.agents.manager.libtmux.Server", return_value=mock_tmux_server):
-            manager = AgentManager(mock_db_manager, mock_llm_provider)
-            manager.tmux_server = mock_tmux_server
-            return manager
+        return AgentManager(
+            mock_db_manager, mock_llm_provider, tmux_server=mock_tmux_server
+        )
 
     @pytest.mark.asyncio
     async def test_terminate_agent_captures_output(
