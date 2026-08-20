@@ -4,6 +4,7 @@ Extracted from server.py for better modularity.
 """
 
 import asyncio
+import functools
 import logging
 import uuid
 from datetime import datetime
@@ -748,10 +749,15 @@ async def submit_result(
         commit_sha = None
         if hasattr(server_state, "branch_manager"):
             try:
-                commit_result = server_state.branch_manager.commit_for_validation(
-                    agent_id=agent_id,
-                    iteration=1,
-                    message="Result submitted for workflow validation",
+                loop = asyncio.get_event_loop()
+                commit_result = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        server_state.branch_manager.commit_for_validation,
+                        agent_id=agent_id,
+                        iteration=1,
+                        message="Result submitted for workflow validation",
+                    ),
                 )
                 commit_sha = commit_result.get("commit_sha")
                 logger.info(
