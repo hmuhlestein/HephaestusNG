@@ -56,7 +56,12 @@ def _find_pending_input() -> Optional[Path]:
                 resp.unlink(missing_ok=True)
                 continue
             return f
-        except Exception:
+        except Exception as e:
+            # Previously silent -- a malformed-but-not-yet-stale request
+            # file was skipped with no visible sign, so the UI never shows
+            # the pending question and the orchestrator stays blocked
+            # until the stale-timeout eventually cleans the file up.
+            logger.warning(f"Skipping unreadable pending-input file {f}: {e}")
             continue
     return None
 
@@ -69,7 +74,8 @@ async def get_human_input_request():
     try:
         data = json.loads(request_file.read_text())
         return HumanInputRequest(**data)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to read pending-input file {request_file}: {e}")
         return None
 
 @router.post("/input")

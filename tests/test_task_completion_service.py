@@ -227,6 +227,45 @@ class TestVerifyOutputArtifact:
             assert result is not None
             assert result["status"] == "failed"
 
+    def test_security_review_ash_scan_check_fails_closed_on_a_read_error(self, tmp_path):
+        """Regression (SOLID review Theme E, 2026-08-20): the ash-scan
+        content check for security_review's security.md used to swallow a
+        read error silently (except Exception: pass), letting a security
+        review whose scan section couldn't even be verified pass through
+        undetected. It must now fail closed -- reject, not silently pass --
+        matching this function's own established philosophy for every
+        other "couldn't verify" case here."""
+        phase = Mock(name="security_review", id="phase-1")
+        phase.name = "security_review"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        sub = tmp_path / ".hephaestus" / "security_review"
+        sub.mkdir(parents=True)
+        (sub / "security.md").write_text(
+            "---\ntype: security_review_result\n---\n\n"
+            "# Security Report\n\nAutomated Scan Results: clean"
+        )
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path), project_id=None)
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files", return_value=["security.md"]
+        ), patch(
+            "src.autopilot.spec.load_optional_phases", return_value=[]
+        ), patch(
+            "pathlib.Path.read_text", side_effect=OSError("simulated I/O failure")
+        ):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "could not be read to verify ash scan results" in result["message"]
+
     def test_rejects_when_output_file_missing(self):
         phase = Mock(name="development", id="phase-1")
         phase.name = "development"

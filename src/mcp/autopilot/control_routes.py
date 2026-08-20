@@ -422,8 +422,22 @@ async def _start_pipeline_reserved(project_id: str, project_path: str, design_qu
         except HTTPException:
             raise
         except Exception as e:
-            logger.warning(f"[START] Zombie check failed, proceeding with start: {e}")
-            await service.stop()
+            # A transient failure of the zombie-detection query itself
+            # (e.g. "database is locked") previously fell through to
+            # `await service.stop()` -- treating "we couldn't check" the
+            # same as "confirmed zombie" and unconditionally stopping a
+            # pipeline that, per service.running, is otherwise believed
+            # healthy and actively running. Fail conservatively instead,
+            # matching the non-zombie branch above (`else: raise
+            # HTTPException(409, ...)`): when the check can't run, assume
+            # the pipeline is legitimately busy, not that it's safe to
+            # kill. The caller can retry the start request later, and a
+            # genuine zombie gets caught on a subsequent attempt once the
+            # check succeeds.
+            logger.error(f"[START] Zombie check failed, treating pipeline as running: {e}")
+            raise HTTPException(
+                409, "Pipeline is already running (zombie check failed; try again shortly)."
+            )
 
     try:
         result = await service.start(
