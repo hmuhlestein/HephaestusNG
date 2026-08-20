@@ -152,11 +152,11 @@ or relocated, same problem) · **WORSE** (regressed since the original review) �
 | 3.6 | Guardian LLM analysis entangled with DB reads/side effects | **PARTIAL** | `_evaluate_steering_eligibility` is now a clean pure function; `analyze_agent_with_trajectory`/`steer_agent` still entangle LLM calls, DB reads, and side effects |
 | 3.7 | Guardian's key remapping unowned/duplicated | **OPEN, now a live bug** | See §1 above |
 | 3.8 | Dead code `_should_steer_agent` | **FIXED** | Deleted this session (Phase 4); zero remaining references |
-| 3.9 | `Conductor` bundles unrelated QA-review op; no constructor-injected `llm_provider` | **PARTIAL** | QA-review bundling is gone; constructor-injection bypass (`get_llm_provider()` called inline, duplicated in 2 branches) is still open |
+| 3.9 | `Conductor` bundles unrelated QA-review op; no constructor-injected `llm_provider` | **FIXED, 2026-08-19** | QA-review bundling was already gone; `llm_provider` is now a required constructor param (matching `Guardian`'s existing pattern), passed through by `Monitor.__init__`. Both inline `get_llm_provider()` call sites removed, `self.llm_provider` used throughout `analyze_system_state`. 5 test files updated (`test_conductor.py`, `test_validation_agent_protection.py`, `test_monitoring_live.py`, `test_trajectory_monitoring.py`, `test_monitoring_integration.py`) to inject a mock instead of patching the module-level factory — this also surfaced and fixed a previously-silent bug in `test_monitoring_integration.py` where the injected mock was never actually being exercised (the old code called the real factory), which had been masking an unconfigured `AsyncMock.get_model_for_component` producing an un-awaited coroutine |
 | 3.10 | Direct infra instantiation instead of DI | **PARTIAL** | Termination-duplication half is fixed (§4.2, single writer); `libtmux.Server()` direct instantiation and raw `get_session()` vs. `session_scope()` imbalance persist in `launch_pipeline.py`/`manager.py`/`conductor.py` |
-| 3.11 | `TicketService.create_ticket` 470-line fused method | **OPEN, worse** | Now ~501 lines, all originally-cited pieces still present |
-| 3.12 | Duplicate cascade-delete in `TicketService` | **OPEN** | Unchanged, two ~32-line verbatim-duplicate blocks |
-| 3.13 | Duplicate similarity thresholds | **OPEN** | Unchanged |
+| 3.11 | `TicketService.create_ticket` 470-line fused method | **FIXED, 2026-08-19** | Decomposed into 5 named `@staticmethod` helpers (`_validate_ticket_creation`, `_delete_ticket_cascade`, `_broadcast_ticket_event`, `_wait_for_ticket_approval`, `_index_new_ticket`); `create_ticket` itself is now a thin sequential orchestrator. Zero intended behavior change — every log message, exception message, and control-flow branch preserved verbatim |
+| 3.12 | Duplicate cascade-delete in `TicketService` | **FIXED, 2026-08-19** | Both timeout-branch and rejection-branch cascade-deletes now call the shared `_delete_ticket_cascade(db, ticket_id, reason)` helper |
+| 3.13 | Duplicate similarity thresholds | **FIXED, 2026-08-19** | `TicketSearchService` gained named class constants (`DUPLICATE_THRESHOLD=0.9`, `RELATED_THRESHOLD=0.7`, `SIMILAR_THRESHOLD=0.5`), used in `find_related_tickets`'s own classification and in `TicketService._index_new_ticket`'s duplicate-warning check (previously a second hardcoded `>= 0.9`) |
 | 3.14 | `QueueService` priority-ordering duplicated 4× | **OPEN** | Unchanged |
 
 ### §4 — Core infrastructure (`src/core/`, `src/interfaces/`, `src/auth/`)
@@ -171,7 +171,7 @@ or relocated, same problem) · **WORSE** (regressed since the original review) �
 | 4.7 | Two parallel LLM abstractions, silent LSP violation | **OPEN, one more implementer** | `AnthropicProvider`'s trajectory/coherence methods still stub hardcoded defaults; `MultiProviderLLM` is now a 3rd concrete implementer of the same ABC, not a fix |
 | 4.8 | `LangChainLLMClient._create_model` 145-line if/elif dispatch | **OPEN, worse** | ~134 lines (grew); all 5 provider packages still unconditionally imported |
 | 4.9 | Duplicated CLI-output-parsing scan logic | **OPEN, partially normalized** | 4 subclasses still duplicate the scan loop; `ClaudeCodeAgent` converged onto the majority key-naming convention, narrowing the split from 2-vs-3 to 1-vs-4 |
-| 4.10 | `auth_api.py` business logic in routes | **OPEN** | See §1 above for a new defect (`/me` stub) in the same file |
+| 4.10 | `auth_api.py` business logic in routes | **FIXED, 2026-08-19** | Extracted `AuthService` (`src/auth/auth_service.py`) with `register_user`/`authenticate`/`refresh_tokens`, matching the original review's proposed method names. Domain errors (`EmailAlreadyRegisteredError`, `UsernameAlreadyTakenError`, `AccountLockedError`, `InvalidCredentialsError`, `AccountNotActiveError`, `InvalidRefreshTokenError`, `InactiveUserError`, `WeakPasswordError`) carry `status_code`/`detail`/`headers`; the 3 routes are now `try/except AuthError` adapters that open a session and translate to `HTTPException`. `get_db_manager()` deliberately stayed in `auth_api.py` (the test suite's DB-injection seam patches it there). Zero intended behavior change — every status code, detail string/dict, and the one route with an extra `WWW-Authenticate` header preserved exactly; verified via `tests/test_authentication.py` (22 passed, 1 pre-existing unrelated failure confirmed via `git stash` isolation against the pre-refactor baseline — `test_register_success`, a test-DB-fixture issue unrelated to this change) |
 
 ---
 
@@ -308,14 +308,29 @@ correctness risk over pure style:
    this whole refactor's bug-fix-history methodology has repeatedly found elsewhere.
 2. **Split `phase_transitions.py` and `orchestrator/__init__.py`.** Both are now larger
    than the files this refactor already fixed for the same reason; leaving them
-   unaddressed undercuts the refactor's own stated rationale. **Mostly done, 2026-08-19**
+   unaddressed undercuts the refactor's own stated rationale. **Done, 2026-08-19**
    — `phase_transitions.py`'s ~620-line arbitration subsystem extracted to a new
    `arbitration.py` (671 lines), dropping it from 3539 to 3000 lines.
    `orchestrator/__init__.py`'s config getters and `prompt_human` extracted to new
    `config.py`/`human_escalation.py` modules, dropping it from 3411 to 3225 lines.
-   Orchestrator-agent registration and the smaller monitored-workflow/stop-signal
-   registries in `orchestrator/__init__.py` remain open — a plausible third module,
-   deliberately out of scope for this pass.
+   The remaining leftover — orchestrator-agent registration and the monitored-workflow/
+   stop-signal registries — extracted to new `agent_registration.py` (82 lines) and
+   `runtime_registries.py` (96 lines), dropping `orchestrator/__init__.py` to 3086 lines
+   (from its original 3411). `_orchestrator_agent_id` itself stayed in `__init__.py`
+   deliberately: it's a mutable module global reassigned by `run_continuous_pipeline`
+   (which stays) and read via deferred imports from `engine_client.py`/
+   `phase_transitions.py` — only `_register_orchestrator_agent`, the side-effect-free
+   function that produces the id, was safe to move. `_register_orchestrator_agent`'s
+   `logger: OrchestratorLogger` parameter needed the same quoted-forward-reference +
+   `TYPE_CHECKING` treatment as `human_escalation.py`'s `prompt_human`, for the same
+   reason (avoiding a circular import back into `__init__.py`, where `OrchestratorLogger`
+   is defined). Verified via `tests/test_orchestrator_helpers.py` (254 passed) plus
+   `test_advance_phases.py`/`test_autopilot_service.py`/`test_phase_advancement_sweep.py`/
+   `test_background_queue_processor.py`/`test_broadcast_scoping_round2.py` (421 more
+   passed) — the full set of tests touching `_should_stop`/`_interruptible_sleep`/
+   `_stop_events`/`_is_workflow_monitored`/`_register_orchestrator_agent`, either directly
+   or via the deferred-import call sites in `phase_transitions.py`/`engine_client.py`/
+   `background_loops.py`/`autopilot/service.py`.
 3. **1.13/1.15/4.6 — the `except Exception`/manual-session patterns.** Still the largest
    volume of individual findings in the codebase (141 broad excepts, dozens of manual
    sessions); no single fix, but the original review's diagnosis (no service layer, so
@@ -323,4 +338,5 @@ correctness risk over pure style:
    still the single highest-leverage remaining structural gap.
 4. **`TicketService`/`ConductorService`/`auth_api.py`** — three areas this refactor never
    touched at all; still carry their original-review findings unchanged or worse.
+   **Done, 2026-08-19** — 3.9, 3.11, 3.12, 3.13, and 4.10 all fixed (see §2 above).
 5. Everything else in §3 above, roughly in the order listed.
