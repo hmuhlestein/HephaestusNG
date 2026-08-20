@@ -5,11 +5,24 @@ import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_
+from sqlalchemy import and_, case
 
 from src.core.database import Agent, DatabaseManager, Phase, Task, Workflow
 
 logger = logging.getLogger(__name__)
+
+# Shared priority ordering for queue queries (SOLID review finding 3.14):
+# was a byte-identical `case()` expression hand-duplicated in 4 methods here.
+# case() builds a stateless expression tree bound to Task.priority, not to any
+# session/query, so one module-level instance is safe to reuse in every
+# .order_by() call below -- adding a new priority tier now only needs
+# updating this one place, not silently drifting out of sync across 4.
+_PRIORITY_ORDER_CASE = case(
+    (Task.priority == "high", 3),
+    (Task.priority == "medium", 2),
+    (Task.priority == "low", 1),
+    else_=2,
+)
 
 
 class QueueService:
@@ -345,15 +358,9 @@ class QueueService:
         Returns:
             Queue position (1-indexed)
         """
-        from sqlalchemy import case, or_
+        from sqlalchemy import or_
 
-        # Define priority ordering using case statement
-        priority_order = case(
-            (Task.priority == "high", 3),
-            (Task.priority == "medium", 2),
-            (Task.priority == "low", 1),
-            else_=2,
-        )
+        priority_order = _PRIORITY_ORDER_CASE
 
         new_priority_value = {"high": 3, "medium": 2, "low": 1}.get(
             new_task.priority, 2
@@ -421,15 +428,7 @@ class QueueService:
             Next task to process, or None if queue is empty
         """
         with self.db_manager.session_scope() as session:
-            # Custom ordering using CASE for priority
-            from sqlalchemy import case
-
-            priority_order = case(
-                (Task.priority == "high", 3),
-                (Task.priority == "medium", 2),
-                (Task.priority == "low", 1),
-                else_=2,
-            )
+            priority_order = _PRIORITY_ORDER_CASE
 
             # Get all queued tasks (excluding blocked)
             # Note: We only look at "queued" status, blocked tasks have status="blocked"
@@ -538,14 +537,7 @@ class QueueService:
         """Recalculate queue positions for all queued tasks."""
         try:
             with self.db_manager.session_scope() as session:
-                from sqlalchemy import case
-
-                priority_order = case(
-                    (Task.priority == "high", 3),
-                    (Task.priority == "medium", 2),
-                    (Task.priority == "low", 1),
-                    else_=2,
-                )
+                priority_order = _PRIORITY_ORDER_CASE
 
                 queued_tasks = (
                     session.query(Task)
@@ -655,14 +647,7 @@ class QueueService:
             List of queued tasks
         """
         with self.db_manager.session_scope() as session:
-            from sqlalchemy import case
-
-            priority_order = case(
-                (Task.priority == "high", 3),
-                (Task.priority == "medium", 2),
-                (Task.priority == "low", 1),
-                else_=2,
-            )
+            priority_order = _PRIORITY_ORDER_CASE
 
             tasks = (
                 session.query(Task)
