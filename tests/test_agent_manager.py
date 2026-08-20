@@ -1968,3 +1968,86 @@ class TestCreateAgentForTaskOffloadsBlockingWork:
             "_prepare_launch_environment ran on the event loop's own thread "
             "-- it must run in the executor's thread pool instead"
         )
+
+
+class TestRestartAgentOffloadsBlockingWork:
+    """Regression test: restart_agent has its own _resolve_worktree /
+    _prepare_launch_environment call site, separate from
+    create_agent_for_task's (fixed above) -- same root cause, missed by
+    that earlier fix because it's a sibling code path, not a shared one.
+    Found while checking for gaps in the create_agent_for_task fix.
+    Called from monitor/guardian_dispatch/mechanical_recovery for stuck-
+    agent recovery, so it runs on the event loop just as often as the
+    create_agent_for_task path did."""
+
+    @pytest.mark.asyncio
+    async def test_resolve_worktree_and_prepare_launch_environment_run_off_the_event_loop(
+        self, mock_agent_manager, db_manager
+    ):
+        import threading
+
+        with db_manager.session_scope() as session:
+            session.add(Workflow(
+                id="wf-restart-offload", name="Restart Offload WF", status="active",
+                phases_folder_path="/tmp",
+            ))
+            task = Task(
+                id="task-restart-offload",
+                workflow_id="wf-restart-offload",
+                raw_description="Do work",
+                done_definition="done",
+                status="in_progress",
+            )
+            session.add(task)
+            session.flush()
+            agent = Agent(
+                id="agent-restart-offload",
+                system_prompt="Test prompt",
+                status="stuck",
+                cli_type="pi",
+                tmux_session_name="test-session-restart-offload",
+                restart_count=0,
+                current_task_id="task-restart-offload",
+            )
+            session.add(agent)
+
+        mock_agent_manager.branch_manager.commit_changes = MagicMock(return_value={})
+        mock_agent_manager.tmux_server.has_session.return_value = False
+
+        main_thread_id = threading.get_ident()
+        call_thread_ids = {}
+
+        real_resolve_worktree = mock_agent_manager._launch._resolve_worktree
+        real_prepare_launch_env = mock_agent_manager._launch._prepare_launch_environment
+
+        def _spy_resolve_worktree(*args, **kwargs):
+            call_thread_ids["resolve_worktree"] = threading.get_ident()
+            return real_resolve_worktree(*args, **kwargs)
+
+        def _spy_prepare_launch_env(*args, **kwargs):
+            call_thread_ids["prepare_launch_environment"] = threading.get_ident()
+            return real_prepare_launch_env(*args, **kwargs)
+
+        with (
+            patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock),
+            patch.object(
+                mock_agent_manager._launch, "_resolve_worktree",
+                side_effect=_spy_resolve_worktree,
+            ),
+            patch.object(
+                mock_agent_manager._launch, "_prepare_launch_environment",
+                side_effect=_spy_prepare_launch_env,
+            ),
+        ):
+            await mock_agent_manager.restart_agent("agent-restart-offload", "Test restart")
+
+        assert call_thread_ids.get("resolve_worktree") is not None, "_resolve_worktree was never called"
+        assert call_thread_ids.get("prepare_launch_environment") is not None, "_prepare_launch_environment was never called"
+        assert call_thread_ids["resolve_worktree"] != main_thread_id, (
+            "_resolve_worktree ran on the event loop's own thread -- it "
+            "must run in the executor's thread pool instead"
+        )
+        assert call_thread_ids["prepare_launch_environment"] != main_thread_id, (
+            "_prepare_launch_environment ran on the event loop's own thread "
+            "-- it must run in the executor's thread pool instead"
+        )

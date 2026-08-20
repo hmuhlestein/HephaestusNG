@@ -2024,8 +2024,13 @@ class LaunchPipeline:
             )
 
             # Resolve worktree (restart: create_if_missing=False, silent None)
-            wt_resolution = self._resolve_worktree(
-                task, self.branch_manager, create_if_missing=False, agent_id=agent_id,
+            loop = asyncio.get_event_loop()
+            wt_resolution = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    self._resolve_worktree,
+                    task, self.branch_manager, create_if_missing=False, agent_id=agent_id,
+                ),
             )
             restart_wd = wt_resolution.branch_path
 
@@ -2057,9 +2062,13 @@ class LaunchPipeline:
             # Prepare launch environment
             if restart_wd:
                 cli_agent.prepare_working_directory(restart_wd)
-            tmux_session = self._prepare_launch_environment(
-                new_session_name, restart_wd, env_vars, task, restart_phase_name,
-                cli_agent=cli_agent, prewarm_codegraph=False,
+            tmux_session = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    self._prepare_launch_environment,
+                    new_session_name, restart_wd, env_vars, task, restart_phase_name,
+                    cli_agent=cli_agent, prewarm_codegraph=False,
+                ),
             )
 
             restart_system_prompt = (
