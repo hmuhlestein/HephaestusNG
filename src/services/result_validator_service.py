@@ -136,29 +136,3 @@ class ResultValidatorService:
                 "next_actions": next_actions,
                 "workflow_id": result.workflow_id,
             }
-
-    def get_validation_status(self, result_id: str) -> Dict[str, Any]:
-        """
-        Get the current validation status of a result.
-
-        Args:
-            result_id: ID of the result
-
-        Returns:
-            Dictionary with validation status information
-        """
-        with self.db_manager.session_scope() as session:
-            result = session.query(WorkflowResult).filter_by(id=result_id).first()
-            if not result:
-                return {"error": "Result not found"}
-
-            return {
-                "result_id": result.id,
-                "status": result.status,
-                "validation_feedback": result.validation_feedback,
-                "validation_evidence": result.validation_evidence,
-                "validated_at": result.validated_at.isoformat() + "Z"
-                if result.validated_at
-                else None,
-                "validated_by_agent_id": result.validated_by_agent_id,
-            }

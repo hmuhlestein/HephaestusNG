@@ -261,39 +261,3 @@ class WorkflowResultService:
         with get_db() as db:
             workflow = db.query(Workflow).filter_by(id=workflow_id).first()
             return workflow.result_found if workflow else False
-
-    @staticmethod
-    def get_validated_result_for_workflow(workflow_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Get the validated result for a workflow if it exists.
-
-        Args:
-            workflow_id: ID of the workflow
-
-        Returns:
-            Validated result dictionary or None
-        """
-        with get_db() as db:
-            result = (
-                db.query(WorkflowResult)
-                .filter_by(workflow_id=workflow_id, status="validated")
-                .first()
-            )
-
-            if not result:
-                return None
-
-            return {
-                "result_id": result.id,
-                "agent_id": result.agent_id,
-                "workflow_id": result.workflow_id,
-                "status": result.status,
-                "validation_feedback": result.validation_feedback,
-                "validation_evidence": result.validation_evidence,
-                "created_at": result.created_at.isoformat() + "Z",
-                "validated_at": result.validated_at.isoformat() + "Z",
-                "validated_by_agent_id": result.validated_by_agent_id,
-                "result_file_path": result.result_file_path,
-                "result_content": result.result_content,
-                "extra_files": result.extra_files or [],
-            }
