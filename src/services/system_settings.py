@@ -54,7 +54,19 @@ def get_default_cost_limit(session=None) -> Optional[float]:
     project creation does exactly that, and opening a nested get_db() during
     an in-flight flush is how SQLite deadlocks.
     """
-    raw = _get(DEFAULT_COST_LIMIT_KEY, session=session)
+    # Fail soft. This is read on the project-creation path, which worked fine
+    # before this setting existed -- a missing ProjectContext table on an older
+    # database, a locked DB, or any other lookup failure must degrade to "no
+    # default", never take down project creation. set_default_cost_limit
+    # deliberately does NOT do this: there the caller explicitly asked to save,
+    # and swallowing that would be silent data loss.
+    try:
+        raw = _get(DEFAULT_COST_LIMIT_KEY, session=session)
+    except Exception as e:
+        logger.warning(
+            f"Could not read {DEFAULT_COST_LIMIT_KEY} ({e}); treating as no default"
+        )
+        return None
     if raw is None:
         return None
     try:
