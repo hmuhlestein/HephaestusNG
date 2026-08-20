@@ -352,10 +352,22 @@ async def resume_feature(feature_id: str):
         # wf.status), so treating it as "restartable" just re-fails it
         # identically and silently occupies a restart slot that should go
         # to genuinely resumable work.
+        # "pending" must be included here -- an hours-old, never-dispatched
+        # pending task (no assigned_agent_id, nobody working it) is exactly
+        # as "restartable" as a failed one. Without it, such a task is
+        # invisible to this query, `restartable` looks empty, and a caller
+        # that then creates a brand-new task for the same phase (see
+        # review_feature's request_changes branch below) strands the old
+        # pending task outside its own phase's cycle once the phase gets
+        # reopened to "now" -- it later gets swept up by an unrelated
+        # staleness check and marked "Orphaned: never dispatched to an
+        # agent", even though nothing was ever actually wrong with it
+        # beyond this endpoint failing to notice it existed. Confirmed
+        # live: task 146d191d.
         from src.autopilot.orchestrator.phase_transitions import MANUAL_ONLY_PHASES, _manual_handoff_required
         candidates_query = db.query(Task).filter(
             Task.workflow_id == workflow_id,
-            Task.status.in_(["blocked", "failed", "assigned", "in_progress"]),
+            Task.status.in_(["blocked", "failed", "assigned", "in_progress", "pending"]),
         )
         if _manual_handoff_required(workflow_id):
             candidates_query = candidates_query.join(Phase, Task.phase_id == Phase.id).filter(
@@ -365,6 +377,8 @@ async def resume_feature(feature_id: str):
         restartable = []
         for t in candidates:
             if t.status in ("blocked", "failed"):
+                restartable.append(t)
+            elif t.status == "pending" and not t.assigned_agent_id:
                 restartable.append(t)
             elif t.assigned_agent_id:
                 agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
@@ -715,10 +729,22 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
         # exactly this happened to task 2ffbcab0 after a "request changes"
         # review action, twice in a row (see the stacked feedback entries
         # this left in its TaskPromptOverride).
+        #
+        # "pending" must be included too -- an hours-old, never-dispatched
+        # pending task (no assigned_agent_id) is exactly as restartable as
+        # a failed one. Without it, such a task is invisible here,
+        # `restartable` looks empty, and the "create a new development
+        # task" branch below fires and creates a SECOND task for the same
+        # phase -- stranding the original pending task outside its own
+        # phase's cycle once reopen_phase_execution below resets
+        # started_at to "now". It's then swept up by an unrelated
+        # staleness check and marked "Orphaned: never dispatched to an
+        # agent", even though nothing was ever wrong with it beyond this
+        # query failing to see it. Confirmed live: task 146d191d.
         from src.autopilot.orchestrator.phase_transitions import MANUAL_ONLY_PHASES, _manual_handoff_required
         candidates_query = db.query(Task).filter(
             Task.workflow_id == workflow_id,
-            Task.status.in_(["blocked", "failed", "assigned", "in_progress"]),
+            Task.status.in_(["blocked", "failed", "assigned", "in_progress", "pending"]),
         )
         if _manual_handoff_required(workflow_id):
             candidates_query = candidates_query.join(Phase, Task.phase_id == Phase.id).filter(
@@ -728,6 +754,8 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
         restartable = []
         for t in candidates:
             if t.status in ("blocked", "failed"):
+                restartable.append(t)
+            elif t.status == "pending" and not t.assigned_agent_id:
                 restartable.append(t)
             elif t.assigned_agent_id:
                 from src.core.database import Agent

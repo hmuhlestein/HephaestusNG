@@ -882,3 +882,98 @@ class TestReviewFeatureReopensCompletedDevelopmentPhase:
                 "freshly-created task, or nothing will ever pick that "
                 "task up again"
             )
+
+
+class TestReviewAndResumeReuseOldPendingTasks:
+    """Regression: review_feature's request_changes path and resume_feature
+    both picked "restartable" candidates via Task.status.in_(["blocked",
+    "failed", "assigned", "in_progress"]) -- missing "pending". An hours-
+    old, never-dispatched pending task (no assigned_agent_id) is exactly
+    as restartable as a failed one, but was invisible to this query.
+
+    For review_feature specifically, that emptiness triggers the "no
+    restartable tasks -> create a brand-new development task" branch,
+    which creates a SECOND task for the same phase and reopens the
+    phase's PhaseExecution to started_at="now" -- stranding the original
+    pending task outside its own phase's cycle (every cycle-scoped query
+    filters on Task.created_at >= cycle_start). The stranded task is then
+    picked up by an unrelated staleness check and marked "Orphaned: never
+    dispatched to an agent", even though nothing was ever wrong with it.
+
+    Confirmed live: task 146d191d hit exactly this sequence through
+    normal application code (no manual DB intervention) after an earlier
+    cycle left it pending with no agent."""
+
+    def _seed_review_mode_project_and_workflow(
+        self, db, project_id="proj-1", workflow_id="wf-1", feature_id="feat-1",
+    ):
+        from src.core.database import AutopilotProject, Feature, Phase, Workflow
+
+        with db.session_scope() as session:
+            session.add(AutopilotProject(id=project_id, name="p", base_dir="/tmp", review_mode=True))
+            session.add(Workflow(
+                id=workflow_id, name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", project_id=project_id,
+            ))
+            session.add(Feature(
+                id=feature_id, design_id="des-1", feature_key="k", name="n",
+                scope="s", workflow_id=workflow_id, status="paused",
+            ))
+            session.add(Phase(
+                id=f"{workflow_id}-dev", workflow_id=workflow_id, name="development",
+                order=5, description="d", done_definitions=["d"],
+            ))
+
+    def _seed_old_pending_task(self, db, workflow_id="wf-1"):
+        from src.core.database import Task
+
+        with db.session_scope() as session:
+            session.add(Task(
+                id="task-old-pending", workflow_id=workflow_id, phase_id=f"{workflow_id}-dev",
+                raw_description="r", done_definition="d", status="pending",
+            ))
+
+    @pytest.mark.asyncio
+    async def test_request_changes_reuses_an_old_pending_task_instead_of_duplicating(
+        self, orch_db_env, monkeypatch,
+    ):
+        self._seed_review_mode_project_and_workflow(orch_db_env)
+        self._seed_old_pending_task(orch_db_env)
+
+        from src.mcp.autopilot import feature_routes
+        spawn_mock = AsyncMock()
+        monkeypatch.setattr(feature_routes, "_spawn_agent_for_task", spawn_mock)
+
+        from src.mcp.autopilot.feature_routes import FeatureReviewRequest, review_feature
+        result = await review_feature(
+            "feat-1", FeatureReviewRequest(action="request_changes", feedback="do another lint check"),
+        )
+        assert result["success"] is True
+
+        from src.core.database import Task, TaskPromptOverride
+
+        with orch_db_env.session_scope() as session:
+            dev_tasks = session.query(Task).filter_by(phase_id="wf-1-dev").all()
+            assert len(dev_tasks) == 1, "the old pending task must be reused, not duplicated"
+            assert dev_tasks[0].id == "task-old-pending"
+
+            override = session.query(TaskPromptOverride).filter_by(task_id="task-old-pending").first()
+            assert override is not None
+            assert "do another lint check" in override.user_prompt
+
+        spawn_mock.assert_called_once_with("task-old-pending", "wf-1-dev")
+
+    @pytest.mark.asyncio
+    async def test_resume_feature_reuses_an_old_pending_task(self, orch_db_env, monkeypatch):
+        self._seed_review_mode_project_and_workflow(orch_db_env)
+        self._seed_old_pending_task(orch_db_env)
+
+        from src.mcp.autopilot import feature_routes
+        spawn_mock = AsyncMock()
+        monkeypatch.setattr(feature_routes, "_spawn_agent_for_task", spawn_mock)
+
+        from src.mcp.autopilot.feature_routes import resume_feature
+        result = await resume_feature("feat-1")
+        assert result["success"] is True
+
+        spawn_mock.assert_called_once_with("task-old-pending", "wf-1-dev")
