@@ -811,6 +811,16 @@ def _run_ash_scan(worktree: Path, logger: "OrchestratorLogger") -> None:
         ash_script = heph_repo / "scripts" / "ash"
         if not ash_script.exists():
             logger.warning(f"[ASH] scripts/ash not found at {ash_script}, skipping scan")
+            # Still write the marker. security_review.yaml tells the agent to
+            # cat this file and quote it verbatim if it reports a failure, and
+            # verify_output_artifact rejects a security.md with no "Automated
+            # Scan Results" section -- so returning silently here leaves the
+            # agent catting a nonexistent file with no sanctioned way to
+            # report why, and its report gets rejected for a missing section
+            # it had no way to fill. Every other failure path below already
+            # writes this marker; this one was the exception.
+            results_path.parent.mkdir(parents=True, exist_ok=True)
+            results_path.write_text(f"SCAN FAILED TO RUN: ash not installed at {ash_script}")
             return
 
         results_path.parent.mkdir(parents=True, exist_ok=True)

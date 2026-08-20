@@ -58,9 +58,21 @@ class TestRunAshScan:
         assert "FAILED TO RUN" in results_path.read_text()
         assert "uvx not found" in results_path.read_text()
 
-    def test_skips_gracefully_when_ash_script_missing(self, tmp_path):
+    def test_writes_the_failure_marker_when_ash_script_missing(self, tmp_path):
         """If scripts/ash doesn't exist at the derived repo path, don't crash
-        and don't write a misleading results file."""
+        -- and DO write the same failure marker every other failure path
+        writes.
+
+        This assertion was inverted ("don't write a misleading results
+        file") back when verify_output_artifact's ash-scan content check was
+        dead and writing nothing was harmless. It isn't any more:
+        security_review.yaml tells the agent to cat this file and quote it
+        verbatim if it reports a failure, and a security.md with no
+        "## Automated Scan Results" section is now rejected. With no file at
+        all the agent cats a nonexistent path, has no sanctioned way to
+        report why, and gets rejected for a section it had no way to fill.
+        Writing the marker is what lets it say "SCAN FAILED TO RUN" and
+        continue, exactly as the prompt instructs."""
         from src.autopilot.orchestrator.worktree_integration import _run_ash_scan
 
         logger = MagicMock()
@@ -68,7 +80,9 @@ class TestRunAshScan:
             _run_ash_scan(tmp_path, logger)
 
         results_path = tmp_path / CONTEXT_DIR_NAME / "ash_results.txt"
-        assert not results_path.exists()
+        assert results_path.exists()
+        assert "SCAN FAILED TO RUN" in results_path.read_text()
+        assert "ash not installed" in results_path.read_text()
 
 
 class TestAshScanWiredIntoPhaseTaskCreation:

@@ -10,8 +10,10 @@ building the message itself.
 """
 
 import logging
+from pathlib import Path
 
 from src.autopilot.phases import SESSION_ROLES
+from src.core.constants import CONTEXT_DIR_NAME
 from src.core.database import AutopilotProject, Task
 from src.prompts.loader import (
     get_non_phase_agent_instructions,
@@ -75,6 +77,29 @@ class AgentPromptBuilder:
 
         # Use the actual worktree path for the agent
         cwd_info = f"Working Directory: {branch_path}" if branch_path else ""
+
+        # Nearly every phase prompt (13 of 14 in config/workflows/autopilot/)
+        # tells the agent to read or write "Artifacts Path" -- qa_validation
+        # and security_review go as far as "Read: Your task description for
+        # 'Docs Path:' and 'Project Path:' locations" -- but nothing ever put
+        # such a field in a task description: _create_phase_task builds it as
+        # f"Execute {phase.name}: {phase.description}" plus optional goto
+        # feedback, and this builder injected only Working Directory /
+        # Project Root. Exactly the same never-injected-field bug as the
+        # Project Root one below, and with the same consequence: the lookup
+        # those prompts describe has nothing to find. "Docs Path" was the
+        # worse half -- unlike "Artifacts Path" (self-defined inline in most
+        # phases' CRITICAL PATH RULE as ./.hephaestus/) it was never defined
+        # anywhere at all, in any prompt or any code path, so the phase
+        # prompts have been normalised onto the single "Artifacts Path" name
+        # this injects. There is no second location: the feature-record docs
+        # folder those prompts seemed to mean is created by
+        # _populate_feature_folder at workflow FINALIZATION, timestamped at
+        # creation, so during a run it does not exist yet -- .hephaestus/ in
+        # the worktree is the only real artifact directory, and the feature
+        # folder is a post-run archive of it.
+        if branch_path:
+            cwd_info += f"\nArtifacts Path (absolute): {Path(branch_path) / CONTEXT_DIR_NAME}"
 
         # Get workflow information for context
         workflow_id = getattr(task, "workflow_id", None) or ""

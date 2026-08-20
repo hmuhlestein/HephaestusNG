@@ -299,7 +299,7 @@ additional_notes: |
   Instead, write the full breakdown as TEXT in architecture.md — one
   section per component, with the same dependency/parallel-group
   information below expressed as a table or list. The development agent
-  reads this from Docs Path and follows it; if IT decides the
+  reads this from Artifacts Path and follows it; if IT decides the
   implementation needs its own parallel subtasks, it creates those itself
   using create_task within its own phase (the standard rule
   every phase follows), using the dependency/parallel-group mechanics

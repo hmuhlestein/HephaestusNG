@@ -435,10 +435,49 @@ def get_review_findings_history(workflow_id: str, phase_name: str) -> list:
         return list(row.value) if row and row.value else []
 
 
+def gate_finding_count(phase_name: str, result: Optional[Dict[str, Any]]) -> int:
+    """How many unresolved findings a gated phase's own report records.
+
+    There is no shared key: each gated phase's report speaks its own
+    vocabulary, and its score_* function above reads accordingly --
+    blocker_count for the three BLOCKER-style reviews, failed_tests /
+    critical_issues for QA, unmet_requirements for product validation,
+    unresolved_count for security review. record_review_finding used to
+    read result["blocker_count"] unconditionally, so every phase that
+    doesn't use that key recorded 0 findings no matter what it found, and
+    the prior-findings block injected into the next run's task description
+    (see _create_phase_task) announced "0 finding(s)" above a summary
+    describing real ones. Same class of mistake as the one
+    synthetic_clean_result's docstring documents: assuming one phase's
+    schema is every phase's.
+
+    scope_review is verdict-based with no count at all and correctly
+    returns 0 here -- its findings survive via the summary text, which is
+    what actually gets read back.
+    """
+    if not result:
+        return 0
+    if phase_name == "security_review":
+        return int(result.get("unresolved_count") or 0)
+    if phase_name == "qa_validation":
+        return int(result.get("failed_tests") or 0) + int(
+            result.get("critical_issues") or 0
+        )
+    if phase_name == "product_validation":
+        unmet = result.get("unmet_requirements") or []
+        return len(unmet) if isinstance(unmet, (list, tuple)) else 0
+    return int(result.get("blocker_count") or 0)
+
+
 def record_review_finding(
     workflow_id: str, phase_name: str, blocker_count: int, summary: str
 ) -> None:
     """Append one run's findings to this phase's persistent history.
+
+    `blocker_count` is the stored key name (kept as-is: history rows
+    already written use it) but the VALUE should come from
+    gate_finding_count above, not from result["blocker_count"] -- "blocker"
+    is only three of the seven gated phases' vocabulary.
 
     Called right before consume_gate_artifacts deletes the result files
     those findings were read from -- the NEXT run of this phase is a fresh
@@ -1202,6 +1241,87 @@ def score_architectural_review(
     return 0.9, {"gate": "architectural_review", "band": "pass", "reason": "clean"}
 
 
+def score_security_review(
+    result: Optional[Dict[str, Any]],
+    report_text: Optional[str] = None,
+) -> Tuple[float, Dict[str, Any]]:
+    """Score a security.md by unresolved critical/high vulnerability count.
+
+    security_review.yaml's mandate is unusual among the review phases: it
+    FIXES critical and high vulnerabilities itself rather than only
+    reporting them ("Critical and high vulnerabilities FIXED in the code"),
+    and tickets the medium/low ones. So the gate input is not "how many did
+    you find" -- a review that found ten and fixed ten is a clean pass --
+    it's `unresolved_count`: the critical/high findings still live in the
+    code when the agent marked itself done.
+
+    Same dead-gate bug and same fix as score_adversarial_review/
+    score_architectural_review (see the GATED_PHASES comment above), just
+    caught later: security_review carried a full set of workflow.yaml
+    conditions (score < 0.3 -> architecture_design, score < 0.7 ->
+    development) but never declared `spec_gate: true`, so
+    build_phase_output returned {} for it and the heuristic evaluator's
+    fixed 0.75 baseline continued past the gate every single time --
+    regardless of what the review found or failed to fix. Of the two
+    phases left behind by that earlier fix, this is the one where it
+    mattered: a security review reporting unfixed critical vulnerabilities
+    advanced straight to QA.
+
+    As with those two, no distinct signal exists to separate "needs a
+    development fix" from "needs an architectural redesign"
+    (workflow.yaml's `score < 0.3` band), so anything unresolved routes to
+    development -- a known limitation, not a silent gap.
+    """
+    if not result:
+        # Same rationale as score_adversarial_review's: the agent may have
+        # written the report but failed to emit the structured frontmatter
+        # -- don't discard real findings over a missing header.
+        reason = (
+            f"no security.md frontmatter found, but a report was "
+            f"written:\n\n{report_text}"
+            if report_text
+            else "no security.md found"
+        )
+        return 0.4, {
+            "gate": "security_review",
+            "reason": reason,
+            "result_missing": True,
+        }
+
+    unresolved = int(result.get("unresolved_count") or 0)
+    criticals = int(result.get("critical_count") or 0)
+    highs = int(result.get("high_count") or 0)
+
+    if unresolved > 0:
+        # Send the full report, not a count: a developer agent with no
+        # other context needs the actual file:line references and
+        # remediation the reviewer wrote.
+        reason = (
+            f"{unresolved} unresolved critical/high vulnerability(ies) left "
+            f"in the code by security review:\n\n{report_text}"
+            if report_text
+            else f"{unresolved} unresolved critical/high vulnerability(ies) "
+            "— returning to development"
+        )
+        return 0.4, {
+            "gate": "security_review",
+            "band": "development",
+            "unresolved_count": unresolved,
+            "critical_count": criticals,
+            "high_count": highs,
+            "reason": reason,
+        }
+    return 0.9, {
+        "gate": "security_review",
+        "band": "pass",
+        "reason": (
+            f"clean — {criticals} critical / {highs} high found, all fixed"
+            if criticals or highs
+            else "clean"
+        ),
+    }
+
+
 def score_feature_review(
     result: Optional[Dict[str, Any]],
     report_text: Optional[str] = None,
@@ -1319,6 +1439,7 @@ GATE_RESULT_ARTIFACTS: Dict[str, Tuple[str, ...]] = {
     "design_review": ("challenge.md",),
     "architectural_review": ("review.md",),
     "adversarial_review": ("adversarial.md",),
+    "security_review": ("security.md",),
     "qa_validation": ("qa.md",),
     "product_validation": ("validation.md",),
     "feature_review": ("feature_review.md",),
@@ -1375,6 +1496,8 @@ def synthetic_clean_result(phase_name: str, run_count: int) -> Dict[str, Any]:
         return {**base, "verdict": "PASS", "unmet_requirements": []}
     if phase_name == "scope_review":
         return {**base, "verdict": "PASS"}
+    if phase_name == "security_review":
+        return {**base, "unresolved_count": 0, "critical_count": 0, "high_count": 0}
     # design_review, architectural_review, adversarial_review, feature_review: blocker-count schema.
     return {**base, "blocker_count": 0}
 
@@ -1469,6 +1592,7 @@ GATE_RESULT_REQUIRED_KEYS: Dict[str, Tuple[str, ...]] = {
     "design_review": ("blocker_count",),
     "architectural_review": ("blocker_count",),
     "adversarial_review": ("blocker_count",),
+    "security_review": ("unresolved_count", "critical_count", "high_count"),
     "qa_validation": ("failed_tests", "passed_tests", "critical_issues"),
     "product_validation": ("verdict",),
     "feature_review": ("blocker_count",),
@@ -1489,6 +1613,13 @@ GATE_RESULT_REQUIRED_KEYS: Dict[str, Tuple[str, ...]] = {
 # §4.9 was written to close (see docs/AUTOPILOT_REFACTOR_PLAN.md §4.9).
 GATE_RESULT_TYPE_OVERRIDE: Dict[str, str] = {
     "feature_review": "feature_review_result",
+    # security_review.yaml documented `type: security_review_report` long
+    # before it became a gated phase (its report predates the spec_gate
+    # mechanism), and other consumers -- verify_output_artifact's ash-scan
+    # check, the archived feature record -- already read files written with
+    # it. Override rather than rewriting the prompt's documented type, which
+    # is exactly the prompt-level inconsistency this table exists to absorb.
+    "security_review": "security_review_report",
 }
 
 
@@ -1600,6 +1731,11 @@ def build_phase_output(
             working_directory, "adversarial.md", phase_name=phase_name
         )
         score, meta = score_adversarial_review(result, report_text=report_text)
+    elif phase_name == "security_review":
+        result, report_text = read_okf_report(
+            working_directory, "security.md", phase_name=phase_name
+        )
+        score, meta = score_security_review(result, report_text=report_text)
     elif phase_name == "qa_validation":
         result, _ = read_okf_report(working_directory, "qa.md", phase_name=phase_name)
         # Enhancement 1: Pass working_directory for independent test verification

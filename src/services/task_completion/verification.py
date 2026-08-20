@@ -304,17 +304,23 @@ def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]
     resolved" is actually required, not just requested.
 
     Also applies to git_expert -- the literal last phase before a
-    feature ships. security_review creates tickets for its findings but
-    has no content-scored workflow.yaml gate of its own (unlike
-    qa_validation/product_validation, which score their own result
-    files); its only enforcement path is this same check firing when the
-    pipeline happens to route back through development. If qa_validation
-    and product_validation both pass on their own separate criteria
-    without the pipeline ever revisiting development, a security ticket
-    could otherwise stay open all the way to git commit -- shipping code
-    with a known, already-reported security issue no gate ever rejected.
-    Checking again at the true end of the pipeline closes that gap
-    regardless of which path a given run took to get there.
+    feature ships. security_review's own gate covers only what it failed
+    to FIX (security.md's unresolved_count, scored by
+    score_security_review): the medium/low findings it deliberately
+    tickets instead of fixing are by design NOT gate input, so they have
+    no scored path of their own and would otherwise ride all the way to
+    the commit unchallenged -- shipping code with a known,
+    already-reported security issue no gate ever rejected. Checking again
+    at the true end of the pipeline closes that gap regardless of which
+    path a given run took to get there.
+
+    (Until security_review became a genuinely gated phase, this check was
+    its ONLY enforcement path of any kind, firing only when the pipeline
+    happened to route back through development -- its workflow.yaml
+    conditions were configured but unreachable, since it declared no
+    `spec_gate: true` and build_phase_output returned {} for it. That is
+    fixed; this check now backstops the ticketed findings rather than
+    standing in for the whole gate.)
 
     Not applied to QA/security_review themselves -- those are the phases
     that CREATE these tickets in the first place and must not be blocked

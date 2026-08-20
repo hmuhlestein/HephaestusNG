@@ -9,8 +9,8 @@ description: |
   findings, QA results, and validation — to identify prompt improvements,
   methodology refinements, and patterns that could reduce iterations.
 done_definitions:
-  - "pipeline_metrics.json read for timing and iteration data"
-  - "All phase YAML files read from phase_prompts/ directory"
+  - "run_health.json read for GOTO counts, decision points, and per-phase tmux error locations"
+  - "All phase YAML files read from ./.hephaestus/phase_prompts/"
   - "All phase artifacts read and compared against prompts"
   - "All tmux session logs read from .hephaestus/tmux/ (full agent output per phase)"
   - "Agent logs fetched via API (/api/agents/{id}/logs)"
@@ -20,7 +20,7 @@ done_definitions:
   - "Common issue patterns cataloged"
   - "Specific prompt rewrites proposed (with before/after text)"
   - "Tickets created for actionable findings (skip and continue if heph_create_ticket returns an error)"
-  - "forensics.md created in Docs Path"
+  - "forensics.md created at ./.hephaestus/forensics.md"
   - "Memory entries saved with feature name prefix in content"
   - "Task marked as done"
 outputs:
@@ -48,84 +48,79 @@ additional_notes: |
 
   ## STEP 1: ESTABLISH YOUR PATHS
 
-  Your task description contains these exact lines — copy the values verbatim:
+  Your task description contains this line — copy the value verbatim:
 
-    Feature Folder: <absolute path to this run's feature folder>
-    Docs Path (absolute): <absolute path to this run's docs folder>
+    Artifacts Path (absolute): <absolute path to this run's .hephaestus/ directory>
 
-  Two separate source trees, two separate purposes:
+  That is the ONE artifact directory for this run. Everything you read and
+  everything you write lives under it, and it is the same directory as your
+  worktree-relative ./.hephaestus/ — the absolute form is given so shell
+  commands work regardless of your current directory. There is no second
+  "feature folder" tree to hunt for: the feature record is assembled from
+  this directory AFTER the pipeline finishes, which is after you run.
 
   PHASE ARTIFACTS (requirements, architecture, reports, QA results):
-    Read from: ./.hephaestus/ (your worktree-relative path — this is where agents wrote them)
-    Example: ./.hephaestus/requirements.md, ./.hephaestus/qa_validation/qa.md
+    Read from: ./.hephaestus/<phase_name>/
+    Example: ./.hephaestus/qa_validation/qa.md, ./.hephaestus/adversarial_review/adversarial.md
 
   PHASE PROMPTS (the YAML files that instructed each agent):
-    Read from: <Docs Path (absolute)>/phase_prompts/
-    Example: $DOCS_ABS/phase_prompts/development.yaml
+    Read from: ./.hephaestus/phase_prompts/
+    Example: ./.hephaestus/phase_prompts/development.yaml
+    Staged for you by the orchestrator when it dispatched this task, along
+    with workflow.yaml (the evaluation points and thresholds that decided
+    every retry and GOTO in this run).
+
+  RUN HEALTH:
+    Read from: ./.hephaestus/run_health.json
+    Written by the orchestrator when it dispatched this task.
 
   FORENSICS REPORT (your output):
-    Write to: ./.hephaestus/forensics.md  ← this gets committed to git
-    Also copy to: <Docs Path (absolute)>/forensics.md  ← for the feature record
-
-  PIPELINE METRICS:
-    Read from: <Docs Path (absolute)>/pipeline_metrics.json
-    NOTE: This file may have null values for qa_passed/completed_at/total_time_seconds
-    because it is finalized AFTER the pipeline ends. If values are null, skip that
-    field in your report — do NOT search for another pipeline_metrics.json file.
-    Do NOT use a metrics file from a different feature folder or a different run.
+    Write to: ./.hephaestus/forensics.md — ONE file, one location.
 
   MANDATORY FIRST ACTION — run this before anything else:
   ```bash
-  DOCS_ABS="<value of 'Docs Path (absolute)' from your task description>"
-  echo "DOCS_ABS=$DOCS_ABS"
-  ls ./.hephaestus/ && echo "worktree hephaestus OK"
-  ls "$DOCS_ABS/phase_prompts/" && echo "phase prompts OK"
+  ls ./.hephaestus/ && echo "artifacts OK"
+  ls ./.hephaestus/phase_prompts/ && echo "phase prompts OK"
+  cat ./.hephaestus/run_health.json && echo "run health OK"
   ```
   Do NOT search for other feature folders. Do NOT use paths from previous runs.
 
-  ## STEP 2: DECIDE ANALYSIS DEPTH
+  ## STEP 2: READ RUN HEALTH AND SET YOUR FOCUS
 
-  Try to read `<Docs Path (absolute)>/run_health.json`. This file may not exist
-  (it is written by the orchestrator after the pipeline ends — forensics runs before
-  that). If the file is missing, proceed in FULL MODE.
-
-  If run_health.json EXISTS:
-    - `clean` (bool): true if no GOTOs and no tmux errors
+  Read `./.hephaestus/run_health.json`. It has:
+    - `clean` (bool): false — this is WHY you were dispatched. The
+      orchestrator skips this phase entirely on a clean run, so if you are
+      reading this, something went wrong and it is your job to find out what.
     - `goto_count` (int): number of GOTO rewinds
-    - `error_count` (int): error-pattern lines found in tmux logs
+    - `goto_events` (list): the last 10 GOTO log lines
+    - `decision_points` (list): the orchestrator's own gate decisions
+    - `error_count` (int): total error-pattern lines found in tmux logs
+    - `tmux_errors` (list): per-log-file `{file, count, samples}` — START HERE.
+      These name the exact phases that produced errors; read those phases'
+      tmux logs and prompts first rather than sweeping all of them evenly.
 
-    If `clean == true` AND `error_count == 0`:
-      → LIGHT MODE: Write a brief forensics.md (1-2 pages). Confirm
-        the run was healthy, note timing/GOTO count/key outputs. Skip deep
-        tmux log analysis. Skip ticket creation.
+  If the file is missing (orchestrator restarted mid-dispatch), proceed
+  anyway and derive the same picture from the tmux logs in STEP 5b. Do NOT
+  wait for it or search for it elsewhere.
 
-    If `clean == false` OR `error_count > 0`:
-      → FULL MODE: Read tmux logs, find root causes, propose prompt fixes,
-        create tickets.
+  GOTOs are normal pipeline iteration — not errors on their own. A run with
+  1-2 GOTOs that ended in success is healthy; a run with 8 is a finding.
 
-  If run_health.json MISSING:
-    → FULL MODE (default). Do NOT wait for it or search for it elsewhere.
+  Log what run_health.json told you at the top of forensics.md.
 
-  GOTOs are normal pipeline iteration — not errors. A run with 1-2 GOTOs that
-  ended in success is healthy.
+  ## STEP 3: (RESERVED)
 
-  Log which mode you chose and why at the top of forensics.md.
-
-  ## STEP 3: READ PIPELINE METRICS (REAL DATA)
-
-  Read `<Docs Path (absolute)>/pipeline_metrics.json`. This contains:
-  - iterations, total_time_seconds, stop_reason
-  - qa_passed / product_validated: final outcomes
-  - started_at / completed_at: timestamps
-
-  IMPORTANT: Some fields may be null because this file is finalized after the
-  pipeline ends (after forensics runs). Use whatever real values exist; omit
-  null fields from your report rather than guessing. Do NOT use a different
-  pipeline_metrics.json from another folder or run.
+  There is no pipeline_metrics.json to read at this point in the pipeline.
+  It is written when the feature record is assembled, which happens after
+  the whole workflow finishes — after git_expert, after you. Timing and
+  iteration data comes from run_health.json (STEP 2) and the tmux logs
+  (STEP 5b) instead. Do not go looking for a metrics file; if you find one,
+  it belongs to a DIFFERENT run and using it would put another feature's
+  numbers in this report.
 
   ## STEP 4: READ ACTUAL AGENT PROMPTS
 
-  Read all files in `<Docs Path (absolute)>/phase_prompts/`. These are YAML files
+  Read all files in `<Artifacts Path (absolute)>/phase_prompts/`. These are YAML files
   (one per phase, e.g. development.yaml, qa_validation.yaml) containing
   the exact prompt given to each agent.
 
@@ -141,26 +136,34 @@ additional_notes: |
 
   Read each artifact from YOUR WORKTREE'S ./.hephaestus/ — agents wrote their outputs
   there, and those files are still present:
+  Each gated phase writes into its OWN subdirectory (.hephaestus/<phase_name>/),
+  which is where its report actually is — not flat in .hephaestus/:
   - ./.hephaestus/requirements.md
-  - ./.hephaestus/architecture.md
-  - ./.hephaestus/challenge.md
-  - ./.hephaestus/adversarial.md
-  - ./.hephaestus/review.md
+  - ./.hephaestus/architecture_design/architecture.md
+  - ./.hephaestus/scope_review/scope.md
+  - ./.hephaestus/design_review/challenge.md
+  - ./.hephaestus/adversarial_review/adversarial.md
+  - ./.hephaestus/architectural_review/review.md
+  - ./.hephaestus/security_review/security.md
+  - ./.hephaestus/qa_validation/qa.md
+  - ./.hephaestus/product_validation/validation.md
   - ./.hephaestus/docs.md
-  - ./.hephaestus/security.md
-  - ./.hephaestus/qa.md
-  - ./.hephaestus/validation.md
-  - ./.hephaestus/scope.md
+
+  A report that is MISSING is itself a finding, not a dead end: gate reports
+  are deleted once their GOTO decision has been acted on (so the phase must
+  produce a fresh one on re-entry), so an absent report means that phase's
+  last run either never completed or was rewound.
 
   Also read the original design document at ./.hephaestus/design.md.
 
   For each output, compare what was produced against:
-  1. The prompt that was given (from Step 2)
+  1. The prompt that was given (from Step 4)
   2. The original design document (the source of truth)
   
-  ## STEP 5b: READ FULL AGENT TMUX LOGS (RAW SESSION OUTPUT) — FULL MODE ONLY
+  ## STEP 5b: READ FULL AGENT TMUX LOGS (RAW SESSION OUTPUT)
 
-  Skip this step entirely in LIGHT MODE.
+  Start with the log files run_health.json's `tmux_errors` named — those
+  are where the errors actually are.
 
   Tmux logs live at: <Project Root (absolute)>/.hephaestus/tmux/
   Each file is named <phase_name>_<agent_id>.log.
@@ -188,7 +191,7 @@ additional_notes: |
 
   There is no separate API tool for this — Guardian steering messages are
   injected directly into an agent's own tmux session, so they already
-  appear inline in the logs you read in Step 3b (look for lines starting
+  appear inline in the logs you read in Step 5b (look for lines starting
   "[GUARDIAN...]"). Do NOT invent an http_get-style tool call here; none
   exists, and doing so will just fail with "tool not found."
 
@@ -204,7 +207,7 @@ additional_notes: |
   
   ### Did the agent follow its instructions?
   - Read the prompt (from phase_prompts/)
-  - Read the output (from Docs Path)
+  - Read the output (from Artifacts Path)
   - Did the output include everything the prompt required?
   - Did the output include things the prompt didn't ask for?
   - Were any instructions ignored or misunderstood?
@@ -242,19 +245,18 @@ additional_notes: |
   
   ## STEP 8: WRITE FORENSICS REPORT
 
-  Write forensics.md to TWO locations:
-  1. ./.hephaestus/forensics.md  (worktree — gets committed to git, primary)
-  2. <Docs Path (absolute)>/forensics.md  (feature folder record)
-
-  Write the worktree copy first.
+  Write forensics.md to ./.hephaestus/forensics.md. ONE file, one location —
+  the feature record is assembled from this directory after the pipeline
+  finishes, so a second copy is not yours to make.
   
   Structure the report around what you ACTUALLY found, not a rigid template.
   Use this structure but fill sections proportionally to findings:
   
   # Forensics Report
   
-  ## Pipeline Metrics
-  (From pipeline_metrics.json — copy the real numbers)
+  ## Run Health
+  (From run_health.json — copy the real numbers: goto_count, error_count,
+  which phases the tmux errors came from)
   
   ## Findings
   (One section per finding. Each finding has:)
@@ -339,7 +341,7 @@ additional_notes: |
   ## RULES
   
   DO:
-  - Read pipeline_metrics.json for real numbers (don't guess)
+  - Read run_health.json for real numbers (don't guess)
   - Read phase_prompts/ for real prompt text (don't paraphrase from memory)
   - Read .hephaestus/tmux/*.log for the raw agent session transcripts
   - Cite specific lines from artifacts AND tmux logs as evidence

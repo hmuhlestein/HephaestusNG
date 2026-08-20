@@ -69,7 +69,7 @@ additional_notes: |
   - Your task description contains the exact paths — copy them exactly.
 
   Read:
-  - Your task description for "Artifacts Path" and "Project Path" locations
+  - Your task description for the "Artifacts Path (absolute):" and "Working Directory:" lines ("Project Path" = Working Directory)
   - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
   - architecture.md (from Artifacts Path) - YOUR design decisions, component structure, interfaces
   - requirements.md (from Artifacts Path) - What the system should do (contains REQ-XX IDs)
@@ -320,7 +320,7 @@ additional_notes: |
 
   ## STEP 14: WRITE THE REPORT
 
-  Write review.md to the Docs Path. This is your ONLY output.
+  Write review.md to the Artifacts Path. This is your ONLY output.
   Do NOT edit any source files or tests.
 
   # Architectural Review Report

@@ -1,5 +1,6 @@
 id: 8
 name: security_review
+spec_gate: true
 thinking_level: high
 description: |
   Perform focused security review and fix vulnerabilities found.
@@ -9,6 +10,7 @@ description: |
   issues before they ship.
 done_definitions:
   - "ash automated scan results read and included in security.md"
+  - "security.md frontmatter declares critical_count/high_count/unresolved_count (gate input) — unresolved_count is the number of critical/high findings still unfixed"
   - "Authentication/authorization mechanisms reviewed"
   - "Input validation verified across all endpoints"
   - "Data handling and storage security assessed"
@@ -21,8 +23,16 @@ done_definitions:
   - ".hephaestus/security_review/security.md created with findings and fixes applied"
   - "Memory saved with security findings"
   - "Task marked as done"
+# Bare filename, like every other gated phase (adversarial.md, qa.md,
+# review.md...). resolve_declared_output_path resolves it against
+# .hephaestus/<phase_name>/ -- the same location GATE_RESULT_ARTIFACTS and
+# this phase's own CRITICAL PATH RULE name. The old "security_review/
+# security.md" form resolved only via the flat-.hephaestus/ candidate, which
+# is skipped for gated phases, and it never matched verify_output_artifact's
+# `declared_output == "security.md"` ash-scan content check either -- so that
+# MANDATORY check silently never ran.
 outputs:
-  - "security_review/security.md"
+  - "security.md"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK.
   Technical terms exact. No pleasantries (sure/certainly/happy to).
@@ -33,8 +43,19 @@ additional_notes: |
   ```
   ---
   type: security_review_report
+  critical_count: <number of CRITICAL vulnerabilities found>
+  high_count: <number of HIGH vulnerabilities found>
+  unresolved_count: <number of those critical/high findings you did NOT fix>
   ---
   ```
+
+  These three counts are the PIPELINE GATE INPUT — not decoration. Finding
+  vulnerabilities is not a failure: this phase's job is to fix the critical
+  and high ones, so `critical_count: 6, high_count: 2, unresolved_count: 0`
+  passes the gate. Any `unresolved_count` above 0 sends the pipeline back to
+  development with your full report attached. Do NOT under-report to get
+  past the gate, and do NOT count medium/low findings here — those become
+  tickets (STEP 11), not gate input.
 
   ## YOU ARE A SECURITY REVIEWER - FIND AND FIX VULNERABILITIES
   
@@ -45,15 +66,29 @@ additional_notes: |
   Read the design document and architecture.md, then classify as ONE of:
   
   - **STATELESS_LIBRARY** — pure computation, no I/O, no HTTP, no auth (e.g. calculator,
-    parser, formatter). SKIP Steps 2, 3, 6. Run Step 4 only if the library handles PII or
-    writes files. Run Steps 5, 7, 8 as normal.
+    parser, formatter). SKIP Step 4 (there is no authentication to review). Run Step 6
+    only if the library handles PII or writes files. Run Steps 2, 3, 5, 7, 8 as normal.
   - **DATA_SERVICE** — reads/writes data but no user authentication (e.g. batch processor,
-    internal ETL). SKIP Step 2. Run all other steps.
+    internal ETL). SKIP Step 4 (no authentication to review). Run all other steps.
   - **WEB_SERVICE** — HTTP endpoints, may have auth (e.g. REST API, web app). Run ALL steps.
-  
+
+  Step 4 is the ONLY step any classification skips outright, and Step 6 the only
+  one it runs conditionally. Steps 2, 3, 5, 7 and 8 apply to EVERY feature type,
+  including a stateless library:
+  - Step 2 (ash scan) — the orchestrator already ran it before you started, so
+    "running" it is reading a file, and your report is REJECTED without an
+    "## Automated Scan Results" section.
+  - Step 3 (security requirements) — you cannot cite the NFR-XX IDs your report
+    is required to reference without reading them first.
+  - Step 5 (input validation) — a parser or formatter is precisely where
+    malformed-input bugs live. This is the last step a stateless library should
+    skip, not the first.
+  - Steps 7-8 (dependencies, security-critical code paths) — a pure library
+    still pulls dependencies and still has paths worth tracing.
+
   Write `**Feature Type: STATELESS_LIBRARY / DATA_SERVICE / WEB_SERVICE**` at the top of
   security.md and note which steps were skipped and why. Do not write long N/A
-  sections — a single line "Step 2 skipped: no authentication in this feature" is enough.
+  sections — a single line "Step 4 skipped: no authentication in this feature" is enough.
   
   ## STEP 2: AUTOMATED SCAN (ash) — MANDATORY, DO NOT SKIP
 
@@ -89,11 +124,11 @@ additional_notes: |
   - Your task description contains the exact paths — copy them exactly.
   
   Read:
-  - Your task description for "Docs Path:" and "Project Path:" locations
+  - Your task description for the "Artifacts Path (absolute):" and "Working Directory:" lines ("Project Path" = Working Directory)
   - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth)
-  - requirements.md (from Docs Path) - What security requirements exist? (contains NFR-XX IDs)
-  - architecture.md (from Docs Path) - How is security designed?
-  - adversarial.md (from Docs Path) - Any security concerns from adversarial review?
+  - requirements.md (from Artifacts Path) - What security requirements exist? (contains NFR-XX IDs)
+  - architecture.md (from Artifacts Path) - How is security designed?
+  - adversarial.md (from Artifacts Path) - Any security concerns from adversarial review?
 
   **REQUIREMENT TRACKING:**
   requirements.md contains NFR-XX numbered non-functional requirements.
@@ -171,11 +206,12 @@ additional_notes: |
   5. Database query → parameterization → execution
   
   ## STEP 9: CREATE SECURITY REPORT
-  
-  Write security.md with:
-  
+
+  Write security.md with the frontmatter block from the top of these notes
+  first, then:
+
   # Security Review Report
-  
+
   ## Summary
   - Critical vulnerabilities found: [count]
   - Critical vulnerabilities FIXED: [count]
@@ -228,6 +264,12 @@ additional_notes: |
   
   DO NOT just report vulnerabilities - FIX THEM. You have write access to the code.
   
+  When you are done fixing, go back and set security.md's frontmatter
+  `unresolved_count` to the number of critical/high findings you could NOT
+  fix. You write the report in STEP 9 but you do the fixing here in STEP 10,
+  so the count is only knowable now — a frontmatter left at its STEP 9 guess
+  is a wrong gate input.
+
   Common fixes:
   - SQL injection: Use parameterized queries
   - XSS: Sanitize and escape output
@@ -238,7 +280,7 @@ additional_notes: |
   
   ## STEP 11: CREATE TICKETS FOR UNFIXED VULNERABILITIES
 
-  For EVERY medium or low vulnerability you did NOT fix (documented in Step 7's
+  For EVERY medium or low vulnerability you did NOT fix (documented in Step 9's
   "Medium Vulnerabilities" / "Low Vulnerabilities" sections), file a ticket so it
   doesn't just sit in a report nobody revisits. Search for an existing open ticket
   (search_tickets) on the same issue first (avoid duplicates).
