@@ -80,6 +80,15 @@ def _create_integration_worktree(
         from src.core.simple_config import get_config
         from src.core.worktree_manager import WorktreeManager
 
+        # If project_path is already a worktree (contains .worktrees/), use
+        # it directly instead of creating a worktree inside it -- same
+        # no-nested-worktrees guard as run_single_workflow's design-worktree
+        # setup (__init__.py). A worktree nested here would be destroyed
+        # when the parent worktree is cleaned up.
+        if ".worktrees/" in str(project_path):
+            logger.info(f"Using existing worktree directly: {project_path}")
+            return Path(project_path)
+
         cfg = get_config()
         db = DbManager(str(cfg.database_path))
         try:
