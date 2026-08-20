@@ -423,6 +423,21 @@ class Guardian:
             )
             return
 
+        await self._apply_steering(agent, steering_type, message)
+
+    async def _apply_steering(
+        self, agent: Agent, steering_type: str, message: str
+    ) -> None:
+        """Send the actual steering intervention and record it.
+
+        Split out from steer_agent (SOLID review 3.6): steer_agent's own
+        eligibility/precondition checks above (task-done, rate-limit,
+        already-queued) all need I/O of their own (a DB read, a tmux
+        read), so they can't be made pure either -- but the side-effecting
+        intervention itself (keystrokes, message send, in-memory record,
+        DB log) is a genuinely separable unit, testable/mockable on its
+        own without re-deriving the eligibility logic every time.
+        """
         # Only break a possible thought-loop (Esc for pi, polymorphic per CLI)
         # for genuinely stuck/idle agents — that's the one case where an
         # in-flight generation is actually a non-terminating loop worth
