@@ -1797,7 +1797,19 @@ class LaunchPipeline:
             task.started_at = datetime.utcnow()
             log_entry = AgentLog(
                 agent_id=agent_id, log_type="created",
-                message=f"Agent created for task: {task.enriched_description[:100]}",
+                # enriched_description is nullable (e.g. a task created
+                # directly by review_feature's request_changes path never
+                # sets it, only raw_description) -- an unguarded slice here
+                # crashed with "'NoneType' object is not subscriptable"
+                # AFTER the tmux session was already launched and the CLI
+                # command already sent (see pane.send_keys above), so the
+                # exception unwound through this function's caller, which
+                # then killed the just-launched tmux session and marked the
+                # task "failed" -- a perfectly good agent launch destroyed
+                # by a crash in what's only ever a log message. Confirmed
+                # live: task 146d191d burned 3 real launch attempts (pi,
+                # pi fallback, claude fallback) this way, one after another.
+                message=f"Agent created for task: {(task.enriched_description or task.raw_description or '')[:100]}",
                 details={"cli_type": cli_type, "task_id": task.id},
             )
             session.add(log_entry)

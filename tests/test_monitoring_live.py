@@ -173,7 +173,9 @@ async def run_monitoring_cycle(db_manager, agent_manager):
     guardian = Guardian(
         db_manager=db_manager, agent_manager=agent_manager, llm_provider=llm_provider
     )
-    conductor = Conductor(db_manager=db_manager, agent_manager=agent_manager)
+    conductor = Conductor(
+        db_manager=db_manager, agent_manager=agent_manager, llm_provider=llm_provider
+    )
 
     with get_db() as db:
         # Get all active agents

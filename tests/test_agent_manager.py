@@ -2051,3 +2051,91 @@ class TestRestartAgentOffloadsBlockingWork:
             "_prepare_launch_environment ran on the event loop's own thread "
             "-- it must run in the executor's thread pool instead"
         )
+
+
+class TestCreateAgentForTaskHandlesNullEnrichedDescription:
+    """Regression: the AgentLog "Agent created for task: ..." message
+    unconditionally sliced task.enriched_description[:100] -- a nullable
+    field (review_feature's request_changes path creates a task with
+    enriched_description=None, only raw_description set). That crashed
+    with "'NoneType' object is not subscriptable" AFTER the tmux session
+    was already launched and the CLI command already sent, so the
+    exception unwound through the caller, which killed the just-launched
+    tmux session and marked the task "failed" -- destroying a perfectly
+    good agent launch over what's only ever a log message. Confirmed
+    live: task 146d191d burned 3 real launch attempts this way before
+    ever being noticed."""
+
+    @pytest.mark.asyncio
+    async def test_agent_creation_succeeds_when_enriched_description_is_none(
+        self, mock_agent_manager, db_manager
+    ):
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-null-enriched", name="Null Enriched WF", status="active",
+                    working_directory="/tmp/test-project-null-enriched", phases_folder_path="/tmp",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-null-enriched", workflow_id="wf-null-enriched", name="development",
+                    order=1, description="d", done_definitions=["d"], cli_tool="claude",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-null-enriched", workflow_id="wf-null-enriched", phase_id="phase-null-enriched",
+                    raw_description="## Human Review Feedback\n\ndo another lint check",
+                    enriched_description=None, done_definition="d", status="pending",
+                )
+            )
+
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-null-enriched-agent",
+                "branch_name": "agent-null-enriched-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-null-enriched"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-null-enriched").first()
+
+            with (
+                patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli,
+                patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock),
+            ):
+                mock_cli = MagicMock()
+                mock_cli.get_launch_command.return_value = LaunchResult("claude --task test", LaunchResult.FLAG)
+                mock_cli.default_model = "test-model"
+                mock_get_cli.return_value = mock_cli
+                mock_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock(return_value=None)
+
+                agent = await mock_agent_manager.create_agent_for_task(
+                    task=task,
+                    enriched_data={},
+                    memories=[],
+                    project_context="",
+                    working_directory="/tmp/test-project-null-enriched",
+                )
+
+        assert agent is not None
+
+        from src.core.database import AgentLog
+        with db_manager.session_scope() as session:
+            log_entry = (
+                session.query(AgentLog)
+                .filter_by(agent_id=agent.id, log_type="created")
+                .first()
+            )
+            assert log_entry is not None
+            assert "do another lint check" in log_entry.message

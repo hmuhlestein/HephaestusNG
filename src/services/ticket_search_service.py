@@ -57,6 +57,11 @@ class TicketSearchService:
     _vector_store = None
     _embedding_provider = None
 
+    # Similarity-score thresholds for classifying a related ticket's relation_type.
+    DUPLICATE_THRESHOLD = 0.9
+    RELATED_THRESHOLD = 0.7
+    SIMILAR_THRESHOLD = 0.5
+
     @classmethod
     def _get_vector_store(cls):
         """Get or create the configurable vector store (turbovec by default)."""
@@ -431,11 +436,11 @@ class TicketSearchService:
 
                 score = hit.get("score", 0.0)
                 # Classify relation type based on similarity score
-                if score >= 0.9:
+                if score >= TicketSearchService.DUPLICATE_THRESHOLD:
                     relation_type = "duplicate"
-                elif score >= 0.7:
+                elif score >= TicketSearchService.RELATED_THRESHOLD:
                     relation_type = "related"
-                elif score >= 0.5:
+                elif score >= TicketSearchService.SIMILAR_THRESHOLD:
                     relation_type = "similar"
                 else:
                     continue  # Skip low similarity

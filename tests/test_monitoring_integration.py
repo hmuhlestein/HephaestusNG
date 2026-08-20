@@ -35,6 +35,7 @@ def mock_llm_provider():
     mock = AsyncMock()
     mock.analyze_agent_trajectory = AsyncMock()
     mock.analyze_system_coherence = AsyncMock()
+    mock.get_model_for_component = Mock(return_value="test-model")
     return mock
 
 
@@ -47,7 +48,11 @@ def monitoring_system(mock_db_manager, mock_agent_manager, mock_llm_provider):
         llm_provider=mock_llm_provider,
     )
 
-    conductor = Conductor(db_manager=mock_db_manager, agent_manager=mock_agent_manager)
+    conductor = Conductor(
+        db_manager=mock_db_manager,
+        agent_manager=mock_agent_manager,
+        llm_provider=mock_llm_provider,
+    )
 
     return {
         "guardian": guardian,

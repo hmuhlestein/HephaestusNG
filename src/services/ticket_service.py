@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.database import (
     Agent,
@@ -173,6 +173,358 @@ class TicketService:
                 queue.extend(current_ticket.blocked_by_ticket_ids)
 
     @staticmethod
+    def _validate_ticket_creation(
+        db,
+        workflow_id: str,
+        ticket_type: str,
+        initial_status: Optional[str],
+        blocked_by_ticket_ids: List[str],
+        agent_id: str,
+    ) -> Tuple[Workflow, BoardConfig, str]:
+        """
+        Validate a ticket-creation request against the workflow and its
+        board config.
+
+        Args:
+            db: Database session
+            workflow_id: ID of the workflow this ticket belongs to
+            ticket_type: Type of ticket to validate against board_config
+            initial_status: Requested initial status, or None to use board_config's default
+            blocked_by_ticket_ids: List of ticket IDs that would block the new ticket
+            agent_id: ID of the agent creating the ticket
+
+        Returns:
+            Tuple of (workflow, board_config, resolved initial_status)
+
+        Raises:
+            ValueError: If validation fails
+        """
+        # Validate workflow exists and is active
+        logger.info(f"[TICKET_SERVICE] Querying for workflow: {workflow_id}")
+        workflow = db.query(Workflow).filter_by(id=workflow_id).first()
+        logger.info(f"[TICKET_SERVICE] Workflow found: {workflow is not None}")
+        if not workflow:
+            logger.error(f"[TICKET_SERVICE] ❌ Workflow not found: {workflow_id}")
+            logger.error("[TICKET_SERVICE] ========== FAILED ==========")
+            raise ValueError(f"Workflow not found: {workflow_id}")
+        if workflow.status not in ["active", "paused", "completed"]:
+            raise ValueError(
+                f"Workflow is not in a state that allows ticket creation: {workflow.status}"
+            )
+
+        # Validate board_config exists for workflow
+        board_config = (
+            db.query(BoardConfig).filter_by(workflow_id=workflow_id).first()
+        )
+        if not board_config:
+            raise ValueError(
+                f"Board configuration not found for workflow: {workflow_id}"
+            )
+
+        # Validate board config structure
+        if (
+            not isinstance(board_config.columns, list)
+            or len(board_config.columns) == 0
+        ):
+            raise ValueError(
+                "Invalid board configuration: columns must be a non-empty list"
+            )
+
+        if (
+            not isinstance(board_config.ticket_types, list)
+            or len(board_config.ticket_types) == 0
+        ):
+            raise ValueError(
+                "Invalid board configuration: ticket_types must be a non-empty list"
+            )
+
+        # Validate ticket_type is allowed by board_config
+        allowed_types = [
+            t["id"] if isinstance(t, dict) else t for t in board_config.ticket_types
+        ]
+        if ticket_type not in allowed_types:
+            raise ValueError(
+                f"Invalid ticket type '{ticket_type}'. Allowed types: {allowed_types}"
+            )
+
+        # Use board_config.initial_status if initial_status is None
+        if initial_status is None:
+            initial_status = board_config.initial_status
+
+        # Validate status is valid per board_config
+        valid_statuses = [
+            col["id"] if isinstance(col, dict) else col
+            for col in board_config.columns
+        ]
+        if initial_status not in valid_statuses:
+            raise ValueError(
+                f"Invalid status '{initial_status}'. Valid statuses: {valid_statuses}"
+            )
+
+        # Ensure initial_status exists in columns
+        if board_config.initial_status not in valid_statuses:
+            raise ValueError(
+                f"Invalid board config: initial_status '{board_config.initial_status}' not in columns"
+            )
+
+        # Validate all blocked_by_ticket_ids exist and belong to same workflow
+        for blocking_ticket_id in blocked_by_ticket_ids:
+            blocking_ticket = (
+                db.query(Ticket).filter_by(id=blocking_ticket_id).first()
+            )
+            if not blocking_ticket:
+                raise ValueError(f"Blocking ticket not found: {blocking_ticket_id}")
+            if blocking_ticket.workflow_id != workflow_id:
+                raise ValueError(
+                    f"Blocking ticket {blocking_ticket_id} belongs to different workflow"
+                )
+
+        # Check for circular blocking (even for new ticket)
+        # This prevents creating a ticket blocked by another that might later try to be blocked by this one
+        # Note: This is a basic check; more complex cycles would require graph traversal
+
+        # Validate agent exists
+        agent = db.query(Agent).filter_by(id=agent_id).first()
+        if not agent:
+            raise ValueError(f"Agent not found: {agent_id}")
+
+        return workflow, board_config, initial_status
+
+    @staticmethod
+    def _delete_ticket_cascade(db, ticket_id: str, reason: str) -> bool:
+        """
+        Delete a ticket and its dependent TicketHistory/TicketComment/
+        TicketCommit rows in one transaction.
+
+        Args:
+            db: Database session
+            ticket_id: ID of the ticket to delete
+            reason: Human-readable reason for the deletion, used only in the log message
+
+        Returns:
+            True if the ticket existed and was deleted, False if it was already gone.
+        """
+        ticket = db.query(Ticket).filter_by(id=ticket_id).first()
+        if not ticket:
+            logger.warning(
+                f"[TICKET_SERVICE] Ticket {ticket_id} not found for deletion (already deleted?)"
+            )
+            return False
+
+        # Delete associated records first to avoid foreign key constraint errors
+        history_count = db.query(TicketHistory).filter_by(ticket_id=ticket_id).delete()
+        comment_count = db.query(TicketComment).filter_by(ticket_id=ticket_id).delete()
+        commit_count = db.query(TicketCommit).filter_by(ticket_id=ticket_id).delete()
+
+        # Now delete the ticket
+        db.delete(ticket)
+        db.commit()
+        logger.info(
+            f"[TICKET_SERVICE] ✅ Ticket {ticket_id} deleted due to {reason} "
+            f"(deleted {history_count} history, {comment_count} comments, {commit_count} commits)"
+        )
+        return True
+
+    @staticmethod
+    async def _broadcast_ticket_event(
+        event_type: str,
+        workflow_id: str,
+        payload: Dict[str, Any],
+        failure_context: str,
+    ) -> None:
+        """
+        Broadcast a ticket lifecycle event, logging and swallowing any
+        failure so a broadcast issue never fails ticket creation itself.
+
+        Args:
+            event_type: The "type" field of the broadcast payload
+            workflow_id: Workflow ID used to resolve broadcast scoping
+            payload: Event-specific fields merged into the broadcast payload
+                (workflow_id and pending_count are added by this helper)
+            failure_context: Short description used in the failure log message
+        """
+        try:
+            from src.core.app_context import get_app_state
+            from src.core.database import resolve_project_for_workflow
+
+            server_state = get_app_state()
+            bcast_project_id, bcast_project_name = resolve_project_for_workflow(
+                workflow_id
+            )
+            await server_state.broadcast_update(
+                {
+                    "type": event_type,
+                    "workflow_id": workflow_id,
+                    "pending_count": approval_manager.get_pending_count(),
+                    **payload,
+                },
+                project_id=bcast_project_id,
+                project_name=bcast_project_name,
+            )
+        except Exception as e:
+            logger.warning(f"[TICKET_SERVICE] Failed to broadcast {failure_context}: {e}")
+
+    @staticmethod
+    async def _wait_for_ticket_approval(
+        ticket_id: str, workflow_id: str, title: str, approval_timeout: int
+    ) -> None:
+        """
+        Wait for human approval of a pending ticket. Deletes the ticket
+        and raises ValueError on timeout or rejection; marks it approved
+        and returns normally otherwise.
+
+        Args:
+            ticket_id: ID of the newly created, pending-review ticket
+            workflow_id: Workflow ID used to resolve broadcast scoping
+            title: Ticket title, included in the pending-review broadcast
+            approval_timeout: Seconds to wait before treating this as a timeout
+
+        Raises:
+            ValueError: If the ticket times out or is rejected
+        """
+        logger.info(
+            f"[TICKET_SERVICE] Waiting for human approval (timeout: {approval_timeout}s)..."
+        )
+
+        await TicketService._broadcast_ticket_event(
+            "ticket_pending_review",
+            workflow_id,
+            {"ticket_id": ticket_id, "title": title},
+            "pending review",
+        )
+
+        decision = await approval_manager.wait_for_approval(ticket_id, approval_timeout)
+
+        if decision["timed_out"]:
+            logger.error(f"[TICKET_SERVICE] Approval timeout for ticket {ticket_id}")
+            with get_db() as db:
+                deleted = TicketService._delete_ticket_cascade(db, ticket_id, "timeout")
+            if deleted:
+                await TicketService._broadcast_ticket_event(
+                    "ticket_deleted",
+                    workflow_id,
+                    {"ticket_id": ticket_id, "reason": "timeout"},
+                    "ticket deletion",
+                )
+            raise ValueError(
+                f"Ticket approval timeout after {approval_timeout} seconds. Please try again."
+            )
+
+        if not decision["approved"]:
+            rejection_reason = decision.get("reason", "No reason provided")
+            logger.error(
+                f"[TICKET_SERVICE] Ticket {ticket_id} rejected: {rejection_reason}"
+            )
+            with get_db() as db:
+                deleted = TicketService._delete_ticket_cascade(db, ticket_id, "rejection")
+            if deleted:
+                await TicketService._broadcast_ticket_event(
+                    "ticket_deleted",
+                    workflow_id,
+                    {
+                        "ticket_id": ticket_id,
+                        "reason": "rejected",
+                        "rejection_reason": rejection_reason,
+                    },
+                    "ticket deletion",
+                )
+            raise ValueError(f"Ticket rejected by human reviewer: {rejection_reason}")
+
+        # Approved - update ticket
+        logger.info(f"[TICKET_SERVICE] Ticket {ticket_id} approved by human")
+        with get_db() as db:
+            ticket = db.query(Ticket).filter_by(id=ticket_id).first()
+            if ticket:
+                ticket.approval_status = "approved"
+                ticket.approval_decided_at = datetime.utcnow()
+                db.commit()
+                logger.info(
+                    f"[TICKET_SERVICE] Ticket {ticket_id} approval status updated to 'approved'"
+                )
+
+        await TicketService._broadcast_ticket_event(
+            "ticket_approved", workflow_id, {"ticket_id": ticket_id}, "approval"
+        )
+
+    @staticmethod
+    async def _index_new_ticket(
+        ticket_id: str,
+        title: str,
+        description: str,
+        workflow_id: str,
+        ticket_type: str,
+        priority: str,
+        status: str,
+        tags: List[str],
+        agent_id: str,
+        assigned_agent_id: Optional[str],
+        blocked_by_ticket_ids: List[str],
+    ) -> Tuple[bool, List[Dict[str, Any]]]:
+        """
+        Generate the new ticket's embedding, store it, and check for
+        near-duplicate tickets. Never raises -- a failure is logged and
+        reported as embedding_created=False, since the ticket itself is
+        already committed by this point.
+
+        Returns:
+            Tuple of (embedding_created, similar_tickets)
+        """
+        logger.info(f"[TICKET_SERVICE] Generating embedding for ticket {ticket_id}...")
+        try:
+            logger.info(
+                f"Creating ticket for workflow {workflow_id}: '{title}' by agent {agent_id}"
+            )
+
+            embedding_id = await TicketSearchService.index_ticket(
+                ticket_id=ticket_id,
+                title=title,
+                description=description,
+                comments=[],
+                workflow_id=workflow_id,
+                ticket_type=ticket_type,
+                priority=priority,
+                status=status,
+                tags=tags,
+                created_at=datetime.utcnow().isoformat() + "Z",
+                updated_at=datetime.utcnow().isoformat() + "Z",
+                created_by_agent_id=agent_id,
+                assigned_agent_id=assigned_agent_id,
+                is_blocked=len(blocked_by_ticket_ids) > 0,
+            )
+
+            # Update ticket record with embedding
+            with get_db() as db:
+                ticket = db.query(Ticket).filter_by(id=ticket_id).first()
+                # Embedding is stored in Qdrant, just mark it
+                ticket.embedding_id = embedding_id
+                db.commit()
+
+            # Find semantically similar tickets for duplicate detection
+            similar_tickets = await TicketSearchService.find_related_tickets(
+                ticket_id, limit=3
+            )
+
+            # Warn if potential duplicate detected
+            if (
+                similar_tickets
+                and similar_tickets[0]["similarity_score"]
+                >= TicketSearchService.DUPLICATE_THRESHOLD
+            ):
+                logger.warning(
+                    f"Potential duplicate ticket detected: {similar_tickets[0]['ticket_id']} "
+                    f"(similarity: {similar_tickets[0]['similarity_score']:.2f})"
+                )
+
+            return True, similar_tickets
+
+        except Exception as e:
+            # Log error but don't fail ticket creation
+            logger.error(
+                f"[TICKET_SERVICE] ❌ Failed to generate embedding for ticket {ticket_id}: {e}"
+            )
+            return False, []
+
+    @staticmethod
     async def create_ticket(
         workflow_id: str,
         agent_id: str,
@@ -227,27 +579,16 @@ class TicketService:
         related_task_ids = related_task_ids or []
 
         with get_db() as db:
-            # Validate workflow exists and is active
-            logger.info(f"[TICKET_SERVICE] Querying for workflow: {workflow_id}")
-            workflow = db.query(Workflow).filter_by(id=workflow_id).first()
-            logger.info(f"[TICKET_SERVICE] Workflow found: {workflow is not None}")
-            if not workflow:
-                logger.error(f"[TICKET_SERVICE] ❌ Workflow not found: {workflow_id}")
-                logger.error("[TICKET_SERVICE] ========== FAILED ==========")
-                raise ValueError(f"Workflow not found: {workflow_id}")
-            if workflow.status not in ["active", "paused", "completed"]:
-                raise ValueError(
-                    f"Workflow is not in a state that allows ticket creation: {workflow.status}"
+            workflow, board_config, initial_status = (
+                TicketService._validate_ticket_creation(
+                    db,
+                    workflow_id,
+                    ticket_type,
+                    initial_status,
+                    blocked_by_ticket_ids,
+                    agent_id,
                 )
-
-            # Validate board_config exists for workflow
-            board_config = (
-                db.query(BoardConfig).filter_by(workflow_id=workflow_id).first()
             )
-            if not board_config:
-                raise ValueError(
-                    f"Board configuration not found for workflow: {workflow_id}"
-                )
 
             # Check if human review is enabled
             human_review_enabled = board_config.ticket_human_review or False
@@ -266,73 +607,6 @@ class TicketService:
             else:
                 approval_status = "auto_approved"
                 approval_requested_at = None
-
-            # Validate board config structure
-            if (
-                not isinstance(board_config.columns, list)
-                or len(board_config.columns) == 0
-            ):
-                raise ValueError(
-                    "Invalid board configuration: columns must be a non-empty list"
-                )
-
-            if (
-                not isinstance(board_config.ticket_types, list)
-                or len(board_config.ticket_types) == 0
-            ):
-                raise ValueError(
-                    "Invalid board configuration: ticket_types must be a non-empty list"
-                )
-
-            # Validate ticket_type is allowed by board_config
-            allowed_types = [
-                t["id"] if isinstance(t, dict) else t for t in board_config.ticket_types
-            ]
-            if ticket_type not in allowed_types:
-                raise ValueError(
-                    f"Invalid ticket type '{ticket_type}'. Allowed types: {allowed_types}"
-                )
-
-            # Use board_config.initial_status if initial_status is None
-            if initial_status is None:
-                initial_status = board_config.initial_status
-
-            # Validate status is valid per board_config
-            valid_statuses = [
-                col["id"] if isinstance(col, dict) else col
-                for col in board_config.columns
-            ]
-            if initial_status not in valid_statuses:
-                raise ValueError(
-                    f"Invalid status '{initial_status}'. Valid statuses: {valid_statuses}"
-                )
-
-            # Ensure initial_status exists in columns
-            if board_config.initial_status not in valid_statuses:
-                raise ValueError(
-                    f"Invalid board config: initial_status '{board_config.initial_status}' not in columns"
-                )
-
-            # Validate all blocked_by_ticket_ids exist and belong to same workflow
-            for blocking_ticket_id in blocked_by_ticket_ids:
-                blocking_ticket = (
-                    db.query(Ticket).filter_by(id=blocking_ticket_id).first()
-                )
-                if not blocking_ticket:
-                    raise ValueError(f"Blocking ticket not found: {blocking_ticket_id}")
-                if blocking_ticket.workflow_id != workflow_id:
-                    raise ValueError(
-                        f"Blocking ticket {blocking_ticket_id} belongs to different workflow"
-                    )
-
-            # Check for circular blocking (even for new ticket)
-            # This prevents creating a ticket blocked by another that might later try to be blocked by this one
-            # Note: This is a basic check; more complex cycles would require graph traversal
-
-            # Validate agent exists
-            agent = db.query(Agent).filter_by(id=agent_id).first()
-            if not agent:
-                raise ValueError(f"Agent not found: {agent_id}")
 
             # Generate unique ticket ID
             ticket_id = f"ticket-{uuid.uuid4()}"
@@ -398,269 +672,24 @@ class TicketService:
 
         # If human review required, wait for approval
         if human_review_enabled:
-            logger.info(
-                f"[TICKET_SERVICE] Waiting for human approval (timeout: {approval_timeout}s)..."
+            await TicketService._wait_for_ticket_approval(
+                ticket_id, workflow_id, title, approval_timeout
             )
-
-            # Broadcast that ticket needs review (will be implemented with API endpoints)
-            try:
-                from src.core.app_context import get_app_state
-
-                server_state = get_app_state()
-
-                from src.core.database import resolve_project_for_workflow
-
-                bcast_project_id, bcast_project_name = resolve_project_for_workflow(workflow_id)
-                await server_state.broadcast_update(
-                    {
-                        "type": "ticket_pending_review",
-                        "ticket_id": ticket_id,
-                        "workflow_id": workflow_id,
-                        "title": title,
-                        "pending_count": approval_manager.get_pending_count(),
-                    },
-                    project_id=bcast_project_id,
-                    project_name=bcast_project_name,
-                )
-            except Exception as e:
-                logger.warning(
-                    f"[TICKET_SERVICE] Failed to broadcast pending review: {e}"
-                )
-
-            # Wait for approval
-            decision = await approval_manager.wait_for_approval(
-                ticket_id, approval_timeout
-            )
-
-            if decision["timed_out"]:
-                # Timeout - delete ticket and raise error
-                logger.error(
-                    f"[TICKET_SERVICE] Approval timeout for ticket {ticket_id}"
-                )
-                deleted = False
-                with get_db() as db:
-                    ticket = db.query(Ticket).filter_by(id=ticket_id).first()
-                    if ticket:
-                        # Delete associated records first to avoid foreign key constraint errors
-                        history_count = (
-                            db.query(TicketHistory)
-                            .filter_by(ticket_id=ticket_id)
-                            .delete()
-                        )
-                        comment_count = (
-                            db.query(TicketComment)
-                            .filter_by(ticket_id=ticket_id)
-                            .delete()
-                        )
-                        commit_count = (
-                            db.query(TicketCommit)
-                            .filter_by(ticket_id=ticket_id)
-                            .delete()
-                        )
-
-                        # Now delete the ticket
-                        db.delete(ticket)
-                        db.commit()
-                        deleted = True
-                        logger.info(
-                            f"[TICKET_SERVICE] ✅ Ticket {ticket_id} deleted due to timeout "
-                            f"(deleted {history_count} history, {comment_count} comments, {commit_count} commits)"
-                        )
-                    else:
-                        logger.warning(
-                            f"[TICKET_SERVICE] Ticket {ticket_id} not found for deletion (already deleted?)"
-                        )
-
-                # Broadcast deletion to UI
-                if deleted:
-                    try:
-                        from src.core.app_context import get_app_state
-
-                        server_state = get_app_state()
-
-                        from src.core.database import resolve_project_for_workflow
-
-                        bcast_project_id, bcast_project_name = resolve_project_for_workflow(workflow_id)
-                        await server_state.broadcast_update(
-                            {
-                                "type": "ticket_deleted",
-                                "ticket_id": ticket_id,
-                                "workflow_id": workflow_id,
-                                "reason": "timeout",
-                                "pending_count": approval_manager.get_pending_count(),
-                            },
-                            project_id=bcast_project_id,
-                            project_name=bcast_project_name,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"[TICKET_SERVICE] Failed to broadcast ticket deletion: {e}"
-                        )
-
-                raise ValueError(
-                    f"Ticket approval timeout after {approval_timeout} seconds. Please try again."
-                )
-
-            elif not decision["approved"]:
-                # Rejected - delete ticket and raise error
-                rejection_reason = decision.get("reason", "No reason provided")
-                logger.error(
-                    f"[TICKET_SERVICE] Ticket {ticket_id} rejected: {rejection_reason}"
-                )
-                deleted = False
-                with get_db() as db:
-                    ticket = db.query(Ticket).filter_by(id=ticket_id).first()
-                    if ticket:
-                        # Delete associated records first to avoid foreign key constraint errors
-                        history_count = (
-                            db.query(TicketHistory)
-                            .filter_by(ticket_id=ticket_id)
-                            .delete()
-                        )
-                        comment_count = (
-                            db.query(TicketComment)
-                            .filter_by(ticket_id=ticket_id)
-                            .delete()
-                        )
-                        commit_count = (
-                            db.query(TicketCommit)
-                            .filter_by(ticket_id=ticket_id)
-                            .delete()
-                        )
-
-                        # Now delete the ticket
-                        db.delete(ticket)
-                        db.commit()
-                        deleted = True
-                        logger.info(
-                            f"[TICKET_SERVICE] ✅ Ticket {ticket_id} deleted due to rejection "
-                            f"(deleted {history_count} history, {comment_count} comments, {commit_count} commits)"
-                        )
-                    else:
-                        logger.warning(
-                            f"[TICKET_SERVICE] Ticket {ticket_id} not found for deletion (already deleted?)"
-                        )
-
-                # Broadcast deletion to UI
-                if deleted:
-                    try:
-                        from src.core.app_context import get_app_state
-
-                        server_state = get_app_state()
-
-                        from src.core.database import resolve_project_for_workflow
-
-                        bcast_project_id, bcast_project_name = resolve_project_for_workflow(workflow_id)
-                        await server_state.broadcast_update(
-                            {
-                                "type": "ticket_deleted",
-                                "ticket_id": ticket_id,
-                                "workflow_id": workflow_id,
-                                "reason": "rejected",
-                                "rejection_reason": rejection_reason,
-                                "pending_count": approval_manager.get_pending_count(),
-                            },
-                            project_id=bcast_project_id,
-                            project_name=bcast_project_name,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"[TICKET_SERVICE] Failed to broadcast ticket deletion: {e}"
-                        )
-
-                raise ValueError(
-                    f"Ticket rejected by human reviewer: {rejection_reason}"
-                )
-
-            else:
-                # Approved - update ticket
-                logger.info(f"[TICKET_SERVICE] Ticket {ticket_id} approved by human")
-                with get_db() as db:
-                    ticket = db.query(Ticket).filter_by(id=ticket_id).first()
-                    if ticket:
-                        ticket.approval_status = "approved"
-                        ticket.approval_decided_at = datetime.utcnow()
-                        db.commit()
-                        logger.info(
-                            f"[TICKET_SERVICE] Ticket {ticket_id} approval status updated to 'approved'"
-                        )
-
-                # Broadcast approval
-                try:
-                    from src.core.app_context import get_app_state
-
-                    server_state = get_app_state()
-
-                    from src.core.database import resolve_project_for_workflow
-
-                    bcast_project_id, bcast_project_name = resolve_project_for_workflow(workflow_id)
-                    await server_state.broadcast_update(
-                        {
-                            "type": "ticket_approved",
-                            "ticket_id": ticket_id,
-                            "workflow_id": workflow_id,
-                            "pending_count": approval_manager.get_pending_count(),
-                        },
-                        project_id=bcast_project_id,
-                        project_name=bcast_project_name,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"[TICKET_SERVICE] Failed to broadcast approval: {e}"
-                    )
 
         # Generate embedding and store in Qdrant (outside transaction)
-        logger.info(f"[TICKET_SERVICE] Generating embedding for ticket {ticket_id}...")
-        try:
-            logger.info(
-                f"Creating ticket for workflow {workflow_id}: '{title}' by agent {agent_id}"
-            )
-
-            embedding_id = await TicketSearchService.index_ticket(
-                ticket_id=ticket_id,
-                title=title,
-                description=description,
-                comments=[],
-                workflow_id=workflow_id,
-                ticket_type=ticket_type,
-                priority=priority,
-                status=initial_status,
-                tags=tags,
-                created_at=datetime.utcnow().isoformat() + "Z",
-                updated_at=datetime.utcnow().isoformat() + "Z",
-                created_by_agent_id=agent_id,
-                assigned_agent_id=assigned_agent_id,
-                is_blocked=len(blocked_by_ticket_ids) > 0,
-            )
-
-            # Update ticket record with embedding
-            with get_db() as db:
-                ticket = db.query(Ticket).filter_by(id=ticket_id).first()
-                # Embedding is stored in Qdrant, just mark it
-                ticket.embedding_id = embedding_id
-                db.commit()
-
-            embedding_created = True
-
-            # Find semantically similar tickets for duplicate detection
-            similar_tickets = await TicketSearchService.find_related_tickets(
-                ticket_id, limit=3
-            )
-
-            # Warn if potential duplicate detected (>= 0.9 similarity)
-            if similar_tickets and similar_tickets[0]["similarity_score"] >= 0.9:
-                logger.warning(
-                    f"Potential duplicate ticket detected: {similar_tickets[0]['ticket_id']} "
-                    f"(similarity: {similar_tickets[0]['similarity_score']:.2f})"
-                )
-
-        except Exception as e:
-            # Log error but don't fail ticket creation
-            logger.error(
-                f"[TICKET_SERVICE] ❌ Failed to generate embedding for ticket {ticket_id}: {e}"
-            )
-            embedding_created = False
-            similar_tickets = []
+        embedding_created, similar_tickets = await TicketService._index_new_ticket(
+            ticket_id=ticket_id,
+            title=title,
+            description=description,
+            workflow_id=workflow_id,
+            ticket_type=ticket_type,
+            priority=priority,
+            status=initial_status,
+            tags=tags,
+            agent_id=agent_id,
+            assigned_agent_id=assigned_agent_id,
+            blocked_by_ticket_ids=blocked_by_ticket_ids,
+        )
 
         result = {
             "success": True,

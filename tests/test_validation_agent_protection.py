@@ -32,6 +32,7 @@ def conductor(mock_db_manager, mock_agent_manager):
     return Conductor(
         db_manager=mock_db_manager,
         agent_manager=mock_agent_manager,
+        llm_provider=Mock(),
     )
 
 
