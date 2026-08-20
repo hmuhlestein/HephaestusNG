@@ -814,3 +814,71 @@ class TestReviewAndResumeExcludeManualOnlyPhaseTasks:
 
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.paused_by == "review"
+
+
+class TestReviewFeatureReopensCompletedDevelopmentPhase:
+    """Regression: review_feature's request_changes path, when creating a
+    fresh corrective task from scratch (no restartable task existed),
+    never reopened the development phase's own PhaseExecution to match --
+    unlike _create_phase_task's own task-creation path, which always
+    calls reopen_phase_execution. If development had already run to
+    completion earlier in the workflow (the normal case -- review only
+    happens after everything finished), its PhaseExecution reads
+    "completed", and no dispatch/self-heal case recognizes a "completed"
+    phase with a live pending task sitting in it: Case 2
+    (_case_in_progress_complete) only ever looks at phases already
+    "in_progress", and the two pending-phase self-heals
+    (_release_pending_phases_with_done_tasks /
+    _release_pending_phases_with_orphaned_task) only match "pending",
+    never "completed". The new task sat invisible to every sweep tick.
+
+    Confirmed live: task 146d191d (created by review_feature for "do
+    another lint check") sat exactly this way after its first dispatch
+    attempt's agent was killed by an unrelated bug (orphan_reaper, fixed
+    in efaf430) and the task was reset back to "pending" -- its own
+    phase still read "completed", so nothing ever picked it up again.
+    """
+
+    @pytest.mark.asyncio
+    async def test_request_changes_reopens_a_completed_development_phase(
+        self, orch_db_env,
+    ):
+        from src.core.database import AutopilotProject, Feature, Phase, PhaseExecution, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp", review_mode=True))
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", project_id="proj-1",
+            ))
+            session.add(Feature(
+                id="feat-1", design_id="des-1", feature_key="k", name="n",
+                scope="s", workflow_id="wf-1", status="paused",
+            ))
+            session.add(Phase(
+                id="wf-1-dev", workflow_id="wf-1", name="development",
+                order=5, description="d", done_definitions=["d"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-dev", phase_id="wf-1-dev", workflow_execution_id="wf-1",
+                status="completed",
+            ))
+
+        from src.mcp.autopilot import feature_routes
+        spawn_mock = AsyncMock()
+        monkeypatch_target = feature_routes
+        import unittest.mock
+        with unittest.mock.patch.object(monkeypatch_target, "_spawn_agent_for_task", spawn_mock):
+            from src.mcp.autopilot.feature_routes import FeatureReviewRequest, review_feature
+            result = await review_feature(
+                "feat-1", FeatureReviewRequest(action="request_changes", feedback="do another lint check"),
+            )
+        assert result["success"] is True
+
+        with orch_db_env.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="wf-1-dev").first()
+            assert execution.status == "in_progress", (
+                "the development phase must be reopened to match its "
+                "freshly-created task, or nothing will ever pick that "
+                "task up again"
+            )

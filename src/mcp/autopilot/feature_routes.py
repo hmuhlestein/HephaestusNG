@@ -775,6 +775,28 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                     priority="high",
                 )
                 db.add(new_task)
+
+                # The development phase's own PhaseExecution can be
+                # "completed" (or "pending") at this point -- it already
+                # ran to completion earlier in the workflow, same as any
+                # phase that's since moved on. _create_phase_task's own
+                # task-creation path always reopens the PhaseExecution to
+                # match a freshly-created task (see reopen_phase_execution);
+                # this ad-hoc creation path didn't, leaving a "completed"
+                # (or "pending") phase with a live pending task that no
+                # dispatch/self-heal case recognizes -- Case 2 only looks
+                # at phases already "in_progress", and the two pending-
+                # phase self-heals (_release_pending_phases_with_done_
+                # tasks/_release_pending_phases_with_orphaned_task) don't
+                # match "completed" at all. Confirmed live: task 146d191d
+                # sat here, its own phase reading "completed", invisible
+                # to every sweep tick.
+                from src.autopilot.orchestrator.phase_transitions import reopen_phase_execution
+                from src.core.database import PhaseExecution
+                dev_execution = db.query(PhaseExecution).filter_by(phase_id=dev_phase.id).first()
+                if dev_execution and dev_execution.status != "in_progress":
+                    reopen_phase_execution(dev_execution, status="in_progress", started_at="now")
+
                 db.flush()
                 restartable.append(new_task)
                 logger.info(f"[REVIEW] Created new development task {new_task.id} for feedback")
