@@ -919,6 +919,78 @@ class TestInputManifest:
             assert phase in real, f"phase_inputs names {phase!r}, which is not a phase"
 
 
+class TestPipelineDocMatchesTheWorkflow:
+    """docs/autopilot.md carries a phase-by-phase input/output reference table.
+    It is the first place an operator looks when a phase is rejected for a
+    missing output, so a table naming files that are not produced sends them
+    hunting for something that does not exist.
+
+    It had drifted badly before these tests existed: every filename in it was
+    the pre-rename alias (requirements_analysis.md rather than requirements.md,
+    qa_report.md rather than qa.md, and so on -- 33 references), and two rows
+    omitted declared outputs entirely. Nothing noticed, because prose has no
+    way to disagree with code out loud."""
+
+    @staticmethod
+    def _doc_rows():
+        import re
+
+        doc = Path(__file__).resolve().parents[1] / "docs" / "autopilot.md"
+        text = doc.read_text()
+        return {
+            int(n): (inputs, outputs)
+            for n, inputs, outputs in re.findall(
+                r"^\| *(\d+) *\| Feature \| (.+?) \| (.+?) \|$", text, re.M
+            )
+        }, text
+
+    @staticmethod
+    def _declared_outputs():
+        import yaml
+
+        from src.autopilot.spec import _extract_declared_files
+        from src.workflow_registry import _WORKFLOWS_DIR
+
+        out = {}
+        for f in sorted((_WORKFLOWS_DIR / "autopilot").glob("*.yaml")):
+            if f.name == "workflow.yaml":
+                continue
+            cfg = yaml.safe_load(f.read_text()) or {}
+            if cfg.get("id"):
+                out[cfg["id"]] = (
+                    cfg["name"],
+                    {Path(e).name for e in _extract_declared_files(cfg.get("outputs"))},
+                )
+        return out
+
+    def test_table_lists_every_declared_output(self):
+        import re
+
+        rows, _ = self._doc_rows()
+        for phase_id, (name, declared) in self._declared_outputs().items():
+            if phase_id not in rows:
+                continue
+            listed = set(re.findall(r"[\w.]+\.(?:md|html|json)", rows[phase_id][1]))
+            missing = declared - listed
+            assert not missing, (
+                f"docs/autopilot.md's phase {phase_id} ({name}) row omits {sorted(missing)}, "
+                "which verify_output_artifact will reject the phase for not producing"
+            )
+
+    def test_doc_uses_current_filenames_not_pre_rename_aliases(self):
+        """OUTPUT_NAME_ALIASES exists so a report written under an old name
+        still resolves. It is a compatibility shim, not a name the docs should
+        be teaching."""
+        from src.autopilot.spec import OUTPUT_NAME_ALIASES
+
+        _, text = self._doc_rows()
+        stale = sorted(old for old in OUTPUT_NAME_ALIASES.values() if old in text)
+        assert not stale, (
+            f"docs/autopilot.md still names pre-rename files {stale}; "
+            "an operator following it will look for files that are never written"
+        )
+
+
 class TestThresholdBandsAreCoherent:
     """workflow.yaml's continue thresholds are band separators, not quality
     bars -- see its own THRESHOLD RATIONALE comment. These tests pin the

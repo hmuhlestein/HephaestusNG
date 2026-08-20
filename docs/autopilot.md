@@ -215,7 +215,7 @@ Primary input is this feature's `scope.md` — not the full design document.
 - Queries the vector database via `search_memory` for prior decisions
 - Greps other design docs for cross-references
 
-Produces: `requirements_analysis.md` scoped strictly to this feature —
+Produces: `requirements.md` scoped strictly to this feature —
 functional/non-functional requirements, component dependencies, technology
 constraints, and integration points with other features as defined in `scope.md`.
 
@@ -224,16 +224,16 @@ constraints, and integration points with other features as defined in `scope.md`
 **Agent:** Scope Reviewer
 
 Gate between product requirements and architecture. Verifies that
-`requirements_analysis.md` is a faithful, complete extraction of this feature's
+`requirements.md` is a faithful, complete extraction of this feature's
 scope — nothing added, nothing dropped.
 
 - Reads `.hephaestus/features/<feature-id>/scope.md` — the feature's stated scope
 - Reads `.hephaestus/design.md` — the original full design doc, to verify `scope.md`
   correctly represents the original intent for this feature's slice
-- Reads `requirements_analysis.md` — what Phase 1 produced
+- Reads `requirements.md` — what Phase 1 produced
 - Traces every requirement back to a line in `scope.md` and ultimately to `design.md`
 
-Produces: `scope_review_result.md` — a YAML frontmatter block (OKF format:
+Produces: `scope.md` — a YAML frontmatter block (OKF format:
 `type` first, then verdict PASS or FAIL and supporting fields) followed by
 the narrative report. On FAIL, returns to Phase 1 with specific correction
 instructions. This is a binary gate — no architecture starts until scope is
@@ -243,10 +243,10 @@ clean.
 
 **Agent:** Software Architect
 
-Primary input is this feature's `scope.md` and `requirements_analysis.md`.
+Primary input is this feature's `scope.md` and `requirements.md`.
 
 - Reads `.hephaestus/features/<feature-id>/scope.md` for boundary constraints
-- Uses `requirements_analysis.md` as the detailed requirements input
+- Uses `requirements.md` as the detailed requirements input
 - Creates system architecture scoped to this feature's file ownership
 - Data models and API contracts within this feature's boundary
 - Implementation plan
@@ -330,7 +330,7 @@ findings between the two is expected and fine:
   deviation), or DEFER (nice to have)
 - Reports findings — does **not** edit production code directly
 
-Produces: `architectural_review_report.md` — a YAML frontmatter block (OKF
+Produces: `review.md` — a YAML frontmatter block (OKF
 format, `blocker_count`/`fix_count`/`defer_count` etc.) followed by the
 narrative report. The developer fixes issues based on this report; capped
 at a max number of review runs (`workflow.yaml`'s `max_review_runs`) before
@@ -349,7 +349,7 @@ Focused security assessment:
 
 **Fixes** critical and high vulnerabilities directly in the code.
 
-Produces: `security_report.md` with findings and fixes applied.
+Produces: `security.md` with findings and fixes applied.
 
 ### Phase 9: QA Validation
 
@@ -362,7 +362,7 @@ Comprehensive testing:
 - Verifies security fixes are working
 - Runs end-to-end smoke tests
 
-Produces: `qa_report.md` with pass/fail status and recommendation.
+Produces: `qa.md` with pass/fail status and recommendation.
 
 ### Phase 10: Product Validation
 
@@ -377,7 +377,7 @@ Compares implementation against every requirement in `scope.md`, validates
 non-functional requirements, checks integration with other features already
 merged, and verifies the feature's scope faithfully represents the original design intent.
 
-Produces: `product_validation.md` with PASS/NEEDS_WORK verdict.
+Produces: `validation.md` with PASS/NEEDS_WORK verdict.
 
 ### Phase 11: Documentation Review
 
@@ -393,7 +393,7 @@ Reviews all documentation against the actual implementation:
 
 **Fixes** documentation inaccuracies, gaps, and stale content directly.
 
-Produces: `doc_review_report.md` with findings and fixes applied.
+Produces: `docs.md` with findings and fixes applied.
 
 ### Phase 12: Forensics Analysis
 
@@ -598,7 +598,7 @@ worktrees/
 │   │       └── auth/
 │   │           └── scope.md           ← copied from Phase 0 worktree at creation
 │   └── docs/
-│       ├── requirements_analysis.md
+│       ├── requirements.md
 │       ├── architecture.md
 │       └── ...
 │
@@ -627,13 +627,13 @@ designs/
         │   ├── scope.md               ← copy of feature scope doc
         │   ├── feature_report.html
         │   └── docs/
-        │       ├── requirements_analysis.md
+        │       ├── requirements.md
         │       ├── architecture.md
         │       ├── adversarial.md
-        │       ├── doc_review_report.md
-        │       ├── security_report.md
-        │       ├── qa_report.md
-        │       ├── product_validation.md
+        │       ├── docs.md
+        │       ├── security.md
+        │       ├── qa.md
+        │       ├── validation.md
         │       ├── forensics.md
         │       ├── pipeline_metrics.json
         │       └── phase_prompts/
@@ -921,18 +921,18 @@ The `CostTracker` module (`src/interfaces/cost_tracker.py`) queries:
 | Phase | Scope | Reads From | Writes To |
 |-------|-------|-----------|-----------|
 | 0  | Design  | design.md, AGENTS.md, designs/, vector DB | features.json, features/\<id\>/scope.md (per feature) |
-| 1  | Feature | scope.md, AGENTS.md, features/, vector DB | requirements_analysis.md |
-| 2  | Feature | scope.md, design.md, requirements_analysis.md | scope_review_result.md |
-| 3  | Feature | scope.md, requirements_analysis.md | architecture.md |
-| 4  | Feature | scope.md, requirements_analysis.md, architecture.md | challenge.md |
+| 1  | Feature | scope.md, AGENTS.md, features/, vector DB | requirements.md |
+| 2  | Feature | scope.md, design.md, requirements.md | scope.md |
+| 3  | Feature | scope.md, requirements.md | architecture.md |
+| 4  | Feature | scope.md, requirements.md, architecture.md | challenge.md |
 | 5  | Feature | architecture.md, challenge.md, AGENTS.md | Source code, tests |
-| 6  | Feature | requirements_analysis.md, architecture.md, source code | adversarial.md |
-| 7  | Feature | architecture.md, requirements_analysis.md, adversarial.md | architectural_review_report.md |
-| 8  | Feature | requirements_analysis.md, architecture.md, adversarial.md | security_report.md, code fixes |
-| 9  | Feature | requirements_analysis.md, architecture.md, all review reports | qa_report.md |
-| 10 | Feature | scope.md, design.md, requirements_analysis.md, architecture.md, qa_report.md | product_validation.md |
-| 11 | Feature | All reports, source code | doc_review_report.md, doc fixes |
+| 6  | Feature | requirements.md, architecture.md, source code | adversarial.md |
+| 7  | Feature | architecture.md, requirements.md, adversarial.md | review.md |
+| 8  | Feature | requirements.md, architecture.md, adversarial.md | security.md, code fixes |
+| 9  | Feature | requirements.md, architecture.md, all review reports | qa.md |
+| 10 | Feature | scope.md, design.md, requirements.md, architecture.md, qa.md | validation.md |
+| 11 | Feature | All reports, source code | docs.md, summary.md, feature_report.html, doc fixes |
 | 12 | Feature | All docs, run_health.json, phase_prompts/ | forensics.md, prompt proposals, memory entries |
 | 13 | Feature | Committed source, forensics.md | Git commit, PR, merge |
-| 14 | Feature | Merged code, deployment config | Deployment output/logs |
+| 14 | Feature | Merged code, deployment config | deploy.md, deployment output/logs |
 | —  | Design  | All feature outputs | design_report.html, design_metrics.json |
