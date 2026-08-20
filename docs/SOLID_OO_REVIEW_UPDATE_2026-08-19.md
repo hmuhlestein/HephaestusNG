@@ -282,6 +282,31 @@ annotation debt.
 `PipelineState._recovery_attempts`/`_design_branch`/`_design_worktree` are the dynamic
 undeclared attributes §2.3 already records, now confirmed by the type checker.
 
+### Configuration — settings that never reach anything (2026-08-20)
+
+Three separate inert-config bugs were found and fixed this pass (see §2 rows 4.3
+and 4.5, and the `max_task_retries` entry in the tooling section above). Each hid the
+same way: the configured value equalled the hardcoded default, so nothing looked wrong
+until someone changed it. Two structural guards now cover the class, both modelled on
+`test_termination_invariant_single_writer.py` — assert the property, don't test keys
+one at a time:
+
+- `tests/test_config_keys_are_live.py` mutates every leaf of `hephaestus_config.yaml`
+  and requires something observable to change in either loader.
+- `tests/test_exported_env_vars_are_consumed.py` (`e86105b`) covers the same defect at
+  the process boundary. **21 of the 38 environment variables `HephaestusConfig.to_env_dict`
+  hands to spawned processes are read by nothing in this repository.** Four are
+  near-misses of names that *are* read — `MAX_HEALTH_FAILURES` vs
+  `MAX_HEALTH_CHECK_FAILURES`, `TASK_DEDUPLICATION_ENABLED` vs `TASK_DEDUP_ENABLED`,
+  `VECTOR_STORE_COLLECTION_PREFIX` vs `QDRANT_COLLECTION_PREFIX`, and `PROJECT_ROOT` vs
+  `PROJECT_PATH`. That last one matters beyond tidiness: three sites read `PROJECT_PATH`,
+  including `policy._resolve_recovery_project_path`, whose env fallback therefore never
+  fires — and that fallback returning `None` is precisely the condition that used to skip
+  stale-agent termination entirely (finding 2.5). **Recorded, not fixed**: renaming them
+  would activate 21 settings inert for their whole lifetime, changing every spawned
+  process's behaviour at once. That is a per-setting decision for the owner, and the
+  guard's allowlist is where each one is now visible rather than silent.
+
 ### MCP/API layer
 
 **`project_routes.py` (2098 lines) is a new god-file bundling 4 unrelated domains.**
