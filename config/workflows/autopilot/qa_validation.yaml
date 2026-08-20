@@ -29,7 +29,7 @@ done_definitions:
   - "TESTING.md checked (exists or noted as missing)"
   - "TESTING.md read thoroughly (if exists)"
   - "If TESTING.md exists: followed its instructions exactly"
-  - "If TESTING.md missing: used fallback test approach (unit tests only)"
+  - "If TESTING.md missing: used the fallback test approach from STEP 2 onward (unit AND integration tests, then end-to-end validation)"
   - "Test commands executed and results captured"
   - "Log locations documented"
   - "Unit tests executed and results captured"
@@ -114,13 +114,13 @@ additional_notes: |
   - Your task description contains the exact paths — copy them exactly.
   
   Read:
-  - Your task description for "Docs Path:" and "Project Path:" locations
+  - Your task description for the "Artifacts Path (absolute):" and "Working Directory:" lines ("Project Path" = Working Directory)
   - TESTING.md — How to run the app and tests
   - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth)
-  - requirements.md (from Docs Path) - What must it do? (contains REQ-XX IDs)
-  - architecture.md (from Docs Path) - How should it work?
-  - adversarial.md (from Docs Path) - What issues were found in adversarial review?
-  - security.md (from Docs Path) - What security fixes were made?
+  - requirements.md (from Artifacts Path) - What must it do? (contains REQ-XX IDs)
+  - architecture.md (from Artifacts Path) - How should it work?
+  - adversarial.md (from Artifacts Path) - What issues were found in adversarial review?
+  - security.md (from Artifacts Path) - What security fixes were made?
 
   **REQUIREMENT TRACKING:**
   requirements.md contains REQ-XX numbered requirements. When writing

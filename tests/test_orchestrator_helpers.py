@@ -6268,6 +6268,75 @@ class TestGetProjectContextsByPrefix:
         }
 
 
+class TestStageForensicsInputs:
+    """Regression: forensics_analysis.yaml made listing a `phase_prompts/`
+    directory its "MANDATORY FIRST ACTION" and read a `run_health.json`
+    alongside it -- and nothing in the codebase has ever written either one.
+    The phase whose entire job is comparing prompts against outcomes could
+    not read the prompts, so its first act was a guaranteed failure on a
+    directory that did not exist."""
+
+    def _logger(self, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger
+
+        return OrchestratorLogger(tmp_path)
+
+    def _workflow(self, definition_id="autopilot"):
+        return type("W", (), {"definition_id": definition_id})()
+
+    def test_writes_run_health_and_phase_prompts(self, tmp_path):
+        import json
+
+        from src.autopilot.orchestrator.phase_transitions import _stage_forensics_inputs
+
+        health = {"clean": False, "goto_count": 3, "error_count": 7, "tmux_errors": []}
+        _stage_forensics_inputs(tmp_path, self._workflow(), health, self._logger(tmp_path))
+
+        run_health = tmp_path / ".hephaestus" / "run_health.json"
+        assert run_health.exists()
+        assert json.loads(run_health.read_text())["goto_count"] == 3
+
+        prompts = tmp_path / ".hephaestus" / "phase_prompts"
+        staged = {f.name for f in prompts.glob("*.yaml")}
+        # The phase YAMLs forensics is asked to quote verbatim, plus
+        # workflow.yaml (where the retry/goto thresholds that shaped the run
+        # actually live).
+        assert {"development.yaml", "security_review.yaml", "workflow.yaml"} <= staged
+
+    def test_staged_prompts_match_the_real_configs(self, tmp_path):
+        """Copied, not summarised: forensics is told to quote these verbatim
+        when proposing rewrites, so a drifted or truncated copy is worse than
+        no copy at all."""
+        from src.autopilot.orchestrator.phase_transitions import _stage_forensics_inputs
+        from src.workflow_registry import _WORKFLOWS_DIR
+
+        _stage_forensics_inputs(tmp_path, self._workflow(), {"clean": False}, self._logger(tmp_path))
+
+        staged = tmp_path / ".hephaestus" / "phase_prompts" / "development.yaml"
+        source = _WORKFLOWS_DIR / "autopilot" / "development.yaml"
+        assert staged.read_text() == source.read_text()
+
+    def test_unknown_definition_id_does_not_raise(self, tmp_path):
+        """forensics_analysis is an optional phase -- a staging failure must
+        never take down task creation for it. run_health.json is written
+        first and independently, so it still lands."""
+        from src.autopilot.orchestrator.phase_transitions import _stage_forensics_inputs
+
+        _stage_forensics_inputs(
+            tmp_path, self._workflow("no-such-workflow"), {"clean": False}, self._logger(tmp_path)
+        )
+        assert (tmp_path / ".hephaestus" / "run_health.json").exists()
+        assert not (tmp_path / ".hephaestus" / "phase_prompts").exists()
+
+    def test_missing_definition_id_does_not_raise(self, tmp_path):
+        from src.autopilot.orchestrator.phase_transitions import _stage_forensics_inputs
+
+        _stage_forensics_inputs(
+            tmp_path, type("W", (), {"definition_id": None})(), {"clean": False}, self._logger(tmp_path)
+        )
+        assert (tmp_path / ".hephaestus" / "run_health.json").exists()
+
+
 class TestCreatePhaseTaskReviewCap:
     """_create_phase_task's opt-in review-run cap + prior-findings
     injection (workflow.yaml's max_review_runs) -- closes the review-fix-
@@ -6450,18 +6519,69 @@ class TestCreatePhaseTaskReviewCap:
     def test_caps_out_a_phase_with_no_gate_result_artifacts(
         self, mock_create_agent, mock_fire_transition, orch_db_env, tmp_path
     ):
-        """Regression: security_review/doc_review have max_review_runs
-        configured in workflow.yaml but no GATE_RESULT_ARTIFACTS entry (they
-        aren't scored via a JSON gate artifact the way architectural_review/
-        adversarial_review/qa_validation/product_validation are).
+        """Regression: doc_review has max_review_runs configured in
+        workflow.yaml but no GATE_RESULT_ARTIFACTS entry (it isn't scored
+        via a gate artifact the way architectural_review/adversarial_review/
+        security_review/qa_validation/product_validation are).
         _cap_out_review_phase previously returned None for these ("isn't a
         known gated phase"), which _create_phase_task treats as "fall
         through and create a normal task" -- so the cap silently never
         engaged and the phase re-ran forever. Observed live: security_review
-        ran 25 times with max_review_runs: 4 configured, doing nothing."""
+        ran 25 times with max_review_runs: 4 configured, doing nothing.
+        (security_review has since become a genuinely gated phase and takes
+        the synthetic-artifact branch instead -- see
+        test_caps_out_security_review_via_its_gate_artifact below. doc_review
+        is the sole remaining user of this branch.)"""
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _create_phase_task
         from src.core.database import Task, Workflow
+
+        self._seed(orch_db_env, phase_name="doc_review", existing_task_count=4)
+        mock_fire_transition.return_value = True
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-cap").first()
+            wf.working_directory = str(tmp_path)
+
+        with patch("src.autopilot.spec.get_max_review_runs", return_value=4), patch(
+            "src.autopilot.spec.get_review_findings_history", return_value=[]
+        ):
+            result = _create_phase_task(
+                "wf-cap", "phase-cap", "doc_review", "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        mock_fire_transition.assert_called_once_with(
+            "wf-cap", "phase-cap", "doc_review", ANY, force_continue=True
+        )
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            # No NEW task created -- still exactly the 4 seeded ones.
+            count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
+            assert count == 4
+
+        notice = tmp_path / ".hephaestus" / "doc_review" / "doc_review_capped_notice.md"
+        assert notice.exists()
+        assert "capped after 4 runs" in notice.read_text()
+
+    @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_caps_out_security_review_via_its_gate_artifact(
+        self, mock_create_agent, mock_fire_transition, orch_db_env, tmp_path
+    ):
+        """security_review is now a real gated phase (spec_gate: true), so
+        capping it out must write the synthetic clean result its OWN scorer
+        reads -- score_security_review reads unresolved_count, not the
+        blocker_count schema the other review phases use. A blocker_count-
+        only synthetic result would read as unresolved_count=0 by accident
+        here rather than by construction; assert the real shape, including
+        the frontmatter `type` validate_gate_result_schema demands."""
+        from src.autopilot.okf_markdown import read_okf
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.autopilot.spec import score_security_review
+        from src.core.database import Workflow
 
         self._seed(orch_db_env, phase_name="security_review", existing_task_count=4)
         mock_fire_transition.return_value = True
@@ -6479,18 +6599,17 @@ class TestCreatePhaseTaskReviewCap:
             )
 
         assert result is True
-        mock_fire_transition.assert_called_once_with(
-            "wf-cap", "phase-cap", "security_review", ANY, force_continue=True
-        )
         mock_create_agent.assert_not_called()
-        with orch_db_env.session_scope() as session:
-            # No NEW task created -- still exactly the 4 seeded ones.
-            count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
-            assert count == 4
 
-        notice = tmp_path / ".hephaestus" / "security_review" / "security_review_capped_notice.md"
-        assert notice.exists()
-        assert "capped after 4 runs" in notice.read_text()
+        result_md = tmp_path / ".hephaestus" / "security_review" / "security.md"
+        assert result_md.exists()
+        frontmatter, body = read_okf(result_md)
+        assert frontmatter["type"] == "security_review_report"
+        assert frontmatter["unresolved_count"] == 0
+        assert "capped after 4 runs" in body
+        # The synthetic result must actually score as a pass through the
+        # real scorer -- that is the entire point of writing it.
+        assert score_security_review(frontmatter)[0] >= 0.7
 
     def test_cap_out_review_phase_returns_none_without_working_directory(
         self, orch_db_env, tmp_path

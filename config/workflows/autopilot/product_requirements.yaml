@@ -16,7 +16,7 @@ done_definitions:
   - "Component dependencies mapped"
   - "Technology constraints noted (respecting existing stack)"
   - "Integration points with existing system identified"
-  - "requirements.md created in Docs Path location"
+  - "requirements.md created in Artifacts Path location"
   - "Memory saved with key decisions and project context"
   - "Task marked as done"
 outputs:
@@ -213,10 +213,10 @@ additional_notes: |
 
   Read your task description for the correct paths:
   - "Design Document:" tells you where the design doc is
-  - "Docs Path:" tells you where to write requirements.md
+  - "Artifacts Path (absolute):" tells you where to write requirements.md
   - "Project Path:" tells you where implementation code goes
 
-  Write requirements.md to the "Docs Path" location from your task description.
+  Write requirements.md to the "Artifacts Path" location from your task description.
 
   **REQUIREMENT NUMBERING (MANDATORY):**
   Every functional requirement MUST be assigned a unique ID:
@@ -282,7 +282,7 @@ additional_notes: |
   Your requirements document is complete. Mark your task as done.
   The orchestrator will advance to the next phase automatically.
 
-  Ensure requirements.md is saved to the "Docs Path" location.
+  Ensure requirements.md is saved to the "Artifacts Path" location.
 
   ## CRITICAL RULES
 

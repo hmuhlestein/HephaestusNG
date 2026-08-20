@@ -59,6 +59,7 @@ from src.autopilot.orchestrator.worktree_integration import (
 )
 from src.autopilot.spec import GATED_PHASES, build_phase_output
 from src.core.constants import (
+    CONTEXT_DIR_NAME,
     DIAGNOSTIC_TASK_PREFIX,
     GOTO_REASON_PREFIX,
 )
@@ -2000,6 +2001,61 @@ def _fire_phase_transition(
         return False
 
 
+def _stage_forensics_inputs(worktree: Path, workflow, health: dict, logger: "OrchestratorLogger") -> None:
+    """Write the two inputs forensics_analysis.yaml reads but nothing wrote.
+
+    forensics_analysis is a post-hoc process-improvement phase: it compares
+    what each agent was TOLD to do (the phase YAMLs) against what actually
+    happened (the artifacts and tmux logs) and proposes prompt rewrites. It
+    can only do that if it can read the prompts -- and its prompt pointed at
+    a `phase_prompts/` directory and a `run_health.json` that no code path
+    in this repo has ever created. Both go into the worktree's .hephaestus/,
+    the same "Artifacts Path" every other phase reads and writes, and get
+    swept into the feature record afterwards like any other artifact.
+
+    Best-effort by design: forensics is an optional phase (workflow.yaml's
+    optional_phases) whose own prompt already handles a missing
+    run_health.json by defaulting to FULL MODE. Failing to stage its inputs
+    must not take down task creation for it, so every failure here is logged
+    and swallowed rather than raised.
+    """
+    import json as _json
+    import shutil as _shutil
+
+    artifacts = worktree / CONTEXT_DIR_NAME
+    try:
+        artifacts.mkdir(parents=True, exist_ok=True)
+        (artifacts / "run_health.json").write_text(_json.dumps(health, indent=2, default=str))
+    except Exception as e:
+        logger.warning(f"[PHASE-TASK] Could not write run_health.json for forensics: {e}")
+
+    definition_id = getattr(workflow, "definition_id", None)
+    if not definition_id:
+        logger.warning("[PHASE-TASK] Workflow has no definition_id — skipping phase_prompts/ staging for forensics")
+        return
+    try:
+        from src.workflow_registry import _WORKFLOWS_DIR
+
+        source = _WORKFLOWS_DIR / definition_id
+        if not source.is_dir():
+            logger.warning(f"[PHASE-TASK] No workflow config dir at {source} — skipping phase_prompts/ staging")
+            return
+        dest = artifacts / "phase_prompts"
+        dest.mkdir(parents=True, exist_ok=True)
+        # workflow.yaml is the orchestration config (evaluation points,
+        # thresholds), not a prompt given to any agent -- copied too, since
+        # "why did this phase loop four times" is exactly the kind of
+        # question forensics is asked to answer and the answer lives in its
+        # evaluation_points.
+        copied = 0
+        for phase_file in sorted(source.glob("*.yaml")):
+            _shutil.copy2(str(phase_file), str(dest / phase_file.name))
+            copied += 1
+        logger.info(f"[PHASE-TASK] Staged {copied} phase prompt(s) + run_health.json for forensics_analysis")
+    except Exception as e:
+        logger.warning(f"[PHASE-TASK] Could not stage phase_prompts/ for forensics: {e}")
+
+
 def _cap_out_review_phase(
     db,
     workflow_id: str,
@@ -2030,20 +2086,22 @@ def _cap_out_review_phase(
     completion, and no forward progress, forever, with nothing but a
     debug-level log to explain why.
 
-    A phase with no GATE_RESULT_ARTIFACTS entry (e.g. security_review,
-    doc_review -- opted into max_review_runs in workflow.yaml but not
-    scored via a JSON gate artifact the way architectural_review/
-    adversarial_review/qa_validation/product_validation are) has nothing
-    for a scorer to re-read, so there's no synthetic result file to write
-    -- but the cap must still apply. _fire_phase_transition doesn't require
-    one either: it only calls build_phase_output (which reads
+    A phase with no GATE_RESULT_ARTIFACTS entry (today: doc_review --
+    opted into max_review_runs in workflow.yaml but not scored via a gate
+    artifact the way architectural_review/adversarial_review/
+    security_review/qa_validation/product_validation are) has nothing for a
+    scorer to re-read, so there's no synthetic result file to write -- but
+    the cap must still apply. _fire_phase_transition doesn't require one
+    either: it only calls build_phase_output (which reads
     GATE_RESULT_ARTIFACTS) for phases in GATED_PHASES, and _create_phase_
     task already relies on this exact same path with zero synthetic
     artifacts for forensics_analysis's clean-run shortcut. Previously this
     branch returned None here ("isn't a known gated phase"), which meant
     the cap silently never engaged for security_review/doc_review -- a live
     run hit 25 re-entries of security_review with max_review_runs: 4
-    configured and doing nothing.
+    configured and doing nothing. (security_review has since become a
+    genuinely gated phase and now takes the synthetic-artifact branch
+    above; doc_review is the sole remaining user of this one.)
     """
     from src.autopilot.okf_markdown import write_okf
     from src.autopilot.spec import GATE_RESULT_ARTIFACTS, get_review_findings_history, synthetic_clean_result
@@ -2062,7 +2120,7 @@ def _cap_out_review_phase(
     docs_dir.mkdir(parents=True, exist_ok=True)
 
     history = get_review_findings_history(workflow_id, phase.name)
-    caveats = "\n".join(f"- Run {h['run_number']}: {h['blocker_count']} blocker(s) -- {h['summary'][:200]}" for h in history) or "(no findings history recorded)"
+    caveats = "\n".join(f"- Run {h['run_number']}: {h['blocker_count']} unresolved finding(s) -- {h['summary'][:200]}" for h in history) or "(no findings history recorded)"
     body = (
         f"# {phase.name} -- capped after {run_count} runs\n\n"
         f"Stopped re-reviewing after {max_runs} runs without a clean "
@@ -2206,6 +2264,16 @@ def _create_phase_task(
                         # the same completion path a real agent would trigger
                         # via update_task_status, just fired synthetically.
                         return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
+                    # Not clean, so the agent IS about to run. Materialise the
+                    # two inputs its prompt requires: run_health.json (the
+                    # health dict just computed above — otherwise thrown away
+                    # after this branch) and phase_prompts/ (the phase YAMLs
+                    # it compares outcomes against). Both were read by
+                    # forensics_analysis.yaml and written by nothing, anywhere
+                    # in the codebase; STEP 1 even made listing phase_prompts/
+                    # a "MANDATORY FIRST ACTION", so the agent's first act was
+                    # a guaranteed failure on a directory that never existed.
+                    _stage_forensics_inputs(Path(wf.working_directory), wf, health, logger)
 
             # deploy phase: skip entirely if DEPLOY.md doesn't exist
             if phase_name == "deploy":
@@ -2356,7 +2424,7 @@ def _create_phase_task(
                 if run_count > 0:
                     history = get_review_findings_history(workflow_id, phase.name)
                     if history:
-                        findings_lines = "\n".join(f"- Run {h['run_number']}: {h['blocker_count']} blocker(s) -- {h['summary'][:200]}" for h in history)
+                        findings_lines = "\n".join(f"- Run {h['run_number']}: {h['blocker_count']} unresolved finding(s) -- {h['summary'][:200]}" for h in history)
                         prior_findings_block = (
                             f"\n\nPRIOR FINDINGS FROM {len(history)} EARLIER "
                             f"RUN(S) OF THIS PHASE:\n{findings_lines}\n\n"

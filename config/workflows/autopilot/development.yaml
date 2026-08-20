@@ -15,7 +15,6 @@ done_definitions:
   - "All foundation components implemented and tested"
   - "All feature components implemented and tested"
   - "Integration points implemented"
-  - "Code follows project style guide"
   - ".gitignore created if missing, covering standard runtime/tool artifacts for this language"
   - "Unit tests written and passing"
   - "For each bug fix: the new/changed test was stash-verified to fail before the fix and pass after (git stash discipline — see STEP 4)"

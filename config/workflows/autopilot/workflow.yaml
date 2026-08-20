@@ -227,18 +227,25 @@ orchestrator:
       max_retries: 2
       # See architectural_review's identical max_review_runs above.
       max_review_runs: 4
+      # Continue-only, deliberately. doc_review is the one review phase
+      # that FIXES what it finds (its done_definitions are "stray files
+      # organized", "critical inaccuracies fixed") rather than reporting
+      # findings for someone else to act on -- it emits no blocker/finding
+      # count for a scorer to read, so it declares no `spec_gate: true` and
+      # build_phase_output returns {} for it. The heuristic evaluator then
+      # scores an empty phase_output at its fixed 0.75 baseline, EVERY
+      # time. This eval point used to carry `score < 0.3 -> goto
+      # architecture_design` and `score < 0.6 -> goto development`
+      # conditions on top of that: both bands were unreachable, so the
+      # config advertised a documentation gate that had never once fired.
+      # Stating the real behaviour beats implying an enforcement that
+      # doesn't exist -- if doc_review should ever gate for real, the fix
+      # is a finding count in docs.md and a scorer, not a threshold with
+      # nothing behind it.
       conditions:
-        - if: "score < 0.3"
-          action: goto
-          target: architecture_design
-          reason: "Documentation gaps indicate architectural issues"
-        - if: "score < 0.6"
-          action: goto
-          target: development
-          reason: "Documentation needs code-level fixes"
-        - if: "score >= 0.6"
+        - if: "score >= 0.0"
           action: continue
-          reason: "Documentation approved"
+          reason: "Documentation reviewed and corrected in place"
 
     - after_phase: forensics_analysis
       evaluator: heuristic

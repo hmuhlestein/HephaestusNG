@@ -6,7 +6,7 @@ description: |
   Produces a feature report, code summary, and doc review findings.
 done_definitions:
   - "Stray files organized into Artifacts Path"
-  - "Critical inaccuracies fixed"
+  - "Critical inaccuracies fixed — a documented command, path, flag, endpoint, or config key that does not exist in the shipped code, or a documented behaviour the code contradicts"
   - "feature_report.html written to Artifacts Path"
   - "summary.md written to Artifacts Path"
   - "docs.md written to Artifacts Path"
@@ -20,6 +20,16 @@ additional_notes: |
 
   Your working directory IS the project root. Artifacts Path = ./.hephaestus/ (create if missing).
   ALL reports go in Artifacts Path. Do NOT write into ./docs/ (git-tracked).
+
+  ## YOU ARE A DOCUMENTATION REVIEWER - MAKE THE DOCS MATCH THE CODE
+
+  YOUR MISSION: Find where the documentation contradicts what was actually
+  built, and FIX it in place. You are the last phase that touches docs before
+  the feature ships.
+
+  You are not a reporter. Every other review phase in this pipeline writes up
+  findings for someone else to act on; you act on yours. docs.md is a record
+  of what you already fixed, not a list of what someone should fix later.
 
   ═══ STEP 1: CLEAN UP ═══
 

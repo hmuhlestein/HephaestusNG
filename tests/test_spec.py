@@ -17,7 +17,9 @@ from src.autopilot.spec import (
     score_feature_review,
     score_product_validation,
     score_qa,
+    gate_finding_count,
     score_scope_review,
+    score_security_review,
 )
 
 
@@ -593,6 +595,271 @@ class TestScoreAdversarialReview:
         )
         assert score < 0.6
         assert "1 BLOCKER" in meta["reason"]
+
+
+class TestGateFindingCount:
+    """record_review_finding read result["blocker_count"] unconditionally,
+    so every gated phase that doesn't use that key recorded 0 findings no
+    matter what it found -- and the prior-findings block injected into the
+    next run's task description announced "0 finding(s)" above a summary
+    describing real ones. Each phase's report speaks its own vocabulary."""
+
+    def test_blocker_style_reviews(self):
+        for phase in ("adversarial_review", "architectural_review", "design_review"):
+            assert gate_finding_count(phase, {"blocker_count": 3}) == 3
+
+    def test_security_review_uses_unresolved_count(self):
+        # Found-but-fixed must NOT be recorded as an unresolved finding --
+        # the same inverted polarity score_security_review reads.
+        assert gate_finding_count(
+            "security_review", {"critical_count": 6, "high_count": 2, "unresolved_count": 0}
+        ) == 0
+        assert gate_finding_count("security_review", {"unresolved_count": 2}) == 2
+
+    def test_qa_validation_sums_failures_and_critical_issues(self):
+        assert gate_finding_count(
+            "qa_validation", {"failed_tests": 3, "critical_issues": 2}
+        ) == 5
+
+    def test_product_validation_counts_unmet_requirements(self):
+        assert gate_finding_count(
+            "product_validation", {"unmet_requirements": ["REQ-1", "REQ-2"]}
+        ) == 2
+        assert gate_finding_count("product_validation", {"unmet_requirements": None}) == 0
+
+    def test_none_result_and_missing_keys_are_zero_not_a_crash(self):
+        assert gate_finding_count("security_review", None) == 0
+        assert gate_finding_count("qa_validation", {}) == 0
+        assert gate_finding_count("scope_review", {"verdict": "FAIL"}) == 0
+
+
+class TestScoreSecurityReview:
+    """security_review carried a full set of workflow.yaml conditions
+    (score < 0.3 -> architecture_design, score < 0.7 -> development) but
+    never declared `spec_gate: true`, so build_phase_output returned {} for
+    it and the heuristic evaluator's fixed 0.75 baseline continued past the
+    gate every time -- a security review reporting unfixed critical
+    vulnerabilities advanced straight to QA. Same dead-gate bug as
+    adversarial_review/architectural_review, which were fixed earlier;
+    security_review and doc_review were left behind.
+
+    Note the inverted polarity vs every other review scorer: this phase
+    FIXES what it finds, so finding a lot is not a failure -- only
+    unresolved_count is."""
+
+    def test_none_result(self):
+        score, meta = score_security_review(None)
+        assert score == 0.4
+        assert meta["result_missing"] is True
+
+    def test_none_result_with_report_text_still_quotes_report(self):
+        report = "# Security Review Report\n\n### SQL injection at api/users.py:42"
+        score, meta = score_security_review(None, report_text=report)
+        assert meta["result_missing"] is True
+        assert report in meta["reason"]
+
+    def test_many_found_but_all_fixed_is_a_clean_pass(self):
+        """The distinguishing case: a review that found six criticals and
+        fixed all six passes. Scoring on found-counts would have punished
+        the phase for doing its job."""
+        score, meta = score_security_review(
+            {"critical_count": 6, "high_count": 2, "unresolved_count": 0}
+        )
+        assert score >= 0.7
+        assert meta["band"] == "pass"
+
+    def test_unresolved_routes_to_development(self):
+        score, meta = score_security_review(
+            {"critical_count": 3, "high_count": 1, "unresolved_count": 2}
+        )
+        # Below security_review's 0.7 continue bar, but at or above the 0.3
+        # architecture_design bar -- code-level fix, not a redesign.
+        assert 0.3 <= score < 0.7
+        assert meta["band"] == "development"
+        assert meta["unresolved_count"] == 2
+
+    def test_unresolved_with_report_text_quotes_full_report(self):
+        """A developer agent with no other context needs the actual
+        file:line references, not a count."""
+        report = "# Security Review Report\n\n### Auth bypass at api/session.py:88\n- Fix: verify signature"
+        score, meta = score_security_review(
+            {"critical_count": 1, "high_count": 0, "unresolved_count": 1},
+            report_text=report,
+        )
+        assert report in meta["reason"]
+
+    def test_clean_report_with_nothing_found(self):
+        score, meta = score_security_review(
+            {"critical_count": 0, "high_count": 0, "unresolved_count": 0}
+        )
+        assert score >= 0.7
+        assert meta["reason"] == "clean"
+
+    def test_missing_counts_default_to_clean_not_crash(self):
+        """A report with the right type but no counts is caught upstream by
+        validate_gate_result_schema, not here -- this must not raise."""
+        score, meta = score_security_review({"type": "security_review_report"})
+        assert score >= 0.7
+
+
+class TestSecurityReviewClassificationSteps:
+    """STEP 1 gates which later steps apply, by NUMBER. Those numbers drifted
+    once already: the ash scan was inserted at position 2 and the skip lists
+    were never renumbered, so STATELESS_LIBRARY was told to "SKIP Steps 2, 3,
+    6" (2 = the mandatory ash scan, 3 = read security requirements) and to
+    "Run Step 4 only if the library handles PII or writes files" (4 = auth;
+    PII and file writes are 6). Harmless while nothing enforced the ash
+    section -- a hard rejection once verify_output_artifact's check went
+    live.
+
+    These assertions pin the step NUMBERS the classification block names to
+    the step TITLES it means, so inserting or reordering a step breaks here
+    instead of silently mis-routing a security review."""
+
+    @staticmethod
+    def _notes_and_titles():
+        import re
+
+        import yaml
+
+        from src.workflow_registry import _WORKFLOWS_DIR
+
+        cfg = yaml.safe_load(
+            (_WORKFLOWS_DIR / "autopilot" / "security_review.yaml").read_text()
+        )
+        notes = cfg["additional_notes"]
+        titles = {
+            int(n): title.strip()
+            for n, title in re.findall(r"^\s*## STEP (\d+):\s*(.+)$", notes, re.M)
+        }
+        return notes, titles
+
+    def test_the_skipped_step_is_the_auth_step(self):
+        _notes, titles = self._notes_and_titles()
+        assert "AUTHENTICATION" in titles[4].upper()
+
+    def test_the_conditional_step_is_the_data_handling_step(self):
+        """"Run Step 6 only if the library handles PII or writes files" only
+        makes sense if 6 is DATA HANDLING."""
+        _notes, titles = self._notes_and_titles()
+        assert "DATA HANDLING" in titles[6].upper()
+
+    def test_step_2_is_the_ash_scan_and_is_never_declared_skippable(self):
+        notes, titles = self._notes_and_titles()
+        assert "AUTOMATED SCAN" in titles[2].upper()
+
+        classification = notes.split("## STEP 1:")[1].split("## STEP 2:")[0]
+        # No classification may tell the agent to skip the ash step: the
+        # report is hard-floor rejected without its section.
+        assert "SKIP Step 2" not in classification
+        assert "SKIP Steps 2" not in classification
+
+    def test_every_step_number_the_classification_names_exists(self):
+        import re
+
+        notes, titles = self._notes_and_titles()
+        classification = notes.split("## STEP 1:")[1].split("## STEP 2:")[0]
+        referenced = {
+            int(n)
+            for chunk in re.findall(r"Steps? ([\d, and-]+)", classification)
+            for n in re.findall(r"\d+", chunk)
+        }
+        assert referenced, "classification block names no steps at all"
+        assert referenced <= set(titles), (
+            f"classification references steps {sorted(referenced - set(titles))} "
+            f"that do not exist (steps are {sorted(titles)})"
+        )
+
+
+class TestSecurityReviewGateWiring:
+    """The scorer only matters if the phase is actually wired as a gate --
+    that wiring is what was missing, not the scoring logic."""
+
+    def test_declared_output_resolves_now_that_the_phase_is_gated(self, tmp_path):
+        """Regression: security_review.yaml used to declare its output as
+        "security_review/security.md" -- the only gated phase with a
+        subdir-prefixed name. That form resolved ONLY via
+        resolve_declared_output_path's flat-.hephaestus/ candidate, which is
+        deliberately skipped for gated phases. Making this phase gated
+        therefore broke verify_output_artifact for it: the report sat in the
+        right place and was reported missing, rejecting every completion."""
+        import yaml
+
+        from src.autopilot.spec import (
+            _extract_declared_files,
+            resolve_declared_output_path,
+        )
+        from src.workflow_registry import _WORKFLOWS_DIR
+
+        cfg = yaml.safe_load(
+            (_WORKFLOWS_DIR / "autopilot" / "security_review.yaml").read_text()
+        )
+        declared = _extract_declared_files(cfg["outputs"])
+        assert declared == ["security.md"]
+
+        report = tmp_path / ".hephaestus" / "security_review" / "security.md"
+        report.parent.mkdir(parents=True)
+        report.write_text("---\ntype: security_review_report\n---\nbody\n")
+        assert (
+            resolve_declared_output_path(str(tmp_path), "security_review", declared[0])
+            == report
+        )
+
+    def test_declared_output_matches_the_ash_scan_content_check(self):
+        """verify_output_artifact gates the MANDATORY ash-scan section on
+        `declared_output == "security.md"`. With the old subdir-prefixed
+        declaration that comparison never matched, so the check silently
+        never ran on any security review."""
+        import yaml
+
+        from src.autopilot.spec import _extract_declared_files
+        from src.workflow_registry import _WORKFLOWS_DIR
+
+        cfg = yaml.safe_load(
+            (_WORKFLOWS_DIR / "autopilot" / "security_review.yaml").read_text()
+        )
+        assert "security.md" in _extract_declared_files(cfg["outputs"])
+
+    def test_security_review_is_a_gated_phase(self):
+        from src.autopilot.spec import GATED_PHASES
+
+        assert "security_review" in GATED_PHASES
+
+    def test_gate_artifact_and_type_are_registered(self):
+        from src.autopilot.spec import (
+            GATE_RESULT_ARTIFACTS,
+            expected_gate_result_type,
+        )
+
+        assert GATE_RESULT_ARTIFACTS["security_review"] == ("security.md",)
+        # security_review.yaml documents `type: security_review_report`, not
+        # the bare phase name the other gated phases use.
+        assert expected_gate_result_type("security_review") == "security_review_report"
+
+    def test_synthetic_clean_result_uses_this_scorers_schema(self):
+        """_cap_out_review_phase's synthetic pass must be readable by THIS
+        phase's scorer -- a blocker_count-only shape would score clean here
+        by accident rather than by construction, the same bug that made
+        qa_validation's cap-out read as a 0% pass rate."""
+        from src.autopilot.spec import (
+            synthetic_clean_result,
+            validate_gate_result_schema,
+        )
+
+        result = synthetic_clean_result("security_review", 4)
+        assert result["unresolved_count"] == 0
+        assert validate_gate_result_schema("security_review", result) is None
+        assert score_security_review(result)[0] >= 0.7
+
+    def test_schema_validation_rejects_a_wrong_shaped_report(self):
+        from src.autopilot.spec import validate_gate_result_schema
+
+        problem = validate_gate_result_schema(
+            "security_review",
+            {"type": "security_review_report", "posture": "STRONG"},
+        )
+        assert problem is not None
+        assert "unresolved_count" in problem
 
 
 class TestScoreDesignReview:

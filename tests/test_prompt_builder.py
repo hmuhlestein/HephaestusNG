@@ -609,3 +609,44 @@ class TestProjectRootInjection:
             task=_FakeTask(), agent_id="agent-abc", branch_path="/worktrees/wt-1"
         )
         assert "Project Root (absolute)" not in message
+
+
+class TestArtifactsPathInjection:
+    """Regression, same class as TestProjectRootInjection above: 13 of the 14
+    autopilot phase prompts tell the agent to read or write an "Artifacts
+    Path", and qa_validation/security_review/architectural_review go as far
+    as "Read: Your task description for the 'Artifacts Path (absolute):'
+    line" -- but nothing ever injected that field either. _create_phase_task
+    builds a description of f"Execute {phase.name}: {phase.description}"
+    plus optional goto feedback, and this builder injected only Working
+    Directory / Project Root, so the lookup those prompts describe had
+    nothing to find."""
+
+    def test_artifacts_path_injected_from_branch_path(self):
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc", branch_path="/worktrees/wt-1"
+        )
+        assert "Artifacts Path (absolute): /worktrees/wt-1/.hephaestus" in message
+
+    def test_artifacts_path_survives_a_workflow_lookup_failure(self):
+        """Injected outside the workflow try/except that wraps the Project
+        Root lookup: a get_workflow failure must not silently cost every
+        phase its artifact directory too."""
+
+        class _Exploding:
+            def get_workflow(self, workflow_id):
+                raise RuntimeError("db down")
+
+        builder = AgentPromptBuilder(phase_manager=_Exploding())
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc", branch_path="/worktrees/wt-1"
+        )
+        assert "Artifacts Path (absolute): /worktrees/wt-1/.hephaestus" in message
+
+    def test_no_artifacts_path_line_without_a_worktree(self):
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc", branch_path=None
+        )
+        assert "Artifacts Path (absolute)" not in message

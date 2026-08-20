@@ -261,7 +261,7 @@ additional_notes: |
 
   ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
 
-  Write the report to the Docs Path. This is your ONLY output — do NOT edit source.
+  Write the report to the Artifacts Path. This is your ONLY output — do NOT edit source.
   The developer reads this report and fixes the code. Make recommended fixes
   specific enough to act on without guessing.
 

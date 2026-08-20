@@ -978,6 +978,7 @@ class PhaseManager:
             from src.autopilot.spec import (
                 GATE_RESULT_ARTIFACTS,
                 consume_gate_artifacts,
+                gate_finding_count,
                 get_max_review_runs,
                 read_okf_report,
                 record_review_finding,
@@ -1006,7 +1007,7 @@ class PhaseManager:
                     record_review_finding(
                         phase.workflow_id,
                         phase.name,
-                        blocker_count=(result or {}).get("blocker_count", 0),
+                        blocker_count=gate_finding_count(phase.name, result),
                         summary=report_text or (result or {}).get("reason", ""),
                     )
 
