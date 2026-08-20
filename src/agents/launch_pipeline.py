@@ -1584,26 +1584,36 @@ class LaunchPipeline:
 
         # Insert a stub Agent row BEFORE worktree creation so the
         # agent_worktrees.agent_id FK passes.
+        # try/except/finally around the whole block: this is a hot,
+        # per-dispatch-call path -- a commit() failure (IntegrityError,
+        # transient OperationalError) previously propagated with the
+        # session never closed or rolled back, leaking a connection on
+        # every failure and risking pool exhaustion under repeated retries.
         session = self.db_manager.get_session()
-        agent = Agent(
-            id=agent_id,
-            system_prompt="(pending: worktree + prompt setup)",
-            status="idle",
-            cli_type=cli_type,
-            agent_type=agent_type,
-            current_task_id=task.id,
-            last_activity=datetime.utcnow(),
-            health_check_failures=0,
-        )
-        session.add(agent)
-        if assign_to_task:
-            claimed_task = session.query(Task).filter_by(id=task.id).first()
-            if claimed_task:
-                claimed_task.assigned_agent_id = agent_id
-                claimed_task.status = "in_progress"
-                claimed_task.started_at = datetime.utcnow()
-        session.commit()
-        session.close()
+        try:
+            agent = Agent(
+                id=agent_id,
+                system_prompt="(pending: worktree + prompt setup)",
+                status="idle",
+                cli_type=cli_type,
+                agent_type=agent_type,
+                current_task_id=task.id,
+                last_activity=datetime.utcnow(),
+                health_check_failures=0,
+            )
+            session.add(agent)
+            if assign_to_task:
+                claimed_task = session.query(Task).filter_by(id=task.id).first()
+                if claimed_task:
+                    claimed_task.assigned_agent_id = agent_id
+                    claimed_task.status = "in_progress"
+                    claimed_task.started_at = datetime.utcnow()
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
         try:
             context_files = self._gather_worktree_context(task)
