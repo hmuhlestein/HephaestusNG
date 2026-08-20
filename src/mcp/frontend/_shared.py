@@ -200,7 +200,7 @@ class FrontendAPI:
                     "type": log.log_type,
                     "message": log.message,
                     "agent_id": log.agent_id,
-                    "timestamp": log.timestamp.isoformat(),
+                    "timestamp": log.timestamp.isoformat() + "Z",
                 }
                 for log in recent_logs
             ]
@@ -229,7 +229,7 @@ class FrontendAPI:
                 "recent_activity": recent_activity,
                 "stuck_agents": stuck_agents,
                 "failed_tasks_today": failed_tasks_today,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.utcnow().isoformat() + "Z",
             }
         finally:
             session.close()
@@ -363,7 +363,7 @@ class FrontendAPI:
                         "related_task_id": memory.related_task_id,
                         "tags": memory.tags,
                         "related_files": memory.related_files,
-                        "created_at": memory.created_at.isoformat(),
+                        "created_at": memory.created_at.isoformat() + "Z",
                     }
                     for memory in memories
                 ],
@@ -421,7 +421,7 @@ class FrontendAPI:
                             "status": agent.status,
                             "cli_type": agent.cli_type,
                             "current_task_id": agent.current_task_id,
-                            "created_at": agent.created_at.isoformat()
+                            "created_at": agent.created_at.isoformat() + "Z"
                             if agent.created_at
                             else None,
                         },
@@ -484,7 +484,7 @@ class FrontendAPI:
                             "priority": task.priority,
                             "description": task.enriched_description
                             or task.raw_description,
-                            "created_at": task.created_at.isoformat()
+                            "created_at": task.created_at.isoformat() + "Z"
                             if task.created_at
                             else None,
                             "phase_id": task.phase_id,
@@ -577,7 +577,7 @@ class FrontendAPI:
                 "nodes": nodes,
                 "edges": edges,
                 "phases": phase_info,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.utcnow().isoformat() + "Z",
             }
         finally:
             session.close()
@@ -774,9 +774,9 @@ class FrontendAPI:
                 "assigned_agent_id": task.assigned_agent_id,
                 "created_by_agent_id": task.created_by_agent_id,
                 "parent_task_id": task.parent_task_id,
-                "created_at": task.created_at.isoformat() if task.created_at else None,
-                "started_at": task.started_at.isoformat() if task.started_at else None,
-                "completed_at": task.completed_at.isoformat()
+                "created_at": task.created_at.isoformat() + "Z" if task.created_at else None,
+                "started_at": task.started_at.isoformat() + "Z" if task.started_at else None,
+                "completed_at": task.completed_at.isoformat() + "Z"
                 if task.completed_at
                 else None,
                 "estimated_complexity": task.estimated_complexity,
@@ -2118,7 +2118,7 @@ class FrontendAPI:
                         "status": agent.status,
                         "cli_type": agent.cli_type,
                         "current_task_id": agent.current_task_id,
-                        "started_at": agent.created_at.isoformat()
+                        "started_at": agent.created_at.isoformat() + "Z"
                         if agent.created_at
                         else None,
                         "health_check_failures": agent.health_check_failures,
@@ -2150,7 +2150,7 @@ class FrontendAPI:
                         "version": v.version,
                         "status": v.status,
                         "created_by": v.created_by,
-                        "created_at": v.created_at.isoformat()
+                        "created_at": v.created_at.isoformat() + "Z"
                         if v.created_at
                         else None,
                         "change_summary": v.change_summary,
@@ -2202,7 +2202,7 @@ class FrontendAPI:
                 "next_steps": pv.next_steps,
                 "change_summary": pv.change_summary,
                 "created_by": pv.created_by,
-                "created_at": pv.created_at.isoformat() if pv.created_at else None,
+                "created_at": pv.created_at.isoformat() + "Z" if pv.created_at else None,
                 "parent_version": pv.parent_version,
             }
         finally:
@@ -2303,7 +2303,7 @@ class FrontendAPI:
                     "success": True,
                     "version": new_version,
                     "status": new_pv.status,
-                    "created_at": new_pv.created_at.isoformat()
+                    "created_at": new_pv.created_at.isoformat() + "Z"
                     if new_pv.created_at
                     else None,
                     "created_by": new_pv.created_by,
@@ -2550,7 +2550,7 @@ class FrontendAPI:
             return {
                 "system_prompt": override.system_prompt,
                 "user_prompt": override.user_prompt,
-                "updated_at": override.updated_at.isoformat()
+                "updated_at": override.updated_at.isoformat() + "Z"
                 if override.updated_at
                 else None,
                 "updated_by": override.updated_by,

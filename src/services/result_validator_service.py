@@ -157,7 +157,7 @@ class ResultValidatorService:
                 "status": result.status,
                 "validation_feedback": result.validation_feedback,
                 "validation_evidence": result.validation_evidence,
-                "validated_at": result.validated_at.isoformat()
+                "validated_at": result.validated_at.isoformat() + "Z"
                 if result.validated_at
                 else None,
                 "validated_by_agent_id": result.validated_by_agent_id,

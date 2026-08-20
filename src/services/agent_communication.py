@@ -67,7 +67,7 @@ class AgentCommunicationService:
                         if task
                         else None,
                         "task_status": task.status if task else None,
-                        "last_activity": child.last_activity.isoformat()
+                        "last_activity": child.last_activity.isoformat() + "Z"
                         if child.last_activity
                         else None,
                         "health_check_failures": child.health_check_failures,

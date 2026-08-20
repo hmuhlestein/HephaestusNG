@@ -150,7 +150,7 @@ class TaskSimilarityService:
                                 or task.raw_description,
                                 "similarity": similarity,
                                 "status": task.status,
-                                "created_at": task.created_at.isoformat()
+                                "created_at": task.created_at.isoformat() + "Z"
                                 if task.created_at
                                 else None,
                             }
@@ -282,7 +282,7 @@ class TaskSimilarityService:
                             "description": original.enriched_description
                             or original.raw_description,
                             "status": original.status,
-                            "created_at": original.created_at.isoformat()
+                            "created_at": original.created_at.isoformat() + "Z"
                             if original.created_at
                             else None,
                         }
@@ -369,7 +369,7 @@ class TaskSimilarityService:
                                     or task.raw_description,
                                     "similarity": similarity,
                                     "status": task.status,
-                                    "created_at": task.created_at.isoformat()
+                                    "created_at": task.created_at.isoformat() + "Z"
                                     if task.created_at
                                     else None,
                                 }
