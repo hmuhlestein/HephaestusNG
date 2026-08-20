@@ -181,7 +181,12 @@ def attempt_recovery(workflow_id: str, logger: "OrchestratorLogger") -> Tuple[bo
     # 1. Retry failed tasks
     recovered.extend(_retry_failed_tasks(workflow_id, logger))
 
-    # 1b. Clean stale "assigned" tasks whose agent is terminated
+    # 1b. Clean stale "assigned" tasks whose agent is terminated. Includes
+    # "pending", not just "assigned"/"in_progress" -- a task can carry
+    # assigned_agent_id while still "pending" (see
+    # _clean_stale_assigned_tasks in features.py, which had the identical
+    # gap, and _advance_phases's own phase-scoped handling of this exact
+    # live-observed state in phase_transitions.py).
     try:
         from src.core.database import Agent as _Agent
         from src.core.database import Task as _Task
@@ -192,7 +197,7 @@ def attempt_recovery(workflow_id: str, logger: "OrchestratorLogger") -> Tuple[bo
                 _db.query(_Task)
                 .filter(
                     _Task.workflow_id == workflow_id,
-                    _Task.status.in_(["assigned", "in_progress"]),
+                    _Task.status.in_(["pending", "assigned", "in_progress"]),
                 )
                 .all()
             )

@@ -27,6 +27,22 @@ logger = logging.getLogger("src.mcp.server.workflow_execution_routes")
 
 router = APIRouter()
 
+def _kill_tmux_session(tmux_session_name: Optional[str]) -> None:
+    """`tmux kill-session` -- real subprocess work (up to the 5s timeout),
+    called via run_in_executor by stop_workflow/cancel_workflow below so a
+    workflow with several agents doesn't block the event loop for their
+    combined kill time on one Stop/Cancel click."""
+    import subprocess
+
+    try:
+        subprocess.run(
+            ["tmux", "kill-session", "-t", tmux_session_name],
+            capture_output=True,
+            timeout=5,
+        )
+    except Exception:
+        pass
+
 @router.get("/api/workflow-definitions")
 async def list_workflow_definitions():
     """List all loaded workflow definitions."""
@@ -296,7 +312,7 @@ async def complete_workflow_execution(workflow_id: str, request: Request):
 @router.post("/api/workflow-executions/{workflow_id}/stop")
 async def stop_workflow(workflow_id: str, request: Request):
     """Stop a workflow and terminate all its agents."""
-    import subprocess
+    import asyncio
 
     session = server_state.db_manager.get_session()
     try:
@@ -318,15 +334,9 @@ async def stop_workflow(workflow_id: str, request: Request):
             from src.autopilot.orchestrator.engine_client import terminate_agent
 
             agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
+            loop = asyncio.get_event_loop()
             for agent in agents:
-                try:
-                    subprocess.run(
-                        ["tmux", "kill-session", "-t", agent.tmux_session_name],
-                        capture_output=True,
-                        timeout=5,
-                    )
-                except Exception:
-                    pass
+                await loop.run_in_executor(None, _kill_tmux_session, agent.tmux_session_name)
                 terminate_agent(agent.id, session=session)
                 terminated_count += 1
 
@@ -417,7 +427,7 @@ async def recover_workflows(workflow_id: Optional[str] = None, project_id: Optio
 @router.post("/api/workflow-executions/{workflow_id}/cancel")
 async def cancel_workflow(workflow_id: str, request: Request):
     """Terminate agents and mark workflow as cancelled."""
-    import subprocess
+    import asyncio
 
     session = server_state.db_manager.get_session()
     try:
@@ -435,15 +445,9 @@ async def cancel_workflow(workflow_id: str, request: Request):
             from src.autopilot.orchestrator.engine_client import terminate_agent
 
             agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
+            loop = asyncio.get_event_loop()
             for agent in agents:
-                try:
-                    subprocess.run(
-                        ["tmux", "kill-session", "-t", agent.tmux_session_name],
-                        capture_output=True,
-                        timeout=5,
-                    )
-                except Exception:
-                    pass
+                await loop.run_in_executor(None, _kill_tmux_session, agent.tmux_session_name)
                 terminate_agent(agent.id, session=session)
                 terminated_count += 1
 

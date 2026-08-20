@@ -183,12 +183,24 @@ async def _resume_interrupted_workflows(
                 )
                 .all()
             )
+            # Both _tmux_session_alive and _git_expert_already_landed run
+            # real subprocess/git work (up to ~23s combined per orphan,
+            # between tmux's 3s and git's two 10s timeouts) -- blocking,
+            # same class of issue fixed elsewhere today. This loop runs at
+            # startup (blocking every request until it finishes) and on
+            # every on-demand Retry click, over however many agents were
+            # orphaned by the last restart, so offloaded per-orphan here.
+            loop = asyncio.get_event_loop()
             for agent in orphans:
-                if _tmux_session_alive(agent.tmux_session_name):
+                still_alive = await loop.run_in_executor(None, _tmux_session_alive, agent.tmux_session_name)
+                if still_alive:
                     continue  # still alive (e.g., only the monitor restarted) — leave it
 
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
-                if task and _git_expert_already_landed(session, task, config):
+                landed = task and await loop.run_in_executor(
+                    None, _git_expert_already_landed, session, task, config
+                )
+                if landed:
                     logger.info(f"[RESUME] Workflow {wf.id[:8]}: orphaned agent {agent.id[:8]}'s git_expert work already landed on {config.base_branch} -- marking done instead of redispatching")
                     task.status = "done"
                     task.completed_at = datetime.utcnow()

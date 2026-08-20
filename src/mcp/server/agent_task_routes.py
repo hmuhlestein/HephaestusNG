@@ -257,7 +257,7 @@ async def _update_task_status_once(
         if self_review_response:
             return self_review_response
 
-        _log_self_review_telemetry(session, task)
+        await _log_self_review_telemetry(session, task)
 
         hard_floor_response = _run_done_hard_floor_checks(session, task, phase)
         if hard_floor_response:
