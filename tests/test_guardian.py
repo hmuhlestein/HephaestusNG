@@ -120,6 +120,7 @@ class TestGuardian:
                 "session_start": datetime.utcnow() - timedelta(minutes=5),
                 "conversation_length": 10,
                 "current_focus": "implementation",
+                "session_duration": "0:05:00",
             },
         ):
             with patch.object(guardian, "_get_agent_task", return_value=_task_dict(mock_task)):
@@ -227,6 +228,8 @@ class TestGuardian:
                 "overall_goal": "Build API",
                 "constraints": ["no external libraries"],
                 "session_start": datetime.utcnow(),
+                "conversation_length": 5,
+                "session_duration": "0:02:00",
             },
         ):
             with patch.object(guardian, "_get_agent_task", return_value=_task_dict(mock_task)):
@@ -386,6 +389,7 @@ class TestGuardian:
             "references": {},
             "conversation_length": 0,
             "session_start": datetime.utcnow(),
+            "session_duration": "0:00:00",
             "discovered_blockers": [],
         }
 

@@ -118,6 +118,8 @@ class TestSteeringMessageFix:
             "overall_goal": "Complete the test task",
             "constraints": [],
             "conversation_history": [],
+            "conversation_length": 0,
+            "session_duration": "0:00:00",
         })
         guardian._get_agent_task = AsyncMock(return_value={
             "id": "task-1",
@@ -133,6 +135,8 @@ class TestSteeringMessageFix:
             "overall_goal": "Complete the test task",
             "constraints": [],
             "conversation_history": [],
+            "conversation_length": 0,
+            "session_duration": "0:00:00",
         })
         guardian._get_agent_task = AsyncMock(return_value={
             "id": "task-1",

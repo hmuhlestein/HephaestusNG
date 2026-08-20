@@ -265,6 +265,19 @@ class Guardian:
                 "accumulated_goal": accumulated_context["overall_goal"],
                 "active_constraints": accumulated_context["constraints"],
                 # Remove progress_percentage as requested
+                # SOLID review 3.7: the LLM is explicitly asked to return
+                # last_claude_message_marker "to mark conversation position
+                # for next cycle" (guardian_trajectory_analysis.md), but it
+                # was never copied out of the raw LLM response here -- the
+                # marker-based "avoid re-analyzing the same content"
+                # mechanism was silently a no-op, since
+                # `past_summaries[-1].get("last_claude_message_marker")`
+                # above always read back None from every prior cycle.
+                "last_claude_message_marker": analysis.get(
+                    "last_claude_message_marker"
+                ),
+                "conversation_length": accumulated_context["conversation_length"],
+                "session_duration": accumulated_context["session_duration"],
             }
 
             # Cache for Conductor
@@ -329,6 +342,7 @@ class Guardian:
             task = session.query(Task).filter_by(id=agent.current_task_id).first()
 
             # Build accumulated context
+            session_start = logs[0].created_at if logs else datetime.utcnow()
             context = {
                 "overall_goal": task.enriched_description if task else "Unknown",
                 "done_definition": task.done_definition if task else "Unknown",
@@ -337,7 +351,11 @@ class Guardian:
                 "references": {},  # Resolved "this/that" references
                 "standing_instructions": [],
                 "conversation_length": len(conversation_history),
-                "session_start": logs[0].created_at if logs else datetime.utcnow(),
+                "session_start": session_start,
+                # SOLID review 3.7: this was never set, so the prompt always
+                # showed the LLM "Session Duration: Unknown" -- session_start
+                # was already computed and unused for this.
+                "session_duration": str(datetime.utcnow() - session_start).split(".")[0],
             }
 
             # Extract constraints and goals from summaries

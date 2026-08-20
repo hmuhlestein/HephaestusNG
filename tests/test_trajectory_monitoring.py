@@ -120,6 +120,8 @@ class TestGuardian:
                     "overall_goal": "Implement JWT authentication",
                     "constraints": ["no external libraries"],
                     "session_start": datetime.utcnow() - timedelta(minutes=5),
+                    "conversation_length": 3,
+                    "session_duration": "0:05:00",
                 },
             ):
                 # Perform analysis
@@ -183,6 +185,8 @@ class TestGuardian:
                     "overall_goal": "Build simple API",
                     "constraints": ["no external libraries", "keep it simple"],
                     "session_start": datetime.utcnow(),
+                    "conversation_length": 4,
+                    "session_duration": "0:01:00",
                 },
             ):
                 result = await guardian.analyze_agent_with_trajectory(
