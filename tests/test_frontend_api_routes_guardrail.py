@@ -1,6 +1,6 @@
 """Guardrail test for the frontend API route set (Phase 0 gate).
 
-Asserts that src.mcp.frontend.router exposes exactly 40 routes with the
+Asserts that src.mcp.frontend.router exposes exactly 39 routes with the
 exact {(method, path)} set from the doc §4.1 tables. The set is hardcoded,
 not computed, so a missing or extra route fails immediately.
 
@@ -11,17 +11,27 @@ at import time (src/mcp/server/_shared.py), strictly before this frontend
 router is included in lifecycle.py's startup_event, so FastAPI's
 registration-order route matching meant these two were permanently
 unreachable dead code, not a live, redundant surface.
+
+Baseline dropped from 40 to 39, 2026-08-20 (SOLID review 1.18): POST
+/api/workflows/{workflow_id}/stop deleted along with FrontendAPI.stop_workflow.
+It force-failed every in-flight task, while the dashboard's actual "Stop"
+button hits the differently-named-but-similarly-shaped
+/api/workflow-executions/{workflow_id}/stop (a distinct implementation in
+src/mcp/server/workflow_execution_routes.py) which pauses the workflow and
+resets tasks to "pending" instead -- a silent, destructive-vs-resumable
+divergence between two endpoints both plausibly meaning "stop". This route
+had exactly one real caller in the whole codebase, the CLI (repointed to
+the workflow-execution endpoint instead); the dashboard never called it.
 """
 
 from unittest.mock import MagicMock
 
 from src.mcp.frontend import create_frontend_routes, router
 
-# ── 40-route baseline (hardcoded from doc §4.1 cluster tables) ────────────
+# ── 39-route baseline (hardcoded from doc §4.1 cluster tables) ────────────
 EXPECTED_ROUTES = {
-    # agent_routes.py — 2 routes
+    # agent_routes.py — 1 route
     ("GET", "/api/phases/{phase_id}/agents"),
-    ("POST", "/api/workflows/{workflow_id}/stop"),
     # task_routes.py — 6 routes
     ("GET", "/api/tasks"),
     ("GET", "/api/tasks/{task_id}"),
@@ -99,10 +109,10 @@ def _count_routes(rtr):
 class TestFrontendAPIRoutesGuardrail:
     """Phase 0 gate: exact route count and path set must match baseline."""
 
-    def test_route_count_is_40(self):
+    def test_route_count_is_39(self):
         count = _count_routes(router)
-        assert count == 40, (
-            f"Expected 40 routes on src.mcp.frontend.router, got {count}"
+        assert count == 39, (
+            f"Expected 39 routes on src.mcp.frontend.router, got {count}"
         )
 
     def test_exact_route_set_matches_baseline(self):
@@ -120,6 +130,6 @@ class TestFrontendAPIRoutesGuardrail:
         # Must return the module-level aggregate router
         assert result is router
 
-    def test_expected_set_has_exactly_40_entries(self):
-        """Self-check: the hardcoded baseline itself has 40 entries."""
-        assert len(EXPECTED_ROUTES) == 40
+    def test_expected_set_has_exactly_39_entries(self):
+        """Self-check: the hardcoded baseline itself has 39 entries."""
+        assert len(EXPECTED_ROUTES) == 39

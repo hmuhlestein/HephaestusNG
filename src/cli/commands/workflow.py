@@ -189,7 +189,7 @@ def stop_workflow(args):
             eid = e.get("id", "")
             if not eid:
                 continue
-            result = api_post(args, f"/api/workflows/{eid}/stop", timeout=15)
+            result = api_post(args, f"/api/workflow-executions/{eid}/stop", timeout=15)
             if result is None:
                 print(f"  {eid[:12]}... connection error")
             elif isinstance(result, dict) and "error" in result:
@@ -235,7 +235,9 @@ def stop_workflow(args):
     except Exception as e:
         print(f"  Warning: could not check/terminate this workflow's agents: {e}")
 
-    data = api_post(args, f"/api/workflows/{args.workflow_id}/stop", timeout=15)
+    data = api_post(
+        args, f"/api/workflow-executions/{args.workflow_id}/stop", timeout=15
+    )
     if data is None:
         print("Connection error")
         return 1
