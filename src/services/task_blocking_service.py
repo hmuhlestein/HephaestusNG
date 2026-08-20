@@ -178,10 +178,20 @@ class TaskBlockingService:
         # Import here to avoid circular dependencies
         try:
             from src.core.database import DatabaseManager
+            from src.core.simple_config import get_config
             from src.services.queue_service import QueueService
 
             db_manager = DatabaseManager(None)
-            queue_service = QueueService(db_manager)
+            # max_concurrent_agents is required and was missing, so this
+            # raised TypeError and the except below swallowed it as a
+            # warning -- queue positions have never actually been
+            # recalculated after a task was unblocked.
+            # _recalculate_queue_positions reads only db_manager; the rest of
+            # QueueService's optional dispatch settings are irrelevant here.
+            queue_service = QueueService(
+                db_manager,
+                max_concurrent_agents=get_config().max_concurrent_agents,
+            )
             queue_service._recalculate_queue_positions()
             logger.info(f"Recalculated queue positions after unblocking task {task_id}")
         except Exception as e:
