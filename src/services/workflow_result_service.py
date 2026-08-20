@@ -137,7 +137,7 @@ class WorkflowResultService:
                 "agent_id": agent_id,
                 "validation_status": "pending_validation",
                 "extra_files_count": len(validated_extra_files),
-                "created_at": result.created_at.isoformat(),
+                "created_at": result.created_at.isoformat() + "Z",
             }
 
     @staticmethod
@@ -161,8 +161,8 @@ class WorkflowResultService:
                     "workflow_id": result.workflow_id,
                     "status": result.status,
                     "validation_feedback": result.validation_feedback,
-                    "created_at": result.created_at.isoformat(),
-                    "validated_at": result.validated_at.isoformat()
+                    "created_at": result.created_at.isoformat() + "Z",
+                    "validated_at": result.validated_at.isoformat() + "Z"
                     if result.validated_at
                     else None,
                     "validated_by_agent_id": result.validated_by_agent_id,
@@ -228,7 +228,7 @@ class WorkflowResultService:
                 "result_id": result.id,
                 "status": result.status,
                 "validation_feedback": result.validation_feedback,
-                "validated_at": result.validated_at.isoformat(),
+                "validated_at": result.validated_at.isoformat() + "Z",
                 "validated_by": validator_agent_id,
             }
 
@@ -290,8 +290,8 @@ class WorkflowResultService:
                 "status": result.status,
                 "validation_feedback": result.validation_feedback,
                 "validation_evidence": result.validation_evidence,
-                "created_at": result.created_at.isoformat(),
-                "validated_at": result.validated_at.isoformat(),
+                "created_at": result.created_at.isoformat() + "Z",
+                "validated_at": result.validated_at.isoformat() + "Z",
                 "validated_by_agent_id": result.validated_by_agent_id,
                 "result_file_path": result.result_file_path,
                 "result_content": result.result_content,

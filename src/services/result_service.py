@@ -92,7 +92,7 @@ class ResultService:
                 "task_id": task_id,
                 "agent_id": agent_id,
                 "verification_status": "unverified",
-                "created_at": result.created_at.isoformat(),
+                "created_at": result.created_at.isoformat() + "Z",
             }
 
     @staticmethod
@@ -117,8 +117,8 @@ class ResultService:
                     "result_type": result.result_type,
                     "summary": result.summary,
                     "verification_status": result.verification_status,
-                    "created_at": result.created_at.isoformat(),
-                    "verified_at": result.verified_at.isoformat()
+                    "created_at": result.created_at.isoformat() + "Z",
+                    "verified_at": result.verified_at.isoformat() + "Z"
                     if result.verified_at
                     else None,
                     "markdown_file_path": result.markdown_file_path,
@@ -148,8 +148,8 @@ class ResultService:
                     "result_type": result.result_type,
                     "summary": result.summary,
                     "verification_status": result.verification_status,
-                    "created_at": result.created_at.isoformat(),
-                    "verified_at": result.verified_at.isoformat()
+                    "created_at": result.created_at.isoformat() + "Z",
+                    "verified_at": result.verified_at.isoformat() + "Z"
                     if result.verified_at
                     else None,
                 }
@@ -188,7 +188,7 @@ class ResultService:
             return {
                 "result_id": result.id,
                 "verification_status": result.verification_status,
-                "verified_at": result.verified_at.isoformat(),
+                "verified_at": result.verified_at.isoformat() + "Z",
                 "verified_by": validation_review_id,
             }
 

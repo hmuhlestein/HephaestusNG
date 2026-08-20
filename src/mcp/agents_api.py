@@ -34,11 +34,11 @@ def _serialize_agent(session, a) -> dict:
         "agent_type": getattr(a, "agent_type", "phase"),
         "current_task_id": a.current_task_id,
         "health_check_failures": a.health_check_failures,
-        "last_activity": a.last_activity.isoformat()
+        "last_activity": a.last_activity.isoformat() + "Z"
         if a.last_activity
         else None,
-        "created_at": a.created_at.isoformat() if a.created_at else None,
-        "terminated_at": getattr(a, 'terminated_at', None).isoformat() if getattr(a, 'terminated_at', None) else None,
+        "created_at": a.created_at.isoformat() + "Z" if a.created_at else None,
+        "terminated_at": getattr(a, 'terminated_at', None).isoformat() + "Z" if getattr(a, 'terminated_at', None) else None,
         "tmux_session_name": a.tmux_session_name,
         "cli_type": getattr(a, "cli_type", None),
         "cli_model": getattr(a, "cli_model", None),
@@ -55,8 +55,8 @@ def _serialize_agent(session, a) -> dict:
                 )[:200],
                 "status": task.status,
                 "priority": task.priority,
-                "started_at": task.started_at.isoformat() if task.started_at else None,
-                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                "started_at": task.started_at.isoformat() + "Z" if task.started_at else None,
+                "completed_at": task.completed_at.isoformat() + "Z" if task.completed_at else None,
                 "runtime_seconds": int(
                     (datetime.utcnow() - task.started_at).total_seconds()
                 )
@@ -126,8 +126,8 @@ def _serialize_agent(session, a) -> dict:
                 )[:200],
                 "status": last_task.status,
                 "priority": last_task.priority,
-                "started_at": last_task.started_at.isoformat() if last_task.started_at else None,
-                "completed_at": last_task.completed_at.isoformat() if last_task.completed_at else None,
+                "started_at": last_task.started_at.isoformat() + "Z" if last_task.started_at else None,
+                "completed_at": last_task.completed_at.isoformat() + "Z" if last_task.completed_at else None,
                 "runtime_seconds": int(
                     (last_task.completed_at - last_task.started_at).total_seconds()
                 )
@@ -284,7 +284,7 @@ async def get_agent_logs(agent_id: str, limit: int = 50, request: Request = None
                 "log_type": log.log_type,
                 "message": log.message,
                 "details": log.details,
-                "created_at": log.created_at.isoformat() if log.created_at else None,
+                "created_at": log.created_at.isoformat() + "Z" if log.created_at else None,
             }
             for log in logs
         ]
@@ -671,7 +671,7 @@ async def get_agent_status(
                 "id": agent.id,
                 "status": agent.status,
                 "current_task_id": agent.current_task_id,
-                "last_activity": agent.last_activity.isoformat()
+                "last_activity": agent.last_activity.isoformat() + "Z"
                 if agent.last_activity
                 else None,
                 "health_check_failures": agent.health_check_failures,
@@ -684,7 +684,7 @@ async def get_agent_status(
                     "id": agent.id,
                     "status": agent.status,
                     "current_task_id": agent.current_task_id,
-                    "last_activity": agent.last_activity.isoformat()
+                    "last_activity": agent.last_activity.isoformat() + "Z"
                     if agent.last_activity
                     else None,
                 }
@@ -721,8 +721,8 @@ async def get_task_progress(
                 "status": task.status,
                 "description": task.enriched_description or task.raw_description,
                 "assigned_agent_id": task.assigned_agent_id,
-                "started_at": task.started_at.isoformat() if task.started_at else None,
-                "completed_at": task.completed_at.isoformat()
+                "started_at": task.started_at.isoformat() + "Z" if task.started_at else None,
+                "completed_at": task.completed_at.isoformat() + "Z"
                 if task.completed_at
                 else None,
                 "phase_id": task.phase_id,
@@ -762,8 +762,8 @@ async def get_task_progress(
                     "status": t.status,
                     "description": (t.enriched_description or t.raw_description)[:200],
                     "assigned_agent_id": t.assigned_agent_id,
-                    "started_at": t.started_at.isoformat() if t.started_at else None,
-                    "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                    "started_at": t.started_at.isoformat() + "Z" if t.started_at else None,
+                    "completed_at": t.completed_at.isoformat() + "Z" if t.completed_at else None,
                     "phase_id": t.phase_id,
                     "workflow_id": t.workflow_id,
                     "phase_name": phase_name,
