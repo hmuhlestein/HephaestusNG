@@ -527,3 +527,102 @@ class TestOrphanReapFlushesCleanTranscript:
             "the clean transcript must be flushed before the session is "
             "killed -- capture-pane can't see anything once it's gone"
         )
+
+
+class TestReviewPausedWorkflowIsNotOrphaned:
+    """Regression: the active-workflow set used to gate off ONLY
+    Workflow.status == "active" -- a workflow paused_by="review" (one
+    specific manual-only phase, e.g. git_commit_push, waiting on a human)
+    was treated exactly like a genuinely dead/abandoned one, even though
+    _advance_phases's own paused_by=="review" carve-out (phase_
+    transitions.py) means every OTHER phase keeps advancing/dispatching
+    normally while it waits. That made this reaper undercut that fix: an
+    agent legitimately dispatched into an unrelated phase during a
+    review-pause got killed the moment its last_activity grace window
+    elapsed, landing its task back at "pending" and looking permanently
+    stuck. Confirmed live: a freshly-dispatched development-phase agent
+    (task 146d191d) was killed this way ~3 minutes after launch, solely
+    because its workflow's status read "paused" at that exact moment.
+
+    Uses a real DatabaseManager, not the mocked-session style the rest of
+    this file uses -- the fix is in the query's own filter predicate, and
+    that isn't exercised through a session.query(...).filter(...).all()
+    mock chain that returns whatever a test hands it regardless of the
+    filter's actual arguments."""
+
+    @pytest.fixture
+    def real_db(self, tmp_path):
+        from src.core.database import DatabaseManager
+
+        db = DatabaseManager(str(tmp_path / "test.db"))
+        db.create_tables()
+        return db
+
+    def _seed(self, real_db, *, workflow_status, paused_by, agent_id="agent-x"):
+        from src.core.database import Agent, Task, Workflow
+
+        with real_db.session_scope() as session:
+            session.add(Workflow(
+                id="wf-1", name="w", phases_folder_path="/tmp",
+                status=workflow_status, paused_by=paused_by,
+            ))
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", raw_description="r",
+                done_definition="d", status="in_progress",
+                assigned_agent_id=agent_id,
+            ))
+            session.add(Agent(
+                id=agent_id, system_prompt="p", status="working", cli_type="pi",
+                tmux_session_name=agent_id, current_task_id="task-1",
+                # Outside the reaper's own 30s "recently active" grace
+                # window, or the termination path is skipped regardless
+                # of workflow status.
+                last_activity=datetime.utcnow() - timedelta(seconds=100),
+            ))
+
+    @pytest.mark.asyncio
+    async def test_does_not_kill_agent_in_a_review_paused_workflow(self, real_db):
+        from src.monitoring.orphan_reaper import OrphanSessionReaper
+        from src.core.database import Agent
+
+        self._seed(real_db, workflow_status="paused", paused_by="review")
+
+        agent_manager = MagicMock()
+        mock_tmux_sess = MagicMock()
+        mock_tmux_sess.name = "agent-x"
+        agent_manager.tmux_server.sessions = [mock_tmux_sess]
+
+        reaper = OrphanSessionReaper(real_db, agent_manager)
+        reaper.last_check_time = datetime.utcnow() - timedelta(seconds=200)
+
+        await reaper.cleanup_orphaned_tmux_sessions()
+
+        with real_db.session_scope() as session:
+            agent = session.query(Agent).filter_by(id="agent-x").first()
+            assert agent.status == "working", (
+                "an agent legitimately working an unrelated phase must "
+                "survive a review-pause, not get killed for it"
+            )
+
+    @pytest.mark.asyncio
+    async def test_still_kills_agent_in_a_user_paused_workflow(self, real_db):
+        """Other pause reasons (user, budget, system) are genuine full
+        stops -- must still be reaped, same as before this fix."""
+        from src.monitoring.orphan_reaper import OrphanSessionReaper
+        from src.core.database import Agent
+
+        self._seed(real_db, workflow_status="paused", paused_by="user")
+
+        agent_manager = MagicMock()
+        mock_tmux_sess = MagicMock()
+        mock_tmux_sess.name = "agent-x"
+        agent_manager.tmux_server.sessions = [mock_tmux_sess]
+
+        reaper = OrphanSessionReaper(real_db, agent_manager)
+        reaper.last_check_time = datetime.utcnow() - timedelta(seconds=200)
+
+        await reaper.cleanup_orphaned_tmux_sessions()
+
+        with real_db.session_scope() as session:
+            agent = session.query(Agent).filter_by(id="agent-x").first()
+            assert agent.status == "terminated"
