@@ -78,11 +78,34 @@ class OrphanSessionReaper:
                     f"Found {len(active_session_names)} active agent sessions: {active_session_names}"
                 )
 
-                # Clean up orphaned agents (working but no active workflow)
+                # Clean up orphaned agents (working but no active workflow).
+                #
+                # A workflow paused_by="review" is a special case, not a
+                # genuine stop: it means one specific manual-only phase
+                # (git_commit_push) is waiting on a human, but per
+                # _advance_phases's own paused_by=="review" carve-out
+                # (phase_transitions.py), every OTHER phase keeps
+                # advancing/dispatching normally while it waits. Excluding
+                # it here undercuts that fix -- any agent legitimately
+                # dispatched into an unrelated phase during a review-pause
+                # would just get killed the moment its last_activity grace
+                # window (below) elapses, landing its task right back at
+                # "pending" and looking permanently stuck. Confirmed live:
+                # a freshly-dispatched development-phase agent (task
+                # 146d191d) was killed this way ~3 minutes after launch,
+                # solely because its workflow's status read "paused" at
+                # this exact moment. Other pause reasons (user, budget,
+                # system) are genuine full stops and stay excluded.
+                from sqlalchemy import and_, or_
                 active_workflow_ids = {
                     wf.id
                     for wf in session.query(Workflow)
-                    .filter(Workflow.status == "active")
+                    .filter(
+                        or_(
+                            Workflow.status == "active",
+                            and_(Workflow.status == "paused", Workflow.paused_by == "review"),
+                        )
+                    )
                     .all()
                 }
 
