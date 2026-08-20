@@ -29,6 +29,8 @@ const TaskTreeStats: React.FC<TaskTreeStatsProps> = ({ taskId, parentTaskId, chi
   const [isCalculating, setIsCalculating] = useState(false);
 
   useEffect(() => {
+    let mounted = true;
+
     const calculateTreeStats = async () => {
       setIsCalculating(true);
 
@@ -77,6 +79,7 @@ const TaskTreeStats: React.FC<TaskTreeStatsProps> = ({ taskId, parentTaskId, chi
 
         const visited = new Set<string>();
         const treeStats = await countDescendants(taskId, visited);
+        if (!mounted) return;
 
         setStats({
           totalTasks: treeStats.total,
@@ -89,11 +92,15 @@ const TaskTreeStats: React.FC<TaskTreeStatsProps> = ({ taskId, parentTaskId, chi
       } catch (error) {
         console.error('Failed to calculate tree stats:', error);
       } finally {
-        setIsCalculating(false);
+        if (mounted) setIsCalculating(false);
       }
     };
 
     calculateTreeStats();
+
+    return () => {
+      mounted = false;
+    };
   }, [taskId, parentTaskId, childTasksCount]);
 
   const completionRate = stats.totalTasks > 0
