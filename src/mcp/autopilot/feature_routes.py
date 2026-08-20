@@ -183,12 +183,12 @@ def _scan_features() -> List[Dict[str, Any]]:
     if cached is not None:
         return cached
 
-    from src.core.database import DatabaseManager
+    from src.core.app_context import get_app_state
     from src.core.status_derivation import derive_feature_status
 
     features = []
     try:
-        db_manager = DatabaseManager(None)
+        db_manager = get_app_state().db_manager
         session = db_manager.get_session()
         try:
             from src.core.database import AutopilotProject, Feature, Workflow

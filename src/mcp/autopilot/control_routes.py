@@ -15,8 +15,18 @@ from src.core.constants import (
 )
 
 # Import authentication function from server module
-
-from src.mcp.autopilot._shared import ALLOWED_EXTENSIONS, PipelineStatus, _cached, _get_active_project_id, _get_effective_queue_dir, _get_latest_run_dir, _invalidate, _read_json, _read_jsonl_tail, _store
+from src.mcp.autopilot._shared import (
+    ALLOWED_EXTENSIONS,
+    PipelineStatus,
+    _cached,
+    _get_active_project_id,
+    _get_effective_queue_dir,
+    _get_latest_run_dir,
+    _invalidate,
+    _read_json,
+    _read_jsonl_tail,
+    _store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -535,7 +545,8 @@ async def cleanup_branches(project_path: Optional[str] = None):
     wrong as soon as more than one project exists (same bug already fixed
     for the other WorktreeManager(...) call sites -- see orchestrator.py).
     """
-    from src.core.database import AutopilotProject, DatabaseManager, get_db
+    from src.core.app_context import get_app_state
+    from src.core.database import AutopilotProject, get_db
     from src.core.worktree_manager import WorktreeManager
 
     try:
@@ -554,7 +565,13 @@ async def cleanup_branches(project_path: Optional[str] = None):
                     )
                 project_path = proj.base_dir
 
-        db_manager = DatabaseManager(None)
+        # A fresh WorktreeManager instance is deliberate here (not the
+        # shared server_state.branch_manager) -- .reload(project_path) below
+        # points it at an arbitrary project, and reload()ing the shared
+        # long-lived instance would race with any other concurrent request
+        # relying on it pointing at a different project. Only db_manager
+        # itself should be the shared instance (see SOLID review 1.12).
+        db_manager = get_app_state().db_manager
         branch_manager = WorktreeManager(db_manager)
         branch_manager.reload(project_path)
         # cleanup_all_stale_branches does real git/filesystem work --
@@ -592,10 +609,11 @@ def run_health_audit(db_manager=None):
     Returns:
         dict with 'findings', 'workflows', 'summary' keys
     """
-    from src.core.database import Agent, DatabaseManager, Task, Workflow, get_db
+    from src.core.app_context import get_app_state
+    from src.core.database import Agent, Task, Workflow, get_db
 
     if db_manager is None:
-        db_manager = DatabaseManager(None)
+        db_manager = get_app_state().db_manager
 
     findings = []
 

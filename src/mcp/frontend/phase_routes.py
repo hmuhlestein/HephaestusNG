@@ -86,10 +86,11 @@ async def get_phase_prompt_preview(
 async def post_phase_prompt_preview(phase_id: str, body: Dict[str, Any]):
     """Render a preview of the assembled prompt with draft content."""
     try:
-        from src.core.database import DatabaseManager, Phase
+        from src.core.app_context import get_app_state
+        from src.core.database import Phase
         from src.prompts.assembler import PromptAssembler
 
-        db_manager = DatabaseManager(None)
+        db_manager = get_app_state().db_manager
         with db_manager.get_session() as session:
             phase = session.query(Phase).filter_by(id=phase_id).first()
             if not phase:
