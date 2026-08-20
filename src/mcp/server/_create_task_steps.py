@@ -22,6 +22,7 @@ from src.mcp.server._shared import (
     CreateTaskRequest,
     CreateTaskResponse,
     _resolve_agent_current_phase,
+    is_sdk_or_root_agent,
     server_state,
 )
 
@@ -39,7 +40,7 @@ def _enforce_ticket_tracking_requirement(agent_id: str, request: CreateTaskReque
         has_ticket_tracking = session.query(BoardConfig).first() is not None
 
         if has_ticket_tracking and not request.ticket_id:
-            is_sdk_agent = agent_id == "main-session-agent" or "sdk" in agent_id.lower() or "main" in agent_id.lower()
+            is_sdk_agent = is_sdk_or_root_agent(agent_id)
             is_phase_agent = request.workflow_id is not None and request.phase_id is not None
 
             if not is_sdk_agent and not is_phase_agent:
