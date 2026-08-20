@@ -478,7 +478,11 @@ class MonitoringLoop:
             except Exception as e:
                 logger.warning(f"[AUTO-DISCOVER] Failed to load active workflow: {e}")
 
-        self._maybe_switch_tracked_workflow()
+        # Offloaded -- does blocking DB queries directly on the event loop
+        # otherwise, same class of issue fixed elsewhere in this codebase.
+        await asyncio.get_event_loop().run_in_executor(
+            None, self._maybe_switch_tracked_workflow
+        )
 
         # Propagate phase_manager to agent_manager so spawned agents get phase context
         if self.phase_manager and self.agent_manager and not self.agent_manager.phase_manager:
@@ -502,7 +506,11 @@ class MonitoringLoop:
         except Exception as e:
             logger.error(f"Error in system health audit: {e}")
 
-        self._log_active_workflow_diagnostics()
+        # Offloaded -- does blocking DB queries directly on the event loop
+        # otherwise, same class of issue fixed elsewhere in this codebase.
+        await asyncio.get_event_loop().run_in_executor(
+            None, self._log_active_workflow_diagnostics
+        )
 
         if self.phase_manager and self.phase_manager.workflow_id:
             logger.info(
@@ -639,6 +647,15 @@ class MonitoringLoop:
         Args:
             analysis: Conductor analysis result
         """
+        # Offloaded -- session_scope() does blocking DB I/O directly on the
+        # event loop otherwise, same class of issue fixed elsewhere in this
+        # codebase.
+        await asyncio.get_event_loop().run_in_executor(
+            None, self._save_conductor_analysis_sync, analysis
+        )
+
+    def _save_conductor_analysis_sync(self, analysis: Dict[str, Any]):
+        """Sync body of _save_conductor_analysis -- run via run_in_executor."""
         try:
             with self.db_manager.session_scope() as session:
                 # Extract duplicate info
