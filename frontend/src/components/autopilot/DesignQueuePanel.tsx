@@ -867,11 +867,35 @@ const FeatureRow: React.FC<{
   const isRealFeature = !feature.id.startsWith('phase0-') && !feature.id.startsWith('placeholder-');
   const hasWorkflow = !!feature.workflow_id;
   const reviewPending = !!feature.review_pending;
+  // reviewPending alone only means git_commit_push's dispatch was
+  // rejected pending approval -- it says nothing about whether OTHER
+  // tasks in this same feature/workflow are still active. paused_by
+  // "review" is workflow-wide (see phase_transitions.py's
+  // _pause_for_manual_handoff), so a retried task in an unrelated phase
+  // (e.g. adversarial_review) can still have a live agent running while
+  // git_commit_push sits paused waiting on a human. Surfacing "Review"
+  // in that window invites approving a push before all the work it
+  // should include even exists yet -- only show it once every OTHER
+  // task has resolved (done, failed, or superseded) and git_commit_push
+  // is the sole thing left. 'duplicated' counts as resolved (a
+  // superseded copy of another task, not real outstanding work) --
+  // observed live on feat-bd683e83: 4 duplicated architecture_design/
+  // architectural_review tasks that will never become 'done', which
+  // would otherwise permanently block this check. Matches the Task.status
+  // CHECK constraint in src/core/database.py; anything not in this set
+  // (pending, queued, blocked, assigned, in_progress, under_review,
+  // validation_in_progress, needs_work) still means real work remains.
+  const TERMINAL_TASK_STATUSES = ['done', 'failed', 'duplicated'];
+  const readyForGitPushReview = tasks.length > 0 && tasks
+    .filter((t: any) => t.phase_name !== 'git_commit_push')
+    .every((t: any) => TERMINAL_TASK_STATUSES.includes(t.status));
   // In review mode, flag the feature currently in flight too, not just
   // one already paused awaiting approval -- gives an at-a-glance "this is
   // the one that'll need your review soon" cue while it's still running.
   // Does NOT gate the "Review" badge/button below -- those stay tied to
-  // reviewPending specifically, since there's nothing to approve yet.
+  // reviewPending && readyForGitPushReview, since there's nothing to
+  // approve yet (or, while other agents are still working, nothing final
+  // to approve).
   const highlightForReview = reviewPending || (!!reviewMode && feature.status === 'active');
 
   const runFeatureAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun' | 'delete') => {
@@ -976,7 +1000,7 @@ const FeatureRow: React.FC<{
           )}
           <FeatureCostBadge cost={feature.cost_total_usd ?? 0} />
           <FeatureStatusBadge status={feature.status} />
-          {reviewPending && (feature.status === 'completed' || feature.status === 'paused') && (
+          {reviewPending && readyForGitPushReview && (feature.status === 'completed' || feature.status === 'paused') && (
             <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700 animate-pulse">
               Review
             </span>
@@ -1014,7 +1038,7 @@ const FeatureRow: React.FC<{
               <FileBarChart2 className="w-3.5 h-3.5" />
             </button>
           )}
-          {reviewPending && (feature.status === 'completed' || feature.status === 'paused') && onReviewFeature && (
+          {reviewPending && readyForGitPushReview && (feature.status === 'completed' || feature.status === 'paused') && onReviewFeature && (
             // Phase 0 (Feature Architect) isn't a real Feature row, but
             // review_feature's approve/request-changes endpoint now branches
             // on the "phase0-" id prefix to support it directly -- same
