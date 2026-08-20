@@ -8,6 +8,8 @@ ce0c4a7, bacaf6b, 22178b1) and the related auto-resume guard fix (a333616)
 paused_at and Feature.status mutually consistent.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 
@@ -642,3 +644,173 @@ class TestPauseReasonValidation:
             wf = session.query(Workflow).filter_by(id="wf-bad").first()
             assert wf.status == "active"
             assert wf.paused_by is None
+
+
+class TestReviewAndResumeExcludeManualOnlyPhaseTasks:
+    """Regression: review_feature's request_changes path and resume_feature
+    both pick "restartable" tasks via a bare Task.status.in_(["blocked",
+    "failed", "assigned", "in_progress"]) query, scoped only to
+    workflow_id -- no awareness that a failed git_commit_push task under
+    review mode is a manual-approval gate, not an ordinary failure.
+
+    Two live-observed consequences on the same feature/workflow:
+    - review_feature: when the git_commit_push task was the ONLY
+      candidate, it got swept into "restartable" and the "if not
+      restartable: create a new development task" branch never ran --
+      the human's review feedback went nowhere, no developer ever got
+      launched. Confirmed live: task 2ffbcab0's TaskPromptOverride ended
+      up with two stacked, never-acted-on feedback entries.
+    - Both endpoints also then called _spawn_agent_for_task directly for
+      whatever was in "restartable", with no MANUAL_ONLY_PHASES check of
+      its own either -- dispatching a git_commit_push task always
+      re-raises PermissionError regardless of workflow.status (Agent-
+      Manager.create_agent_for_task's review_mode check doesn't care),
+      which _spawn_agent_for_task's generic except-clause then converts
+      into a misleading "Resume failed to spawn agent: ..." failure.
+
+    Fixed at both layers: the candidate queries now exclude
+    MANUAL_ONLY_PHASES tasks under review mode, and _spawn_agent_for_task
+    itself pauses instead of dispatching if it's ever handed one anyway.
+    """
+
+    def _seed_review_mode_project_and_workflow(
+        self, db, project_id="proj-1", workflow_id="wf-1", feature_id="feat-1",
+    ):
+        from src.core.database import AutopilotProject, Feature, Phase, Workflow
+
+        with db.session_scope() as session:
+            session.add(AutopilotProject(id=project_id, name="p", base_dir="/tmp", review_mode=True))
+            session.add(Workflow(
+                id=workflow_id, name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", project_id=project_id,
+            ))
+            session.add(Feature(
+                id=feature_id, design_id="des-1", feature_key="k", name="n",
+                scope="s", workflow_id=workflow_id, status="paused",
+            ))
+            session.add(Phase(
+                id=f"{workflow_id}-gcp", workflow_id=workflow_id, name="git_commit_push",
+                order=13, description="d", done_definitions=["d"],
+            ))
+            session.add(Phase(
+                id=f"{workflow_id}-dev", workflow_id=workflow_id, name="development",
+                order=5, description="d", done_definitions=["d"],
+            ))
+
+    def _seed_failed_git_commit_push_task(self, db, workflow_id="wf-1"):
+        from src.core.database import Task
+
+        with db.session_scope() as session:
+            session.add(Task(
+                id="task-gcp-failed", workflow_id=workflow_id, phase_id=f"{workflow_id}-gcp",
+                raw_description="r", done_definition="d", status="failed",
+                failure_reason="Orphaned: never dispatched to an agent",
+            ))
+
+    @pytest.mark.asyncio
+    async def test_request_changes_creates_dev_task_instead_of_restarting_git_commit_push(
+        self, orch_db_env, monkeypatch,
+    ):
+        self._seed_review_mode_project_and_workflow(orch_db_env)
+        self._seed_failed_git_commit_push_task(orch_db_env)
+
+        from src.mcp.autopilot import feature_routes
+        spawn_mock = AsyncMock()
+        monkeypatch.setattr(feature_routes, "_spawn_agent_for_task", spawn_mock)
+
+        from src.mcp.autopilot.feature_routes import FeatureReviewRequest, review_feature
+        result = await review_feature(
+            "feat-1", FeatureReviewRequest(action="request_changes", feedback="do another lint check"),
+        )
+        assert result["success"] is True
+
+        from src.core.database import Task, TaskPromptOverride
+
+        with orch_db_env.session_scope() as session:
+            gcp_task = session.query(Task).filter_by(id="task-gcp-failed").first()
+            assert gcp_task.status == "failed", (
+                "the manual-only phase's own failed task must be left "
+                "alone, not swept up and reset as if it were ordinary "
+                "restartable work"
+            )
+
+            dev_tasks = session.query(Task).filter_by(phase_id="wf-1-dev").all()
+            assert len(dev_tasks) == 1, "a real development task must be created to address the feedback"
+            dev_task = dev_tasks[0]
+            assert dev_task.status == "pending"
+
+            override = session.query(TaskPromptOverride).filter_by(task_id=dev_task.id).first()
+            # The dev task's own raw_description already embeds the
+            # feedback (see review_feature's feedback_prompt) -- no
+            # TaskPromptOverride needed for a freshly-created task, only
+            # for a reused restartable one.
+            assert "do another lint check" in dev_task.raw_description
+
+        spawn_mock.assert_called_once()
+        called_task_id = spawn_mock.call_args.args[0]
+        assert called_task_id != "task-gcp-failed", "must not dispatch the manual-only phase's task"
+
+    @pytest.mark.asyncio
+    async def test_resume_feature_does_not_restart_git_commit_push_task(
+        self, orch_db_env, monkeypatch,
+    ):
+        self._seed_review_mode_project_and_workflow(orch_db_env)
+        self._seed_failed_git_commit_push_task(orch_db_env)
+
+        from src.mcp.autopilot import feature_routes
+        spawn_mock = AsyncMock()
+        monkeypatch.setattr(feature_routes, "_spawn_agent_for_task", spawn_mock)
+
+        from src.mcp.autopilot.feature_routes import resume_feature
+        result = await resume_feature("feat-1")
+        assert result["success"] is True
+
+        from src.core.database import Task
+
+        with orch_db_env.session_scope() as session:
+            gcp_task = session.query(Task).filter_by(id="task-gcp-failed").first()
+            assert gcp_task.status == "failed", (
+                "resuming must not reset a manual-only phase task to "
+                "pending and try to dispatch it -- it would just "
+                "re-raise PermissionError and fail again identically"
+            )
+
+        spawn_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_spawn_agent_for_task_pauses_instead_of_dispatching_manual_only_phase(
+        self, orch_db_env,
+    ):
+        """Direct unit test of the shared dispatch helper's own guard --
+        defense in depth even if some future caller's candidate query
+        forgets this exclusion."""
+        self._seed_review_mode_project_and_workflow(orch_db_env)
+        self._seed_failed_git_commit_push_task(orch_db_env)
+
+        with orch_db_env.session_scope() as session:
+            from src.core.database import Task
+            task = session.query(Task).filter_by(id="task-gcp-failed").first()
+            task.status = "pending"
+            task.failure_reason = None
+
+        from unittest.mock import MagicMock, patch
+
+        mock_state = MagicMock()
+        mock_state.db_manager = orch_db_env
+
+        from src.mcp.autopilot.feature_routes import _spawn_agent_for_task
+        with patch("src.core.app_context.get_app_state", return_value=mock_state):
+            await _spawn_agent_for_task("task-gcp-failed", "wf-1-gcp")
+
+        from src.core.database import Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-gcp-failed").first()
+            assert task.status == "pending", (
+                "must be left as-is for the human to act on, not marked "
+                "failed with a misleading 'Resume failed to spawn agent' reason"
+            )
+            assert task.failure_reason is None
+
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.paused_by == "review"
