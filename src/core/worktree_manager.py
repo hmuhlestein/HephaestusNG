@@ -991,11 +991,23 @@ class WorktreeManager:
             failed: List[str] = []
             worktrees_cleaned = 0
             target_branch = self.config.base_branch
+            # Deliberately unguarded, matching merge_to_main's identical
+            # checkout above -- a swallowed failure here previously let
+            # execution continue with main_repo still checked out on
+            # whatever branch it actually had, and merge_shared_branch's
+            # `git merge <branch>` merges into whichever branch is
+            # currently checked out, not target_branch by name. Every
+            # branch this function then "successfully" merges gets
+            # force-deleted afterward (_merge_and_delete), so a silent
+            # checkout failure here meant agent work silently merged into
+            # the wrong branch and its real branch was deleted -- a
+            # real, silent corruption/data-loss bug. Failing loudly here
+            # aborts the whole cleanup pass instead, which both call
+            # sites already handle correctly (control_routes.py's own
+            # try/except turns it into a proper 500; the background
+            # thread in queue_routes.py just logs to stderr).
             if self.main_repo.active_branch.name != target_branch:
-                try:
-                    self.main_repo.heads[target_branch].checkout()
-                except Exception:
-                    pass
+                self.main_repo.heads[target_branch].checkout()
 
             # Step 1: remove all linked worktrees (except the main one and any
             # currently claimed by an active workflow).

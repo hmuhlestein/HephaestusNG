@@ -63,7 +63,7 @@ class SystemHealthAuditor:
         # slow tool call rather than truly stuck.
         try:
             session = self.db_manager.get_session()
-            from src.core.database import Agent, Task, Workflow
+            from src.core.database import Agent, Task
 
             idle_minutes = timedelta(minutes=self.config.stuck_detection_minutes)
             idle_cutoff = datetime.utcnow() - idle_minutes
@@ -181,25 +181,20 @@ class SystemHealthAuditor:
                         task.status = "done"
                         task.failure_reason = None
                         task.completed_at = datetime.utcnow()
-                        # Fire spec gate for gated phases so phase execution
-                        # is properly marked as completed
-                        try:
-                            from pathlib import Path as _Path
-
-                            from src.autopilot.spec import GATED_PHASES, build_phase_output
-                            from src.core.database import Phase as _Phase
-                            _phase = session.query(_Phase).filter_by(id=task.phase_id).first() if task.phase_id else None
-                            if _phase and _phase.name in GATED_PHASES:
-                                _wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
-                                if _wf and _wf.working_directory:
-                                    phase_output = build_phase_output(_phase.name, _Path(_wf.working_directory), skip_independent_verification=True)
-                                    from src.core.database import DatabaseManager as _DbMgr
-                                    from src.phases import PhaseManager
-                                    pm = PhaseManager(_DbMgr(None))
-                                    pm.workflow_id = task.workflow_id
-                                    pm.mark_phase_complete(_phase.id, "Phase completed (monitor promoted stuck task)", phase_output=phase_output)
-                        except Exception as e:
-                            logger.error(f"[HEALTH] Failed to fire spec gate for task {task.id[:8]}: {e}")
+                        # No spec-gate firing here, deliberately: this branch
+                        # is only reachable when `is_gated` (computed above)
+                        # is already False, so a gated phase's stuck task
+                        # never reaches this promote-to-done path at all --
+                        # it takes the `if is_gated:` branch above instead,
+                        # which marks it "failed" specifically so a proper
+                        # re-run goes through real gate validation, not this
+                        # heuristic. A prior version of this branch had a
+                        # dead "fire spec gate for gated phases" block here
+                        # that re-checked the identical is_gated condition
+                        # and could therefore never fire -- removed as part
+                        # of the health_audit.py Theme C fix (SOLID review
+                        # priority #3); see
+                        # design_docs/phase3_except_exception_survey_findings.md.
                 else:
                     logger.warning(
                         f"[HEALTH] Task {task.id[:8]} stuck in_progress with no "
