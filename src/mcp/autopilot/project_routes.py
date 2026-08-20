@@ -17,6 +17,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator, model_validator, validator
 from sqlalchemy import func as sqlfunc
 
+from src.core.agent_identity import is_known_system_identity
 from src.core.constants import (
     CONTEXT_DIR_NAME,
     DESIGN_CONTEXT_SUBDIR,
@@ -25,7 +26,7 @@ from src.core.constants import (
 from src.mcp.autopilot._shared import ALLOWED_EXTENSIONS, _cached, _invalidate, _safe_path, _store
 
 # Import authentication function from server module
-from src.mcp.server._shared import KNOWN_SYSTEM_AGENTS, verify_agent_authentication
+from src.mcp.server._shared import verify_agent_authentication
 from src.mcp.server.oauth_routes import _check_rate_limit
 from src.services.design_status_service import get_design_status
 
@@ -767,7 +768,7 @@ async def create_cost_entry(
     # single agent to bind to and post cost entries on behalf of whichever
     # agent/task they're servicing, so only a real per-agent UUID identity
     # is bound here.
-    if agent_id not in KNOWN_SYSTEM_AGENTS and not agent_id.startswith(("sdk-", "mcp-")):
+    if not is_known_system_identity(agent_id):
         if req.agent_id and req.agent_id != agent_id:
             raise HTTPException(
                 status_code=403,
