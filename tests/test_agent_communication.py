@@ -603,3 +603,46 @@ class TestAgentCommunicationServiceMigration:
             comm_service.nudge_child("parent-1", "child-1", "test reason")
         )
         assert result is False
+
+    def test_send_message_to_child_offloads_get_children(self, comm_service, db_manager):
+        """Regression: get_children does blocking DB I/O and was called
+        directly (unoffloaded) inside async def send_message_to_child --
+        same class of issue already fixed at the route layer for this
+        service's sibling (sync) methods (agents_api.py)."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        with db_manager.session_scope() as session:
+            session.add(Agent(
+                id="parent-1", status="working", cli_type="pi",
+                system_prompt="x", current_task_id="task-1",
+            ))
+
+        with patch("asyncio.to_thread", new=AsyncMock(return_value=[])) as mock_to_thread:
+            asyncio.run(
+                comm_service.send_message_to_child("parent-1", "child-1", "hello")
+            )
+
+        mock_to_thread.assert_called_once_with(comm_service.get_children, "parent-1")
+
+    def test_monitor_and_nudge_stuck_children_offloads_status_summary(self, comm_service, db_manager):
+        """Regression: get_children_status_summary does blocking DB reads
+        plus tmux pane inspection per child and was called directly
+        (unoffloaded) inside async def monitor_and_nudge_stuck_children."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        with db_manager.session_scope() as session:
+            session.add(Agent(
+                id="parent-1", status="working", cli_type="pi",
+                system_prompt="x", current_task_id="task-1",
+            ))
+
+        empty_summary = {"total": 0, "working": 0, "idle": 0, "stuck": 0, "completed": 0, "failed": 0, "children": []}
+        with patch("asyncio.to_thread", new=AsyncMock(return_value=empty_summary)) as mock_to_thread:
+            nudged = asyncio.run(
+                comm_service.monitor_and_nudge_stuck_children("parent-1")
+            )
+
+        assert nudged == []
+        mock_to_thread.assert_called_once_with(comm_service.get_children_status_summary, "parent-1")

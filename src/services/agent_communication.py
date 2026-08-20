@@ -9,6 +9,7 @@ Allows any agent to:
 - Monitor child progress
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -135,8 +136,11 @@ class AgentCommunicationService:
         Routes through AgentMessenger for consistent escaping and
         stuck-shell (_pane_is_wedged) detection.
         """
-        # Verify the child belongs to this parent
-        children = self.get_children(parent_agent_id)
+        # Verify the child belongs to this parent. to_thread: get_children
+        # does blocking DB I/O -- inline here stalls the whole event loop,
+        # matching the fix already applied at the route layer for its
+        # sibling (sync) methods (agents_api.py).
+        children = await asyncio.to_thread(self.get_children, parent_agent_id)
         child_ids = [c["agent_id"] for c in children]
 
         if child_agent_id not in child_ids:
@@ -223,7 +227,9 @@ class AgentCommunicationService:
 
         Returns list of nudged child agent IDs.
         """
-        summary = self.get_children_status_summary(parent_agent_id)
+        # to_thread: blocking DB reads plus tmux pane inspection per child --
+        # same reasoning as send_message_to_child above.
+        summary = await asyncio.to_thread(self.get_children_status_summary, parent_agent_id)
         nudged = []
 
         for child in summary["children"]:
