@@ -92,16 +92,14 @@ def mock_agent_manager(db_manager):
     llm_provider = MagicMock()
     phase_manager = MagicMock()
 
-    with patch("src.agents.manager.libtmux.Server"):
-        manager = AgentManager(
-            db_manager=db_manager,
-            llm_provider=llm_provider,
-            phase_manager=phase_manager,
-        )
-
-    # Mock tmux operations
-    manager.tmux_server = MagicMock()
-    manager.tmux_server.sessions = MagicMock()
+    fake_tmux_server = MagicMock()
+    fake_tmux_server.sessions = MagicMock()
+    manager = AgentManager(
+        db_manager=db_manager,
+        llm_provider=llm_provider,
+        phase_manager=phase_manager,
+        tmux_server=fake_tmux_server,
+    )
 
     return manager
 

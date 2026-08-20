@@ -7,7 +7,7 @@ import tempfile
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 # Add project root to path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -110,22 +110,20 @@ def agent_manager(test_db, mock_llm_provider, worktree_manager, monkeypatch):
     # module-local get_config(), unaffected by patching src.core.simple_config.
     monkeypatch.setattr("src.agents.manager.get_config", lambda: config)
 
-    # Mock tmux server
-    with patch("src.agents.manager.libtmux.Server"):
-        manager = AgentManager(test_db, mock_llm_provider)
-        manager.worktree_manager = worktree_manager
+    manager = AgentManager(test_db, mock_llm_provider, tmux_server=Mock())
+    manager.worktree_manager = worktree_manager
 
-        # Mock tmux operations
-        manager._create_tmux_session = Mock()
-        mock_pane = Mock()
-        mock_pane.send_keys = Mock()
-        mock_window = Mock()
-        mock_window.attached_pane = mock_pane
-        mock_session = Mock()
-        mock_session.attached_window = mock_window
-        manager._create_tmux_session.return_value = mock_session
+    # Mock tmux operations
+    manager._create_tmux_session = Mock()
+    mock_pane = Mock()
+    mock_pane.send_keys = Mock()
+    mock_window = Mock()
+    mock_window.attached_pane = mock_pane
+    mock_session = Mock()
+    mock_session.attached_window = mock_window
+    manager._create_tmux_session.return_value = mock_session
 
-        yield manager
+    yield manager
 
 
 @pytest.mark.asyncio
