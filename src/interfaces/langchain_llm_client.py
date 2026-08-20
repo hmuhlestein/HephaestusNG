@@ -16,41 +16,18 @@ from langchain_openai import (
     ChatOpenAI,
     OpenAIEmbeddings,
 )
-from pydantic import BaseModel
 
+# The canonical config models, parsed from hephaestus_config.yaml. This module
+# used to redefine ModelAssignment/ProviderConfig/LLMConfig locally and rely on
+# the real ones being duck-typed in at runtime -- the copies had already
+# drifted (the local ProviderConfig was missing api_version, which both Azure
+# builders below read), so anyone actually constructing with them would have
+# broken Azure. Importing the real ones removes the drift entirely.
+from src.core.llm_config import ModelAssignment
+from src.core.llm_config import MultiProviderLLMConfig as LLMConfig
 from src.prompts.loader import get_base_system_prompt, get_prompt
 
 logger = logging.getLogger(__name__)
-
-
-class ModelAssignment(BaseModel):
-    """Model assignment configuration."""
-
-    provider: str
-    model: str
-    openrouter_provider: Optional[str] = None
-    temperature: float = 0.7
-    max_tokens: int = 4000
-    # OpenRouter reasoning cap for reasoning models (mimo etc.): "low" | "medium" |
-    # "high" | "off". Utility calls (enrich/guardian/conductor/prompts) don't need
-    # deep reasoning; capping it avoids multi-minute reasoning streams per call.
-    reasoning_effort: Optional[str] = None
-
-
-class ProviderConfig(BaseModel):
-    """Provider configuration."""
-
-    api_key_env: str
-    base_url: Optional[str] = None
-    models: List[Any]
-
-
-class LLMConfig(BaseModel):
-    """Complete LLM configuration."""
-
-    embedding_model: str = "text-embedding-3-small"
-    providers: Dict[str, ProviderConfig]
-    model_assignments: Dict[str, ModelAssignment]
 
 
 class ComponentType(Enum):
