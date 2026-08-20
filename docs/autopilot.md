@@ -76,14 +76,17 @@ Feature: pending → active → completed
 - `pending`: design picked up from queue, Feature Architect not yet run
 - `decomposing`: Feature Architect is running, `features.json` not yet written
 - `active`: `features.json` written; per-feature pipelines running
-- `completed`: all features passed product validation and merged
+- `paused`: pipeline paused while this design still has active/paused workflows
+- `completed`: every feature reached completed or skipped
 - `failed`: one or more features failed beyond max iterations
 - `skipped`: design removed from queue before completion
 
 **Feature states:**
 - `pending`: created from `features.json`; waiting for dependencies or parallel slot
 - `active`: pipeline phases running
-- `completed`: product validation passed; feature merged to main
+- `paused`: this feature's workflow was paused; the pause cascades to the
+  feature so the UI does not keep showing it as active with nothing running
+- `completed`: the workflow ran to the end and the feature was merged to main
 - `failed`: exceeded max iterations or hard error
 - `skipped`: a dependency feature failed; this feature cannot run
 

@@ -977,6 +977,32 @@ class TestPipelineDocMatchesTheWorkflow:
                 "which verify_output_artifact will reject the phase for not producing"
             )
 
+    def test_documented_feature_states_match_the_db_constraint(self):
+        """docs/autopilot.md enumerates the Feature states an operator can see
+        in the UI. Feature.status carries a CHECK constraint naming exactly
+        which are writable, so the two can be compared -- and had diverged:
+        `paused` is reachable (pausing a workflow cascades to its Feature, see
+        engine_client's cascade_to_feature) but was undocumented, so anyone
+        seeing a paused feature found nothing explaining it."""
+        import re
+
+        from src.core.database import Feature
+
+        constraints = Feature.__table__.columns["status"].constraints
+        allowed = set()
+        for c in constraints:
+            allowed |= set(re.findall(r"'(\w+)'", str(getattr(c, "sqltext", ""))))
+        assert allowed, "Feature.status lost its CHECK constraint"
+
+        _, text = self._doc_rows()
+        block = text.split("**Feature states:**")[1].split("\n\n")[0]
+        documented = set(re.findall(r"^- `(\w+)`:", block, re.M))
+
+        assert allowed == documented, (
+            f"Feature.status permits {sorted(allowed)} but docs/autopilot.md "
+            f"documents {sorted(documented)}"
+        )
+
     def test_doc_uses_current_filenames_not_pre_rename_aliases(self):
         """OUTPUT_NAME_ALIASES exists so a report written under an old name
         still resolves. It is a compatibility shim, not a name the docs should
