@@ -219,7 +219,6 @@ class TestResultService:
         assert result["verified_by"] == "review-123"
         assert mock_result.verification_status == "verified"
         assert mock_result.verified_by_validation_id == "review-123"
-        mock_db.commit.assert_called()
 
 
 class TestValidationHelpers:

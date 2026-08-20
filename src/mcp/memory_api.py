@@ -526,13 +526,14 @@ async def give_validation_review(
             if task.has_results:
                 from src.services.result_service import ResultService
 
-                results = ResultService.get_results_for_task(request.task_id)
+                results = ResultService.get_results_for_task(request.task_id, db=session)
                 for result_info in results:
                     try:
                         ResultService.verify_result(
                             result_id=result_info["result_id"],
                             validation_review_id=review.id,
                             verified=True,
+                            db=session,
                         )
                     except Exception as e:
                         logger.warning(
