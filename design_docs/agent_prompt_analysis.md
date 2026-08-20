@@ -496,8 +496,38 @@ document-end marker from `safe_dump` of a bare scalar, comments between a field
 and the next key being swallowed by the replaced span (including one added to
 `security_review.yaml` earlier the same day), and whitespace-only lines inside
 embedded code samples being flattened. It also refused, rather than mangled, a
-genuine pre-existing defect: `01_feature_architect.yaml` declares `description:`
-twice, so PyYAML's last-wins makes line 3 dead text.
+genuine pre-existing defect: `01_feature_architect.yaml` declared `description:`
+twice, so PyYAML's last-wins made line 3 dead text.
+
+**That defect was worse than a dead line, and is now fixed.** The
+5,249-character block under the second key was the phase's step-by-step
+instructions, mislabelled as `description` — every other phase keeps that body
+in `additional_notes`. It matters because
+[`to_prompt_context`](../src/phases/models.py#L93) truncates `description` to 80
+characters and its first line for the pipeline listing, while `additional_notes`
+becomes the full `## PHASE-SPECIFIC INSTRUCTIONS` block. So feature_architect
+had **no PHASE-SPECIFIC INSTRUCTIONS section at all**, and its pipeline listing
+read `"You are the Feature Architect. Your job is to analyze a design document
+and deco"` where a summary belonged — the same bug `models.py`'s own docstring
+records fixing elsewhere ("a security_review agent had no idea an ASH automated
+scan step existed at all"), still live in this file. The body moved to
+`additional_notes`, restoring both the real description and the instructions
+block. The agent received the full text either way, via the task description, so
+this was a degraded prompt rather than a blind agent.
+
+Fixing it exposed a bug in the edit engine itself: `_render_field` always
+emitted a block scalar, so a single-line value (`description: "..."`, no
+trailing newline) read back with one appended and failed the verification. Every
+autopilot phase uses block scalars, which is why the identity round-trip never
+caught it until feature_architect became editable. Single-line values are now
+emitted as scalars, and all three editable fields round-trip cleanly across
+every phase file in both workflows.
+
+One loose end, recorded rather than papered over: the concurrency regression
+test failed once during verification and has passed 34+ consecutive runs since,
+across four stress patterns. The cause is unexplained. It was not
+speculatively "fixed" — the assertion surfaces git's stderr, so a recurrence
+will be diagnosable.
 
 Genuine absences worth noting but not filed as gaps: no per-phase token budget,
 no dedicated dependency/license audit phase, no performance-test phase, no

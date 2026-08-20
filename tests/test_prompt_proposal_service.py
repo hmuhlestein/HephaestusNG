@@ -106,6 +106,26 @@ class TestEditIsActuallySurgical:
         updated = apply_edit(f, "additional_notes", body)
         assert yaml.safe_load(updated)["additional_notes"] == body
 
+    def test_single_line_value_is_not_forced_into_a_block_scalar(self, tmp_path):
+        """A one-line `description: "..."` has no trailing newline. Rendering it
+        as `description: |` appends one, which the block-scalar clip rule reads
+        back -- so the value no longer equals what was asked for. Every
+        autopilot phase uses block scalars, so this only ever surfaced on
+        feature_architect's quoted one-liner."""
+        f = tmp_path / "p.yaml"
+        f.write_text('name: demo\ndescription: "a one-line summary"\nother: 1\n')
+        updated = apply_edit(f, "description", "a different one-line summary")
+        parsed = yaml.safe_load(updated)
+        assert parsed["description"] == "a different one-line summary"
+        assert parsed["other"] == 1
+
+    def test_multiline_value_still_uses_a_block_scalar(self, tmp_path):
+        f = tmp_path / "p.yaml"
+        f.write_text("name: demo\ndescription: |\n  line one\n  line two\n")
+        updated = apply_edit(f, "description", "new one\nnew two\n")
+        assert "description: |" in updated
+        assert yaml.safe_load(updated)["description"] == "new one\nnew two\n"
+
     def test_refuses_a_file_with_a_duplicated_top_level_key(self, tmp_path):
         """PyYAML resolves duplicates last-wins while the span finder takes the
         first, so editing would rewrite the copy that has no effect and leave

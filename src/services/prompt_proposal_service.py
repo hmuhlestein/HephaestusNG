@@ -243,6 +243,23 @@ def _render_field(field: str, value: Any) -> List[str]:
             sort_keys=False,
         )
         return dumped.rstrip("\n").split("\n")
+    # A single-line value with no trailing newline was written as a plain or
+    # quoted scalar (`description: "..."`), not a block scalar. Forcing it into
+    # `|` form appends a newline that the block-scalar clip rule then reads
+    # back, so the value no longer equals what was asked for and apply_edit
+    # rejects the edit. Emit it the way it was written instead. Every autopilot
+    # phase uses block scalars, which is why this only surfaced on
+    # feature_architect's one-line description.
+    if isinstance(value, str) and "\n" not in value:
+        dumped = yaml.safe_dump(
+            {field: value},
+            default_flow_style=False,
+            width=10**6,
+            allow_unicode=True,
+            sort_keys=False,
+        )
+        return dumped.rstrip("\n").split("\n")
+
     body = str(value).rstrip("\n")
     out = [f"{field}: |"]
     for line in body.split("\n"):
