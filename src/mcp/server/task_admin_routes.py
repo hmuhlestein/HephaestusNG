@@ -3,6 +3,8 @@
 Extracted from src/mcp/server.py (design_docs/phase_1c_server_decomposition.md).
 """
 
+import asyncio
+import functools
 import logging
 from datetime import datetime
 
@@ -443,7 +445,10 @@ async def complete_task_as_user(
             await TaskCompletionService.commit_and_link_ticket(
                 session, task.assigned_agent_id or "human-operator", task, summary.strip()
             )
-            output_lost_rejection = TaskCompletionService.verify_output_survived_commit(session, task, phase=phase)
+            loop = asyncio.get_event_loop()
+            output_lost_rejection = await loop.run_in_executor(
+                None, functools.partial(TaskCompletionService.verify_output_survived_commit, session, task, phase=phase)
+            )
             if output_lost_rejection:
                 task.status = "failed"
                 task.failure_reason = output_lost_rejection["message"]

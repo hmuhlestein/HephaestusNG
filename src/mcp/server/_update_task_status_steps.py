@@ -9,6 +9,7 @@ these in sequence.
 """
 
 import asyncio
+import functools
 import logging
 from datetime import datetime
 from typing import Optional
@@ -120,7 +121,14 @@ async def _maybe_fire_self_review_gate(
     # infinite re-trigger of this branch on retry.
     task.self_review_done = True
     task.self_review_started_at = datetime.utcnow()
-    task.self_review_started_commit = _resolve_worktree_head_sha(session, task)
+    # _resolve_worktree_head_sha does real GitPython I/O (Repo().head) --
+    # blocking, same class of issue as commit_and_link_ticket/
+    # collect_cost_on_completion below, fixed here too since this path
+    # fires on every "done" for any self_review-enabled phase.
+    loop = asyncio.get_event_loop()
+    task.self_review_started_commit = await loop.run_in_executor(
+        None, _resolve_worktree_head_sha, session, task
+    )
     task.completion_notes = request.summary
     session.commit()
 
@@ -135,7 +143,18 @@ async def _maybe_fire_self_review_gate(
     )
 
 
-def _log_self_review_telemetry(session, task: Task) -> None:
+def _diff_stat_since(worktree_path: str, since_commit: str) -> Optional[str]:
+    """`git diff --stat` since a commit -- real GitPython I/O, called via
+    run_in_executor by _log_self_review_telemetry below."""
+    try:
+        repo = Repo(worktree_path)
+        return repo.git.diff(since_commit, "HEAD", stat=True)
+    except Exception as e:
+        logger.debug(f"[SELF-REVIEW] Could not diff worktree: {e}")
+        return None
+
+
+async def _log_self_review_telemetry(session, task: Task) -> None:
     """This task went through the self-review gate on a prior call and is
     now completing for real. Log elapsed time and a diff-stat of what
     changed during the review pass."""
@@ -147,11 +166,10 @@ def _log_self_review_telemetry(session, task: Task) -> None:
     if task.self_review_started_commit:
         worktree_path = _resolve_worktree_path(session, task)
         if worktree_path:
-            try:
-                repo = Repo(worktree_path)
-                diff_stat = repo.git.diff(task.self_review_started_commit, "HEAD", stat=True)
-            except Exception as e:
-                logger.debug(f"[SELF-REVIEW] Could not diff worktree for task {task.id[:8]}: {e}")
+            loop = asyncio.get_event_loop()
+            diff_stat = await loop.run_in_executor(
+                None, _diff_stat_since, worktree_path, task.self_review_started_commit
+            )
     logger.info(
         f"[SELF-REVIEW] Task {task.id[:8]} completed {elapsed:.0f}s after self-review fired. Diff since review: {diff_stat.strip() if diff_stat else '(no changes / diff unavailable)'}"
     )
@@ -294,8 +312,14 @@ async def _complete_task_normally(
         # commit -- catches the file having vanished between the pre-commit
         # check and here, e.g. an agent whose last actual write landed
         # outside its worktree. Flips the task back to "failed" instead of
-        # letting a real loss stand as a silent "done".
-        output_lost_rejection = TaskCompletionService.verify_output_survived_commit(session, task, phase=phase)
+        # letting a real loss stand as a silent "done". Offloaded like
+        # collect_cost_on_completion above -- its fallback path does real
+        # GitPython history search (repo.iter_commits) when the file isn't
+        # found directly in the worktree.
+        loop = asyncio.get_event_loop()
+        output_lost_rejection = await loop.run_in_executor(
+            None, functools.partial(TaskCompletionService.verify_output_survived_commit, session, task, phase=phase)
+        )
 
     async def terminate_and_process_queue():
         await server_state.agent_manager.terminate_agent(agent_id)

@@ -557,7 +557,17 @@ async def cleanup_branches(project_path: Optional[str] = None):
         db_manager = DatabaseManager(None)
         branch_manager = WorktreeManager(db_manager)
         branch_manager.reload(project_path)
-        result = branch_manager.cleanup_all_stale_branches()
+        # cleanup_all_stale_branches does real git/filesystem work --
+        # blocking, same class of issue as the /health endpoint below
+        # (its own comment explains the same offload-at-the-caller
+        # pattern). queue_routes.py's rerun flow backgrounds this same
+        # call in a fire-and-forget thread, but that path doesn't need
+        # the result back; this endpoint's whole contract is returning
+        # it to the caller, so it needs an awaited executor call instead.
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, branch_manager.cleanup_all_stale_branches)
         return result
     except HTTPException:
         raise

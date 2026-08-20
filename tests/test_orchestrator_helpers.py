@@ -1516,6 +1516,33 @@ class TestCleanStaleAssignedTasks:
             assert task.status == "failed"
             assert "terminated unexpectedly" in task.failure_reason
 
+    def test_cleans_pending_task_with_terminated_assigned_agent(self, orch_db_env, tmp_path):
+        """Regression: a task can carry assigned_agent_id while status is
+        still "pending" -- e.g. a dispatch loop that sets both fields in
+        memory but only commits after the whole batch, or any other path
+        that assigns before flipping to in_progress. phase_transitions.py's
+        own _advance_phases sweep documents this exact live incident
+        (a task observed "pending", pointing at an agent terminated hours
+        earlier, reason "Orphaned: never dispatched to an agent") and
+        already handles it for its own phase-scoped candidates. This
+        workflow-wide cleanup pass claimed the same "stale task whose
+        agent is terminated" job but its status filter only covered
+        "assigned"/"in_progress", silently leaving a pending+orphaned task
+        parked forever whenever this pass runs instead of (or before) the
+        phase-scoped one."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.features import _clean_stale_assigned_tasks
+        from src.core.database import Task
+
+        self._make_workflow_task_agent(orch_db_env, task_status="pending", failure_reason=None)
+
+        _clean_stale_assigned_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "failed"
+            assert "terminated unexpectedly" in task.failure_reason
+
 
 class TestRetryFailedTasks:
     """Regression: the only thing that ever retried an individual failed
@@ -3203,6 +3230,52 @@ class TestAttemptRecovery:
         success, msg = attempt_recovery("wf-1", logger)
         assert success is True
         assert "terminated" in msg.lower()
+
+    @patch("src.autopilot.orchestrator.phase_transitions.get_tasks")
+    def test_cleans_pending_task_with_terminated_assigned_agent(
+        self, mock_tasks, orch_db_env, tmp_path, monkeypatch
+    ):
+        """Regression, same gap as _clean_stale_assigned_tasks
+        (TestCleanStaleAssignedTasks above): step 1b's own status filter
+        only covered "assigned"/"in_progress", missing "pending" -- even
+        though a task carrying assigned_agent_id while still "pending" is
+        a proven-live state in this codebase (see
+        _advance_phases's own handling of the identical scenario in
+        phase_transitions.py)."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.policy import attempt_recovery
+        from src.core.database import Agent, Task, Workflow
+
+        monkeypatch.delenv("PROJECT_PATH", raising=False)
+        mock_tasks.return_value = []  # step 1: nothing to retry
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+            )
+            session.add(
+                Agent(id="agent-1", system_prompt="p", status="terminated", cli_type="pi")
+            )
+            session.add(
+                Task(
+                    id="task-1",
+                    workflow_id="wf-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                    assigned_agent_id="agent-1",
+                )
+            )
+
+        logger = OrchestratorLogger(tmp_path)
+        success, msg = attempt_recovery("wf-1", logger)
+
+        assert success is True
+        assert "cleaned stale task" in msg
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "failed"
+            assert "terminated unexpectedly" in task.failure_reason
 
 
 class TestGetLitellmConfig:

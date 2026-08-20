@@ -369,20 +369,28 @@ def _relink_features_to_workflows(design_id: str, logger: "OrchestratorLogger") 
 
 
 def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") -> None:
-    """Clean tasks that are 'assigned' or 'in_progress' to terminated agents,
-    and pending/assigned tasks that belong to already-completed workflows.
+    """Clean tasks that are 'pending', 'assigned', or 'in_progress' with a
+    terminated agent, and pending/assigned tasks that belong to
+    already-completed workflows.
 
     Called periodically from the polling loop to prevent tasks from hanging
     forever when agents crash or are killed.
     """
 
     with get_db() as db:
-        # 1. Tasks assigned to terminated agents
+        # 1. Tasks assigned to terminated agents. Includes "pending", not
+        # just "assigned"/"in_progress" -- a task can carry assigned_
+        # agent_id while still "pending" (e.g. a dispatch loop that sets
+        # both fields in memory but only commits after a whole batch).
+        # _advance_phases's own phase-scoped sweep already treats this as
+        # a live bug (observed: a task stuck "pending" pointing at an
+        # agent terminated hours earlier, never self-healed) -- this
+        # workflow-wide pass claims the same job and needs the same floor.
         stale_tasks = (
             db.query(Task)
             .filter(
                 Task.workflow_id == workflow_id,
-                Task.status.in_(["assigned", "in_progress"]),
+                Task.status.in_(["pending", "assigned", "in_progress"]),
                 Task.assigned_agent_id.isnot(None),
             )
             .all()
