@@ -25,6 +25,7 @@ from src.core.simple_config import get_config
 from src.autopilot.orchestrator.state import DesignEntry
 from src.autopilot.orchestrator.state import DesignStatus
 from typing import Dict
+from typing import NamedTuple
 from src.autopilot.orchestrator.state import FeatureReport
 from src.autopilot.orchestrator.state import FeatureRunStatus
 from typing import Optional
@@ -425,6 +426,176 @@ def _resync_pipeline_registry(logger: OrchestratorLogger, loop: "asyncio.Abstrac
 
 
 
+class _WorkflowActivity(NamedTuple):
+    """One poll's view of a workflow's agents and tasks."""
+
+    agents: list
+    active_agents: list
+    pending: list
+    in_progress: list
+    done: list
+    failed: list
+    non_terminal: list
+
+    @property
+    def has_any_work(self) -> bool:
+        return bool(
+            self.active_agents
+            or self.pending
+            or self.in_progress
+            or self.non_terminal
+            or self.done
+        )
+
+    @property
+    def is_idle(self) -> bool:
+        """Nothing running and nothing left queued -- the precondition for
+        declaring the workflow either complete or broken."""
+        return not (
+            self.active_agents or self.pending or self.in_progress or self.non_terminal
+        )
+
+
+def _snapshot_workflow_activity(exec_id: str) -> _WorkflowActivity:
+    """Read this workflow's current agent/task counts.
+
+    Scoped by workflow_id throughout so a concurrently-running workflow's
+    tasks are never counted here.
+    """
+    agents = get_agents(workflow_id=exec_id)
+    non_terminal: list = []
+    for status in (
+        "assigned",
+        "queued",
+        "under_review",
+        "validation_in_progress",
+        "needs_work",
+        "blocked",
+    ):
+        non_terminal += get_tasks(status=status, workflow_id=exec_id)
+    return _WorkflowActivity(
+        agents=agents,
+        active_agents=[a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES],
+        pending=get_tasks(status="pending", workflow_id=exec_id),
+        in_progress=get_tasks(status="in_progress", workflow_id=exec_id),
+        done=get_tasks(status="done", workflow_id=exec_id),
+        failed=get_tasks(status="failed", workflow_id=exec_id),
+        non_terminal=non_terminal,
+    )
+
+
+def _log_agent_state_changes(agents: list, previous: dict, logger: OrchestratorLogger) -> dict:
+    """Log spawns/terminations since the last poll; return the new states."""
+    current = {a["id"]: (a.get("status", ""), a.get("agent_type", "")) for a in agents}
+    for aid, (status, atype) in current.items():
+        prev_status, _ = previous.get(aid, (None, None))
+        if prev_status is None and status in ACTIVE_AGENT_STATUSES:
+            logger.info(f"  [AGENT SPAWN] {aid[:8]} ({atype}) status={status}")
+        elif prev_status in ACTIVE_AGENT_STATUSES and status == "terminated":
+            logger.info(f"  [AGENT DONE]  {aid[:8]} ({atype}) terminated")
+        elif prev_status is not None and prev_status != status:
+            logger.info(f"  [AGENT]       {aid[:8]} ({atype}): {prev_status} → {status}")
+    return current
+
+
+def _peek_active_agent_output(active_agents: list, logger: OrchestratorLogger) -> None:
+    """Parent peeks at children's output periodically for observability."""
+    for agent in active_agents:
+        aid = agent.get("id", "")
+        output = peek_agent_output(aid, lines=15)
+        if not output:
+            continue
+        lines = [ln.strip() for ln in output.strip().split("\n") if ln.strip()][-8:]
+        if lines:
+            preview = " | ".join(lines[-3:])  # last 3 lines
+            logger.info(f"  [{aid[:8]}] {preview}")
+
+
+def _has_unfinished_phases(exec_id: str, done_count: int, logger: OrchestratorLogger) -> bool:
+    """Whether any phase is still pending/in_progress.
+
+    Guards against declaring a workflow complete while the monitor simply
+    hasn't created the next phase's task yet. A failure to check is reported
+    as "no unfinished phases" so the caller falls through to its own
+    completion handling, matching the original inline behavior.
+    """
+    try:
+        from src.core.database import DatabaseManager, PhaseExecution
+
+        _session = DatabaseManager(None).get_session()
+        try:
+            unfinished = (
+                _session.query(PhaseExecution)
+                .filter(
+                    PhaseExecution.workflow_execution_id == exec_id,
+                    PhaseExecution.status.in_(["pending", "in_progress"]),
+                )
+                .count()
+            )
+            if unfinished > 0:
+                logger.info(f"{done_count} tasks done but {unfinished} phases still pending/in_progress — waiting")
+                return True
+            return False
+        finally:
+            _session.close()
+    except Exception as e:
+        logger.warning(f"Could not check phase status: {e}")
+        return False
+
+
+def _merge_design_branch_into_main(
+    design_branch: Optional[str], project_path: str, logger: OrchestratorLogger
+) -> None:
+    """Merge the shared design branch into main once the workflow completes.
+
+    A merge conflict aborts and preserves the branch for a manual merge/PR
+    rather than failing the (already successful) workflow.
+    """
+    try:
+        if not design_branch:
+            logger.info("No design branch tracked — skipping final merge")
+            return
+
+        import git as _git
+
+        from src.core.database import DatabaseManager as DbManager
+        from src.core.simple_config import get_config
+        from src.core.worktree_manager import WorktreeManager
+
+        cfg = get_config()
+        wt_mgr = WorktreeManager(db_manager=DbManager(str(cfg.database_path)))
+        wt_mgr.reload(Path(project_path))
+
+        # Ensure main is clean
+        wt_mgr.main_repo.heads[wt_mgr.config.base_branch].checkout()
+        try:
+            wt_mgr.main_repo.git.merge("--abort")
+        except Exception:
+            pass
+        wt_mgr.main_repo.git.reset("--hard", "HEAD")
+        wt_mgr.main_repo.git.clean("-fd")
+
+        try:
+            wt_mgr.main_repo.git.merge(
+                design_branch,
+                no_ff=True,
+                m=f"Merge design branch {design_branch} into main",
+            )
+            merge_sha = wt_mgr.main_repo.head.commit.hexsha
+            logger.info(f"Final merge complete: {design_branch} -> main ({merge_sha[:8]})")
+        except _git.exc.GitCommandError as e:
+            if "CONFLICT" in str(e):
+                logger.warning(f"Merge conflict on {design_branch} -> main, aborting")
+                wt_mgr.main_repo.git.merge("--abort")
+                logger.info(f"Conflict detected — branch {design_branch} preserved for manual merge/PR")
+            else:
+                raise
+
+        # Worktree is intentionally kept — UI references artifacts there
+    except Exception as e:
+        logger.warning(f"Final merge failed: {e}")
+
+
 def run_single_workflow(
     sdk,
     workflow_id: str,
@@ -769,79 +940,31 @@ def run_single_workflow(
                 return FeatureRunStatus.TIMEOUT
 
             wf_status = get_workflow_status(exec_id)
-            # Get agents for this workflow only
-            agents = get_agents(workflow_id=exec_id)
-            active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
-            # Filter tasks by workflow_id to avoid counting tasks from other workflows
-            pending = get_tasks(status="pending", workflow_id=exec_id)
-            in_progress = get_tasks(status="in_progress", workflow_id=exec_id)
-            done = get_tasks(status="done", workflow_id=exec_id)
-            failed = get_tasks(status="failed", workflow_id=exec_id)
-            # Also check for non-terminal statuses that mean work is still happening
-            assigned = get_tasks(status="assigned", workflow_id=exec_id)
-            queued = get_tasks(status="queued", workflow_id=exec_id)
-            under_review = get_tasks(status="under_review", workflow_id=exec_id)
-            validation = get_tasks(status="validation_in_progress", workflow_id=exec_id)
-            needs_work = get_tasks(status="needs_work", workflow_id=exec_id)
-            blocked = get_tasks(status="blocked", workflow_id=exec_id)
-            non_terminal = assigned + queued + under_review + validation + needs_work + blocked
+            activity = _snapshot_workflow_activity(exec_id)
 
             _log_phase_transitions(exec_id)
+            _last_agent_states = _log_agent_state_changes(activity.agents, _last_agent_states, logger)
 
-            # Log agent spawns and terminations
-            current_agent_states = {a["id"]: (a.get("status", ""), a.get("agent_type", "")) for a in agents}
-            for aid, (status, atype) in current_agent_states.items():
-                prev_status, _ = _last_agent_states.get(aid, (None, None))
-                if prev_status is None and status in ACTIVE_AGENT_STATUSES:
-                    logger.info(f"  [AGENT SPAWN] {aid[:8]} ({atype}) status={status}")
-                elif prev_status in ACTIVE_AGENT_STATUSES and status == "terminated":
-                    logger.info(f"  [AGENT DONE]  {aid[:8]} ({atype}) terminated")
-                elif prev_status is not None and prev_status != status:
-                    logger.info(f"  [AGENT]       {aid[:8]} ({atype}): {prev_status} → {status}")
-            _last_agent_states = current_agent_states
-
-            logger.info(f"[{workflow_id}] [{elapsed}s] Agents: {len(active_agents)} active | Tasks: {len(pending)} pending, {len(in_progress)} active, {len(done)} done, {len(failed)} failed")
+            logger.info(f"[{workflow_id}] [{elapsed}s] Agents: {len(activity.active_agents)} active | Tasks: {len(activity.pending)} pending, {len(activity.in_progress)} active, {len(activity.done)} done, {len(activity.failed)} failed")
 
             # Phase progression — the single source of truth for advancing phases.
             # This replaces the monitor's phase progression logic.
             _try_advance_phases(exec_id, logger)
 
             # Refresh ALL counts after phase advancement. _advance_phases
-            # may have created a new task + agent — active_agents/done/failed/
-            # non_terminal were stale from the pre-advance snapshot, which
-            # could trick the completion check into seeing "no agents, no
-            # work" before the new task appeared.
-            agents = get_agents(workflow_id=exec_id)
-            active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
-            pending = get_tasks(status="pending", workflow_id=exec_id)
-            in_progress = get_tasks(status="in_progress", workflow_id=exec_id)
-            done = get_tasks(status="done", workflow_id=exec_id)
-            failed = get_tasks(status="failed", workflow_id=exec_id)
-            assigned = get_tasks(status="assigned", workflow_id=exec_id)
-            queued = get_tasks(status="queued", workflow_id=exec_id)
-            under_review = get_tasks(status="under_review", workflow_id=exec_id)
-            validation = get_tasks(status="validation_in_progress", workflow_id=exec_id)
-            needs_work = get_tasks(status="needs_work", workflow_id=exec_id)
-            blocked = get_tasks(status="blocked", workflow_id=exec_id)
-            non_terminal = assigned + queued + under_review + validation + needs_work + blocked
-            if active_agents or pending or in_progress or non_terminal or done:
+            # may have created a new task + agent — the pre-advance snapshot
+            # is now stale, and acting on it could trick the completion check
+            # into seeing "no agents, no work" before the new task appeared.
+            activity = _snapshot_workflow_activity(exec_id)
+            if activity.has_any_work:
                 no_tasks_streak = 0
 
             # Agent scheduling is handled by the server's background_queue_processor.
             # Stuck-agent detection is handled by Guardian/Conductor.
             # The orchestrator only monitors and logs.
 
-            # Parent peeks at children's output periodically for observability
             if elapsed > 0 and elapsed % PARENT_PEEK_INTERVAL < POLL_INTERVAL:
-                for agent in active_agents:
-                    aid = agent.get("id", "")
-                    output = peek_agent_output(aid, lines=15)
-                    if output:
-                        # Show last meaningful lines (skip blank)
-                        lines = [ln.strip() for ln in output.strip().split("\n") if ln.strip()][-8:]
-                        if lines:
-                            preview = " | ".join(lines[-3:])  # last 3 lines
-                            logger.info(f"  [{aid[:8]}] {preview}")
+                _peek_active_agent_output(activity.active_agents, logger)
 
             wf_state = wf_status.get("status", "")
             if wf_state in ("completed", "failed", "paused"):
@@ -850,91 +973,26 @@ def run_single_workflow(
 
             # Check if workflow should be considered complete:
             # No active agents AND no pending/in-progress/non-terminal tasks
-            if not active_agents and not pending and not in_progress and not non_terminal:
+            if activity.is_idle:
                 # All agents done, no more work to do
-                if done:
-                    # Verify all phases are completed before declaring workflow done.
-                    # This prevents premature completion when the monitor hasn't yet
-                    # created the next phase's task.
-                    try:
-                        from src.core.database import (
-                            DatabaseManager,
-                            PhaseExecution,
-                        )
+                if activity.done:
+                    # Verify all phases are completed before declaring workflow
+                    # done. This prevents premature completion when the monitor
+                    # hasn't yet created the next phase's task.
+                    if _has_unfinished_phases(exec_id, len(activity.done), logger):
+                        time.sleep(POLL_INTERVAL)
+                        continue
 
-                        _db = DatabaseManager(None)
-                        _session = _db.get_session()
-                        try:
-                            pending_phases = (
-                                _session.query(PhaseExecution)
-                                .filter(
-                                    PhaseExecution.workflow_execution_id == exec_id,
-                                    PhaseExecution.status.in_(["pending", "in_progress"]),
-                                )
-                                .count()
-                            )
-                            if pending_phases > 0:
-                                logger.info(f"{len(done)} tasks done but {pending_phases} phases still pending/in_progress — waiting")
-                                # Don't declare complete yet; monitor will create next task
-                                time.sleep(POLL_INTERVAL)
-                                continue
-                        finally:
-                            _session.close()
-                    except Exception as e:
-                        logger.warning(f"Could not check phase status: {e}")
+                    logger.info(f"Workflow complete: {len(activity.done)} tasks done, no agents active, all phases done")
 
-                    logger.info(f"Workflow complete: {len(done)} tasks done, no agents active, all phases done")
-
-                    # Final merge: merge the shared design branch into main
-                    try:
-                        design_branch = getattr(state, "_design_branch", None)
-                        if design_branch:
-                            from src.core.database import DatabaseManager as DbManager
-                            from src.core.simple_config import get_config
-                            from src.core.worktree_manager import WorktreeManager
-
-                            cfg = get_config()
-                            db = DbManager(str(cfg.database_path))
-                            wt_mgr = WorktreeManager(db_manager=db)
-                            wt_mgr.reload(Path(project_path))
-
-                            # Ensure main is clean
-                            wt_mgr.main_repo.heads[wt_mgr.config.base_branch].checkout()
-                            try:
-                                wt_mgr.main_repo.git.merge("--abort")
-                            except Exception:
-                                pass
-                            wt_mgr.main_repo.git.reset("--hard", "HEAD")
-                            wt_mgr.main_repo.git.clean("-fd")
-
-                            # Merge the design branch
-                            try:
-                                wt_mgr.main_repo.git.merge(
-                                    design_branch,
-                                    no_ff=True,
-                                    m=f"Merge design branch {design_branch} into main",
-                                )
-                                merge_sha = wt_mgr.main_repo.head.commit.hexsha
-                                logger.info(f"Final merge complete: {design_branch} -> main ({merge_sha[:8]})")
-                            except _git.exc.GitCommandError as e:
-                                if "CONFLICT" in str(e):
-                                    logger.warning(f"Merge conflict on {design_branch} -> main, aborting")
-                                    wt_mgr.main_repo.git.merge("--abort")
-                                    # Create PR instead
-                                    logger.info(f"Conflict detected — branch {design_branch} preserved for manual merge/PR")
-                                else:
-                                    raise
-
-                            # Worktree is intentionally kept — UI references artifacts there
-                        else:
-                            logger.info("No design branch tracked — skipping final merge")
-                    except Exception as e:
-                        logger.warning(f"Final merge failed: {e}")
+                    _merge_design_branch_into_main(
+                        getattr(state, "_design_branch", None), project_path, logger
+                    )
 
                     if state:
                         state.current_workflow_id = None
                     return FeatureRunStatus.COMPLETED
-                elif elapsed > 300 and not done:
+                elif elapsed > 300 and not activity.done:
                     # No tasks AND no done tasks after 5 minutes — something
                     # is wrong. Confirmed on a second consecutive poll before
                     # acting -- see no_tasks_streak's declaration above for
@@ -975,12 +1033,12 @@ def run_single_workflow(
                     # Signal metadata could be used for more nuanced decisions
                     # For now, signals factor into stuck_count below
 
-            hard_error, error_reason = detect_hard_error(agents, failed, workflow_id=exec_id)
+            hard_error, error_reason = detect_hard_error(activity.agents, activity.failed, workflow_id=exec_id)
             if hard_error:
                 logger.error(f"Hard error detected: {error_reason}")
                 return FeatureRunStatus.HARD_ERROR
 
-            impasse, impasse_reason = detect_impasse(agents, pending, in_progress, elapsed)
+            impasse, impasse_reason = detect_impasse(activity.agents, activity.pending, activity.in_progress, elapsed)
             # Enhancement 4: Monitor signals can also indicate impasse.
             # Require at least 2 high-confidence stuck signals to avoid false
             # positives from a single Guardian assessment firing too aggressively.
@@ -999,13 +1057,12 @@ def run_single_workflow(
                     elif choice == "s":
                         stuck_count = 0
                         # Skip this design - terminate all active agents for this workflow
-                        for a in agents:
-                            if a.get("status") in ACTIVE_AGENT_STATUSES:
-                                try:
-                                    terminate_agent_direct(a["id"])
-                                    logger.info(f"Terminated agent {a['id'][:8]} (skip)")
-                                except Exception:
-                                    pass
+                        for a in activity.active_agents:
+                            try:
+                                terminate_agent_direct(a["id"])
+                                logger.info(f"Terminated agent {a['id'][:8]} (skip)")
+                            except Exception:
+                                pass
                         return FeatureRunStatus.SKIPPED
                     else:
                         # "c" (continue) or timeout — reset stuck count and keep watching
