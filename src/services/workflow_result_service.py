@@ -179,6 +179,7 @@ class WorkflowResultService:
         feedback: str = "",
         evidence: Optional[Dict[str, Any]] = None,
         validator_agent_id: Optional[str] = None,
+        db=None,
     ) -> Dict[str, Any]:
         """
         Update the validation status of a result.
@@ -189,6 +190,10 @@ class WorkflowResultService:
             feedback: Validation feedback
             evidence: Validation evidence
             validator_agent_id: ID of the validator agent
+            db: optional existing session to participate in the caller's
+                own transaction (e.g. ResultValidatorService.
+                process_validation_outcome) instead of opening a separate
+                one that commits independently.
 
         Returns:
             Updated result information
@@ -201,36 +206,46 @@ class WorkflowResultService:
                 f"Invalid status: {status}. Must be 'validated' or 'rejected'"
             )
 
+        if db is not None:
+            return WorkflowResultService._update_result_status_impl(
+                db, result_id, status, feedback, evidence, validator_agent_id
+            )
         with get_db() as db:
-            result = db.query(WorkflowResult).filter_by(id=result_id).first()
+            return WorkflowResultService._update_result_status_impl(
+                db, result_id, status, feedback, evidence, validator_agent_id
+            )
 
-            if not result:
-                raise ValueError(f"Result not found: {result_id}")
+    @staticmethod
+    def _update_result_status_impl(
+        db, result_id, status, feedback, evidence, validator_agent_id
+    ) -> Dict[str, Any]:
+        result = db.query(WorkflowResult).filter_by(id=result_id).first()
 
-            # Update result
-            result.status = status
-            result.validation_feedback = feedback
-            result.validation_evidence = evidence
-            result.validated_at = datetime.utcnow()
-            if validator_agent_id:
-                result.validated_by_agent_id = validator_agent_id
+        if not result:
+            raise ValueError(f"Result not found: {result_id}")
 
-            # Update workflow if result is validated
-            if status == "validated":
-                workflow = db.query(Workflow).filter_by(id=result.workflow_id).first()
-                if workflow:
-                    workflow.result_found = True
-                    workflow.result_id = result_id
+        # Update result
+        result.status = status
+        result.validation_feedback = feedback
+        result.validation_evidence = evidence
+        result.validated_at = datetime.utcnow()
+        if validator_agent_id:
+            result.validated_by_agent_id = validator_agent_id
 
-            db.commit()
+        # Update workflow if result is validated
+        if status == "validated":
+            workflow = db.query(Workflow).filter_by(id=result.workflow_id).first()
+            if workflow:
+                workflow.result_found = True
+                workflow.result_id = result_id
 
-            return {
-                "result_id": result.id,
-                "status": result.status,
-                "validation_feedback": result.validation_feedback,
-                "validated_at": result.validated_at.isoformat() + "Z",
-                "validated_by": validator_agent_id,
-            }
+        return {
+            "result_id": result.id,
+            "status": result.status,
+            "validation_feedback": result.validation_feedback,
+            "validated_at": result.validated_at.isoformat() + "Z",
+            "validated_by": validator_agent_id,
+        }
 
     @staticmethod
     def get_result_content(result_id: str) -> Optional[str]:
