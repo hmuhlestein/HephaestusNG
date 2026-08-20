@@ -220,6 +220,72 @@ class TestSafetyAllowlist:
         )
 
 
+class TestConcurrentApplies:
+    def test_two_simultaneous_applies_do_not_lose_one(self, tmp_path, monkeypatch):
+        """Each apply is a read-modify-write plus a git commit. Unserialized,
+        two approvals landing together can each read the original and each
+        write, and the loser vanishes while its row still says "applied" with a
+        SHA -- a row that lies about what is on disk."""
+        import threading
+
+        repo = tmp_path / "repo"
+        wf = repo / "config" / "workflows" / "demo"
+        wf.mkdir(parents=True)
+        target = wf / "demo_phase.yaml"
+        target.write_text(
+            "name: demo_phase\ndescription: |\n  original\nadditional_notes: |\n  notes\n"
+        )
+        for cmd in (
+            ["git", "init", "-q"], ["git", "config", "user.email", "t@t"],
+            ["git", "config", "user.name", "t"], ["git", "add", "-A"],
+            ["git", "commit", "-qm", "init"],
+        ):
+            subprocess.run(cmd, cwd=repo, check=True)
+        monkeypatch.setattr(
+            "src.services.prompt_proposal_service._workflows_dir",
+            lambda: repo / "config" / "workflows",
+        )
+
+        errors = []
+
+        def run(field, value, pid):
+            try:
+                apply_proposal(repo, "demo", "demo_phase", field, value, pid)
+            except Exception as e:  # pragma: no cover - surfaced via `errors`
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=run, args=("description", "rewritten A\n", "p1")),
+            threading.Thread(target=run, args=("additional_notes", "rewritten B\n", "p2")),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"concurrent applies raised: {errors}"
+        parsed = yaml.safe_load(target.read_text())
+        # Both edits must survive -- neither silently overwritten by the other.
+        assert parsed["description"] == "rewritten A\n"
+        assert parsed["additional_notes"] == "rewritten B\n"
+
+
+class TestRevertGuards:
+    def test_revert_refuses_a_missing_previous_value(self, tmp_path, monkeypatch):
+        """Without this, _render_field stringifies None and writes the literal
+        text "None" into the prompt -- a silent corruption that reads as a real
+        instruction to the next agent."""
+        wf = tmp_path / "config" / "workflows" / "demo"
+        wf.mkdir(parents=True)
+        (wf / "demo_phase.yaml").write_text("name: demo_phase\ndescription: |\n  text\n")
+        monkeypatch.setattr(
+            "src.services.prompt_proposal_service._workflows_dir",
+            lambda: tmp_path / "config" / "workflows",
+        )
+        with pytest.raises(ValueError, match="no recorded previous value"):
+            revert_proposal(tmp_path, "demo", "demo_phase", "description", None, "prop-x")
+
+
 class TestApplyAndRevert:
     """Approve writes the YAML and commits it; revert puts it back. Both go
     through the same verified edit path."""

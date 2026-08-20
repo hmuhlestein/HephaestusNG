@@ -27,7 +27,7 @@ type Proposal = {
   is_stale?: boolean;
   rationale: string;
   evidence?: string | null;
-  status: 'pending' | 'approved' | 'rejected' | 'applied' | 'reverted' | 'failed';
+  status: 'pending' | 'rejected' | 'applied' | 'reverted' | 'failed';
   review_note?: string | null;
   applied_commit_sha?: string | null;
   created_at?: string | null;
@@ -232,7 +232,9 @@ const ProposalCard: React.FC<{
                   </div>
                   <p className="text-xs text-gray-500 dark:text-gray-400">
                     Approving writes the change to <code>{proposal.phase_name}.yaml</code> and
-                    commits it. You can revert it afterwards.
+                    commits it. It applies to workflows started{' '}
+                    <strong>after</strong> this point — runs already in flight keep the
+                    prompt they were created with. Revertable.
                   </p>
                 </div>
               )}
@@ -310,6 +312,12 @@ const ImprovementsPanel: React.FC = () => {
             proposed — the pipeline’s gate wiring (<code>spec_gate</code>,{' '}
             <code>outputs</code>, thresholds) is out of reach by design, and a phase
             cannot rewrite its own prompt.
+          </p>
+          <p className="mt-2 text-violet-800/80 dark:text-violet-300/80">
+            These edit the phase <em>templates</em>, so an approved change affects
+            workflows started afterwards — not ones already running, which keep the
+            prompt they were created with. To change a prompt for a run in progress,
+            use that phase’s prompt versions instead.
           </p>
         </div>
       </div>

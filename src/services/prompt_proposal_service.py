@@ -27,6 +27,33 @@ the UI, because a guard the API doesn't enforce is exactly the kind of
      forensics_analysis can rewrite forensics_analysis.yaml, and the loop has
      no fixed point outside itself.
 
+WHICH COPY OF A PROMPT THIS EDITS, AND WHEN IT TAKES EFFECT.
+
+There are three copies of any phase prompt, and this module edits the first:
+
+  1. config/workflows/<def>/<phase>.yaml -- the TEMPLATE. Read once, when a
+     workflow is created (phase_manager.initialize_workflow: "Only create
+     phase records for NEW workflows"). This is what a proposal edits.
+  2. The Phase DB row -- a per-workflow snapshot taken from the template at
+     creation. This is what an agent actually reads at dispatch, via
+     get_phase_context.
+  3. PhasePromptVersion rows -- an existing, separate draft/publish/restore
+     mechanism for editing ONE running workflow's prompt, which writes into
+     that Phase row.
+
+So an approved proposal changes NOTHING about any workflow already in flight;
+it lands for workflows created afterwards. That is the correct scope for this
+feature -- forensics_analysis exists to improve FUTURE runs, and rewriting a
+prompt out from under a running agent would be worse than useless -- but it
+has to be said out loud in the UI, because "approve" that visibly does nothing
+to the running pipeline otherwise reads as a bug.
+
+The corollary: if a PhasePromptVersion has been published for some workflow's
+phase, that workflow's DB row no longer matches the template, and a proposal's
+diff (which is template-vs-template, correctly) will not resemble what that
+particular run is executing. The two mechanisms are complementary -- per
+definition here, per running workflow there -- not competing.
+
 Edits are surgical text replacements, NOT a yaml.safe_load/yaml.dump round
 trip. These files carry long explanatory comments that are load-bearing
 documentation (see workflow.yaml's THRESHOLD RATIONALE block), and dumping
@@ -40,6 +67,7 @@ instead of silently mangling a prompt.
 import logging
 import re
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -60,6 +88,14 @@ PROTECTED_FILENAMES: Tuple[str, ...] = ("workflow.yaml",)
 #: Phases that may not have their own prompt rewritten by a proposal they
 #: generated. Closes the self-modification loop.
 SELF_EDIT_BLOCKED: Tuple[str, ...] = ("forensics_analysis",)
+
+#: Serializes apply/revert. Each is a read-modify-write of a file plus a git
+#: commit, and both halves race badly: two approvals landing together can each
+#: read the original, each write, and the loser is silently lost while its row
+#: still says "applied" with a commit SHA -- a row that lies. The git index is
+#: also process-wide, so concurrent `git commit --only` calls contend. Approvals
+#: are human-paced, so a plain lock costs nothing.
+_EDIT_LOCK = threading.Lock()
 
 
 def _workflows_dir() -> Path:
@@ -304,7 +340,18 @@ def commit_file(repo: Path, path: Path, message: str) -> Optional[str]:
     unrelated in-flight work, and an approved prompt tweak must never sweep it
     into a commit.
     """
-    rel = str(path.relative_to(repo)) if path.is_absolute() else str(path)
+    try:
+        rel = str(path.relative_to(repo)) if path.is_absolute() else str(path)
+    except ValueError:
+        # Deployments where the workflows tree is not inside the checkout being
+        # committed to (an installed package, a custom workflows path). The
+        # edit itself already succeeded; say so plainly rather than surfacing a
+        # bare relative_to() traceback.
+        raise RuntimeError(
+            f"{path} is not inside the git repository at {repo}, so the change was "
+            "written but could not be committed. Commit it manually, or point the "
+            "workflows directory inside the checkout."
+        )
     add = _git(repo, "add", "--", rel)
     if add.returncode != 0:
         raise RuntimeError(f"git add failed for {rel}: {add.stderr.strip()}")
@@ -342,16 +389,17 @@ def apply_proposal(
     if path is None:
         raise ValueError(f"no phase named {phase_name!r} in {workflow_definition!r}")
 
-    previous_value = current_value(workflow_definition, phase_name, field)
-    updated = apply_edit(path, field, proposed_value)
-    path.write_text(updated)
-    sha = commit_file(
-        repo_root,
-        path,
-        f"prompt: apply forensics proposal to {phase_name}.{field}\n\n"
-        f"Proposal {proposal_id}, approved via the autopilot Improvements tab.\n"
-        f"Reverting this commit restores the previous prompt exactly.",
-    )
+    with _EDIT_LOCK:
+        previous_value = current_value(workflow_definition, phase_name, field)
+        updated = apply_edit(path, field, proposed_value)
+        path.write_text(updated)
+        sha = commit_file(
+            repo_root,
+            path,
+            f"prompt: apply forensics proposal to {phase_name}.{field}\n\n"
+            f"Proposal {proposal_id}, approved via the autopilot Improvements tab.\n"
+            f"Reverting this commit restores the previous prompt exactly.",
+        )
     logger.info(
         f"[PROMPT-PROPOSAL] Applied {proposal_id[:8]} to {phase_name}.{field} "
         f"({path.name}) as {sha[:8] if sha else 'no-op'}"
@@ -377,14 +425,23 @@ def revert_proposal(
     path = phase_yaml_path(workflow_definition, phase_name)
     if path is None:
         raise ValueError(f"no phase named {phase_name!r} in {workflow_definition!r}")
-    updated = apply_edit(path, field, previous_value)
-    path.write_text(updated)
-    sha = commit_file(
-        repo_root,
-        path,
-        f"prompt: revert forensics proposal to {phase_name}.{field}\n\n"
-        f"Proposal {proposal_id}, reverted via the autopilot Improvements tab.",
-    )
+    # Without this, _render_field stringifies None and writes the literal text
+    # "None" into the prompt -- a silent corruption that would read as a real
+    # instruction to the next agent.
+    if previous_value is None:
+        raise ValueError(
+            f"no recorded previous value for {phase_name}.{field}, so there is nothing "
+            "to restore. Edit the file by hand rather than guessing at what it was."
+        )
+    with _EDIT_LOCK:
+        updated = apply_edit(path, field, previous_value)
+        path.write_text(updated)
+        sha = commit_file(
+            repo_root,
+            path,
+            f"prompt: revert forensics proposal to {phase_name}.{field}\n\n"
+            f"Proposal {proposal_id}, reverted via the autopilot Improvements tab.",
+        )
     logger.info(f"[PROMPT-PROPOSAL] Reverted {proposal_id[:8]} on {phase_name}.{field}")
     return {"path": str(path), "commit_sha": sha}
 

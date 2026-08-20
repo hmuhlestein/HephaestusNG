@@ -478,6 +478,17 @@ dependency. Instead each edit is *verified*: parse before and after, confirm
 the target field reads back equal to the proposed value, and confirm no other
 key moved.
 
+**Scope, which the UI now states explicitly:** there are three copies of any
+phase prompt — the YAML template, the per-workflow `Phase` DB row snapshotted
+from it at creation, and `PhasePromptVersion` rows (a pre-existing draft/
+publish/restore mechanism for editing one *running* workflow's prompt). A
+proposal edits the template, so an approved change lands for workflows started
+afterwards and does nothing to runs already in flight. That is the correct
+scope — forensics exists to improve future runs — but "approve" that visibly
+changes nothing about the running pipeline reads as a bug unless it is said out
+loud. The two mechanisms are complementary, per-definition here and
+per-workflow there, not competing.
+
 That verification paid for itself immediately. An identity edit across every
 real phase file and field caught four bugs the implementation would otherwise
 have shipped — a lost trailing newline on a file-final block scalar, a `...`
