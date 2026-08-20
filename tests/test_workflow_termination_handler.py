@@ -271,7 +271,7 @@ class TestWorktreeCleanupReporting:
 class TestAtomicity:
     @pytest.mark.asyncio
     async def test_a_failure_in_the_final_step_rolls_back_task_cancellation(
-        self, handler, db, monkeypatch
+        self, handler, db, monkeypatch, agent_manager
     ):
         """The sub-steps must share one transaction.
 
@@ -299,3 +299,9 @@ class TestAtomicity:
         # Nothing the failed teardown touched may survive.
         assert _read(db, Task, id="task-1").status == "in_progress"
         assert _read(db, Workflow, id=WORKFLOW_ID).status == "active"
+        # ...except the one step that cannot be rolled back. Killing a tmux
+        # session is irreversible and terminate_agent runs its own
+        # transaction, so the agent stays terminated. Pinned because
+        # terminate_workflow's docstring makes this promise explicitly: the
+        # DB half is atomic, the process half is not.
+        agent_manager.terminate_agent.assert_awaited_once_with("agent-1")
