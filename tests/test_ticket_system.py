@@ -331,6 +331,60 @@ async def test_update_ticket_fields(
 
 
 @pytest.mark.asyncio
+async def test_update_ticket_shares_one_db_session_across_fields(
+    db_manager, test_workflow, test_agent, test_board_config
+):
+    """Regression: update_ticket's per-field TicketHistoryService.record_change
+    call opened its own independent get_db() session for EACH field instead
+    of participating in the caller's own transaction -- non-atomic (a
+    failure partway through the field loop could leave history rows
+    committed for a ticket update that itself never took effect).
+
+    record_change opens its fallback session via the get_db it imported
+    into src.services.ticket_history_service's own namespace, not
+    ticket_service's -- that's the module to patch to observe it."""
+    from unittest.mock import patch
+
+    from src.services.ticket_history_service import get_db as real_get_db
+
+    ticket = await TicketService.create_ticket(
+        workflow_id=test_workflow,
+        agent_id=test_agent,
+        title="Original title",
+        description="Original description",
+        ticket_type="task",
+        priority="low",
+        tags=["tag1"],
+    )
+
+    call_count = 0
+
+    def counting_get_db(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return real_get_db(*args, **kwargs)
+
+    with patch(
+        "src.services.ticket_history_service.get_db", side_effect=counting_get_db
+    ):
+        result = await TicketService.update_ticket(
+            ticket_id=ticket["ticket_id"],
+            agent_id=test_agent,
+            updates={
+                "title": "Updated title",
+                "priority": "high",
+                "tags": ["tag1", "tag2", "tag3"],
+            },
+            update_comment="Updating ticket details",
+        )
+
+    assert result["success"] is True
+    # record_change participates in update_ticket's own session now --
+    # it should never open one of its own.
+    assert call_count == 0
+
+
+@pytest.mark.asyncio
 async def test_change_status_unblocked_ticket(
     db_manager, test_workflow, test_agent, test_board_config
 ):
