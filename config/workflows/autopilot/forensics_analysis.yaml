@@ -19,6 +19,7 @@ done_definitions:
   - "Stuck/crashed agents identified with timestamps"
   - "Common issue patterns cataloged"
   - "Specific prompt rewrites proposed (with before/after text)"
+  - "Every prompt rewrite in the report also filed via heph_propose_prompt_change (a rewrite that exists only as prose goes nowhere)"
   - "Tickets created for actionable findings (skip and continue if heph_create_ticket returns an error)"
   - "forensics.md created at ./.hephaestus/forensics.md"
   - "Memory entries saved with feature name prefix in content"
@@ -280,13 +281,57 @@ additional_notes: |
   Keep the report focused. Do not pad with boilerplate.
   If a phase performed well, say so in one line and move on.
   
+  ## STEP 8b: FILE YOUR PROMPT REWRITES AS PROPOSALS
+
+  Every entry in your report's "Prompt Rewrites" section must ALSO be filed as
+  a proposal, or it goes nowhere. A rewrite that exists only as prose in
+  forensics.md is a suggestion nobody can act on: there is no record of whether
+  it was applied, and the next run has no idea it was ever made.
+
+  ```
+  heph_propose_prompt_change(
+    phase_name="<the phase whose prompt should change>",
+    field="additional_notes",        # or description / done_definitions
+    proposed_value="<the COMPLETE new value for that field>",
+    current_value="<the value you read, verbatim from phase_prompts/>",
+    rationale="<why, citing what actually went wrong in THIS run>",
+    evidence="<quoted tmux lines or artifact text>",
+    proposing_phase="forensics_analysis",
+    workflow_id="<your workflow id>",
+    agent_id="<your agent id>"
+  )
+  ```
+
+  This changes NOTHING on its own. The proposal appears in the autopilot
+  Improvements tab, where a human approves or rejects it; only on approval is
+  the YAML written and committed.
+
+  Rules the API enforces, so save yourself the rejection:
+  - `proposed_value` is the COMPLETE new field value, not a diff, not a
+    description of the change, not "add a line saying X". Whatever you pass
+    replaces the field wholesale.
+  - Only `description`, `done_definitions` and `additional_notes` can be
+    proposed. `spec_gate`, `outputs`, `thinking_level`, `id`, `name` and
+    everything in workflow.yaml (thresholds, evaluation points, required_output)
+    are OFF LIMITS. Those wire the pipeline's gates together; if you believe one
+    is wrong, write it up in the report for a human instead.
+  - You may NOT propose changes to forensics_analysis — your own prompt. Write
+    those in the report.
+  - `rationale` is required, and "this could be clearer" is not one. Cite the
+    run.
+
+  If the call returns rejected=true, note the reason in your report and move
+  on. Do not retry with a reworded proposal.
+
   ## STEP 9: CREATE TICKETS FOR FINDINGS (OPTIONAL — SKIP IF API FAILS)
 
   IMPORTANT: Ticket creation is OPTIONAL. If heph_create_ticket returns an error,
   note "ticket creation failed — findings documented in forensics.md"
   and MOVE ON immediately to Step 8. Do NOT retry. Do NOT loop.
 
-  For each actionable finding in your report, attempt to create a ticket:
+  Tickets are for findings that are NOT prompt rewrites — those go through
+  heph_propose_prompt_change in Step 8b instead, where they get a diff and a
+  review. For each remaining actionable finding, attempt to create a ticket:
 
   ```
   heph_create_ticket(

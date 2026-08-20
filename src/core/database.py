@@ -1098,6 +1098,58 @@ class AutopilotProject(Base):
     designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
 
 
+class PromptProposal(Base):
+    """A forensics-proposed rewrite of one phase-prompt field, awaiting human
+    review (design_docs/agent_prompt_analysis.md finding 8).
+
+    forensics_analysis runs after a pipeline finishes and proposes prompt
+    improvements for FUTURE runs. Those proposals used to exist only as prose
+    in forensics.md and as `improvement` tickets carrying no before/after
+    text, so nothing could tell which had been applied or what they changed.
+
+    `previous_value` is captured at APPLY time, not at proposal time: the file
+    can change between a proposal being filed and approved, and revert has to
+    restore what was actually there, not what the agent once quoted.
+    """
+
+    __tablename__ = "prompt_proposals"
+
+    id = Column(String, primary_key=True)  # prop-<uuid8>
+    workflow_id = Column(String, ForeignKey("workflows.id"), nullable=True)
+    created_by_agent_id = Column(String, nullable=True)
+
+    # What it wants to change. workflow_definition + phase_name + field
+    # locate the target; the service enforces which fields are reachable.
+    workflow_definition = Column(String(100), nullable=False, default="autopilot")
+    phase_name = Column(String(100), nullable=False)
+    field = Column(String(50), nullable=False)
+    proposing_phase = Column(String(100), nullable=True)  # for the self-edit guard
+
+    proposed_value = Column(JSON, nullable=False)  # str, or list[str] for done_definitions
+    quoted_current_value = Column(JSON, nullable=True)  # what the agent believed it was
+    previous_value = Column(JSON, nullable=True)  # what was actually replaced, set on apply
+
+    rationale = Column(Text, nullable=False)  # why -- the evidence from the run
+    evidence = Column(Text, nullable=True)  # optional citation (log lines, artifact quotes)
+
+    status = Column(
+        String,
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected', 'applied', 'reverted', 'failed')"
+        ),
+        nullable=False,
+        default="pending",
+    )
+    review_note = Column(Text, nullable=True)  # human's reason on reject
+    applied_commit_sha = Column(String(64), nullable=True)
+    reverted_commit_sha = Column(String(64), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    reviewed_at = Column(DateTime, nullable=True)
+    applied_at = Column(DateTime, nullable=True)
+    reverted_at = Column(DateTime, nullable=True)
+
+
 class Feature(Base):
     """Feature model representing a decomposed feature from a design document."""
 
@@ -1761,6 +1813,15 @@ class DatabaseManager:
             logger.info("Ensured features table exists")
         except Exception as e:
             logger.debug(f"features table creation (may already exist): {e}")
+
+        # Create prompt_proposals table if it doesn't exist (finding 8).
+        try:
+            Base.metadata.create_all(
+                self.engine, tables=[PromptProposal.__table__], checkfirst=True
+            )
+            logger.info("Ensured prompt_proposals table exists")
+        except Exception as e:
+            logger.debug(f"prompt_proposals table creation (may already exist): {e}")
 
         # Add pr_url column to features table for existing databases
         try:

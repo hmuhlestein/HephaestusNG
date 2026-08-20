@@ -1,6 +1,6 @@
 # Agent Prompt Progression — Verified Findings
 
-Status: findings 1–7 and the housekeeping items are **fixed** (see "What changed"). Finding 8 is open and needs a product decision.
+Status: all eight findings and the housekeeping items are **fixed** (see "What changed").
 
 This document replaces an earlier revision that was written by reading
 `config/workflows/autopilot/*.yaml` without reading `src/`. Roughly half of that
@@ -328,6 +328,12 @@ contradicts.
 | `config/workflows/autopilot/workflow.yaml` | `doc_review` conditions replaced with the reachable one; `phase_inputs:` declarations (finding 6); THRESHOLD RATIONALE comment (finding 7) |
 | `config/workflows/autopilot/development.yaml` | stash-verify discipline extended to new-feature acceptance tests (finding 5) |
 | 5 phase YAMLs | pointer to the dispatch-resolved input manifest (finding 6) |
+| `src/services/prompt_proposal_service.py` | the guarded prompt-edit engine (finding 8) |
+| `src/mcp/autopilot/prompt_proposal_routes.py` | list/approve/reject/revert API (finding 8) |
+| `src/mcp/server/_mcp_tool_registry.py` | `propose_prompt_change` tool (finding 8) |
+| `src/core/database.py` | `PromptProposal` model (finding 8) |
+| `frontend/.../ImprovementsPanel.tsx` + `Autopilot.tsx` | the Improvements tab (finding 8) |
+| `config/workflows/autopilot/forensics_analysis.yaml` | STEP 8b files rewrites as proposals (finding 8) |
 | `config/workflows/autopilot/forensics_analysis.yaml` | paths, inputs, output location, dead mode branch |
 | 6 other phase YAMLs | `Docs Path` → `Artifacts Path` |
 | `tests/test_ash_scan.py` | missing-script assertion inverted to the intended behaviour |
@@ -345,7 +351,7 @@ its own scorer reads — the same class of mismatch that once made
 
 ---
 
-## Findings 5-8
+## Findings 5-8 (all fixed)
 
 **5. Test-first was mandated only for bug fixes.** (FIXED) `development.yaml`
 required stash-verification that a test failed before the fix — for bug fixes
@@ -440,11 +446,47 @@ dropping security_review's bar to 0.3 makes it fail with "a 'development'
 result scores 0.4, at or above its continue bar 0.3 — it would pass the gate".
 That is the exact bug class Finding 1 was.
 
-**8. Forensics findings still have no tracked path back.** The phase can now
-read its inputs and propose rewrites, and it files tickets. Nothing tracks which
-proposals were applied or whether the next run improved. A prompt-review UI —
-before/after text, approve/reject, applied-vs-outcome tracking — is the obvious
-shape, and it is a real feature proposal rather than a bug.
+**8. Forensics findings had no tracked path back.** (FIXED) The phase proposed
+prompt rewrites in prose inside `forensics.md` and filed `improvement` tickets
+that did not carry the before/after text. Nothing recorded which were applied.
+
+Built as a review loop: `heph_propose_prompt_change` files a structured
+proposal → the autopilot **Improvements** tab shows a real before/after diff →
+approve writes the YAML and commits it → revert restores it. Structured via an
+MCP tool rather than parsed out of `forensics.md`, because this session was
+largely a tour of prose contracts nothing enforced.
+
+**The design point that matters is the guard, not the feature.** This is a
+self-modifying system — an LLM editing the prompts that drive the pipeline
+running it. Two constraints, both enforced in the service rather than the UI,
+because a guard the API does not enforce is exactly the "configured but never
+fires" shape of findings 1 and 2:
+
+- **Only prose fields are editable** (`description`, `done_definitions`,
+  `additional_notes`). `spec_gate`, `outputs`, `id`, `name` and all of
+  `workflow.yaml` are refused. An approved proposal that could drop
+  `spec_gate: true` or lower a continue threshold would silently undo a gate
+  fix while arriving as a routine improvement.
+- **A phase may not rewrite its own prompt**, closing the self-modification
+  loop that otherwise has no fixed point outside itself.
+
+Edits are surgical text replacements, not a `yaml.safe_load`/`safe_dump` round
+trip — that would delete every comment in these files, and those comments are
+load-bearing (this document's own THRESHOLD RATIONALE block lives in
+`workflow.yaml`). `ruamel.yaml` would preserve them but is not a declared
+dependency. Instead each edit is *verified*: parse before and after, confirm
+the target field reads back equal to the proposed value, and confirm no other
+key moved.
+
+That verification paid for itself immediately. An identity edit across every
+real phase file and field caught four bugs the implementation would otherwise
+have shipped — a lost trailing newline on a file-final block scalar, a `...`
+document-end marker from `safe_dump` of a bare scalar, comments between a field
+and the next key being swallowed by the replaced span (including one added to
+`security_review.yaml` earlier the same day), and whitespace-only lines inside
+embedded code samples being flattened. It also refused, rather than mangled, a
+genuine pre-existing defect: `01_feature_architect.yaml` declares `description:`
+twice, so PyYAML's last-wins makes line 3 dead text.
 
 Genuine absences worth noting but not filed as gaps: no per-phase token budget,
 no dedicated dependency/license audit phase, no performance-test phase, no
@@ -492,6 +534,9 @@ tests/test_phase_manager.py           76 passed
 tests/test_spec_gate_firing.py, test_task_completion_service.py,
 test_update_task_status_ordering.py   all passed
 all affected suites together         333 passed
+tests/test_prompt_proposal_service.py 74 passed  (finding 8)
+tests/test_prompt_proposal_api.py     12 passed  (finding 8)
+frontend                              tsc --noEmit clean, build succeeds
 ruff                                  no new findings (14 pre-existing, unchanged)
 ```
 

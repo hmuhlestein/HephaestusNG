@@ -141,6 +141,44 @@ async def _tool_create_ticket(arguments: Dict[str, Any]):
     )
     return {"success": True, "ticket": result}
 
+async def _tool_propose_prompt_change(arguments: Dict[str, Any]):
+    """File a prompt-rewrite proposal for human review.
+
+    Deliberately does NOT edit anything. The proposal lands in the autopilot
+    Improvements tab, where a person approves or rejects it; only then is the
+    YAML written and committed. Guards (which fields are reachable, and the
+    self-edit block) live in prompt_proposal_service and are applied here via
+    create_proposal, the same entry point the HTTP route uses -- a tool path
+    that reimplemented them would be a second, unguarded door into the same
+    edit engine.
+    """
+    from src.services.prompt_proposal_service import create_proposal
+
+    try:
+        result = create_proposal(
+            phase_name=arguments.get("phase_name"),
+            field=arguments.get("field"),
+            proposed_value=arguments.get("proposed_value"),
+            rationale=arguments.get("rationale"),
+            evidence=arguments.get("evidence"),
+            quoted_current_value=arguments.get("current_value"),
+            workflow_definition=arguments.get("workflow_definition", "autopilot"),
+            workflow_id=arguments.get("workflow_id"),
+            proposing_phase=arguments.get("proposing_phase"),
+            created_by_agent_id=arguments.get("agent_id"),
+        )
+    except ValueError as e:
+        # Returned rather than raised: the proposing agent should record that
+        # this particular proposal was refused and carry on with the rest of
+        # its report, not treat it as a tool failure worth retrying.
+        return {"success": False, "rejected": True, "reason": str(e)}
+    return {
+        "success": True,
+        "proposal": result,
+        "note": "Filed for human review. Nothing has been changed yet.",
+    }
+
+
 async def _tool_search_tickets(arguments: Dict[str, Any]):
 
     session = server_state.db_manager.get_session()
@@ -637,6 +675,64 @@ MCP_TOOL_REGISTRY: List[MCPToolSpec] = [
             "required": ["title", "description", "ticket_type", "priority"],
         },
         handler=_tool_create_ticket,
+    ),
+    MCPToolSpec(
+        name="propose_prompt_change",
+        description=(
+            "Propose a rewrite of one phase-prompt field for human review. Does NOT "
+            "change anything: the proposal appears in the autopilot Improvements tab "
+            "where a person approves or rejects it. Only prose fields are editable "
+            "(description, done_definitions, additional_notes) -- the orchestration "
+            "wiring (spec_gate, outputs, thresholds) is deliberately out of reach."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "phase_name": {
+                    "type": "string",
+                    "description": "Phase whose prompt should change, e.g. 'development'",
+                },
+                "field": {
+                    "type": "string",
+                    "enum": ["description", "done_definitions", "additional_notes"],
+                    "description": "Which field to rewrite",
+                },
+                "proposed_value": {
+                    "description": (
+                        "The COMPLETE new value for that field, not a diff or a "
+                        "description of the change. A string, except for "
+                        "done_definitions which is a list of strings."
+                    ),
+                },
+                "current_value": {
+                    "description": (
+                        "The value you are proposing to replace, as you read it. Used "
+                        "to flag the proposal as stale if the file changed before a "
+                        "human reviewed it."
+                    ),
+                },
+                "rationale": {
+                    "type": "string",
+                    "description": (
+                        "Why this change, citing what actually went wrong in the run. "
+                        "Required -- a change with no recorded reason cannot be "
+                        "reviewed, only guessed at."
+                    ),
+                },
+                "evidence": {
+                    "type": "string",
+                    "description": "Optional: quoted log lines or artifact text supporting it",
+                },
+                "proposing_phase": {
+                    "type": "string",
+                    "description": "Your own phase name (a phase may not rewrite its own prompt)",
+                },
+                "workflow_id": {"type": "string", "description": "Your workflow ID"},
+                "agent_id": {"type": "string", "description": "Your agent ID"},
+            },
+            "required": ["phase_name", "field", "proposed_value", "rationale"],
+        },
+        handler=_tool_propose_prompt_change,
     ),
     MCPToolSpec(
         name="search_tickets",
