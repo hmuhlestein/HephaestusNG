@@ -1135,7 +1135,11 @@ class PromptProposal(Base):
     status = Column(
         String,
         CheckConstraint(
-            "status IN ('pending', 'approved', 'rejected', 'applied', 'reverted', 'failed')"
+            # No 'approved' state: approval and application are one action, so a
+            # row that was approved is already 'applied' (or 'failed' if the
+            # write did not land). An unreachable state in a constraint reads
+            # like a capability that exists.
+            "status IN ('pending', 'rejected', 'applied', 'reverted', 'failed')"
         ),
         nullable=False,
         default="pending",
