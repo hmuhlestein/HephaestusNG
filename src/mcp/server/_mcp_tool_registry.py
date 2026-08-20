@@ -180,25 +180,52 @@ async def _tool_propose_prompt_change(arguments: Dict[str, Any]):
 
 
 async def _tool_search_tickets(arguments: Dict[str, Any]):
-
-    session = server_state.db_manager.get_session()
-    try:
-        search_service = TicketSearchService(session)
-        results = await search_service.search_tickets(
-            query=arguments.get("query"),
-            tags=arguments.get("tags"),
-            status=arguments.get("status"),
+    # TicketSearchService has no __init__ and only static methods, so the
+    # previous `TicketSearchService(session)` raised TypeError before it ever
+    # reached the (also non-existent) search_tickets method. Mirrors
+    # search_tickets_endpoint's default hybrid mode.
+    workflow_id = arguments.get("workflow_id")
+    if not workflow_id:
+        raise HTTPException(
+            status_code=400, detail="workflow_id is required for search_tickets"
         )
-        return {"tickets": results}
-    finally:
-        session.close()
+
+    filters: Dict[str, Any] = {}
+    if arguments.get("status"):
+        filters["status"] = arguments["status"]
+
+    # Tags are not a supported filter key (only status/priority/ticket_type
+    # are), but _ticket_text indexes them into the searchable document, so
+    # folding them into the query is what actually makes them match.
+    query = arguments.get("query") or ""
+    tags = arguments.get("tags") or []
+    if tags:
+        query = f"{query} {' '.join(tags)}".strip()
+
+    results = await TicketSearchService.hybrid_search(
+        query=query,
+        workflow_id=workflow_id,
+        limit=arguments.get("limit", 10),
+        filters=filters or None,
+    )
+    return {"tickets": results}
 
 async def _tool_update_ticket_status(arguments: Dict[str, Any]):
+    # The method is change_status, not change_ticket_status, and `comment` is
+    # required -- change_ticket_status has never existed, so this tool raised
+    # AttributeError for every agent that called it.
+    comment = arguments.get("comment")
+    if not comment:
+        raise HTTPException(
+            status_code=400,
+            detail="comment is required for update_ticket_status",
+        )
 
-    result = await TicketService.change_ticket_status(
+    result = await TicketService.change_status(
         ticket_id=arguments.get("ticket_id"),
-        new_status=arguments.get("new_status"),
         agent_id=arguments.get("agent_id", "mcp-claude"),
+        new_status=arguments.get("new_status"),
+        comment=comment,
     )
     return {"success": True, "result": result}
 
@@ -747,11 +774,19 @@ MCP_TOOL_REGISTRY: List[MCPToolSpec] = [
                 "tags": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Filter by tags",
+                    "description": "Tags to bias the search toward (folded into the query text)",
                 },
                 "status": {"type": "string", "description": "Filter by status"},
+                "workflow_id": {
+                    "type": "string",
+                    "description": "Workflow whose tickets to search",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results to return (default 10)",
+                },
             },
-            "required": [],
+            "required": ["workflow_id"],
         },
         handler=_tool_search_tickets,
     ),
@@ -766,8 +801,12 @@ MCP_TOOL_REGISTRY: List[MCPToolSpec] = [
                     "type": "string",
                     "description": "New status value",
                 },
+                "comment": {
+                    "type": "string",
+                    "description": "Why the status is changing (recorded on the ticket)",
+                },
             },
-            "required": ["ticket_id", "new_status"],
+            "required": ["ticket_id", "new_status", "comment"],
         },
         handler=_tool_update_ticket_status,
     ),
