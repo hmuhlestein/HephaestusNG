@@ -1242,7 +1242,20 @@ class PhaseManager:
             # into the silent pass that exception exists to prevent.
             # _fire_phase_transition routes "arbitrate" to
             # _trigger_arbitration, which spawns an arbiter to decide rather
-            # than guessing here on a session that just rolled back.
+            # than guessing here on a session that just rolled back. That call
+            # is idempotent per phase and hard-capped at 3, so a persistently
+            # failing phase escalates a bounded number of times rather than
+            # looping.
+            #
+            # No _reopen_phase_execution here, unlike
+            # _handle_evaluation_arbitrate. That handler reopens because the
+            # normal path closes the execution to "completed" before deciding
+            # to arbitrate. This path never got that far: the idempotency
+            # guard above returns early when the execution is already
+            # completed, and the rollback undoes anything uncommitted -- so
+            # the execution is still open and needs no reopening. Touching it
+            # here would also mean writing through a session that just
+            # failed.
             logger.error(
                 f"Failed to mark phase complete, escalating to arbitration: {e}",
                 exc_info=True,
