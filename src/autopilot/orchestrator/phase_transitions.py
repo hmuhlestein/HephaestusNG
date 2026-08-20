@@ -646,8 +646,22 @@ def _advance_phases(workflow_id: str, logger: "OrchestratorLogger") -> bool:
             # Auto-resume paused workflow if it has a done task in the stalled phase
             if wf.status == "paused":
                 _try_auto_resume_paused_workflow(db, workflow_id, wf, logger)
-                if wf.status == "paused":
+                if wf.status == "paused" and wf.paused_by != "review":
                     return False  # Still paused, nothing to do
+
+                # paused_by="review" only means one specific phase
+                # (MANUAL_ONLY_PHASES) is waiting on a human -- the
+                # per-phase check inside _case_in_progress_complete
+                # (phase.name in MANUAL_ONLY_PHASES) already skips just
+                # that phase and leaves it paused. Every other in-progress
+                # phase must keep advancing/self-healing normally, or this
+                # workflow-wide gate silently freezes them too. Observed
+                # live: task a1efdda6 (adversarial_review, phase 6) sat
+                # orphaned and was never retried while the workflow was
+                # paused for git_commit_push (phase 13) needing approval --
+                # two unrelated phases, one review gate. Other pause
+                # reasons (user, budget, system) are genuine full stops and
+                # still hard-return above.
 
             # Self-heal any abandoned task-creation claim before reading
             # phase statuses below, so the dispatch that follows sees the
