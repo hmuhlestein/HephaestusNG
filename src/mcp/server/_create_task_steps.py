@@ -209,43 +209,53 @@ def _guard_phase_ownership(agent_id: str, request: CreateTaskRequest, dedup_phas
 def _persist_new_task(agent_id: str, request: CreateTaskRequest, task_id: str) -> None:
     """Create the initial task row (pending status), auto-creating the
     created_by_agent_id Agent FK row if it doesn't exist yet."""
+    # try/finally around the whole body: a failure partway through (e.g. an
+    # IntegrityError on session.add/flush/commit) previously propagated with
+    # the session never closed or rolled back, leaking a connection holding
+    # a failed, uncommitted transaction -- the same leak class documented on
+    # _apply_enrichment_to_task below.
     session = server_state.db_manager.get_session()
-    resolved_phase_id = request.phase_id
-    if request.phase_id:
-        if not session.query(Phase).filter_by(id=request.phase_id).first():
-            resolved_phase_id = None
-    from src.core.database import Agent
+    try:
+        resolved_phase_id = request.phase_id
+        if request.phase_id:
+            if not session.query(Phase).filter_by(id=request.phase_id).first():
+                resolved_phase_id = None
+        from src.core.database import Agent
 
-    if not session.query(Agent).filter_by(id=agent_id).first():
-        session.add(
-            Agent(
-                id=agent_id,
-                system_prompt="auto-created by create_task",
-                status="idle",
-                cli_type="system",
+        if not session.query(Agent).filter_by(id=agent_id).first():
+            session.add(
+                Agent(
+                    id=agent_id,
+                    system_prompt="auto-created by create_task",
+                    status="idle",
+                    cli_type="system",
+                )
             )
+            session.flush()
+        task = Task(
+            id=task_id,
+            raw_description=request.task_description,
+            enriched_description=f"[Processing] {request.task_description}",
+            done_definition=request.done_definition,
+            status="pending",
+            priority=request.priority,
+            parent_task_id=request.parent_task_id,
+            created_by_agent_id=agent_id,
+            phase_id=resolved_phase_id,
+            workflow_id=request.workflow_id,
+            estimated_complexity=5,
+            ticket_id=request.ticket_id,
+            depends_on=request.depends_on,
+            parallel_group=request.parallel_group,
+            max_concurrent=request.max_concurrent or 1,
         )
-        session.flush()
-    task = Task(
-        id=task_id,
-        raw_description=request.task_description,
-        enriched_description=f"[Processing] {request.task_description}",
-        done_definition=request.done_definition,
-        status="pending",
-        priority=request.priority,
-        parent_task_id=request.parent_task_id,
-        created_by_agent_id=agent_id,
-        phase_id=resolved_phase_id,
-        workflow_id=request.workflow_id,
-        estimated_complexity=5,
-        ticket_id=request.ticket_id,
-        depends_on=request.depends_on,
-        parallel_group=request.parallel_group,
-        max_concurrent=request.max_concurrent or 1,
-    )
-    session.add(task)
-    session.commit()
-    session.close()
+        session.add(task)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 async def _apply_ticket_blocking_if_needed(request: CreateTaskRequest, task_id: str) -> Optional[dict]:
@@ -327,10 +337,12 @@ async def _resolve_phase_and_enrich(request: CreateTaskRequest, agent_id: str) -
     working_directory = request.cwd
     if not working_directory and phase_id:
         session = server_state.db_manager.get_session()
-        phase = session.query(Phase).filter_by(id=phase_id).first()
-        if phase and phase.working_directory:
-            working_directory = phase.working_directory
-        session.close()
+        try:
+            phase = session.query(Phase).filter_by(id=phase_id).first()
+            if phase and phase.working_directory:
+                working_directory = phase.working_directory
+        finally:
+            session.close()
     if not working_directory:
         working_directory = os.getcwd()
 
@@ -427,13 +439,18 @@ async def _check_for_duplicate_task(task_id: str, phase_id: Optional[str], enric
 
         if duplicate_info["is_duplicate"]:
             session = server_state.db_manager.get_session()
-            task = session.query(Task).filter_by(id=task_id).first()
-            if task:
-                task.status = "duplicated"
-                task.duplicate_of_task_id = duplicate_info["duplicate_of"]
-                task.similarity_score = duplicate_info["max_similarity"]
-                session.commit()
-            session.close()
+            try:
+                task = session.query(Task).filter_by(id=task_id).first()
+                if task:
+                    task.status = "duplicated"
+                    task.duplicate_of_task_id = duplicate_info["duplicate_of"]
+                    task.similarity_score = duplicate_info["max_similarity"]
+                    session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
 
             logger.warning(f"Task {task_id} detected as duplicate of {duplicate_info['duplicate_of']} with similarity {duplicate_info['max_similarity']:.3f}")
             return True
@@ -606,12 +623,27 @@ async def _handle_task_processing_failure(task_id: str, error: Exception) -> Non
     """Mark the task failed after an unhandled error in background
     processing."""
     logger.error(f"Failed to process task {task_id} in background: {error}")
+    # try/except/finally around the whole body: this is the last line of
+    # defense in a fire-and-forget background coroutine -- nothing above it
+    # catches a failure here. Without cleanup, a commit() failure (e.g. a
+    # transient lock) previously leaked a connection holding a failed,
+    # uncommitted transaction and left the task stuck at "pending" forever
+    # with no error visible anywhere -- exactly the leak
+    # _apply_enrichment_to_task's docstring points at this function as the
+    # likely victim of.
     session = server_state.db_manager.get_session()
-    task = session.query(Task).filter_by(id=task_id).first()
-    if task:
-        task.status = "failed"
-        task.failure_reason = str(error)
-        session.commit()
-    session.close()
+    try:
+        task = session.query(Task).filter_by(id=task_id).first()
+        if task:
+            task.status = "failed"
+            task.failure_reason = str(error)
+            session.commit()
+    except Exception as recovery_error:
+        session.rollback()
+        logger.error(
+            f"Failed to mark task {task_id} as failed during recovery: {recovery_error}"
+        )
+    finally:
+        session.close()
 
 
