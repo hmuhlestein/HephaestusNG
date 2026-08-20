@@ -10,8 +10,6 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import (
     FastAPI,
-    Header,
-    HTTPException,
     WebSocket,
 )
 from fastapi.middleware.cors import CORSMiddleware
@@ -622,38 +620,6 @@ def _build_phase_dict(phase) -> dict:
     if phase.thinking_level:
         phase_dict["thinking_level"] = phase.thinking_level
     return phase_dict
-
-def verify_agent_id(agent_id: str = Header(None, alias="X-Agent-ID")) -> str:
-    """Verify agent ID from header.
-
-    SECURITY: Validates agent_id format (must be UUID or known SDK identifier).
-    Rejects empty/malformed agent IDs.
-    """
-    if not agent_id:
-        raise HTTPException(status_code=401, detail="Agent ID required in X-Agent-ID header")
-
-    # Validate format: must be UUID or known SDK/system identifier
-    import re
-
-    uuid_pattern = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
-    known_system_ids = {
-        "main-session-agent",
-        "sdk-agent",
-        "system",
-        "ui-user",
-        "sdk-repair-agent",
-        "orchestrator",
-        "monitor",
-        "pi-extension",
-    }
-
-    if not (uuid_pattern.match(agent_id) or agent_id in known_system_ids or agent_id.startswith("sdk-") or agent_id.startswith("mcp-")):
-        raise HTTPException(
-            status_code=401,
-            detail=f"Invalid agent ID format: '{agent_id}'. Must be a UUID or known system identifier.",
-        )
-
-    return agent_id
 
 def _touch_agent_activity(agent_id: str) -> None:
     """Update agent's last_activity timestamp (best-effort, never raises)."""
