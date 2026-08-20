@@ -418,6 +418,60 @@ class TestAdvancePhases:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "paused"
 
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_review_paused_workflow_still_retries_an_unrelated_phase(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Regression: paused_by="review" means one specific phase
+        (MANUAL_ONLY_PHASES, i.e. git_commit_push) is waiting on a human --
+        it must not freeze every OTHER in-progress phase too. Before this
+        fix, the top-level `if wf.status == "paused": return False` gate
+        short-circuited _advance_phases entirely regardless of paused_by,
+        so a workflow paused for git_commit_push approval silently stopped
+        retrying/self-healing every unrelated phase as well. Observed
+        live: task a1efdda6 (an adversarial_review-phase task, nothing to
+        do with git_commit_push) sat orphaned and was never retried while
+        the workflow was paused for a later phase's approval gate.
+
+        phase-1 here is "requirements" -- not in MANUAL_ONLY_PHASES -- so a
+        stale orphaned task on it must still self-heal (failed -> retried)
+        even while the workflow sits paused_by="review" for an unrelated
+        reason."""
+        from src.autopilot.orchestrator.phase_transitions import _advance_phases
+        from src.core.database import Agent, Task as _Task
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.status = "paused"
+            wf.paused_by = "review"
+            wf.status_reason = "git_commit_push is manual-only; human approval is required"
+
+            session.add(Agent(id="dead-agent", system_prompt="p", status="terminated", cli_type="pi"))
+            session.add(Agent(id="fresh-agent", system_prompt="p", status="working", cli_type="pi"))
+            session.add(Task(
+                id="task-orphaned-1",
+                workflow_id="wf-1",
+                phase_id="phase-1",
+                raw_description="r",
+                done_definition="d",
+                status="pending",
+                assigned_agent_id="dead-agent",
+                created_at=datetime.utcnow() - timedelta(minutes=5),
+            ))
+        mock_create_agent.return_value = {"agent_id": "fresh-agent"}
+
+        logger = MagicMock()
+        _advance_phases("wf-1", logger)
+
+        with db_manager.session_scope() as session:
+            task = session.query(_Task).filter_by(id="task-orphaned-1").first()
+            assert task.status == "in_progress"
+            assert task.assigned_agent_id == "fresh-agent"
+
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "review"
+
 
 class TestCaseStartFirstPhase:
     """Tests for _case_start_first_phase function."""
