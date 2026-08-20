@@ -43,6 +43,38 @@ def _kill_tmux_session(tmux_session_name: Optional[str]) -> None:
     except Exception:
         pass
 
+async def _terminate_workflow_agents(session, workflow_id: str):
+    """Find every actively-working agent assigned to this workflow's
+    tasks, kill its tmux session, then apply the DB termination invariant.
+
+    Shared by stop_workflow/cancel_workflow (SOLID review 1.18) -- this
+    exact block used to be duplicated byte-for-byte between them, so a
+    tmux-cleanup fix had to be applied twice.
+
+    Returns (terminated_count, all_tasks_for_workflow). Callers still need
+    the full task list afterward to decide what happens to each
+    non-terminal task (stop_workflow resets them to pending, cancel_workflow
+    marks them failed) -- deliberately left to the caller since that part
+    differs between them.
+    """
+    import asyncio
+
+    from src.autopilot.orchestrator.engine_client import terminate_agent
+
+    tasks = session.query(Task).filter_by(workflow_id=workflow_id).all()
+    task_ids = [t.id for t in tasks]
+
+    terminated_count = 0
+    if task_ids:
+        agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
+        loop = asyncio.get_event_loop()
+        for agent in agents:
+            await loop.run_in_executor(None, _kill_tmux_session, agent.tmux_session_name)
+            terminate_agent(agent.id, session=session)
+            terminated_count += 1
+
+    return terminated_count, tasks
+
 @router.get("/api/workflow-definitions")
 async def list_workflow_definitions():
     """List all loaded workflow definitions."""
@@ -312,11 +344,9 @@ async def complete_workflow_execution(workflow_id: str, request: Request):
 @router.post("/api/workflow-executions/{workflow_id}/stop")
 async def stop_workflow(workflow_id: str, request: Request):
     """Stop a workflow and terminate all its agents."""
-    import asyncio
-
     session = server_state.db_manager.get_session()
     try:
-        from src.core.database import Agent, Task, Workflow
+        from src.core.database import Workflow
 
         workflow = session.query(Workflow).filter_by(id=workflow_id).first()
         if not workflow:
@@ -324,22 +354,11 @@ async def stop_workflow(workflow_id: str, request: Request):
         if workflow.status in ("completed", "failed", "paused"):
             return {"status": workflow.status, "message": "Already stopped"}
 
-        # Find all tasks in this workflow
-        tasks = session.query(Task).filter_by(workflow_id=workflow_id).all()
+        # Find and terminate all agents working on this workflow's tasks
+        terminated_count, tasks = await _terminate_workflow_agents(session, workflow_id)
         task_ids = [t.id for t in tasks]
 
-        # Find and terminate all agents working on these tasks
-        terminated_count = 0
         if task_ids:
-            from src.autopilot.orchestrator.engine_client import terminate_agent
-
-            agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
-            loop = asyncio.get_event_loop()
-            for agent in agents:
-                await loop.run_in_executor(None, _kill_tmux_session, agent.tmux_session_name)
-                terminate_agent(agent.id, session=session)
-                terminated_count += 1
-
             # Reset the tasks those agents were working on -- without this,
             # a task left "assigned"/"in_progress" pointing at a now-
             # terminated agent is indistinguishable from one whose agent is
@@ -427,29 +446,16 @@ async def recover_workflows(workflow_id: Optional[str] = None, project_id: Optio
 @router.post("/api/workflow-executions/{workflow_id}/cancel")
 async def cancel_workflow(workflow_id: str, request: Request):
     """Terminate agents and mark workflow as cancelled."""
-    import asyncio
-
     session = server_state.db_manager.get_session()
     try:
-        from src.core.database import Agent, Task, Workflow
+        from src.core.database import Workflow
 
         workflow = session.query(Workflow).filter_by(id=workflow_id).first()
         if not workflow:
             raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
 
         # Terminate agents
-        tasks = session.query(Task).filter_by(workflow_id=workflow_id).all()
-        task_ids = [t.id for t in tasks]
-        terminated_count = 0
-        if task_ids:
-            from src.autopilot.orchestrator.engine_client import terminate_agent
-
-            agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
-            loop = asyncio.get_event_loop()
-            for agent in agents:
-                await loop.run_in_executor(None, _kill_tmux_session, agent.tmux_session_name)
-                terminate_agent(agent.id, session=session)
-                terminated_count += 1
+        terminated_count, tasks = await _terminate_workflow_agents(session, workflow_id)
 
         # Mark every non-terminal task failed too -- otherwise a task whose
         # agent was just terminated above is left showing its last live
