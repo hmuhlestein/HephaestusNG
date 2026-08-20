@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -32,6 +32,16 @@ export default function ConductorSummaryCard({ analysis }: ConductorSummaryCardP
   const [showHistory, setShowHistory] = useState(false);
   const [historyData, setHistoryData] = useState<ConductorAnalysis[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  // Guards against a fetch resolving after this card unmounts (e.g. the
+  // overview panel is closed while history is loading) -- without it, the
+  // resolved response's setState calls fire on an unmounted component.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (showHistory && historyData.length === 0) {
@@ -43,6 +53,7 @@ export default function ConductorSummaryCard({ analysis }: ConductorSummaryCardP
     setLoadingHistory(true);
     try {
       const data = await apiService.getConductorAnalyses(20);
+      if (!mountedRef.current) return;
       // Filter out the current analysis if it's in the history
       const filtered = analysis
         ? data.filter((item: ConductorAnalysis) => item.id !== analysis.id)
@@ -51,7 +62,7 @@ export default function ConductorSummaryCard({ analysis }: ConductorSummaryCardP
     } catch (error) {
       console.error('Failed to load conductor analyses history:', error);
     } finally {
-      setLoadingHistory(false);
+      if (mountedRef.current) setLoadingHistory(false);
     }
   };
   if (!analysis) {
