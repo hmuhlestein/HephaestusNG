@@ -103,6 +103,11 @@ monitoring:
   stuck_agent_threshold: 300
   guardian_min_agent_age_seconds: 60
   max_ignored_steering: 3
+  # How long a task may sit "assigned" with no agent before the stale-task
+  # sweep puts it back on the queue. Must comfortably exceed a normal
+  # dequeue->dispatch window (LLM enrichment + agent launch), or the sweep
+  # races an in-flight dispatch and double-dispatches the task.
+  stranded_task_grace_seconds: 900
 mcp:
   # SECURITY: auth_required should be true in production. Set to false only for
   # local development/debugging. When true, endpoints require valid X-Agent-ID header.

@@ -1,7 +1,7 @@
 """Feature-Model DB record bookkeeping."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
@@ -12,6 +12,7 @@ from src.core.database import (
     Workflow,
     get_db,
 )
+from src.core.simple_config import get_config
 from src.core.status_derivation import derive_feature_status
 
 from typing import TYPE_CHECKING
@@ -370,8 +371,8 @@ def _relink_features_to_workflows(design_id: str, logger: "OrchestratorLogger") 
 
 def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") -> None:
     """Clean tasks that are 'pending', 'assigned', or 'in_progress' with a
-    terminated agent, and pending/assigned tasks that belong to
-    already-completed workflows.
+    terminated agent, pending/assigned tasks that belong to already-completed
+    workflows, and tasks stranded 'assigned' with no agent at all.
 
     Called periodically from the polling loop to prevent tasks from hanging
     forever when agents crash or are killed.
@@ -428,6 +429,46 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
                 task.assigned_agent_id = None
             if orphaned:
                 db.commit()
+
+        # 3. Tasks stranded "assigned" with no agent at all. process_queue and
+        # bump_task_priority_endpoint both dequeue ("queued" -> "assigned")
+        # before the dispatch that can fail; both now requeue on failure, but
+        # a process death in that window runs no handler at all. The result is
+        # the one task state nothing else can reclaim: get_next_queued_task
+        # reads only "queued", case 1 above requires assigned_agent_id
+        # isnot(None), and every mechanical_recovery detector looks its task up
+        # by agent. Unlike "pending" (which phase_transitions already retries
+        # when unassigned), no sweep covers it -- observed live, a review task
+        # sat this way for hours while its workflow stayed active.
+        #
+        # started_at is NULL only if the task was never dispatched, so this
+        # cannot fire on a task an agent is really working. The grace period
+        # is what keeps it off a dispatch still in flight: queued_at is
+        # refreshed by enqueue_task immediately before every dequeue, so it
+        # measures time since this dispatch attempt began, not task age.
+        grace_seconds = get_config().stranded_task_grace_seconds
+        cutoff = datetime.utcnow() - timedelta(seconds=grace_seconds)
+        stranded = (
+            db.query(Task)
+            .filter(
+                Task.workflow_id == workflow_id,
+                Task.status == "assigned",
+                Task.assigned_agent_id.is_(None),
+                Task.started_at.is_(None),
+                Task.queued_at.isnot(None),
+                Task.queued_at < cutoff,
+            )
+            .all()
+        )
+        for task in stranded:
+            logger.info(
+                f"[STRANDED-TASK] Task {task.id[:8]} assigned with no agent since "
+                f"{task.queued_at} (>{grace_seconds}s) — returning to queue"
+            )
+            task.status = "queued"
+            task.queue_position = None
+        if stranded:
+            db.commit()
 
 
 def _validate_features_json(features_json: dict) -> None:
