@@ -92,19 +92,6 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
     },
   });
 
-  const handleSaveBudget = (projectId: string) => {
-    const value = parseFloat(budgetValue);
-    if (isNaN(value) || value < 0) {
-      toast.error('Please enter a valid budget amount');
-      return;
-    }
-    if (value > 100000) {
-      toast.error('Budget cannot exceed $100,000');
-      return;
-    }
-    updateBudgetMutation.mutate({ projectId, costLimit: value });
-  };
-
   const createMutation = useMutation({
     mutationFn: async ({ name, path }: { name: string; path: string }) => {
       const response = await apiService.createProject(name, path);
@@ -365,59 +352,39 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                           </div>
                           <p className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">{project.base_dir}</p>
                           <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{project.design_count || 0} designs</p>
-                          {/* Budget display */}
-                          <div className="mt-2">
-                            {editingBudget === project.id ? (
-                              <div className="flex items-center gap-2">
-                                <DollarSign className="w-3 h-3 text-gray-400 dark:text-gray-500" />
-                                <input
-                                  type="number"
-                                  value={budgetValue}
-                                  onChange={(e) => setBudgetValue(e.target.value)}
-                                  placeholder="No limit"
-                                  min="0"
-                                  step="0.01"
-                                  className="w-24 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
-                                  autoFocus
-                                />
-                                <button
-                                  onClick={() => handleUpdateBudget(project.id)}
-                                  disabled={updateBudgetMutation.isPending}
-                                  className="px-2 py-1 text-xs bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-50"
-                                >
-                                  Save
-                                </button>
-                                <button
-                                  onClick={() => { setEditingBudget(null); setBudgetValue(''); }}
-                                  className="px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => {
-                                  setEditingBudget(project.id);
-                                  setBudgetValue(project.cost_limit_usd?.toString() || '');
-                                }}
-                                className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                              >
-                                <DollarSign className="w-3 h-3" />
-                                {project.cost_limit_usd != null ? (
-                                  <>
-                                    Budget: ${project.cost_total_usd?.toFixed(2) || '0.00'} / ${project.cost_limit_usd.toFixed(2)}
-                                  </>
-                                ) : (
-                                  <span>Set budget limit</span>
-                                )}
-                              </button>
-                            )}
-                          </div>
                         </div>
                       </div>
 
                       <div className="flex items-center gap-2 flex-shrink-0">
-                        {/* Budget display and edit */}
+                        {/* Spend is a plain label -- never a button, never editable.
+                            Only the limit is editable, via the single control below. */}
+                        {project.cost_total_usd > 0 && editingBudget !== project.id && (
+                          <div className="text-right mr-2">
+                            <div className="flex items-center gap-1">
+                              <DollarSign className="w-3 h-3 text-gray-500 dark:text-gray-400" />
+                              <span className="text-sm font-mono text-gray-800 dark:text-gray-200">
+                                {project.cost_total_usd >= 1000
+                                  ? `$${(project.cost_total_usd / 1000).toFixed(1)}k`
+                                  : `$${project.cost_total_usd.toFixed(2)}`}
+                              </span>
+                              {project.cost_limit_usd != null && (
+                                <span className="text-xs text-gray-400 dark:text-gray-500">
+                                  / ${project.cost_limit_usd.toFixed(0)}
+                                </span>
+                              )}
+                            </div>
+                            {project.cost_limit_usd != null && project.cost_total_usd >= project.cost_limit_usd && (
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <AlertTriangle className="w-3 h-3 text-red-500" />
+                                <span className="text-xs text-red-600 dark:text-red-400">Over budget</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* The ONE limit editor for this project -- previously duplicated
+                            as two independent inputs sharing the same editingBudget state,
+                            which meant editing put both on screen at once. */}
                         {editingBudget === project.id ? (
                           <div className="flex items-center gap-1 mr-2">
                             <span className="text-xs text-gray-500 dark:text-gray-400">$</span>
@@ -425,77 +392,52 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                               type="number"
                               value={budgetValue}
                               onChange={(e) => setBudgetValue(e.target.value)}
-                              placeholder="100.00"
+                              placeholder="blank = no limit"
                               min="0"
                               max="100000"
                               step="0.01"
-                              className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
+                              className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
                               autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleUpdateBudget(project.id);
+                                if (e.key === 'Escape') { setEditingBudget(null); setBudgetValue(''); }
+                              }}
                             />
                             <button
-                              onClick={() => handleSaveBudget(project.id)}
+                              onClick={() => handleUpdateBudget(project.id)}
                               disabled={updateBudgetMutation.isPending}
-                              className="p-1 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded"
-                              title="Save budget"
+                              className="px-2 py-1 text-xs bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-50"
                             >
-                              <CheckCircle2 className="w-4 h-4" />
+                              Save
                             </button>
                             <button
-                              onClick={() => {
-                                setEditingBudget(null);
-                                setBudgetValue('');
-                              }}
-                              className="p-1 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
-                              title="Cancel"
+                              onClick={() => { setEditingBudget(null); setBudgetValue(''); }}
+                              className="px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
                             >
-                              <X className="w-4 h-4" />
+                              Cancel
                             </button>
-                            {project.cost_limit_usd != null && (
-                              <button
-                                onClick={() => handleUpdateBudget(project.id)}
-                                className="p-1 text-red-400 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded text-xs"
-                                title="Remove budget limit"
-                              >
-                                Clear
-                              </button>
-                            )}
                           </div>
+                        ) : project.cost_limit_usd != null ? (
+                          <button
+                            onClick={() => {
+                              setEditingBudget(project.id);
+                              setBudgetValue(project.cost_limit_usd?.toString() || '');
+                            }}
+                            className="p-1 text-gray-400 dark:text-gray-500 hover:text-violet-600 dark:hover:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 rounded-lg transition-colors"
+                            title="Edit budget"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
                         ) : (
-                          <>
-                            {project.cost_total_usd > 0 && (
-                              <div className="text-right mr-2">
-                                <div className="flex items-center gap-1">
-                                  <DollarSign className="w-3 h-3 text-gray-500 dark:text-gray-400" />
-                                  <span className="text-sm font-mono text-gray-800 dark:text-gray-200">
-                                    {project.cost_total_usd >= 1000
-                                      ? `$${(project.cost_total_usd / 1000).toFixed(1)}k`
-                                      : `$${project.cost_total_usd.toFixed(2)}`}
-                                  </span>
-                                  {project.cost_limit_usd != null && (
-                                    <span className="text-xs text-gray-400 dark:text-gray-500">
-                                      / ${project.cost_limit_usd.toFixed(0)}
-                                    </span>
-                                  )}
-                                </div>
-                                {project.cost_limit_usd != null && project.cost_total_usd >= project.cost_limit_usd && (
-                                  <div className="flex items-center gap-1 mt-0.5">
-                                    <AlertTriangle className="w-3 h-3 text-red-500" />
-                                    <span className="text-xs text-red-600 dark:text-red-400">Over budget</span>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                            <button
-                              onClick={() => {
-                                setEditingBudget(project.id);
-                                setBudgetValue(project.cost_limit_usd?.toString() || '');
-                              }}
-                              className="p-1 text-gray-400 dark:text-gray-500 hover:text-violet-600 dark:hover:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 rounded-lg transition-colors"
-                              title={project.cost_limit_usd ? 'Edit budget' : 'Set budget'}
-                            >
-                              <Edit3 className="w-4 h-4" />
-                            </button>
-                          </>
+                          <button
+                            onClick={() => {
+                              setEditingBudget(project.id);
+                              setBudgetValue('');
+                            }}
+                            className="px-2 py-1 text-xs font-medium text-violet-600 dark:text-violet-400 hover:text-violet-700 dark:hover:text-violet-300 underline underline-offset-2"
+                          >
+                            Set Budget
+                          </button>
                         )}
                         {deleteConfirm === project.id ? (
                           <div className="flex items-center gap-2">

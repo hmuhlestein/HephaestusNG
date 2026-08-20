@@ -225,6 +225,32 @@ class TestBroadcastMessage:
             assert message in formatted_message
             assert formatted_message.endswith("\n")
 
+    @pytest.mark.asyncio
+    async def test_broadcast_passes_its_own_session_through(
+        self, agent_manager, sample_agents
+    ):
+        """Regression: send_message_to_agent used to open its own,
+        independent session to update Agent.last_activity while the
+        broadcast loop's AgentLog entries sat uncommitted in a different
+        session -- a crash or failed outer commit between the two could
+        leave a message genuinely delivered (inner session already
+        committed) with no AgentLog record of it ever having happened."""
+        captured_sessions = []
+
+        async def fake_send(agent_id, message, session=None):
+            captured_sessions.append(session)
+
+        with patch.object(
+            agent_manager, "send_message_to_agent", side_effect=fake_send
+        ):
+            await agent_manager.broadcast_message_to_all_agents(
+                sender_agent_id="agent-0", message="Test"
+            )
+
+        assert len(captured_sessions) == 2
+        assert all(s is not None for s in captured_sessions)
+        assert len(set(id(s) for s in captured_sessions)) == 1
+
 
 class TestDirectMessage:
     """Tests for send_direct_message."""
@@ -251,6 +277,30 @@ class TestDirectMessage:
             # Verify correct recipient
             call_args = mock_send.call_args[0]
             assert call_args[0] == recipient_id
+
+    @pytest.mark.asyncio
+    async def test_send_direct_message_passes_its_own_session_through(
+        self, agent_manager, sample_agents
+    ):
+        """Regression: same split-session issue as the broadcast case --
+        send_message_to_agent must participate in send_direct_message's own
+        session instead of opening/committing an independent one."""
+        captured_sessions = []
+
+        async def fake_send(agent_id, message, session=None):
+            captured_sessions.append(session)
+
+        with patch.object(
+            agent_manager, "send_message_to_agent", side_effect=fake_send
+        ):
+            await agent_manager.send_direct_message(
+                sender_agent_id="agent-0",
+                recipient_agent_id="agent-1",
+                message="Test",
+            )
+
+        assert len(captured_sessions) == 1
+        assert captured_sessions[0] is not None
 
     @pytest.mark.asyncio
     async def test_send_to_nonexistent_agent(self, agent_manager, sample_agents):

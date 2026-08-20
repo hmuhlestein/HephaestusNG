@@ -37,6 +37,18 @@ CONDITION_OPERATORS: Dict[str, Any] = {
 }
 
 
+class ConditionEvaluationError(Exception):
+    """A workflow condition could not be evaluated at all.
+
+    Distinct from a condition that evaluated to False. Both used to return
+    False, and _evaluate_conditions falls through to CONTINUE when nothing
+    matches -- so an unevaluable gate condition silently advanced the phase
+    it was meant to hold back. Every condition in every shipped workflow
+    tests `score`, which is only bound when it is not None, so "the phase
+    produced no score" made every gate on that phase fail open at once.
+    """
+
+
 def is_valid_condition_string(condition_str: str) -> bool:
     """True if condition_str is either a bare boolean or matches CONDITION_PATTERN.
 
@@ -574,15 +586,19 @@ class WorkflowOrchestrator:
                 # Get variable value
                 var_value = variables.get(var_name)
                 if var_value is None:
-                    logger.warning(f"Variable '{var_name}' not found in conditions")
-                    return False
+                    raise ConditionEvaluationError(
+                        f"condition {condition_str!r} references '{var_name}', which "
+                        f"this phase did not produce (available: {sorted(variables)})"
+                    )
 
                 # Convert to float for comparison
                 try:
                     var_value = float(var_value)
-                except (ValueError, TypeError):
-                    logger.warning(f"Cannot convert '{var_value}' to float")
-                    return False
+                except (ValueError, TypeError) as exc:
+                    raise ConditionEvaluationError(
+                        f"condition {condition_str!r} compares '{var_name}', whose "
+                        f"value {var_value!r} is not numeric"
+                    ) from exc
 
                 return CONDITION_OPERATORS[op](var_value, threshold)
             else:
@@ -592,12 +608,20 @@ class WorkflowOrchestrator:
                 elif condition_str.strip() == "false":
                     return False
                 else:
-                    logger.warning(f"Invalid condition format: {condition_str}")
-                    return False
+                    raise ConditionEvaluationError(
+                        f"malformed condition {condition_str!r} -- config_validator "
+                        "rejects these at load time, so reaching here means it was "
+                        "introduced after validation"
+                    )
 
+        except ConditionEvaluationError:
+            # Deliberately not swallowed: an unevaluable condition must not be
+            # reported as "condition not met", which is what let gates fail open.
+            raise
         except Exception as e:
-            logger.warning(f"Failed to evaluate condition '{condition_str}': {e}")
-            return False
+            raise ConditionEvaluationError(
+                f"failed to evaluate condition {condition_str!r}: {e}"
+            ) from e
 
     def get_retry_count(self, phase_name: str) -> int:
         """Get current retry count for a phase."""

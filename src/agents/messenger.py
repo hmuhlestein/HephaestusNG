@@ -67,28 +67,51 @@ class AgentMessenger:
                 return bool(_SHELL_CONTINUATION_RE.match(stripped))
         return False
 
-    async def send_message_to_agent(self, agent_id: str, message: str) -> None:
+    async def send_message_to_agent(
+        self, agent_id: str, message: str, session=None
+    ) -> None:
         """Send a message to an agent's tmux session.
 
         Args:
             agent_id: Agent ID
             message: Message to send
+            session: optional existing session to participate in the
+                caller's own transaction (e.g. AgentManager.
+                broadcast_message_to_all_agents/send_direct_message, which
+                add an AgentLog entry per recipient in their own session)
+                instead of opening/committing/closing a separate one. When
+                supplied, the caller owns commit/rollback/close.
         """
         import asyncio
+        import functools
 
         from src.core.database import Agent
         from src.interfaces import get_cli_agent
 
-        session = self.db_manager.get_session()
+        # Every blocking call below (DB session I/O, tmux capture-pane/
+        # send-keys shell-outs) is individually offloaded via run_in_executor
+        # rather than wrapping the whole method in one executor call -- the
+        # wedge-recovery and submit-confirmation steps need real, non-
+        # blocking asyncio.sleep() pauses interleaved between them so other
+        # coroutines keep running during those waits.
+        loop = asyncio.get_event_loop()
+
+        owns_session = session is None
+        if owns_session:
+            session = self.db_manager.get_session()
         try:
-            agent = session.query(Agent).filter_by(id=agent_id).first()
+            agent = await loop.run_in_executor(
+                None, lambda: session.query(Agent).filter_by(id=agent_id).first()
+            )
             if not agent or not agent.tmux_session_name:
                 logger.warning(f"Agent {agent_id} not found or no tmux session")
                 return
 
             logger.debug(f"Sending message to tmux session: {agent.tmux_session_name}")
 
-            has_session = self.tmux_server.has_session(agent.tmux_session_name)
+            has_session = await loop.run_in_executor(
+                None, self.tmux_server.has_session, agent.tmux_session_name
+            )
             logger.debug(f"has_session({agent.tmux_session_name}) = {has_session}")
             if not has_session:
                 logger.warning(f"Tmux session {agent.tmux_session_name} not found")
@@ -115,7 +138,7 @@ class AgentMessenger:
             # Send message
             pane = tmux_session.attached_window.attached_pane
 
-            if self._pane_is_wedged(pane):
+            if await loop.run_in_executor(None, self._pane_is_wedged, pane):
                 logger.warning(
                     f"Pane for agent {agent_id} is wedged in a shell continuation "
                     f"prompt (unterminated quote/paren from a prior command) -- "
@@ -123,9 +146,11 @@ class AgentMessenger:
                     f"otherwise it would just be typed into the stuck shell as more "
                     f"garbage input and never reach the agent."
                 )
-                pane.send_keys("C-c", enter=False)
+                await loop.run_in_executor(
+                    None, functools.partial(pane.send_keys, "C-c", enter=False)
+                )
                 await asyncio.sleep(0.5)
-                if self._pane_is_wedged(pane):
+                if await loop.run_in_executor(None, self._pane_is_wedged, pane):
                     logger.warning(
                         f"Pane for agent {agent_id} still wedged after Ctrl-C -- "
                         f"sending the message anyway as a best effort."
@@ -138,20 +163,30 @@ class AgentMessenger:
                 .replace("$", "\\$")
                 .replace("`", "\\`")
             )
-            pane.send_keys(f'"{escaped_message}"', enter=True)
+            await loop.run_in_executor(
+                None,
+                functools.partial(pane.send_keys, f'"{escaped_message}"', enter=True),
+            )
 
             # Wait a moment then send Enter to ensure message is submitted
             await asyncio.sleep(1)
-            pane.send_keys("", enter=True)
+            await loop.run_in_executor(
+                None, functools.partial(pane.send_keys, "", enter=True)
+            )
 
             # Update last activity
             agent.last_activity = datetime.utcnow()
-            session.commit()
+            if owns_session:
+                await loop.run_in_executor(None, session.commit)
 
             logger.debug(f"Sent message to agent {agent_id}")
 
         except Exception as e:
             logger.error(f"Failed to send message to agent: {e}")
-            session.rollback()
+            if owns_session:
+                await loop.run_in_executor(None, session.rollback)
+            else:
+                raise
         finally:
-            session.close()
+            if owns_session:
+                await loop.run_in_executor(None, session.close)

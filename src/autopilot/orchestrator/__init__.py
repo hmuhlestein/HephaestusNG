@@ -2618,7 +2618,6 @@ def _build_and_start_pipeline_sdk(args, project_path: Path, logger: Orchestrator
         main_repo_path=str(project_path),
         project_root=str(project_path),
         auto_commit=True,
-        conflict_resolution="newest_file_wins",
         branch_prefix="agent-",
     )
 

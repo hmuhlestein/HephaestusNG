@@ -57,7 +57,12 @@ class HephaestusConfig:
     )
     branch_prefix: str = "agent-"
     auto_commit: bool = True
-    conflict_resolution: str = "newest_file_wins"
+    # No conflict_resolution option: ConflictResolver is unconditionally
+    # newest-file-wins. This field existed and was exported as a
+    # CONFLICT_RESOLUTION environment variable that nothing ever read --
+    # the same dead knob already removed from core Config as
+    # conflict_resolution_strategy (SOLID review 4.5). Do not re-add one
+    # without a resolver that actually branches on it.
 
     # Agent Configuration
     default_cli_tool: str = "claude"
@@ -156,7 +161,6 @@ class HephaestusConfig:
             "GIT_BASE_BRANCH": self.base_branch,
             "BRANCH_PREFIX": self.branch_prefix,
             "AUTO_COMMIT": str(self.auto_commit).lower(),
-            "CONFLICT_RESOLUTION": self.conflict_resolution,
             # Agent Configuration
             "DEFAULT_CLI_TOOL": self.default_cli_tool,
             "TMUX_SESSION_PREFIX": self.tmux_session_prefix,

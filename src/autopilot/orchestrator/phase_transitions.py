@@ -452,6 +452,26 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
                         _db4.commit()
             except Exception as e3:
                 logger.error(f"  Agent {agent_id[:8]} created for task {task_id[:8]} but failed to link it to the task row: {e3}")
+                # Left "pending" with assigned_agent_id still None, this task
+                # is invisible to every sweep: this function only re-queries
+                # status="failed", _clean_stale_assigned_tasks's terminated-
+                # agent pass requires assigned_agent_id isnot(None), and
+                # mechanical_recovery's detectors look their task up by a
+                # live agent id. Revert to "failed" (same terminal state the
+                # outer except below uses) so the next sweep tick retries it
+                # -- "Orphaned:" prefix matches this function's own is_orphan
+                # check above, so the real, still-live agent_id doesn't burn
+                # this task's retry budget for a DB write failure that had
+                # nothing to do with the agent's own work.
+                try:
+                    with get_db() as _db5:
+                        _t3 = _db5.query(Task).filter_by(id=task_id).first()
+                        if _t3 and _t3.status == "pending":
+                            _t3.status = "failed"
+                            _t3.failure_reason = f"Orphaned: agent {agent_id[:8]} created but failed to link to task row: {e3}"
+                            _db5.commit()
+                except Exception as e4:
+                    logger.error(f"  Failed to revert task {task_id[:8]} to failed after link failure: {e4}")
         except Exception as e:
             # Back to "failed" (not left "pending") so a later retry pass
             # -- this function, or _maybe_retry_failed_tasks -- gets
@@ -2672,13 +2692,36 @@ def _create_corrective_task_body(
         return None
 
     agent_id = agent_data.get("agent_id", "unknown")
-    with get_db() as db:
-        t = db.query(Task).filter_by(id=task_id).first()
-        if t:
-            t.assigned_agent_id = agent_id
-            t.status = "in_progress"
-            t.started_at = datetime.utcnow()
-            db.commit()
+    # The agent is already live at this point -- caught separately from the
+    # agent_data check above so a failure here isn't misreported as "agent
+    # creation failed". Left "pending" with assigned_agent_id still None on
+    # failure, this task is invisible to every sweep -- _clean_stale_
+    # assigned_tasks's terminated-agent pass requires assigned_agent_id
+    # isnot(None), and _retry_failed_tasks only re-queries status="failed".
+    # Revert to "failed" so the latter picks it up on its next ~20s tick.
+    # "Orphaned:" prefix matches that function's own is_orphan check, so the
+    # real, still-live agent_id doesn't burn this task's retry budget for a
+    # DB write failure unrelated to the agent's own work.
+    try:
+        with get_db() as db:
+            t = db.query(Task).filter_by(id=task_id).first()
+            if t:
+                t.assigned_agent_id = agent_id
+                t.status = "in_progress"
+                t.started_at = datetime.utcnow()
+                db.commit()
+    except Exception as e:
+        logger.error(f"[CORRECTIVE-TASK] Agent {agent_id[:8]} created for task {task_id[:8]} but failed to link it to the task row: {e}")
+        try:
+            with get_db() as db:
+                t = db.query(Task).filter_by(id=task_id).first()
+                if t and t.status == "pending":
+                    t.status = "failed"
+                    t.failure_reason = f"Orphaned: agent {agent_id[:8]} created but failed to link to task row: {e}"
+                    db.commit()
+        except Exception as e2:
+            logger.error(f"[CORRECTIVE-TASK] Failed to revert task {task_id[:8]} to failed after link failure: {e2}")
+        return None
 
     logger.info(f"[CORRECTIVE-TASK] Created task {task_id[:8]} and agent {agent_id[:8]} to fix: {feedback}")
     return task_id
@@ -2853,13 +2896,40 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: "OrchestratorLogger")
                 logger.warning(f"[RESUME] Failed to create agent for task {task_id[:8]}")
                 continue
             agent_id = agent_data.get("agent_id", "unknown")
-            with get_db() as db:
-                task = db.query(Task).filter_by(id=task_id).first()
-                if task:
-                    task.assigned_agent_id = agent_id
-                    task.status = "in_progress"
-                    task.started_at = datetime.utcnow()
-                    db.commit()
+            # Separate try -- the agent is already live at this point, so a
+            # failure here must not fall into the outer except below, which
+            # (correctly, for create_agent_for_task_direct itself failing)
+            # just logs and leaves the task "pending" for the *next* resume
+            # of this same workflow to retry. Left "pending" with
+            # assigned_agent_id still None, this task is invisible to every
+            # OTHER sweep too -- _clean_stale_assigned_tasks's terminated-
+            # agent pass requires assigned_agent_id isnot(None), and
+            # _retry_failed_tasks only re-queries status="failed". Revert to
+            # "failed" so that ~20s sweep picks it up without waiting on a
+            # human to explicitly resume this workflow again. "Orphaned:"
+            # prefix matches _retry_failed_tasks's own is_orphan check, so
+            # the real, still-live agent_id doesn't burn this task's retry
+            # budget for a DB write failure unrelated to the agent's work.
+            try:
+                with get_db() as db:
+                    task = db.query(Task).filter_by(id=task_id).first()
+                    if task:
+                        task.assigned_agent_id = agent_id
+                        task.status = "in_progress"
+                        task.started_at = datetime.utcnow()
+                        db.commit()
+            except Exception as e:
+                logger.error(f"[RESUME] Agent {agent_id[:8]} created for task {task_id[:8]} but failed to link it to the task row: {e}")
+                try:
+                    with get_db() as db:
+                        task = db.query(Task).filter_by(id=task_id).first()
+                        if task and task.status == "pending":
+                            task.status = "failed"
+                            task.failure_reason = f"Orphaned: agent {agent_id[:8]} created but failed to link to task row: {e}"
+                            db.commit()
+                except Exception as e2:
+                    logger.error(f"[RESUME] Failed to revert task {task_id[:8]} to failed after link failure: {e2}")
+                continue
             logger.info(f"[RESUME] Restarted task {task_id[:8]} with agent {agent_id[:8]}")
             restarted += 1
         except Exception as e:

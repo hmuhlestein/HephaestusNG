@@ -5,9 +5,11 @@ times, and each instance stayed hidden for the same reason -- the value the
 operator wrote happened to match the hardcoded default, so nothing looked
 wrong until someone changed it:
 
-  * `conflict_resolution_strategy` is read at exactly one site and never
-    branched on; `_resolve_conflicts` always runs newest-file-wins (original
-    review 4.5, still open).
+  * `conflict_resolution_strategy` was read at exactly one site and never
+    branched on; the resolver always runs newest-file-wins (original review
+    4.5). Since fixed by deleting the field rather than implementing it --
+    both in core Config and, later, in the SDK's HephaestusConfig, which was
+    still exporting a CONFLICT_RESOLUTION env var nothing read.
   * `orchestrator.max_task_retries` was read through a function that does not
     exist, inside `except Exception: max_retry = 5`. Configured 5, default 5.
   * `git.worktree_branch_prefix` was never read at all -- the loader reads
