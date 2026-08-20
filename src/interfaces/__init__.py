@@ -13,7 +13,6 @@ from .cli_interface import (
 )
 from .llm_interface import (
     LLM_PROVIDERS,
-    AnthropicProvider,
     LLMProviderInterface,
     OpenAIProvider,
     get_llm_provider,
@@ -22,7 +21,6 @@ from .llm_interface import (
 __all__ = [
     "LLMProviderInterface",
     "OpenAIProvider",
-    "AnthropicProvider",
     "LLM_PROVIDERS",
     "get_llm_provider",
     "CLIAgentInterface",

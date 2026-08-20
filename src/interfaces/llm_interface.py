@@ -428,163 +428,6 @@ Ensure the enriched description is actionable and the completion criteria are sp
         return self.model
 
 
-class AnthropicProvider(LLMProviderInterface):
-    """Anthropic Claude implementation."""
-
-    def __init__(self, api_key: str, model: str = "claude-3-opus-20240229"):
-        """Initialize Anthropic provider.
-
-        Args:
-            api_key: Anthropic API key
-            model: Model to use
-        """
-        import anthropic
-
-        self.client = anthropic.AsyncAnthropic(api_key=api_key)
-        self.model = model
-
-    async def enrich_task(
-        self,
-        task_description: str,
-        done_definition: str,
-        context: List[str],
-        phase_context: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Enrich task using Claude."""
-        phase_info = f"\n\n# Phase info\n{phase_context}" if phase_context else ""
-        prompt = f"""Analyze and enrich this task for an AI agent orchestration system.
-
-Task: {task_description}
-Done Definition: {done_definition}
-Context: {" ".join(context[:10])}{phase_info}
-
-Provide a JSON response with these exact keys:
-- enriched_description: Clear, unambiguous task description
-- completion_criteria: List of specific, measurable criteria
-- agent_prompt: System prompt for the executing agent
-- required_capabilities: List of required capabilities
-- estimated_complexity: Integer 1-10
-
-Make the description actionable and criteria verifiable."""
-
-        try:
-            response = await self.client.messages.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=16000,
-            )
-
-            # Claude returns text, so we need to parse JSON from it
-            content = response.content[0].text
-            # Try to extract JSON from the response
-            import re
-
-            json_match = re.search(r"\{.*\}", content, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
-            else:
-                raise ValueError("No JSON found in response")
-
-        except Exception as e:
-            logger.error(f"Failed to enrich task with Claude: {e}")
-            return {
-                "enriched_description": task_description,
-                "completion_criteria": [done_definition],
-                "agent_prompt": f"Complete this task: {task_description}",
-                "required_capabilities": ["general"],
-                "estimated_complexity": 5,
-            }
-
-    async def generate_embedding(self, text: str) -> List[float]:
-        """Generate embedding.
-
-        Note: Claude doesn't provide embeddings directly, so we'd need to use
-        a separate service or fallback to OpenAI for embeddings.
-        """
-        logger.warning("Claude doesn't provide embeddings, using placeholder")
-        # In production, you'd want to use a dedicated embedding service
-        return [0.0] * 1536
-
-    async def generate_agent_prompt(
-        self,
-        task: Dict[str, Any],
-        memories: List[Dict[str, Any]],
-        project_context: str,
-        phase_name: str = None,
-    ) -> str:
-        """Generate agent system prompt."""
-        from src.prompts.loader import get_phase_system_prompt
-
-        memory_context = "\n".join(
-            [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
-        )
-
-        specialized = get_phase_system_prompt(
-            phase_name,
-            agent_id=task.get("agent_id", "unknown"),
-            task_id=task.get("id", "unknown"),
-            memory_context=memory_context,
-            project_context=project_context,
-        )
-        if specialized:
-            return specialized
-
-        return get_base_system_prompt(
-            agent_id=task.get("agent_id", "unknown"),
-            task_id=task.get("id", "unknown"),
-            memory_context=memory_context,
-            project_context=project_context,
-        )
-
-    async def analyze_agent_trajectory(
-        self,
-        agent_output: str,
-        accumulated_context: Dict[str, Any],
-        past_summaries: List[Dict[str, Any]],
-        task_info: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Analyze agent using trajectory thinking."""
-        # For now, return default - can be implemented with Claude API later
-        logger.warning(
-            "Trajectory analysis not fully implemented for Anthropic provider"
-        )
-        return {
-            "current_phase": "implementation",
-            "trajectory_aligned": True,
-            "alignment_score": 0.7,
-            "alignment_issues": [],
-            "progress_estimate": 50,
-            "needs_steering": False,
-            "steering_type": None,
-            "steering_recommendation": None,
-            "trajectory_summary": "Using default trajectory analysis",
-        }
-
-    async def analyze_system_coherence(
-        self,
-        guardian_summaries: List[Dict[str, Any]],
-        system_goals: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Analyze system-wide coherence from Guardian summaries."""
-        # For now, return default - can be implemented with Claude API later
-        logger.warning(
-            "System coherence analysis not fully implemented for Anthropic provider"
-        )
-        return {
-            "coherence_score": 0.7,
-            "duplicates": [],
-            "collective_progress": 50,
-            "alignment_issues": [],
-            "termination_recommendations": [],
-            "coordination_needs": [],
-            "system_summary": "Using default coherence analysis",
-        }
-
-    def get_model_name(self) -> str:
-        """Get model name."""
-        return self.model
-
-
 class OpenRouterProvider(OpenAIProvider):
     """OpenRouter provider (OpenAI-compatible API with custom base URL)."""
 
@@ -609,7 +452,6 @@ class OpenRouterProvider(OpenAIProvider):
 # Registry for LLM providers
 LLM_PROVIDERS = {
     "openai": OpenAIProvider,
-    "anthropic": AnthropicProvider,
     "openrouter": OpenRouterProvider,
 }
 
@@ -628,7 +470,7 @@ def get_llm_provider() -> LLMProviderInterface:
 
     # model_assignments (hephaestus_config.yaml) is required -- MultiProviderLLM
     # is the only supported prompt source. This used to silently fall back to
-    # single-provider mode (OpenAIProvider/AnthropicProvider) on any failure
+    # single-provider mode (e.g. OpenAIProvider) on any failure
     # here, including a merely-missing config -- those legacy providers carry
     # their own separate copies of every prompt LangChainLLMClient builds, so
     # a silent fallback meant a misconfigured deployment could run for a long
