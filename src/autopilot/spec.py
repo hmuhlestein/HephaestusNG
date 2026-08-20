@@ -286,6 +286,9 @@ def resolve_declared_output_path(
 _PHASE_OUTPUT_ARTIFACTS_CACHE: Dict[str, dict] = {}
 _OPTIONAL_PHASES_CACHE: Dict[str, set] = {}
 _MAX_REVIEW_RUNS_CACHE: Dict[tuple, Optional[int]] = {}
+_MAX_TASK_RETRIES_CACHE: Dict[str, int] = {}
+
+DEFAULT_MAX_TASK_RETRIES = 5
 
 
 def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:
@@ -433,6 +436,58 @@ def get_max_review_runs(workflow_id: Optional[str], phase_name: str) -> Optional
     except Exception as e:
         logger.debug(f"Could not load max_review_runs for {phase_name}: {e}")
         return None
+
+
+def get_max_task_retries(workflow_id: Optional[str]) -> int:
+    """workflow.yaml's `orchestrator.max_task_retries` -- how many times a
+    failed task may be retried before it is left failed for good.
+
+    The retry paths in phase_transitions.py were written to read this via
+    `spec.load_workflow_definition(...)`, a function that has never existed
+    here. Every one of those call sites sat inside `except Exception:
+    max_retry = 5`, so the ImportError was swallowed and the configured value
+    was never consulted -- documented behaviour (see
+    AUTOPILOT_REFACTOR_ANALYSIS.md) that the code did not implement. It went
+    unnoticed because the shipped config sets exactly 5, the same number as
+    the hardcoded fallback; changing it in workflow.yaml simply did nothing.
+
+    Falls back to DEFAULT_MAX_TASK_RETRIES when the workflow, its definition,
+    or the key is missing -- preserving the previous effective behaviour
+    rather than failing a retry decision over a config read.
+    """
+    if not workflow_id:
+        return DEFAULT_MAX_TASK_RETRIES
+
+    try:
+        from src.core.database import Workflow, get_db
+
+        with get_db() as session:
+            wf = session.query(Workflow).filter_by(id=workflow_id).first()
+            if not wf or not wf.definition_id:
+                return DEFAULT_MAX_TASK_RETRIES
+
+            if wf.definition_id in _MAX_TASK_RETRIES_CACHE:
+                return _MAX_TASK_RETRIES_CACHE[wf.definition_id]
+
+            from src.workflow_registry import _WORKFLOWS_DIR
+
+            workflow_yaml = _WORKFLOWS_DIR / wf.definition_id / "workflow.yaml"
+            value = DEFAULT_MAX_TASK_RETRIES
+            if workflow_yaml.exists():
+                import yaml
+
+                with open(workflow_yaml) as f:
+                    wf_config = yaml.safe_load(f)
+                configured = (wf_config or {}).get("orchestrator", {}).get(
+                    "max_task_retries"
+                )
+                if isinstance(configured, int) and configured >= 0:
+                    value = configured
+            _MAX_TASK_RETRIES_CACHE[wf.definition_id] = value
+            return value
+    except Exception as e:
+        logger.debug(f"Could not load max_task_retries for {workflow_id}: {e}")
+        return DEFAULT_MAX_TASK_RETRIES
 
 
 def get_review_findings_history(workflow_id: str, phase_name: str) -> list:
