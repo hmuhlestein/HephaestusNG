@@ -252,11 +252,17 @@ def _get_or_create_project_id(project_path: str) -> str:
     with get_db() as db:
         proj = db.query(AutopilotProject).filter_by(base_dir=str(project)).first()
         if not proj:
+            from src.services.system_settings import get_default_cost_limit
+
+            # Apply the system default spend cap (settings:default_cost_limit_usd).
+            # Passed the in-flight session deliberately: opening a nested get_db()
+            # mid-flush is how SQLite deadlocks.
             proj = AutopilotProject(
                 id=f"proj-{_uuid.uuid4().hex[:12]}",
                 name=project.name,
                 base_dir=str(project),
                 is_active=False,
+                cost_limit_usd=get_default_cost_limit(db),
             )
             db.add(proj)
             try:

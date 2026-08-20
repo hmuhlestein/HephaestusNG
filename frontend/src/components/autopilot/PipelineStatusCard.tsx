@@ -151,12 +151,20 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, pending
                     ? 'cursor-pointer hover:bg-white/15 hover:border-white/20 hover:underline active:scale-95'
                     : 'cursor-default'
                 }`}
-                title="View budget"
+                title={costLimit != null ? 'View or change the spend limit' : 'No spend limit set — click to set one'}
               >
                 <div className="flex items-center justify-center gap-1 mb-1">
                   <span className="text-xs text-white/60 uppercase tracking-wider">Budget</span>
                 </div>
                 <CostDisplay currentCost={costTotal} costLimit={costLimit} showProgress={false} variant="large" />
+                {/* Without this the tile shows spend only, with nothing to
+                    indicate a limit CAN be set -- the feature was reachable
+                    but invisible unless you already knew to click. */}
+                {costLimit == null && onBudgetClick && (
+                  <span className="mt-0.5 block text-[10px] leading-none text-white/50">
+                    no limit · set one
+                  </span>
+                )}
               </button>
             )}
 

@@ -164,12 +164,18 @@ def _create_offline(name: str, path: str, is_default: bool):
 
         is_first = session.query(AutopilotProject).count() == 0
 
+        from src.services.system_settings import get_default_cost_limit
+
+        # Apply the system default spend cap (settings:default_cost_limit_usd).
+        # Passed the in-flight session deliberately: opening a nested get_db()
+        # mid-flush is how SQLite deadlocks.
         proj = AutopilotProject(
             id=f"proj-{uuid.uuid4().hex[:12]}",
             name=name,
             base_dir=path,
             is_default=is_default or is_first,
             is_active=is_first or is_default,
+            cost_limit_usd=get_default_cost_limit(session),
         )
         session.add(proj)
         session.commit()

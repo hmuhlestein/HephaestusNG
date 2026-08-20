@@ -430,11 +430,17 @@ async def create_project(
         if req.is_default:
             db.query(AutopilotProject).update({"is_default": False})
 
+        from src.services.system_settings import get_default_cost_limit
+
+        # Apply the system default spend cap (settings:default_cost_limit_usd).
+        # Passed the in-flight session deliberately: opening a nested get_db()
+        # mid-flush is how SQLite deadlocks.
         proj = AutopilotProject(
             id=f"proj-{uuid.uuid4().hex[:12]}",
             name=req.name,
             base_dir=resolved,
             is_default=req.is_default,
+            cost_limit_usd=get_default_cost_limit(db),
         )
         db.add(proj)
         db.flush()
@@ -722,6 +728,40 @@ async def delete_project(
 
     _invalidate("queue", "status", f"project_designs:{project_id}")
     return {"deleted": project_id}
+
+class DefaultBudgetUpdate(BaseModel):
+    """None clears the default; a positive number sets it."""
+
+    default_cost_limit_usd: Optional[float] = None
+
+
+@router.get("/settings/default-budget")
+async def get_default_budget():
+    """The system-wide default spend cap applied to newly created projects."""
+    from src.services.system_settings import get_default_cost_limit
+
+    loop = asyncio.get_running_loop()
+    value = await loop.run_in_executor(None, get_default_cost_limit)
+    return {"default_cost_limit_usd": value}
+
+
+@router.put("/settings/default-budget")
+async def put_default_budget(req: DefaultBudgetUpdate):
+    """Set or clear the default. Existing projects are untouched -- this only
+    seeds projects created afterwards, so raising it does not silently widen
+    the cap on a project someone deliberately constrained."""
+    from src.services.system_settings import set_default_cost_limit
+
+    loop = asyncio.get_running_loop()
+    try:
+        value = await loop.run_in_executor(
+            None, set_default_cost_limit, req.default_cost_limit_usd
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _invalidate("status")
+    return {"default_cost_limit_usd": value}
+
 
 @router.post("/cost-entries")
 async def create_cost_entry(
