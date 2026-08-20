@@ -701,6 +701,18 @@ def run_single_workflow(
 
     stuck_count = 0
     credit_stuck_count = 0
+    # Consecutive-poll counter guarding the "no tasks exist" HARD_ERROR
+    # verdict below against a single transient get_tasks() DB failure --
+    # get_tasks() swallows its own exceptions and returns [] on failure,
+    # indistinguishable from "genuinely no tasks in this status" to every
+    # caller. A lone bad poll (e.g. SQLite write contention, a documented
+    # recurring issue elsewhere in this codebase) landing on all of
+    # pending/in_progress/non_terminal/done simultaneously previously
+    # killed a healthy, actively-progressing workflow outright. Requiring
+    # the same verdict on a second, independent poll before acting matches
+    # this file's own established pattern for exactly this class of
+    # false-positive (see STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS above).
+    no_tasks_streak = 0
     start_time = time.time()
     _last_phase_states: dict = {}  # phase_name -> status, for transition detection
     _last_agent_states: dict = {}  # agent_id -> (status, phase_label), for spawn/terminate detection
@@ -812,6 +824,8 @@ def run_single_workflow(
             needs_work = get_tasks(status="needs_work", workflow_id=exec_id)
             blocked = get_tasks(status="blocked", workflow_id=exec_id)
             non_terminal = assigned + queued + under_review + validation + needs_work + blocked
+            if active_agents or pending or in_progress or non_terminal or done:
+                no_tasks_streak = 0
 
             # Agent scheduling is handled by the server's background_queue_processor.
             # Stuck-agent detection is handled by Guardian/Conductor.
@@ -921,9 +935,15 @@ def run_single_workflow(
                         state.current_workflow_id = None
                     return FeatureRunStatus.COMPLETED
                 elif elapsed > 300 and not done:
-                    # No tasks AND no done tasks after 5 minutes — something is wrong
-                    logger.error(f"No tasks exist after {elapsed}s — workflow appears broken")
-                    return FeatureRunStatus.HARD_ERROR
+                    # No tasks AND no done tasks after 5 minutes — something
+                    # is wrong. Confirmed on a second consecutive poll before
+                    # acting -- see no_tasks_streak's declaration above for
+                    # why a single poll isn't trusted alone.
+                    no_tasks_streak += 1
+                    if no_tasks_streak >= 2:
+                        logger.error(f"No tasks exist after {elapsed}s (confirmed on {no_tasks_streak} consecutive polls) — workflow appears broken")
+                        return FeatureRunStatus.HARD_ERROR
+                    logger.warning(f"No tasks exist after {elapsed}s — reconfirming next poll before declaring the workflow broken")
 
             out_of_credits, credit_reason = check_api_credits()
             if out_of_credits:
@@ -1467,14 +1487,24 @@ def run_phase0(
 
 
 def _should_pause_for_review(project_id: str) -> bool:
-    """Return True if this project has review_mode enabled."""
+    """Return True if this project has review_mode enabled.
+
+    Fails safe (True) on a DB error, not silently False. review_mode is a
+    deliberate operator setting gating risky autonomous actions (Phase 0
+    creating Feature rows from an unapproved decomposition, a feature
+    proceeding without human sign-off) behind human approval -- for every
+    caller of this function, True routes into a normal, visible "paused for
+    review" state a human clears the same way a genuine review pause is
+    cleared, while a wrongly-False result here means the gate is silently
+    skipped entirely, with no visible sign anything was bypassed.
+    """
     try:
         from src.core.database import AutopilotProject, get_db
         with get_db() as db:
             proj = db.query(AutopilotProject).get(project_id)
             return bool(proj and getattr(proj, "review_mode", False))
     except Exception:
-        return False
+        return True
 
 
 def _pause_feature_for_review(feature_id: str, logger: "OrchestratorLogger") -> None:
@@ -2778,11 +2808,17 @@ def run_continuous_pipeline(args) -> None:
 
                         is_complete, reason = is_design_fully_complete(state.current_workflow_id, logger)
 
-                        # Periodic stale task cleanup (every cycle)
+                        # Periodic stale task cleanup (every cycle). Logged
+                        # at warning, not debug (invisible at production log
+                        # levels) -- if this starts failing every cycle,
+                        # tasks stuck "assigned"/"in_progress" under
+                        # terminated agents stop getting cleaned up with no
+                        # visible sign the self-heal itself has stopped
+                        # working.
                         try:
                             _clean_stale_assigned_tasks(state.current_workflow_id, logger)
                         except Exception as e:
-                            logger.debug(f"Stale task cleanup error: {e}")
+                            logger.warning(f"Stale task cleanup error: {e}")
 
                         if not is_complete:
                             logger.info(f"Previous workflow not yet complete: {reason}")
@@ -2845,7 +2881,25 @@ def run_continuous_pipeline(args) -> None:
                             logger.info(f"Previous workflow fully complete: {reason}")
                             state.current_workflow_id = None
                 except Exception as e:
-                    logger.warning(f"Warning: Could not check active workflows: {e}")
+                    # This except wraps the ENTIRE protective-gating section
+                    # above (still_blocking / _has_resumable_active_design /
+                    # state.current_workflow_id verification) -- previously,
+                    # any failure inside it (a transient DB error, not just
+                    # one specific check) was logged as a mere warning and
+                    # fell straight through to pick_next_design below with
+                    # every protection bypassed. run_single_workflow's
+                    # default pause_existing=True terminates every other
+                    # active workflow's agents project-wide, so dispatching
+                    # a new design here on an UNVERIFIED "nothing else is
+                    # active" could kill a genuinely in-progress design's
+                    # agents mid-work. Treat "couldn't verify" as "not safe
+                    # to proceed yet" instead -- skip this scan cycle and
+                    # let the gate re-run cleanly next time, matching the
+                    # "wait and retry" pattern already used for the
+                    # confirmed-active-workflow case above.
+                    logger.warning(f"Warning: Could not check active workflows, skipping this scan cycle: {e}")
+                    _interruptible_sleep(POLL_INTERVAL, current_project_id)
+                    continue
 
                 next_design = pick_next_design(queue_dir, processed_hashes, logger, project_id=current_project_id)
 

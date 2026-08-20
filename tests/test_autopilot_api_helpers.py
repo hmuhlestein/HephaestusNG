@@ -253,3 +253,44 @@ class TestStartPipelineConcurrencyCap:
 
         assert result == {"started": True}
         fake_service.start.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_zombie_check_db_failure_fails_conservative_not_destructive(self):
+        """Regression (SOLID review Theme B, 2026-08-20): a transient DB
+        error inside the zombie-detection query itself used to be treated
+        the same as a CONFIRMED zombie, falling through to
+        `await service.stop()` -- unconditionally killing a pipeline that,
+        per service.running, is otherwise believed healthy and actively
+        running. It must now fail conservative instead, matching the
+        non-zombie branch's own behavior: raise 409 "already running" and
+        leave the service alone."""
+        from fastapi import HTTPException
+        from sqlalchemy.exc import OperationalError
+
+        import src.core.database as db_module
+        from src.mcp.autopilot.control_routes import start_pipeline
+
+        fake_registry = Mock()
+        fake_registry.try_reserve.return_value = (True, "")
+
+        fake_service = Mock()
+        fake_service.running = True
+        fake_service._start_time = time.time() - 999  # past the 45s grace period
+        fake_service.stop = AsyncMock()
+
+        def _raise(*a, **kw):
+            raise OperationalError("SELECT ...", {}, Exception("database is locked"))
+
+        with patch(
+            "src.autopilot.orchestrator.state._get_or_create_project_id",
+            return_value="proj-a",
+        ), patch(
+            "src.autopilot.service.get_registry", return_value=fake_registry
+        ), patch(
+            "src.autopilot.service.get_autopilot_service", return_value=fake_service
+        ), patch.object(db_module, "get_db", _raise):
+            with pytest.raises(HTTPException) as exc_info:
+                await start_pipeline("/some/running/project")
+
+        assert exc_info.value.status_code == 409
+        fake_service.stop.assert_not_awaited()

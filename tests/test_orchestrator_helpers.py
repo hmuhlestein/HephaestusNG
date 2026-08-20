@@ -936,6 +936,52 @@ class TestHasResumableActiveDesign:
         assert _has_resumable_active_design(None) is False
 
 
+class TestShouldPauseForReview:
+    """Regression (SOLID review Theme B, 2026-08-20): _should_pause_for_review
+    used to fail open (return False, "no review needed") on a DB error --
+    for every one of its 5 call sites, that meant review_mode's human-
+    approval gate could be silently skipped entirely on a transient DB
+    hiccup, with no visible sign anything was bypassed. It now fails safe
+    (True), which routes into a normal, human-clearable "paused for review"
+    state instead -- worst case an unnecessary pause, not a silently
+    skipped checkpoint."""
+
+    def test_true_when_review_mode_enabled(self, orch_db_env):
+        from src.autopilot.orchestrator import _should_pause_for_review
+        from src.core.database import AutopilotProject
+
+        session = orch_db_env.get_session()
+        session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp", review_mode=True))
+        session.commit()
+        session.close()
+
+        assert _should_pause_for_review("proj-1") is True
+
+    def test_false_when_review_mode_disabled(self, orch_db_env):
+        from src.autopilot.orchestrator import _should_pause_for_review
+        from src.core.database import AutopilotProject
+
+        session = orch_db_env.get_session()
+        session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp", review_mode=False))
+        session.commit()
+        session.close()
+
+        assert _should_pause_for_review("proj-1") is False
+
+    def test_fails_safe_to_true_on_a_db_error(self, orch_db_env, monkeypatch):
+        from sqlalchemy.exc import OperationalError
+
+        import src.core.database as db_module
+        from src.autopilot.orchestrator import _should_pause_for_review
+
+        def _raise(*a, **kw):
+            raise OperationalError("SELECT ...", {}, Exception("database is locked"))
+
+        monkeypatch.setattr(db_module, "get_db", _raise)
+
+        assert _should_pause_for_review("proj-1") is True
+
+
 class TestCreateFeatureFolder:
     def test_creates_folder(self, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger

@@ -286,7 +286,11 @@ class Terminator:
                     from src.services.cost_collection_service import collect_task_cost
                     collect_task_cost(agent.current_task_id)
                 except Exception as e:
-                    logger.debug(f"[COST-COLLECT] Failed on terminate for agent {agent_id[:8]}: {e}")
+                    # Logged at warning, not debug (invisible at production
+                    # log levels) -- billing/cost data for this agent's run
+                    # is silently lost otherwise, with no visible sign it
+                    # happened.
+                    logger.warning(f"[COST-COLLECT] Failed on terminate for agent {agent_id[:8]}: {e}")
 
             # The DB half of termination -- the three-field invariant and
             # the release of any Task still pointing at this agent -- is

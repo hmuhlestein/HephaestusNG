@@ -703,7 +703,12 @@ def _resolve_agent_current_phase(agent_id: str, workflow_id: str) -> Optional[st
         if own_task and own_task.phase_id:
             return own_task.phase_id
     except Exception as e:
-        logger.debug(f"[_resolve_agent_current_phase] Failed: {e}")
+        # A DB failure here (not just "no assigned task found") previously
+        # logged at debug -- invisible at production log levels -- and
+        # then re-surfaced downstream as a misleading client-input-
+        # validation error telling the agent to supply phase_id explicitly,
+        # with no trace back to the real cause.
+        logger.warning(f"[_resolve_agent_current_phase] Failed: {e}")
     finally:
         session.close()
     return None

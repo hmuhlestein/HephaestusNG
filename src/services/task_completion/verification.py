@@ -188,14 +188,20 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
             if read_okf(found_path) is None:
                 invalid_frontmatter.append(f"{declared_output} (no valid OKF frontmatter block)")
 
-            # Security review must include ash scan results
+            # Security review must include ash scan results. Fails closed,
+            # not open, on a read error -- matching this function's own
+            # established philosophy (see the comment above): an I/O
+            # hiccup here previously skipped the check silently instead of
+            # rejecting, letting a security review whose scan section
+            # couldn't even be verified pass through undetected.
             if phase.name == "security_review" and declared_output == "security.md":
                 try:
                     content = found_path.read_text(errors="replace")
                     if "Automated Scan Results" not in content and "ash_results" not in content.lower():
                         invalid_frontmatter.append(f"{declared_output} (missing 'Automated Scan Results' section — ash scan not included)")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to read {declared_output} to verify ash scan results: {e}")
+                    invalid_frontmatter.append(f"{declared_output} (could not be read to verify ash scan results: {e})")
 
     if not missing and not invalid_frontmatter:
         return None
