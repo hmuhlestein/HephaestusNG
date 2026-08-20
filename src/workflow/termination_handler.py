@@ -27,6 +27,20 @@ class WorkflowTerminationHandler:
         """
         Terminate all aspects of a workflow when a result is validated.
 
+        This method owns the transaction: every DB mutation below runs in one
+        session and is committed once, at the end. The sub-steps used to
+        commit individually, so a failure in a later one left the earlier ones
+        durably applied -- typically every task marked failed while the
+        workflow itself stayed "active", which is the stale-active shape the
+        orchestrator has separate escalation machinery to clean up, and which
+        blocks the design queue until that fires.
+
+        Agent termination is the one step that cannot participate: killing a
+        tmux session is not reversible, and terminate_agent manages its own
+        transaction. A rollback here therefore leaves already-terminated
+        agents terminated -- recoverable (their tasks are reset rather than
+        stranded), unlike the partially-committed state above.
+
         Args:
             workflow_id: ID of the workflow to terminate
 
@@ -233,12 +247,18 @@ class WorkflowTerminationHandler:
                         }
                     )
 
-            session.commit()
+            # Flush, don't commit: terminate_workflow owns the transaction and
+            # commits once, after every sub-step has succeeded. The flush is
+            # required, not cosmetic -- these sessions are built with
+            # autoflush=False, and _cleanup_workflow_resources counts this
+            # workflow's still-pending tasks straight after. Without it that
+            # count reads pre-cancellation state and leaves the phase
+            # execution in_progress with every one of its tasks failed.
+            session.flush()
             return tasks_cancelled
 
         except Exception as e:
             logger.error(f"Error cancelling workflow tasks: {e}")
-            session.rollback()
             raise
 
     async def _cleanup_workflow_resources(
@@ -281,7 +301,7 @@ class WorkflowTerminationHandler:
                             "action": "abandon_worktree",
                             "details": f"Abandoned worktree for agent {worktree.agent_id}",
                             "success": True,
-                            "branch_path": worktree.branch_path,
+                            "branch_path": worktree.worktree_path,
                         }
                     )
                     logger.debug(f"Abandoned worktree for agent {worktree.agent_id}")
@@ -364,14 +384,13 @@ class WorkflowTerminationHandler:
                         }
                     )
 
-            session.commit()
+            # No commit here either -- see _cancel_workflow_tasks.
             results["cleanup_actions"].extend(cleanup_actions)
 
             return cleanup_actions
 
         except Exception as e:
             logger.error(f"Error during resource cleanup: {e}")
-            session.rollback()
             raise
 
     def get_workflow_termination_status(self, workflow_id: str) -> Dict[str, Any]:
