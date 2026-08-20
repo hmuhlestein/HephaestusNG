@@ -6,7 +6,7 @@ Extracted from src/mcp/server.py (design_docs/phase_1c_server_decomposition.md).
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from src.core.database import (
     Task,
@@ -30,7 +30,7 @@ async def process_queue(project_id: Optional[str] = None):
             of competing for one global slot count, so a busier project
             can't starve a quieter one's queue. When omitted, behaves
             globally (original behavior, used by callers not yet updated
-            to pass project_id, e.g. terminate_and_process_queue below).
+            to pass project_id, e.g. terminate_agents_and_process_queue below).
     """
     from src.services.agent_dispatch_service import AgentDispatchService
     from src.services.task_enrichment_service import TaskEnrichmentService
@@ -227,6 +227,21 @@ from src.core.app_context import set_queue_processor as _set_queue_processor  # 
 
 _set_queue_processor(process_queue)
 
+
+async def terminate_agents_and_process_queue(
+    agent_manager, agent_ids: List[str], project_id: Optional[str] = None
+) -> None:
+    """Terminate one or more agents, then advance the queue once.
+
+    Consolidates the 4 near-identical "terminate + advance queue" closures
+    that were duplicated across _update_task_status_steps.py/memory_api.py
+    (SOLID review 1.17) -- each independently paired agent termination with
+    a process_queue() call, so a future edit applied to one copy but not
+    the others could silently stall the queue.
+    """
+    for agent_id in agent_ids:
+        await agent_manager.terminate_agent(agent_id)
+    await process_queue(project_id)
 
 
 async def background_queue_processor():

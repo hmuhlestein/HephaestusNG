@@ -936,12 +936,11 @@ async def submit_result_validation(
             )
 
         # Terminate validator agent and process queue
-        async def terminate_result_validator_and_process_queue():
-            await server_state.agent_manager.terminate_agent(agent_id)
-            from src.mcp.server.background_loops import process_queue
-            await process_queue()
+        from src.mcp.server.background_loops import terminate_agents_and_process_queue
 
-        asyncio.create_task(terminate_result_validator_and_process_queue())
+        asyncio.create_task(
+            terminate_agents_and_process_queue(server_state.agent_manager, [agent_id])
+        )
 
         # Broadcast validation result
         from src.core.database import resolve_project_for_workflow
