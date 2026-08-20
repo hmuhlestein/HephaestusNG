@@ -663,33 +663,45 @@ def run_health_audit(db_manager=None):
 
     # 2. Unmerged branches
     try:
-        # Get project path from active autopilot project
+        # Check every active project, not just one -- under the
+        # concurrent-active-projects model (max_concurrent_projects), more
+        # than one AutopilotProject.is_active row can be True at once, and
+        # a .first() here silently skipped unmerged-branch findings for
+        # every active project except whichever one the query happened to
+        # return.
         with get_db() as _db:
             from src.core.database import AutopilotProject
 
-            _proj = _db.query(AutopilotProject).filter_by(is_active=True).first()
-            project_path = _proj.base_dir if _proj else os.getenv("PROJECT_PATH")
-        if not project_path:
-            return findings  # Can't check without a project path
-        result = subprocess.run(
-            ["git", "branch", "--list", "agent-*"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=project_path,
-        )
-        if result.returncode == 0:
-            branches = [b.strip().lstrip("* ") for b in result.stdout.strip().split("\n") if b.strip()]
-            if branches:
-                findings.append(
-                    {
-                        "type": "unmerged_branches",
-                        "severity": "info",
-                        "message": f"{len(branches)} unmerged agent branch(es)",
-                        "branches": branches[:10],
-                        "action": "heph cleanup branches",
-                    }
-                )
+            active_projects = (
+                _db.query(AutopilotProject).filter_by(is_active=True).all()
+            )
+            project_paths = [p.base_dir for p in active_projects if p.base_dir]
+        if not project_paths:
+            fallback_path = os.getenv("PROJECT_PATH")
+            if fallback_path:
+                project_paths = [fallback_path]
+
+        for project_path in project_paths:
+            result = subprocess.run(
+                ["git", "branch", "--list", "agent-*"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=project_path,
+            )
+            if result.returncode == 0:
+                branches = [b.strip().lstrip("* ") for b in result.stdout.strip().split("\n") if b.strip()]
+                if branches:
+                    findings.append(
+                        {
+                            "type": "unmerged_branches",
+                            "severity": "info",
+                            "message": f"{len(branches)} unmerged agent branch(es)",
+                            "branches": branches[:10],
+                            "action": "heph cleanup branches",
+                            "project_path": project_path,
+                        }
+                    )
     except Exception:
         pass
 
