@@ -1689,10 +1689,16 @@ def synthetic_clean_result(phase_name: str, run_count: int) -> Dict[str, Any]:
     goto'd back to development -- burning through max_total_gotos faster
     than not capping at all would have.
     """
-    # type: matches validate_gate_result_schema's expected `type` for this
-    # phase (GATE_RESULT_TYPE_OVERRIDE, the same source of truth) -- without
-    # it this synthetic result would fail the very check a real agent's
-    # report has to pass.
+    # The `type` field matches validate_gate_result_schema's expectation for
+    # this phase (GATE_RESULT_TYPE_OVERRIDE, the same source of truth) --
+    # without it this synthetic result would fail the very check a real
+    # agent's report has to pass.
+    #
+    # Do not start this comment with "type:" -- mypy parses a `# type: ...`
+    # comment as a PEP 484 type annotation, fails to parse the prose after
+    # it, and reports "Invalid syntax" here. That error is fatal to the whole
+    # run ("errors prevented further checking"), so it silently disabled type
+    # checking across all of src/ for as long as it was present.
     base = {"type": expected_gate_result_type(phase_name), "capped": True, "capped_after_runs": run_count}
     if phase_name == "qa_validation":
         return {
