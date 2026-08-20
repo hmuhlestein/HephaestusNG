@@ -241,7 +241,7 @@ class GuardianDispatcher:
                             agent_id=agent.id,
                             confidence=0.7,
                             evidence=f"Guardian detected {steering_type}: "
-                            f"{analysis.get('summary', '')[:100]}",
+                            f"{analysis.get('trajectory_summary', '')[:100]}",
                             metadata={
                                 "steering_type": steering_type,
                                 "consecutive_flags": consecutive_stuck,
