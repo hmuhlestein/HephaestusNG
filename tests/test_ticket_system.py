@@ -614,6 +614,66 @@ async def test_link_commit_offloads_get_commit_stats(
 
 
 @pytest.mark.asyncio
+async def test_change_status_with_commit_sha_shares_one_db_session(
+    db_manager, test_workflow, test_agent, test_board_config
+):
+    """Regression: change_status's commit-linking call opened its own,
+    independent get_db() session instead of participating in the
+    caller's own transaction -- non-atomic (an exception in one session
+    could not roll back writes already committed in the other). Fixed
+    by threading db=db through link_commit."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from src.services.ticket_service import get_db as real_get_db
+
+    ticket = await TicketService.create_ticket(
+        workflow_id=test_workflow,
+        agent_id=test_agent,
+        title="Test ticket",
+        description="Test description",
+        ticket_type="task",
+        priority="medium",
+    )
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = AsyncMock(
+        return_value={"files_changed": 0, "insertions": 0, "deletions": 0, "files_list": []}
+    )
+
+    call_count = 0
+
+    def counting_get_db(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return real_get_db(*args, **kwargs)
+
+    with patch(
+        "src.services.ticket_service.get_db", side_effect=counting_get_db
+    ), patch("asyncio.get_event_loop", return_value=fake_loop):
+        result = await TicketService.change_status(
+            ticket_id=ticket["ticket_id"],
+            agent_id=test_agent,
+            new_status="in_progress",
+            comment="Starting work on this ticket",
+            commit_sha="abc123def456",
+        )
+
+    assert result["success"] is True
+    assert call_count == 1
+
+    session = db_manager.get_session()
+    try:
+        commit = (
+            session.query(TicketCommit)
+            .filter_by(ticket_id=ticket["ticket_id"], commit_sha="abc123def456")
+            .first()
+        )
+        assert commit is not None
+    finally:
+        session.close()
+
+
+@pytest.mark.asyncio
 async def test_get_tickets_by_workflow(
     db_manager, test_workflow, test_agent, test_board_config
 ):
