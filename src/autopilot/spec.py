@@ -452,6 +452,202 @@ def get_review_findings_history(workflow_id: str, phase_name: str) -> list:
         return list(row.value) if row and row.value else []
 
 
+_PHASE_INPUTS_CACHE: Dict[str, dict] = {}
+
+
+def load_phase_inputs(workflow_id: Optional[str] = None) -> dict:
+    """workflow.yaml's `phase_inputs:` block: {phase_name: {required: [...],
+    optional: [...]}}.
+
+    Read from disk per definition_id, the same way load_phase_output_artifacts
+    reads `required_output:`, and for the same reason: Phase.outputs and
+    friends are snapshotted into the DB at workflow-creation time and never
+    re-read, so anything declared per-phase reaches only workflows created
+    afterwards. Runs already in flight are exactly the ones most likely to be
+    missing an input.
+    """
+    if workflow_id is None:
+        return {}
+    try:
+        from src.core.database import DatabaseManager, Workflow
+
+        session = DatabaseManager(None).get_session()
+        try:
+            wf = session.query(Workflow).filter_by(id=workflow_id).first()
+            if not wf or not wf.definition_id:
+                return {}
+            cached = _PHASE_INPUTS_CACHE.get(wf.definition_id)
+            if cached is not None:
+                return cached
+            from src.workflow_registry import _WORKFLOWS_DIR
+
+            workflow_yaml = _WORKFLOWS_DIR / wf.definition_id / "workflow.yaml"
+            declared = {}
+            if workflow_yaml.exists():
+                cfg = yaml.safe_load(workflow_yaml.read_text()) or {}
+                declared = cfg.get("phase_inputs") or {}
+            _PHASE_INPUTS_CACHE[wf.definition_id] = declared
+            return declared
+        finally:
+            session.close()
+    except Exception as e:
+        logger.debug(f"Could not load phase_inputs from workflow.yaml: {e}")
+        return {}
+
+
+_INPUT_PRODUCERS_CACHE: Dict[str, Dict[str, list]] = {}
+
+
+def input_producer_phases(workflow_id: Optional[str], filename: str) -> list:
+    """Which phases are documented to write `filename`, so a consumer knows
+    which .hephaestus/<phase_name>/ subdirectories to look in.
+
+    Built from the workflow definition's OWN declarations -- each phase
+    YAML's `outputs:` list plus workflow.yaml's `required_output:` block --
+    rather than a second hand-maintained filename->phase table that would
+    drift out of sync with them. Read from disk, not the DB, for the reason
+    load_phase_inputs documents.
+
+    Deliberately NOT a directory scan of .hephaestus/*/: iterating whatever
+    subdirectory happens to contain a same-named file risks picking up a
+    stale copy from an earlier retry pass, since filesystem order is not
+    "most recent" -- the same trap read_okf_report's docstring calls out.
+    """
+    if workflow_id is None:
+        return []
+    try:
+        from src.core.database import DatabaseManager, Workflow
+
+        session = DatabaseManager(None).get_session()
+        try:
+            wf = session.query(Workflow).filter_by(id=workflow_id).first()
+            if not wf or not wf.definition_id:
+                return []
+            cached = _INPUT_PRODUCERS_CACHE.get(wf.definition_id)
+            if cached is None:
+                from src.workflow_registry import _WORKFLOWS_DIR
+
+                wf_dir = _WORKFLOWS_DIR / wf.definition_id
+                cached = {}
+
+                def _record(basename: str, phase: str) -> None:
+                    cached.setdefault(basename, [])
+                    if phase not in cached[basename]:
+                        cached[basename].append(phase)
+
+                for phase_file in sorted(wf_dir.glob("*.yaml")):
+                    cfg = yaml.safe_load(phase_file.read_text()) or {}
+                    if phase_file.name == "workflow.yaml":
+                        for phase, declared in (cfg.get("required_output") or {}).items():
+                            entries = declared if isinstance(declared, list) else [declared]
+                            for entry in entries:
+                                _record(Path(entry).name, phase)
+                        continue
+                    name = cfg.get("name")
+                    if not name:
+                        continue
+                    for entry in _extract_declared_files(cfg.get("outputs")):
+                        _record(Path(entry).name, name)
+                _INPUT_PRODUCERS_CACHE[wf.definition_id] = cached
+            return list(cached.get(filename, []))
+        finally:
+            session.close()
+    except Exception as e:
+        logger.debug(f"Could not resolve producer phases for {filename}: {e}")
+        return []
+
+
+def resolve_phase_input(
+    working_directory: Any, filename: str, workflow_id: Optional[str] = None
+) -> Optional[Path]:
+    """Find an input file one phase produced and another consumes.
+
+    Checks every .hephaestus/<phase_name>/ subdirectory that a phase is
+    actually documented to write this filename into, then the flat
+    .hephaestus/ location, then the worktree root -- plus each candidate's
+    old-name alias, the same table read_okf_report and
+    resolve_declared_output_path use.
+
+    Unlike resolve_declared_output_path (which knows which phase it is
+    checking, and must NOT accept a gated phase's report from the flat
+    location) this is a consumer-side lookup: the reader does not care which
+    phase wrote the file or whether that phase was gated, only where it is.
+    Accepting the flat location here is therefore correct, not a loosening --
+    nothing scores off this result.
+    """
+    base = Path(working_directory)
+    names = [filename]
+    old_name = OUTPUT_NAME_ALIASES.get(filename)
+    if old_name:
+        names.append(old_name)
+    producers = input_producer_phases(workflow_id, filename)
+    for name in names:
+        candidates = [base / CONTEXT_DIR_NAME / producer / name for producer in producers]
+        candidates.append(base / CONTEXT_DIR_NAME / name)
+        candidates.append(base / name)
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def build_input_manifest(
+    workflow_id: Optional[str], phase_name: str, working_directory: Any
+) -> str:
+    """A concrete, per-run list of which declared inputs actually exist right
+    now, for injection into the phase's task description.
+
+    Returns "" when the phase declares no inputs or nothing can be resolved,
+    so callers can concatenate unconditionally.
+
+    This is the consumer-side counterpart to verify_output_artifact: outputs
+    have been checked for existence at completion for a while, inputs never
+    were at dispatch. A phase whose input is missing -- rewound by a goto,
+    deleted by consume_gate_artifacts, or never produced because an optional
+    phase was skipped -- previously found out by cat-ing a path and getting
+    nothing, with no way to tell "not produced this run" from "I guessed the
+    path wrong".
+    """
+    declared = load_phase_inputs(workflow_id).get(phase_name)
+    if not declared or not working_directory:
+        return ""
+
+    lines = []
+    missing_required = []
+    for kind in ("required", "optional"):
+        for filename in declared.get(kind) or []:
+            found = resolve_phase_input(working_directory, filename, workflow_id)
+            if found:
+                rel = Path(found)
+                try:
+                    rel = rel.relative_to(Path(working_directory))
+                except ValueError:
+                    pass
+                lines.append(f"  [present]  {filename}  ->  ./{rel}")
+            else:
+                lines.append(f"  [MISSING]  {filename}  ({kind})")
+                if kind == "required":
+                    missing_required.append(filename)
+    if not lines:
+        return ""
+
+    manifest = (
+        "\n\nINPUTS AVAILABLE TO YOU THIS RUN (resolved at dispatch, do not "
+        "guess these paths):\n" + "\n".join(lines)
+    )
+    if missing_required:
+        manifest += (
+            f"\n\nNOTE: {', '.join(missing_required)} "
+            f"{'is' if len(missing_required) == 1 else 'are'} normally "
+            "available to this phase and absent right now -- most likely the "
+            "producing phase was rewound by a goto, or its report was consumed "
+            "after a gate decision. Work from what IS present and say plainly "
+            "in your report what you could not check. Do NOT go looking for "
+            "these files in other feature folders or invent their contents."
+        )
+    return manifest
+
+
 def gate_finding_count(phase_name: str, result: Optional[Dict[str, Any]]) -> int:
     """How many unresolved findings a gated phase's own report records.
 

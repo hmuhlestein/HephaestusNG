@@ -1,6 +1,6 @@
 # Agent Prompt Progression — Verified Findings
 
-Status: findings 1–4 and the housekeeping items are **fixed** (see "What changed"). Findings 5–8 are open.
+Status: findings 1–7 and the housekeeping items are **fixed** (see "What changed"). Finding 8 is open and needs a product decision.
 
 This document replaces an earlier revision that was written by reading
 `config/workflows/autopilot/*.yaml` without reading `src/`. Roughly half of that
@@ -318,14 +318,16 @@ contradicts.
 
 | File | Change |
 |---|---|
-| `src/autopilot/spec.py` | `score_security_review`; `security_review` added to `GATE_RESULT_ARTIFACTS`, `GATE_RESULT_REQUIRED_KEYS`, `GATE_RESULT_TYPE_OVERRIDE`, `synthetic_clean_result`, `build_phase_output`; `gate_finding_count`; `resolve_declared_output_path`'s flat-location exclusion tests the path, not the phase |
+| `src/autopilot/spec.py` | `load_phase_inputs`, `input_producer_phases`, `resolve_phase_input`, `build_input_manifest` (finding 6); `score_security_review`; `security_review` added to `GATE_RESULT_ARTIFACTS`, `GATE_RESULT_REQUIRED_KEYS`, `GATE_RESULT_TYPE_OVERRIDE`, `synthetic_clean_result`, `build_phase_output`; `gate_finding_count`; `resolve_declared_output_path`'s flat-location exclusion tests the path, not the phase |
 | `src/phases/phase_manager.py` | findings history records the phase's own count via `gate_finding_count` |
 | `src/agents/prompt_builder.py` | injects `Artifacts Path (absolute)` |
-| `src/autopilot/orchestrator/phase_transitions.py` | `_stage_forensics_inputs`; called at forensics dispatch; `_cap_out_review_phase` docstring corrected |
+| `src/autopilot/orchestrator/phase_transitions.py` | injects the input manifest into every phase task description (finding 6); `_stage_forensics_inputs`; called at forensics dispatch; `_cap_out_review_phase` docstring corrected |
 | `src/services/task_completion/verification.py` | `verify_no_open_tickets` docstring corrected — it backstops ticketed findings now, it is no longer the whole gate; ash-scan check compares basenames so it fires for in-flight workflows |
 | `src/autopilot/orchestrator/worktree_integration.py` | missing-`scripts/ash` path writes the failure marker like every other path |
 | `config/workflows/autopilot/security_review.yaml` | `spec_gate: true`; gate frontmatter documented; count written after fixing, not before; declared output is the bare `security.md`; STEP 1 skip lists renumbered against the step titles; STEP 11 cross-reference corrected |
-| `config/workflows/autopilot/workflow.yaml` | `doc_review` conditions replaced with the reachable one |
+| `config/workflows/autopilot/workflow.yaml` | `doc_review` conditions replaced with the reachable one; `phase_inputs:` declarations (finding 6); THRESHOLD RATIONALE comment (finding 7) |
+| `config/workflows/autopilot/development.yaml` | stash-verify discipline extended to new-feature acceptance tests (finding 5) |
+| 5 phase YAMLs | pointer to the dispatch-resolved input manifest (finding 6) |
 | `config/workflows/autopilot/forensics_analysis.yaml` | paths, inputs, output location, dead mode branch |
 | 6 other phase YAMLs | `Docs Path` → `Artifacts Path` |
 | `tests/test_ash_scan.py` | missing-script assertion inverted to the intended behaviour |
@@ -343,28 +345,100 @@ its own scorer reads — the same class of mismatch that once made
 
 ---
 
-## Open findings
+## Findings 5-8
 
-**5. Test-first is mandated only for bug fixes.** `development.yaml` requires
-stash-verification that a test failed before the fix — for bug fixes only. New
-features can ship with tests written after the fact. A symmetric acceptance-test
-definition would close it. This one is real and unaddressed.
+**5. Test-first was mandated only for bug fixes.** (FIXED) `development.yaml`
+required stash-verification that a test failed before the fix — for bug fixes
+only. New features could ship with tests written after the fact.
 
-**6. No structured input validation.** Phases do enumerate their inputs in prose
-(`development.yaml` lists architecture.md, requirements.md, adversarial.md;
-`security_review.yaml` and `qa_validation.yaml` do the same), and Finding 3
-makes those paths resolvable. What is still missing is machine-checkable
-declaration: nothing validates that a phase's required inputs exist before
-dispatch, the way `verify_output_artifact` validates outputs after. That is a
-real asymmetry, but it is a feature, not a defect — and it is worth much less
-now that the paths resolve at all.
+The fix reframes the discipline rather than adding a second one. The property
+worth enforcing is not "test-first"; it is **prove the test fails without your
+code**, which applies identically to a bug fix and a new feature — stash the
+fix, or stash the implementation. Same four steps, same evidence. Writing the
+test first is then just the easier route to the same guarantee, not a separate
+requirement, so an agent that did TDD naturally is not made to redo anything.
 
-**7. Threshold rationale is undocumented.** `security_review` and `qa_validation`
-continue at 0.7 while `design_review` and `adversarial_review` continue at 0.6.
-The values are probably fine; nothing records why they differ, so nobody can
-tell a deliberate choice from an accident. Note that as of Finding 2 every
-remaining threshold in `workflow.yaml` is at least *reachable*, which was not
-true before.
+Two things the instruction has to say explicitly, or it is a no-op: `git stash
+push -u` (without `-u`, brand-new untracked source files are NOT stashed, the
+test keeps passing, and the verification looks done while proving nothing), and
+that an ImportError or collection error IS a valid failure for a module that
+does not exist yet.
+
+**6. No structured input validation.** (FIXED) Phases enumerated their inputs in
+prose. Prose tells an agent *why* it wants a file and nothing about whether the
+file is there — and an input a goto rewound, or that `consume_gate_artifacts`
+deleted after a gate decision, or that an optional phase never produced, reads
+exactly like one sitting on disk. The agent found out by `cat`-ing a path and
+getting nothing, with no way to tell "not produced this run" from "I guessed
+the path wrong".
+
+`phase_inputs:` in workflow.yaml declares what each phase consumes;
+`build_input_manifest` resolves each at dispatch and injects a per-run manifest
+into the task description:
+
+```
+INPUTS AVAILABLE TO YOU THIS RUN (resolved at dispatch, do not guess these paths):
+  [present]  architecture.md  ->  ./.hephaestus/architecture_design/architecture.md
+  [present]  requirements.md  ->  ./.hephaestus/requirements.md
+  [MISSING]  challenge.md  (optional)
+```
+
+Three deliberate design choices:
+
+- **Declared in workflow.yaml, not per-phase.** `Phase.outputs` is snapshotted
+  into the DB at workflow creation and never re-read, so a per-phase
+  declaration would reach only workflows created afterwards — the exact trap
+  that broke security_review for in-flight runs (Finding 1). workflow.yaml is
+  read from disk at dispatch.
+- **`required` is advisory, not a dispatch block.** Refusing to dispatch on a
+  missing input would deadlock the pipeline precisely when it is already
+  degraded. A missing required input is marked in the manifest with a note
+  explaining the likely cause and an instruction to work from what is present
+  and say so — not to hunt in other feature folders or invent contents.
+- **The producer map is derived, not hand-maintained.** Which
+  `.hephaestus/<phase>/` subdirectory holds a given file comes from the
+  workflow's own `outputs:` and `required_output:` declarations, so it cannot
+  drift out of sync with them. It is not a directory scan: iterating whatever
+  subdirectory happens to hold a same-named file risks a stale copy from an
+  earlier retry pass, the trap `read_okf_report` already documents.
+
+Two tests guard the declarations themselves — every declared input must have a
+real producer in this workflow, and every named phase must exist — so a typo
+shows up as a failing test rather than a permanently `[MISSING]` line in every
+run's manifest.
+
+**7. Threshold rationale was undocumented.** (FIXED) The question the earlier
+revision asked — "is doc review really less important than security?" — has a
+better answer than a guess at intent: **the numbers are not quality bars at
+all.** Enumerating every score every gated scorer can actually emit:
+
+```
+scope_review          0.2, 1.0          design_review         0.4, 0.5, 0.9
+adversarial_review    0.4, 0.5, 0.9     architectural_review  0.4, 0.5, 0.9
+security_review       0.4, 0.9          qa_validation         0.25, 0.5, 1.0
+product_validation    0.25, 0.5, 0.7, 0.85, 1.0
+```
+
+**No phase can produce a score in [0.6, 0.7).** The 0.6-vs-0.7 spread is
+therefore behaviourally inert — the two are interchangeable for every reachable
+input, and changing one to match the other would alter no outcome. It is
+cosmetic drift, not a policy anyone decided. What actually matters is that the
+bar sits above the "needs work" band, and that is now asserted per-phase.
+
+Also recorded: the `score < 0.3` architecture band is genuinely reachable only
+for `scope_review` (verdict FAIL), `qa_validation` (critical issues over the
+spec cap) and `product_validation` (an explicit ARCHITECTURE verdict). For the
+blocker-count scorers it is unreachable — their floor is 0.4, because no signal
+distinguishes "needs a code fix" from "needs a redesign". Those conditions are
+kept so the routing exists if such a signal is added; they are dead today,
+deliberately and knowably, which is the important distinction.
+
+`TestThresholdBandsAreCoherent` pins all of this, including the one property
+that matters: every non-passing score must fall below its own phase's bar, and
+every clean one must clear it. Verified to catch a real misconfiguration —
+dropping security_review's bar to 0.3 makes it fail with "a 'development'
+result scores 0.4, at or above its continue bar 0.3 — it would pass the gate".
+That is the exact bug class Finding 1 was.
 
 **8. Forensics findings still have no tracked path back.** The phase can now
 read its inputs and propose rewrites, and it files tickets. Nothing tracks which

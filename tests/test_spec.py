@@ -1,6 +1,7 @@
 """Tests for autopilot/spec.py — scoring, loading, phase output."""
 
 import json
+from pathlib import Path
 
 from src.autopilot.spec import (
     DEFAULT_SPEC,
@@ -700,6 +701,292 @@ class TestScoreSecurityReview:
         validate_gate_result_schema, not here -- this must not raise."""
         score, meta = score_security_review({"type": "security_review_report"})
         assert score >= 0.7
+
+
+def _reachable_scores(spec):
+    """Every (score, band) each gated phase's scorer can actually emit, for
+    the representative inputs its own documented schema allows. The band is
+    the scorer's OWN label ("pass" / "development" / "architecture"), so
+    callers don't have to guess which anchor constant a phase uses -- they
+    don't all use the same ones (scope_review emits 0.2/1.0 and never
+    touches _DEV at all)."""
+    from src.autopilot.spec import (
+        score_adversarial_review,
+        score_architectural_review,
+        score_design_review,
+        score_product_validation,
+        score_qa,
+        score_scope_review,
+        score_security_review,
+    )
+
+    def add(bucket, pair):
+        score, meta = pair
+        out[bucket].add((score, meta.get("band")))
+
+    out = {k: set() for k in (
+        "scope_review", "design_review", "adversarial_review",
+        "architectural_review", "security_review", "qa_validation",
+        "product_validation",
+    )}
+    for v in ("PASS", "FAIL"):
+        add("scope_review", score_scope_review({"type": "scope_review", "verdict": v}))
+    for bc in (0, 1, 4):
+        for second in (0, 2):
+            add("design_review",
+                score_design_review({"blocker_count": bc, "warning_count": second}))
+            add("adversarial_review",
+                score_adversarial_review({"blocker_count": bc, "warning_count": second}))
+            add("architectural_review",
+                score_architectural_review({"blocker_count": bc, "fix_count": second}))
+    for u in (0, 1, 5):
+        add("security_review",
+            score_security_review({"unresolved_count": u, "critical_count": u, "high_count": 0}))
+    for failed, total in ((0, 10), (1, 10), (10, 10)):
+        for ci in (0, 3):
+            for met in (10, 5):
+                add("qa_validation", score_qa({
+                    "type": "qa_validation", "passed_tests": total - failed,
+                    "failed_tests": failed, "total_tests": total,
+                    "pass_rate": (total - failed) / total * 100, "critical_issues": ci,
+                    "requirements_met": met, "requirements_total": 10,
+                }, spec, working_directory=None))
+    for verdict in ("PASS", "PASS_WITH_MINOR_GAPS", "FAIL", "ARCHITECTURE", ""):
+        for unmet in ([], ["a"], ["a", "b", "c"]):
+            for agent_score in (0.0, 1.0):
+                add("product_validation", score_product_validation({
+                    "type": "product_validation", "verdict": verdict,
+                    "unmet_requirements": unmet, "agent_score": agent_score,
+                }, spec))
+    return out
+
+
+class TestInputManifest:
+    """Phase prompts have always named their inputs in prose
+    ("requirements.md (from Artifacts Path) - REQ-XX requirements to
+    implement"). Prose tells an agent WHY it wants a file and nothing about
+    whether the file is there -- an input a goto rewound, or that
+    consume_gate_artifacts deleted after a gate decision, or that an optional
+    phase never produced, reads exactly like one sitting on disk. The
+    manifest resolves them at dispatch so the agent stops guessing.
+
+    Consumer-side counterpart to verify_output_artifact: outputs have been
+    existence-checked at completion for a while; inputs never were."""
+
+    _PRODUCERS = {
+        "architecture.md": ["architecture_design"],
+        "requirements.md": ["product_requirements"],
+        "adversarial.md": ["adversarial_review"],
+        "security.md": ["security_review"],
+        "challenge.md": ["design_review"],
+        "review.md": ["architectural_review"],
+    }
+
+    def _manifest(self, phase, wd, declared):
+        from unittest.mock import patch
+
+        import src.autopilot.spec as sp
+
+        with patch.object(sp, "load_phase_inputs", return_value=declared), patch.object(
+            sp, "input_producer_phases", side_effect=lambda w, f: self._PRODUCERS.get(f, [])
+        ):
+            return sp.build_input_manifest("wf-1", phase, str(wd))
+
+    @staticmethod
+    def _seed(tmp_path, rel_paths):
+        for rel in rel_paths:
+            f = tmp_path / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("x")
+
+    def test_resolves_a_producer_subdirectory_not_just_the_flat_location(self, tmp_path):
+        self._seed(tmp_path, [".hephaestus/architecture_design/architecture.md"])
+        out = self._manifest(
+            "development", tmp_path, {"development": {"required": ["architecture.md"]}}
+        )
+        assert "[present]  architecture.md" in out
+        assert "./.hephaestus/architecture_design/architecture.md" in out
+
+    def test_marks_a_missing_required_input_and_explains_why(self, tmp_path):
+        self._seed(tmp_path, [".hephaestus/requirements.md"])
+        out = self._manifest(
+            "development",
+            tmp_path,
+            {"development": {"required": ["architecture.md", "requirements.md"]}},
+        )
+        assert "[MISSING]  architecture.md  (required)" in out
+        assert "[present]  requirements.md" in out
+        # The agent is told what to do about it rather than left to invent.
+        assert "rewound by a goto" in out
+        assert "invent their contents" in out
+
+    def test_missing_optional_input_does_not_raise_the_note(self, tmp_path):
+        self._seed(tmp_path, [".hephaestus/requirements.md"])
+        out = self._manifest(
+            "qa_validation",
+            tmp_path,
+            {"qa_validation": {"required": ["requirements.md"], "optional": ["security.md"]}},
+        )
+        assert "[MISSING]  security.md  (optional)" in out
+        assert "normally available to this phase" not in out
+
+    def test_empty_string_when_the_phase_declares_no_inputs(self, tmp_path):
+        assert self._manifest("git_expert", tmp_path, {}) == ""
+
+    def test_empty_string_without_a_working_directory(self):
+        from unittest.mock import patch
+
+        import src.autopilot.spec as sp
+
+        with patch.object(
+            sp, "load_phase_inputs", return_value={"development": {"required": ["x.md"]}}
+        ):
+            assert sp.build_input_manifest("wf-1", "development", None) == ""
+
+    def test_every_declared_input_has_a_real_producer_in_this_workflow(self):
+        """A declared input nothing produces is a typo that would show up as a
+        permanently MISSING line in every run's manifest."""
+        import yaml
+
+        from src.autopilot.spec import _extract_declared_files
+        from src.workflow_registry import _WORKFLOWS_DIR
+
+        wf_dir = _WORKFLOWS_DIR / "autopilot"
+        cfg = yaml.safe_load((wf_dir / "workflow.yaml").read_text())
+        produced = set()
+        for entry in (cfg.get("required_output") or {}).values():
+            for e in entry if isinstance(entry, list) else [entry]:
+                produced.add(Path(e).name)
+        for phase_file in wf_dir.glob("*.yaml"):
+            if phase_file.name == "workflow.yaml":
+                continue
+            pc = yaml.safe_load(phase_file.read_text()) or {}
+            for e in _extract_declared_files(pc.get("outputs")):
+                produced.add(Path(e).name)
+        # Seeded into the worktree by WorktreeManager's context_files rather
+        # than produced by a phase.
+        produced |= {"design.md", "context.md", "qa_spec.json"}
+
+        for phase, declared in (cfg.get("phase_inputs") or {}).items():
+            for kind in ("required", "optional"):
+                for filename in declared.get(kind) or []:
+                    assert filename in produced, (
+                        f"{phase} declares input {filename!r}, which no phase in "
+                        f"this workflow produces and nothing seeds"
+                    )
+
+    def test_declared_input_phases_all_exist(self):
+        import yaml
+
+        from src.workflow_registry import _WORKFLOWS_DIR
+
+        wf_dir = _WORKFLOWS_DIR / "autopilot"
+        cfg = yaml.safe_load((wf_dir / "workflow.yaml").read_text())
+        real = {
+            (yaml.safe_load(f.read_text()) or {}).get("name")
+            for f in wf_dir.glob("*.yaml")
+            if f.name != "workflow.yaml"
+        }
+        for phase in (cfg.get("phase_inputs") or {}):
+            assert phase in real, f"phase_inputs names {phase!r}, which is not a phase"
+
+
+class TestThresholdBandsAreCoherent:
+    """workflow.yaml's continue thresholds are band separators, not quality
+    bars -- see its own THRESHOLD RATIONALE comment. These tests pin the
+    claims that comment makes, so it cannot quietly rot into a lie the way
+    security_review's and doc_review's own conditions did.
+
+    The whole lesson of that bug: a threshold nothing can ever cross reads
+    exactly like an enforced one."""
+
+    @staticmethod
+    def _continue_bars():
+        import yaml
+
+        from src.workflow_registry import _WORKFLOWS_DIR
+
+        cfg = yaml.safe_load((_WORKFLOWS_DIR / "autopilot" / "workflow.yaml").read_text())
+        bars = {}
+        for ep in cfg["orchestrator"]["evaluation_points"]:
+            for cond in ep["conditions"]:
+                if cond["action"] == "continue" and ">=" in cond["if"]:
+                    bars[ep["after_phase"]] = float(cond["if"].split(">=")[1].strip().strip('"'))
+        return bars
+
+    def test_no_gated_phase_can_score_into_the_0_6_to_0_7_gap(self):
+        """This is what makes the 0.6-vs-0.7 spread cosmetic. If a scorer
+        ever starts emitting into this gap, the two values stop being
+        interchangeable and the rationale comment needs rewriting."""
+        from src.autopilot.spec import load_spec
+
+        for phase, scores in _reachable_scores(load_spec()).items():
+            in_gap = sorted(v for v, _band in scores if 0.6 <= v < 0.7)
+            assert not in_gap, (
+                f"{phase} can now score {in_gap}, inside the 0.6-0.7 gap that "
+                "workflow.yaml's THRESHOLD RATIONALE says is empty"
+            )
+
+    def test_swapping_0_6_and_0_7_changes_no_outcome(self):
+        """The direct statement of the claim: these two bars are
+        interchangeable for every reachable score."""
+        from src.autopilot.spec import load_spec
+
+        reachable = _reachable_scores(load_spec())
+        for phase, bar in self._continue_bars().items():
+            if bar not in (0.6, 0.7):
+                continue
+            other = 0.7 if bar == 0.6 else 0.6
+            for score, _band in reachable.get(phase, ()):
+                assert (score >= bar) == (score >= other), (
+                    f"{phase} score {score} is decided differently by "
+                    f"{bar} vs {other} -- the bars are no longer interchangeable"
+                )
+
+    def test_no_failing_result_can_clear_its_own_gate(self):
+        """The one property that actually matters, and the only one worth
+        enforcing: for each gated phase, every score its scorer labels
+        anything other than "pass" must fall BELOW that phase's continue bar.
+
+        Stated per-phase against the scorer's own band label rather than
+        against a shared constant, because the phases do not share anchors --
+        scope_review emits 0.2/1.0 and never produces _DEV at all, so a
+        blanket `bar > _DEV` assertion would flag its perfectly correct 0.5
+        bar. Getting that wrong in the obvious direction is how a gate ends
+        up enforcing nothing."""
+        from src.autopilot.spec import load_spec
+
+        reachable = _reachable_scores(load_spec())
+        bars = self._continue_bars()
+        for phase, scores in reachable.items():
+            bar = bars[phase]
+            for score, band in scores:
+                if band == "pass":
+                    assert score >= bar, (
+                        f"{phase}: a clean result scores {score}, below its own "
+                        f"continue bar {bar} -- the gate can never be passed"
+                    )
+                else:
+                    assert score < bar, (
+                        f"{phase}: a {band!r} result scores {score}, at or above "
+                        f"its continue bar {bar} -- it would pass the gate"
+                    )
+
+    def test_architecture_band_reachability_is_as_documented(self):
+        """Three phases can reach `score < 0.3`; the blocker-count scorers
+        cannot, and workflow.yaml says so rather than pretending otherwise."""
+        from src.autopilot.spec import load_spec
+
+        reachable = _reachable_scores(load_spec())
+        for phase in ("scope_review", "qa_validation", "product_validation"):
+            assert any(v < 0.3 for v, _b in reachable[phase]), f"{phase} should reach the arch band"
+        for phase in (
+            "design_review", "adversarial_review", "architectural_review", "security_review",
+        ):
+            assert not any(v < 0.3 for v, _b in reachable[phase]), (
+                f"{phase} now reaches the arch band -- workflow.yaml documents it as "
+                "unreachable for the blocker-count scorers; update that comment"
+            )
 
 
 class TestResolveDeclaredOutputSubdirPrefixed:

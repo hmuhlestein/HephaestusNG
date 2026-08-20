@@ -18,6 +18,7 @@ done_definitions:
   - ".gitignore created if missing, covering standard runtime/tool artifacts for this language"
   - "Unit tests written and passing"
   - "For each bug fix: the new/changed test was stash-verified to fail before the fix and pass after (git stash discipline — see STEP 4)"
+  - "For each new feature: an acceptance test was stash-verified to fail without the implementation and pass with it — same discipline, `git stash push -u` so brand-new untracked source files are actually removed"
   - "`ruff check .` and `ruff format --check .` pass with ZERO errors (logging not print, imports at top, sorted) and `mypy` passes — run `ruff check --fix . && ruff format .` first, then verify clean before marking done"
   - "Implementation status documented"
   - "Phase 4 review tasks created"
@@ -87,6 +88,12 @@ additional_notes: |
   has had to catch and fix a missing .gitignore after the fact (runtime log
   files ending up tracked in git); it belongs here, at project setup time,
   not as a later review finding.
+
+  Your task description carries an "INPUTS AVAILABLE TO YOU THIS RUN" block
+  listing each file below with its resolved path, or [MISSING] if it was not
+  produced this run (a goto rewound the producing phase, or a gate consumed
+  its report). Trust that block over the paths in this list, and do not go
+  hunting for a [MISSING] file elsewhere.
 
   Read:
   - ./.hephaestus/design.md — SCOPE AUTHORITY: only implement what this specifies
@@ -174,26 +181,43 @@ additional_notes: |
      - Edge case tests
      - Aim for meaningful coverage, not just line count
 
-     STASH-VERIFY EVERY BUG-FIX TEST (this phase re-entering to fix an open
-     bug ticket, per STEP 2 — not a from-scratch new-feature test with no
-     "before" state): a test that passes whether or not your fix is applied
-     proves nothing. For each new or changed test covering a bug fix:
-       1. `git stash` (or `git stash -- <file>` for just your fix, keeping
-          the test) to remove your fix, leaving the test in place.
-       2. Run that test — confirm it FAILS. If it still passes, the test
-          isn't actually exercising the bug; rewrite it until stashing the
-          fix makes it fail.
-       3. `git stash pop` to restore your fix.
+     STASH-VERIFY EVERY TEST YOU WRITE. A test that passes whether or not
+     your code is there proves nothing — it is not a test, it is decoration.
+     This applies to BOTH kinds of work in this phase:
+
+       - BUG FIX (re-entering to fix an open bug ticket, per STEP 2): stash
+         the fix, keep the test.
+       - NEW FEATURE: stash the implementation, keep the acceptance test.
+
+     The mechanic is the same either way — the only question is whether the
+     test can fail at all:
+       1. `git stash push -u -- <your implementation files>` — removes your
+          code while leaving the test in place. The `-u` matters for a new
+          feature: without it, brand-new untracked source files are NOT
+          stashed and the test keeps passing, which looks like a verified
+          test and is actually a no-op.
+       2. Run that test — confirm it FAILS. For a new feature the failure is
+          often an ImportError or a collection error because the module does
+          not exist yet; that IS a valid failure, not a broken test. If it
+          still PASSES, the test isn't exercising your code — rewrite it
+          until removing the code makes it fail.
+       3. `git stash pop` to restore your code.
        4. Run the test again — confirm it PASSES.
-     Do this before marking done, not as an afterthought — a test you
-     haven't proven can fail is not a regression test, it's decoration.
+
+     If you wrote the test first and watched it fail before implementing,
+     steps 1-2 are already satisfied — say so in your completion notes and
+     just confirm step 4. Writing the test first is the easier path to the
+     same guarantee, not a different requirement.
+
+     Do this before marking done, not as an afterthought.
 
   4. **Verify implementation**
      - Run tests and ensure they pass
      - Run linter and fix issues
      - Run type checker if applicable
      - Verify component works as specified
-     - For bug fixes: confirm every new/changed test was stash-verified per STEP 3 above
+     - Confirm every new/changed test was stash-verified per STEP 3 above —
+       bug-fix regression tests AND new-feature acceptance tests alike
   
   ## CODE COMPOSITION PRINCIPLES (apply during implementation)
 

@@ -35,6 +35,58 @@ required_output:
   qa_validation: .hephaestus/qa_validation/qa.md
   product_validation: .hephaestus/product_validation/validation.md
 
+# Inputs each phase consumes from earlier phases, as filenames. Resolved to
+# real paths at dispatch and injected into the task description as a manifest
+# saying which are actually present THIS run (see build_input_manifest).
+#
+# Every one of these was already declared in the phase's own prompt, in prose
+# ("requirements.md (from Artifacts Path) - REQ-XX requirements to
+# implement"). Prose is fine for telling an agent WHY it wants a file and
+# useless for telling it whether the file is there: an input that a goto
+# rewound, or that a gate consumed, or that an optional phase never produced,
+# reads identically to one sitting on disk. Agents were left to discover that
+# by cat-ing and guessing.
+#
+# Declared here rather than in each phase's own YAML deliberately.
+# Phase.outputs is snapshotted into the DB when a workflow is created and
+# never re-read, so a per-phase declaration would reach only workflows
+# created afterwards -- the exact trap that broke security_review for
+# in-flight runs. workflow.yaml is read from disk at dispatch, so this
+# applies to runs already in progress too.
+#
+# `required` is advisory, NOT a dispatch block: a missing required input is
+# logged and marked in the manifest, and the phase still runs. Refusing to
+# dispatch would deadlock the pipeline exactly when it is already degraded,
+# and the agent is better placed than this config to decide whether it can
+# proceed without the file.
+phase_inputs:
+  scope_review:
+    required: [design.md, requirements.md]
+  architecture_design:
+    required: [requirements.md]
+    optional: [design.md]
+  design_review:
+    required: [requirements.md, architecture.md]
+  development:
+    required: [architecture.md, requirements.md]
+    optional: [challenge.md, adversarial.md, review.md, security.md]
+  adversarial_review:
+    required: [requirements.md]
+    optional: [architecture.md]
+  architectural_review:
+    required: [architecture.md, requirements.md]
+  security_review:
+    required: [requirements.md, architecture.md]
+    optional: [adversarial.md]
+  qa_validation:
+    required: [requirements.md]
+    optional: [architecture.md, adversarial.md, security.md]
+  product_validation:
+    required: [design.md, requirements.md]
+    optional: [architecture.md]
+  doc_review:
+    optional: [requirements.md, architecture.md, summary.md]
+
 # Optional phases that can fail without blocking the pipeline.
 # All other phases are required — if they fail after MAX_PHASE_ATTEMPTS,
 # the workflow enters impasse (paused for human review).
@@ -45,6 +97,48 @@ optional_phases:
 
 orchestrator:
   type: evaluating
+  # THRESHOLD RATIONALE (read before "fixing" an apparent inconsistency).
+  #
+  # The continue thresholds below are NOT quality bars, and the fact that
+  # security_review/qa_validation/product_validation continue at 0.7 while
+  # design_review/adversarial_review/architectural_review continue at 0.6
+  # does NOT mean documentation is held to a laxer standard than security.
+  # They are band separators, and every one of them sits inside a gap the
+  # scorers never emit into. spec.py anchors the bands at:
+  #
+  #     _ARCH       = 0.25   -> goto architecture_design  (< 0.3)
+  #     _DEV        = 0.5    -> goto development          (< the continue bar)
+  #     _PASS_FLOOR = 0.7    -> continue
+  #
+  # Enumerating every reachable score of every gated phase's scorer:
+  #
+  #     scope_review           0.2, 1.0
+  #     design_review          0.4, 0.5, 0.9
+  #     adversarial_review     0.4, 0.5, 0.9
+  #     architectural_review   0.4, 0.5, 0.9
+  #     security_review        0.4, 0.9
+  #     qa_validation          0.25, 0.5, 1.0
+  #     product_validation     0.25, 0.5, 0.7, 0.85, 1.0
+  #
+  # NO phase can produce a score in [0.6, 0.7). So 0.6 and 0.7 are
+  # behaviourally identical here -- any value strictly between _DEV (0.5)
+  # and the pass band works, and changing one to match the other would
+  # change no outcome for any input. Leave them alone; the difference is
+  # cosmetic drift, not a policy decision anyone made.
+  #
+  # What DOES matter, if you touch the scorers: keep the continue bar above
+  # 0.5, or a "needs work" result starts passing the gate silently.
+  #
+  # The `score < 0.3` architecture band is genuinely reachable only for
+  # scope_review (verdict FAIL -> 0.2), qa_validation (critical_issues over
+  # the spec cap -> 0.25) and product_validation (an explicit ARCHITECTURE
+  # verdict -> 0.25). For the blocker-count scorers -- design_review,
+  # adversarial_review, architectural_review, security_review -- the band is
+  # UNREACHABLE: their lowest score is 0.4, because no signal currently
+  # distinguishes "needs a code fix" from "needs a redesign". Each of those
+  # scorers documents this in its own docstring. The conditions are kept
+  # rather than deleted so the routing is already in place if such a signal
+  # is ever added; they are dead today, deliberately and knowably.
   max_phase_retries: 2
   max_task_retries: 5
   max_total_gotos: 30

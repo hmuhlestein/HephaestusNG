@@ -80,6 +80,12 @@ additional_notes: |
   - Do NOT edit any source code or tests. Your only output is the report.
     The developer will fix based on your findings.
 
+  Your task description carries an "INPUTS AVAILABLE TO YOU THIS RUN" block
+  listing each file below with its resolved path, or [MISSING] if it was not
+  produced this run (a goto rewound the producing phase, or a gate consumed
+  its report). Trust that block over the paths in this list, and do not go
+  hunting for a [MISSING] file elsewhere.
+
   Read:
   - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth)
   - requirements.md — contains REQ-XX requirement IDs to verify
