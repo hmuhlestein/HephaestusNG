@@ -140,8 +140,12 @@ class AgentManager:
         return self._launch._scoped_worktree_manager(workflow_id)
 
 
-    def _ensure_codegraph_initialized(self: str) -> None:
-        return self._launch._ensure_codegraph_initialized(self)
+    def _ensure_codegraph_initialized(self, working_directory: str) -> None:
+        # The extraction that produced these delegators renamed the real first
+        # parameter to `self` and then forwarded `self` as that argument, so
+        # this passed an AgentManager where launch_pipeline expects a path
+        # string. Currently uncalled, so it never surfaced.
+        return self._launch._ensure_codegraph_initialized(working_directory)
 
 
     async def _check_termination_race(
@@ -183,7 +187,14 @@ class AgentManager:
         agent_id: str,
         context_files: Optional[Dict[str, str]] = None,
     ) -> WorktreeResolution:
-        return self._launch._resolve_worktree(task, wt_mgr, create_if_missing, agent_id, context_files=context_files)
+        # create_if_missing/agent_id are keyword-only on the target.
+        return self._launch._resolve_worktree(
+            task,
+            wt_mgr,
+            create_if_missing=create_if_missing,
+            agent_id=agent_id,
+            context_files=context_files,
+        )
 
 
     def _resolve_env_and_model(
@@ -218,7 +229,10 @@ class AgentManager:
         *,
         excluded_types: Tuple[str, ...],
     ) -> str:
-        return self._launch._resolve_session_id(task, agent_type, phase_name, model, excluded_types)
+        # excluded_types is keyword-only on the target.
+        return self._launch._resolve_session_id(
+            task, agent_type, phase_name, model, excluded_types=excluded_types
+        )
 
 
     def _prepare_launch_environment(
@@ -251,7 +265,25 @@ class AgentManager:
         env_vars: Dict[str, str],
         label: str,
     ) -> Tuple[Any, Any, float]:
-        return await self._launch._build_and_send_launch_command(cli_agent, tmux_session, system_prompt, task, model, thinking_level, phase_name, agent_id, session_id, working_directory, instructions_pointer, env_vars, label)
+        # Everything after tmux_session is keyword-only on the target, so the
+        # generated positional forwarding here was a guaranteed TypeError.
+        # Uncalled, like the other mangled delegators, so it never surfaced;
+        # launch_pipeline's own two call sites pass keywords correctly.
+        return await self._launch._build_and_send_launch_command(
+            cli_agent,
+            tmux_session,
+            system_prompt=system_prompt,
+            task=task,
+            model=model,
+            thinking_level=thinking_level,
+            phase_name=phase_name,
+            agent_id=agent_id,
+            session_id=session_id,
+            working_directory=working_directory,
+            instructions_pointer=instructions_pointer,
+            env_vars=env_vars,
+            label=label,
+        )
 
 
     async def _deliver_initial_prompt(
@@ -321,10 +353,12 @@ class AgentManager:
 
 
     def _build_instructions_pointer(
-        self: str, instructions_rel_path: str, restarted: bool = False,
+        self, task_id: str, instructions_rel_path: str, restarted: bool = False,
         agent_name: str = None,
     ) -> str:
-        return self._launch._build_instructions_pointer(self, instructions_rel_path, restarted, agent_name)
+        # Same mangled extraction as _ensure_codegraph_initialized above:
+        # launch_pipeline's first parameter is task_id, not the manager.
+        return self._launch._build_instructions_pointer(task_id, instructions_rel_path, restarted, agent_name)
 
 
     async def _send_goal_command(
