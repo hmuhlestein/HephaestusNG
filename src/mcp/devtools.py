@@ -200,7 +200,7 @@ class CDPBrowser:
 
         elif method == "Network.requestWillBeSent":
             req = params.get("request", {})
-            entry = NetworkEntry(
+            net_entry = NetworkEntry(
                 request_id=params.get("requestId", ""),
                 url=req.get("url", ""),
                 method=req.get("method", "GET"),
@@ -208,33 +208,44 @@ class CDPBrowser:
                 resource_type=params.get("type", ""),
                 timestamp=params.get("timestamp", 0),
             )
-            self.network_logs.append(entry)
+            self.network_logs.append(net_entry)
             for cb in self.network_callbacks:
                 try:
-                    cb(entry)
+                    cb(net_entry)
                 except Exception:
                     logger.exception("Network callback error")
 
         elif method == "Network.responseReceived":
             resp_data = params.get("response", {})
             req_id = params.get("requestId", "")
-            for entry in reversed(self.network_logs):
-                if entry.request_id == req_id:
-                    entry.status = resp_data.get("status", 0)
-                    entry.response_headers = resp_data.get("headers", {})
+            # net_entry, not entry: `entry` is already bound to a ConsoleEntry
+            # earlier in this function, and Python scopes it to the whole
+            # function -- so reusing the name here made every NetworkEntry
+            # field access below look like a ConsoleEntry attribute error.
+            for net_entry in reversed(self.network_logs):
+                if net_entry.request_id == req_id:
+                    net_entry.status = resp_data.get("status", 0)
+                    net_entry.response_headers = resp_data.get("headers", {})
                     break
 
         elif method == "Network.loadingFinished":
             req_id = params.get("requestId", "")
             ts = params.get("timestamp", 0)
-            for entry in reversed(self.network_logs):
-                if entry.request_id == req_id and entry.duration_ms == 0:
-                    entry.duration_ms = (ts - entry.timestamp) * 1000
+            for net_entry in reversed(self.network_logs):
+                if net_entry.request_id == req_id and net_entry.duration_ms == 0:
+                    net_entry.duration_ms = (ts - net_entry.timestamp) * 1000
                     break
 
     @property
     def is_connected(self) -> bool:
-        return self._connected and self.ws is not None and self.ws.open
+        # close_code, not .open: websockets removed ClientConnection.open in
+        # its asyncio client (16.x is what's pinned here), so this raised
+        # AttributeError exactly when the connection WAS live -- the two
+        # earlier terms short-circuit while disconnected, so the crash only
+        # surfaced once _connected was True and self.ws was set. close_code
+        # stays None until the close handshake and exists on both the legacy
+        # protocol and the current client.
+        return self._connected and self.ws is not None and self.ws.close_code is None
 
     async def send(
         self, method: str, params: Optional[Dict[str, Any]] = None
