@@ -460,6 +460,28 @@ KNOWN_SYSTEM_AGENTS = {
     "pi-extension",
 }
 
+#: The root session agent, exempt from controls that apply to spawned agents.
+ROOT_AGENT_ID = "main-session-agent"
+
+#: Prefix identifying an agent started by the SDK.
+SDK_AGENT_PREFIX = "sdk-"
+
+
+def is_sdk_or_root_agent(agent_id: str) -> bool:
+    """Whether `agent_id` is the root session agent or an SDK-started one.
+
+    The single definition of that question. `_enforce_ticket_tracking_requirement`
+    previously answered it with `"sdk" in agent_id.lower() or "main" in
+    agent_id.lower()` -- an unanchored substring test that exempts far more
+    than its own docstring claims, so any agent whose id merely contains
+    "main" (`domain-expert`, `maintenance-agent`) silently skipped the
+    ticket-tracking requirement. Nothing hits that today, because real ids are
+    either UUID4 hex -- which cannot spell "main" or "sdk" -- or names like
+    `orchestrator-*`; it is the next named agent that would have been the
+    problem.
+    """
+    return agent_id == ROOT_AGENT_ID or agent_id.startswith(SDK_AGENT_PREFIX)
+
 async def verify_agent_authentication(agent_id: str) -> bool:
     """Verify agent is authenticated and authorized.
 
