@@ -193,7 +193,17 @@ async def _tool_send_message(arguments: Dict[str, Any]):
             message=message,
         )
     except Exception as e:
+        # Unlike a best-effort broadcast, this is a targeted delivery the
+        # calling agent may depend on for coordination -- unconditionally
+        # reporting success regardless of whether send_direct_message
+        # actually raised gave the caller no way to detect a failed
+        # delivery. Raises the same way this function's own agent_id/
+        # message validation above does, letting FastAPI convert it to a
+        # proper error response instead of a fictitious 200.
         logger.warning(f"send_message to {target_agent_id[:8]} failed: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to send message to {target_agent_id[:8]}: {e}"
+        ) from e
     return {"success": True, "message": f"Message sent to {target_agent_id[:8]}"}
 
 async def _tool_update_task_status(arguments: Dict[str, Any]):

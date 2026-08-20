@@ -107,11 +107,8 @@ async def unarchive_message(request: dict):
         raise HTTPException(400, "message_id is required")
 
     with get_db() as db:
-        try:
-            db.execute(text("DELETE FROM archived_events WHERE id = :id"), {"id": msg_id})
-            db.commit()
-        except Exception:
-            pass
+        db.execute(text("DELETE FROM archived_events WHERE id = :id"), {"id": msg_id})
+        db.commit()
     return {"unarchived": True}
 
 @router.post("/messages/unarchive-all")
@@ -122,11 +119,8 @@ async def unarchive_all_messages():
     from src.core.database import get_db
 
     with get_db() as db:
-        try:
-            db.execute(text("DELETE FROM archived_events"))
-            db.commit()
-        except Exception:
-            pass
+        db.execute(text("DELETE FROM archived_events"))
+        db.commit()
     return {"unarchived": True}
 
 @router.post("/messages/cleanup-archives")
@@ -137,11 +131,8 @@ async def cleanup_old_archives():
     from src.core.database import get_db
 
     with get_db() as db:
-        try:
-            db.execute(text("DELETE FROM archived_events WHERE archived_at < datetime('now', '-30 days')"))
-            db.commit()
-        except Exception:
-            pass
+        db.execute(text("DELETE FROM archived_events WHERE archived_at < datetime('now', '-30 days')"))
+        db.commit()
     return {"cleaned": True}
 
 @router.get("/logs")
