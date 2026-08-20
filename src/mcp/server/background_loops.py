@@ -35,6 +35,12 @@ async def process_queue(project_id: Optional[str] = None):
     from src.services.agent_dispatch_service import AgentDispatchService
     from src.services.task_enrichment_service import TaskEnrichmentService
 
+    # dequeue_task flips the task out of "queued" before enrichment and
+    # dispatch -- everything below that point can raise. These two track
+    # how far we got so the handler can put the task back (see below).
+    dequeued_task_id = None
+    agent = None
+
     try:
         # Check if we should queue (i.e., at capacity)
         if server_state.queue_service.should_queue_task(project_id):
@@ -52,6 +58,7 @@ async def process_queue(project_id: Optional[str] = None):
 
         # Dequeue the task
         server_state.queue_service.dequeue_task(next_task.id)
+        dequeued_task_id = next_task.id
 
         # Resolve phase_id once up front — reused for both enrichment (if
         # needed) and agent dispatch below. Previously this exact
@@ -218,6 +225,29 @@ async def process_queue(project_id: Optional[str] = None):
         import traceback
 
         logger.error(traceback.format_exc())
+
+        # Compensate for the non-atomic dequeue-then-dispatch above. Without
+        # this, a failure between dequeue_task and dispatch strands the task
+        # in "assigned" with assigned_agent_id=None: get_next_queued_task
+        # only looks at "queued", and every recovery sweep finds its task via
+        # filter_by(assigned_agent_id=agent.id) (mechanical_recovery's
+        # STUCK_TASK_STATUSES detectors) or requires assigned_agent_id
+        # isnot(None) (_clean_stale_assigned_tasks), so nothing can ever see
+        # it again -- the workflow waits on that task forever. Observed live:
+        # a review task sat "assigned" with no agent while its workflow
+        # stayed active for hours.
+        # Skipped once dispatch succeeded: an agent is already running on the
+        # task, and requeueing would launch a second one for the same work.
+        if dequeued_task_id and agent is None:
+            try:
+                server_state.queue_service.enqueue_task(dequeued_task_id)
+                logger.info(f"Requeued task {dequeued_task_id} after failed dispatch")
+            except Exception as requeue_error:
+                logger.error(
+                    f"Failed to requeue task {dequeued_task_id} after failed "
+                    f"dispatch -- it is now stranded in 'assigned' with no "
+                    f"agent: {requeue_error}"
+                )
 
 
 
