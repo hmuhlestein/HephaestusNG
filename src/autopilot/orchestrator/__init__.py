@@ -14,7 +14,6 @@ from src.autopilot.orchestrator.policy import ACTIVE_AGENT_STATUSES
 import json
 import shutil
 import sys
-import threading as _threading
 from src.core.constants import AUTOPILOT_STATE_DIR
 from typing import Any
 from src.core.constants import CONTEXT_DIR_NAME
@@ -55,12 +54,21 @@ from src.autopilot.orchestrator.queue import _get_phase0_completion
 from src.autopilot.orchestrator.config import _get_phase0_timeout
 from src.autopilot.orchestrator.config import _get_workflow_timeout
 from src.autopilot.orchestrator.queue import _has_resumable_active_design
+from src.autopilot.orchestrator.runtime_registries import _interruptible_sleep
+from src.autopilot.orchestrator.runtime_registries import (
+    _is_workflow_monitored as _is_workflow_monitored,
+)
 from src.autopilot.orchestrator.phase_transitions import _negotiate_validation_fix
+from src.autopilot.orchestrator.runtime_registries import _register_monitored_workflow
+from src.autopilot.orchestrator.agent_registration import _register_orchestrator_agent
 from src.autopilot.orchestrator.features import _relink_features_to_workflows
 from src.autopilot.orchestrator.features import _resolve_execution_order
 from src.autopilot.orchestrator.phase_transitions import _resume_stuck_workflow_tasks
 from src.autopilot.orchestrator.queue import _set_workflow_type
+from src.autopilot.orchestrator.runtime_registries import _should_stop
+from src.autopilot.orchestrator.runtime_registries import _stop_events as _stop_events
 from src.autopilot.orchestrator.phase_transitions import _try_advance_phases
+from src.autopilot.orchestrator.runtime_registries import _unregister_monitored_workflow
 from src.autopilot.orchestrator.queue import _update_design_status
 from src.autopilot.orchestrator.features import _update_feature_status
 from src.autopilot.orchestrator.engine_client import _update_orchestrator_status
@@ -85,7 +93,7 @@ from src.autopilot.orchestrator.engine_client import pause_workflow_direct
 from src.autopilot.orchestrator.engine_client import peek_agent_output
 from src.autopilot.orchestrator.queue import pick_next_design
 from src.autopilot.orchestrator.human_escalation import prompt_human
-from src.autopilot.orchestrator.engine_client import terminate_agent, terminate_agent_direct
+from src.autopilot.orchestrator.engine_client import terminate_agent_direct
 import threading
 import time
 
@@ -131,38 +139,6 @@ MAX_PARALLEL_FEATURES = 4  # max concurrent feature pipelines
 
 # Module-level orchestrator agent ID (set during registration)
 _orchestrator_agent_id: Optional[str] = None
-
-# Workflow IDs currently being polled by run_single_workflow.
-# The background _advance_phases sweep skips these — the inline
-# call in run_single_workflow is the main path for phase advancement;
-# the sweep is a fallback for workflows that lost their poll loop
-# (e.g. backend restart).
-_actively_monitored_lock = _threading.Lock()
-_actively_monitored_workflows: set = set()
-
-def _register_monitored_workflow(workflow_id: str) -> None:
-    with _actively_monitored_lock:
-        _actively_monitored_workflows.add(workflow_id)
-
-def _unregister_monitored_workflow(workflow_id: str) -> None:
-    with _actively_monitored_lock:
-        _actively_monitored_workflows.discard(workflow_id)
-
-def _is_workflow_monitored(workflow_id: str) -> bool:
-    with _actively_monitored_lock:
-        return workflow_id in _actively_monitored_workflows
-
-# Per-workflow locks providing true mutual exclusion around _advance_phases
-# calls. _actively_monitored_workflows above is an optimization (the sweep
-# skips a workflow entirely rather than attempting it) but is advisory
-# only -- _is_workflow_monitored() and the caller's subsequent
-# _advance_phases() call are two separate, non-atomic steps, so a workflow
-# whose run_single_workflow poll loop is just starting up (registered
-# after the sweep's check but before its _advance_phases call returns)
-# could still race. _try_advance_phases below is the actual guarantee:
-# only one caller can be inside _advance_phases for a given workflow_id
-# at a time, whether that's the sweep, run_single_workflow, or (in the
-# rare case _actively_monitored_workflows didn't already prevent it) both.
 
 
 
@@ -2493,121 +2469,6 @@ def run_single_design(
     # inside run_phase0() and _run_one_feature(). No additional cleanup needed here.
 
     return status, report
-
-
-# project_id -> the AutopilotService's own asyncio.Event, registered by
-# AutopilotService._run_pipeline_sync. Was a single bare module global
-# (_service_stop_event) -- a second project starting overwrote the first
-# project's reference silently, so whichever project's stop() fired last
-# won control of BOTH pipelines' stop signal (project A's "stop" could be
-# swallowed, or could incorrectly stop project B). Keyed by project_id,
-# not workflow_id: AutopilotService is 1:1 with a project, not a workflow
-# (run_continuous_pipeline, one of this function's three call sites, spans
-# many workflows over its life and has no single workflow_id to key by).
-_stop_events: Dict[str, "asyncio.Event"] = {}
-
-
-def _should_stop(project_id: Optional[str]) -> bool:
-    """Check if the pipeline should stop for this project.
-
-    Returns True if the in-process AutopilotService for this project has
-    requested a stop (via _stop_events, keyed by project_id). A caller
-    that couldn't resolve its own project_id gets False rather than
-    guessing at some other project's stop signal.
-    """
-    if not project_id:
-        return False
-    event = _stop_events.get(project_id)
-    if event is not None:
-        try:
-            # Non-blocking check
-            return event.is_set()
-        except Exception:
-            pass
-    return False
-
-
-def _interruptible_sleep(seconds: int, project_id: Optional[str]) -> None:
-    """Sleep up to `seconds`, but return early if _should_stop(project_id)
-    flips during it. A plain time.sleep(seconds) here means a stop request
-    (including AutopilotService.pause_for_restart(), see
-    docs/SAFE_RESTART_DESIGN.md §3.3) is invisible to the loop for however
-    long the sleep already had left -- up to DESIGN_QUEUE_SCAN_INTERVAL
-    (60s) at the two call sites that use this. Checking every second
-    instead makes that latency ~1s regardless of where in the sleep the
-    stop request lands.
-    """
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        if _should_stop(project_id):
-            return
-        time.sleep(max(0, min(1, deadline - time.time())))
-
-
-def _register_orchestrator_agent(log_dir: Path, cli_tool: str, logger: OrchestratorLogger) -> Optional[str]:
-    """Register (or re-register, after a restart) the orchestrator's own
-    Agent row, whose id becomes Task.created_by_agent_id for every task the
-    orchestrator itself creates (_create_phase_task, _create_corrective_task).
-
-    Returns the new agent's id, or None if registration failed -- in which
-    case those task-creation call sites fall back to created_by_agent_id=
-    None (the column is nullable).
-    """
-    try:
-        import uuid
-
-        from src.core.database import Agent, DatabaseManager
-
-        db_manager = DatabaseManager(None)
-        session = db_manager.get_session()
-        try:
-            new_agent_id = f"orchestrator-{uuid.uuid4().hex[:8]}"
-            orchestrator_agent = session.query(Agent).filter_by(id=new_agent_id).first()
-            if orchestrator_agent:
-                orchestrator_agent.status = "working"
-                orchestrator_agent.last_activity = datetime.utcnow()
-            else:
-                # Check if tmux_session_name is already taken
-                existing = session.query(Agent).filter_by(tmux_session_name="orchestrator").first()
-                if existing:
-                    terminate_agent(existing.id, session=session)
-                    # tmux_session_name has a UNIQUE constraint -- marking
-                    # the old row "terminated" alone doesn't free the value
-                    # "orchestrator" up, so the commit below still collides
-                    # with it. Without this, registration silently failed
-                    # on every restart after the first (logged as just a
-                    # warning), leaving the caller's _orchestrator_agent_id
-                    # pointing at an Agent row that was never actually
-                    # persisted -- so any task creation using it as
-                    # created_by_agent_id (_create_phase_task) hit a
-                    # FOREIGN KEY failure the moment FK enforcement was
-                    # turned on. Uses the FULL id, not a slice: every
-                    # orchestrator agent id shares the literal prefix
-                    # "orchestrator-", so id[:8] is always "orchestr" for
-                    # every one of them -- not unique at all, and the very
-                    # first fix attempt using it collided with itself
-                    # across restarts the same way the original bug did.
-                    existing.tmux_session_name = f"orchestrator-terminated-{existing.id}"
-                orchestrator_agent = Agent(
-                    id=new_agent_id,
-                    system_prompt=f"LOG_DIR:{log_dir}",
-                    status="working",
-                    cli_type=cli_tool,
-                    agent_type="orchestrator",
-                    tmux_session_name="orchestrator",
-                )
-                session.add(orchestrator_agent)
-            session.commit()
-            logger.info(f"Registered orchestrator agent: {orchestrator_agent.id[:8]}")
-            return new_agent_id
-        except Exception as e:
-            logger.warning(f"Warning: Could not register orchestrator agent: {e}")
-            return None
-        finally:
-            session.close()
-    except Exception as e:
-        logger.warning(f"Warning: Could not register orchestrator agent: {e}")
-        return None
 
 
 def run_continuous_pipeline(args) -> None:
