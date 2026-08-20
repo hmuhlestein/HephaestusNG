@@ -1170,13 +1170,42 @@ async def get_feature_detail(feature_id: str):
         files_created=metrics.get("files_created", []),
         issues_resolved=metrics.get("issues_resolved", []),
         outstanding_issues=metrics.get("outstanding_issues", []),
-        cost_total=metrics.get("cost_total", 0),
+        # Cost comes from the DB rollup, not the metrics file. No writer has
+        # ever put a cost field in pipeline_metrics.json -- its writer emits
+        # design_name / workflow_id / project_path / docs_dir / feature_folder
+        # / completed_at / stop_reason / qa_passed / product_validated and
+        # nothing else -- so metrics.get("cost_total", 0) silently returned 0
+        # for every feature ever recorded. Workflow.cost_total_usd is the
+        # authoritative value, maintained by cost_derivation from the
+        # CostEntry ledger; reading it here fixes the response without
+        # creating a second, staleable copy of the number in a JSON file.
+        cost_total=_feature_record_cost(metrics.get("workflow_id")),
         cost_breakdown=metrics.get("cost_breakdown", {}),
         cost_currency=metrics.get("cost_currency", "USD"),
         created_at=created_at,
         docs=docs,
     )
     return _store(cache_key, result)
+
+def _feature_record_cost(workflow_id: Optional[str]) -> float:
+    """This feature's total cost, from the authoritative DB rollup.
+
+    Returns 0.0 when the workflow is unknown or has no recorded cost -- an
+    archived feature whose Workflow row was pruned still renders, just
+    without a figure.
+    """
+    if not workflow_id:
+        return 0.0
+    try:
+        from src.core.database import Workflow, get_db
+
+        with get_db() as db:
+            wf = db.query(Workflow).filter_by(id=workflow_id).first()
+            return float(wf.cost_total_usd or 0.0) if wf else 0.0
+    except Exception as e:
+        logger.debug(f"Could not read cost for workflow {workflow_id}: {e}")
+        return 0.0
+
 
 def _resolve_feature_docs_base(wf) -> Optional[str]:
     """Best-known directory to look for a feature's generated docs in.
