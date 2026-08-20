@@ -203,6 +203,16 @@ class OrchestratorLogger:
             with open(self.log_file, "a") as f:
                 f.write(line + "\n")
 
+    def debug(self, message: str):
+        # Three call sites already used logger.debug() on this class, which
+        # has never had one -- each raised AttributeError instead of logging.
+        # The worst was run_single_workflow's, sitting in the handler for a
+        # failed pipeline_metrics.json patch: the AttributeError escaped into
+        # the enclosing `except Exception`, which reported "Failed to launch
+        # workflow" and returned FAILED, turning a cosmetic metrics problem
+        # into a dead workflow. Found by mypy once it was unblocked (c38f143).
+        self.log(message, "DEBUG")
+
     def info(self, message: str):
         self.log(message, "INFO")
 
