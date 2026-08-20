@@ -776,6 +776,7 @@ class TicketService:
                     old_value=json.dumps(old_value) if old_value else None,
                     new_value=json.dumps(new_value) if new_value else None,
                     metadata={"field_name": field},
+                    db=db,
                 )
 
             # Update timestamp
