@@ -85,7 +85,9 @@ phase_inputs:
     required: [design.md, requirements.md]
     optional: [architecture.md]
   doc_review:
-    optional: [requirements.md, architecture.md, summary.md]
+    # Not summary.md -- doc_review PRODUCES that, so listing it here would show
+    # a spurious [MISSING] on every run.
+    optional: [requirements.md, architecture.md]
 
 # Optional phases that can fail without blocking the pipeline.
 # All other phases are required — if they fail after MAX_PHASE_ATTEMPTS,

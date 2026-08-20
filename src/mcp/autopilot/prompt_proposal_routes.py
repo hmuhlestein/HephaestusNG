@@ -79,7 +79,20 @@ def _serialize(p: PromptProposal, include_current: bool = False) -> dict:
         "reviewed_at": p.reviewed_at.isoformat() if p.reviewed_at else None,
         "applied_at": p.applied_at.isoformat() if p.applied_at else None,
     }
-    if include_current:
+    # Only for proposals still awaiting a decision, for two reasons.
+    #
+    # Correctness: once a proposal is APPLIED the file holds proposed_value, so
+    # current_value would equal it and the UI's `current_value ?? previous_value`
+    # would render every historical row as an empty diff -- destroying the audit
+    # trail this feature exists to provide. Omitting it makes the frontend fall
+    # back to previous_value, which is the correct "before" for a change that
+    # already landed.
+    #
+    # Cost: this parses a phase YAML off disk per proposal, and the Autopilot
+    # page polls this endpoint every 30s purely to render a badge count. There
+    # is no reason to re-read a phase file for every row of resolved history on
+    # every tick.
+    if include_current and p.status == "pending":
         # Read live rather than echoing what the agent quoted: the file may
         # have changed since the proposal was filed, and a stale "before" would
         # make the diff a fiction the reviewer cannot detect.

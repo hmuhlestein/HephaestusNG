@@ -296,6 +296,33 @@ class TestReviewLoop:
         assert listing["proposals"][0]["is_stale"] is True
 
     @pytest.mark.asyncio
+    async def test_an_applied_proposal_still_shows_a_real_diff(self, prompt_repo, db, monkeypatch):
+        """Once applied, the file holds proposed_value -- so echoing a live
+        current_value would make before == after and render every historical
+        row as an empty diff, destroying the audit trail. Resolved rows must
+        fall back to previous_value, which is the correct "before" for a change
+        that already landed."""
+        from src.mcp.autopilot import prompt_proposal_routes as routes
+
+        monkeypatch.setattr(routes, "_repo_root", lambda: prompt_repo)
+        filed = svc.create_proposal(
+            phase_name="demo_phase",
+            field="description",
+            proposed_value="rewritten\n",
+            rationale="evidence",
+            workflow_definition="demo",
+        )
+        await routes.approve_prompt_proposal(filed["id"], routes.ProposalReview())
+
+        row = (await routes.list_prompt_proposals())["proposals"][0]
+        assert row["status"] == "applied"
+        assert "current_value" not in row, "a resolved row must not carry a live current_value"
+        # before (previous_value) and after (proposed_value) genuinely differ.
+        assert row["previous_value"] == "original description\n"
+        assert row["proposed_value"] == "rewritten\n"
+        assert row["previous_value"] != row["proposed_value"]
+
+    @pytest.mark.asyncio
     async def test_apply_failure_is_recorded_on_the_row_not_lost(
         self, prompt_repo, db, monkeypatch
     ):
