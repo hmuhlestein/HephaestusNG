@@ -219,6 +219,15 @@ pipeline-execution flow (`run_phase0`, `run_single_workflow`, `_run_one_feature`
 getters, human-escalation prompting, and orchestrator-agent registration — none of which
 belong to "run the pipeline." *Fix:* extract config getters to `config.py`, human-escalation
 to its own module, matching the file's own package siblings.
+**Partially done, 2026-08-19** — config getters (4 functions) and `prompt_human` extracted
+verbatim to new `config.py`/`human_escalation.py` modules; `orchestrator/__init__.py` drops
+to 3225 lines. Orchestrator-agent registration (`_register_orchestrator_agent`) and the
+smaller monitored-workflow/stop-signal registries (`_register_monitored_workflow`/
+`_is_workflow_monitored`, `_should_stop`/`_stop_events`) were deliberately left in place —
+a plausible third "orchestrator process/runtime bookkeeping" module, but out of this pass's
+scope; still open if this file keeps growing. Also found and removed an orphaned ~155-line
+blank-line/stray-comment gap exposed by `prompt_human`'s extraction; other pre-existing
+blank-line gaps elsewhere in the file (unrelated to this extraction) were left alone.
 
 **Two disconnected phase-retry-budget mechanisms** — see §1, live bug. *Fix:*
 `_create_phase_task`'s DB-row-count bound should read from `eval_point.max_retries` (the
@@ -299,11 +308,14 @@ correctness risk over pure style:
    this whole refactor's bug-fix-history methodology has repeatedly found elsewhere.
 2. **Split `phase_transitions.py` and `orchestrator/__init__.py`.** Both are now larger
    than the files this refactor already fixed for the same reason; leaving them
-   unaddressed undercuts the refactor's own stated rationale. **`phase_transitions.py`
-   done, 2026-08-19** — its ~620-line arbitration subsystem extracted to a new
-   `arbitration.py` (671 lines), dropping `phase_transitions.py` from 3539 to 3000
-   lines. `orchestrator/__init__.py`'s split (config getters, human-escalation,
-   orchestrator-agent registration) remains open.
+   unaddressed undercuts the refactor's own stated rationale. **Mostly done, 2026-08-19**
+   — `phase_transitions.py`'s ~620-line arbitration subsystem extracted to a new
+   `arbitration.py` (671 lines), dropping it from 3539 to 3000 lines.
+   `orchestrator/__init__.py`'s config getters and `prompt_human` extracted to new
+   `config.py`/`human_escalation.py` modules, dropping it from 3411 to 3225 lines.
+   Orchestrator-agent registration and the smaller monitored-workflow/stop-signal
+   registries in `orchestrator/__init__.py` remain open — a plausible third module,
+   deliberately out of scope for this pass.
 3. **1.13/1.15/4.6 — the `except Exception`/manual-session patterns.** Still the largest
    volume of individual findings in the codebase (141 broad excepts, dozens of manual
    sessions); no single fix, but the original review's diagnosis (no service layer, so
