@@ -521,8 +521,8 @@ async def verify_agent_authentication(agent_id: str) -> bool:
             return False
     return False
 
-def _git_commit_push_already_landed(session, task, config) -> bool:
-    """Check whether a git_commit_push task's actual git work (commit +
+def _git_expert_already_landed(session, task, config) -> bool:
+    """Check whether a git_expert task's actual git work (commit +
     merge + push) already succeeded, even though the agent never reported
     "done" -- e.g. its final complete_my_task call was lost to a
     connection drop during a backend restart. Observed live: task
@@ -534,7 +534,7 @@ def _git_commit_push_already_landed(session, task, config) -> bool:
     a harmless no-op merge, but a wasted retry cycle every time this
     collision happens.
 
-    Scoped to git_commit_push specifically: it's the one phase whose real
+    Scoped to git_expert specifically: it's the one phase whose real
     "done" signal is external git state, not a file artifact
     verify_output_artifact can check (spec.py lists it in
     OPTIONAL_PHASES, with no required output at all).
@@ -544,7 +544,7 @@ def _git_commit_push_already_landed(session, task, config) -> bool:
     from src.core.database import Workflow
 
     phase = session.query(Phase).filter_by(id=task.phase_id).first()
-    if not phase or phase.name != "git_commit_push":
+    if not phase or phase.name != "git_expert":
         return False
 
     wf = session.query(Workflow).filter_by(id=task.workflow_id).first()

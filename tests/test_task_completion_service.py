@@ -766,13 +766,13 @@ class TestVerifyNoOpenTickets:
         )
         assert result is None
 
-    def test_rejects_at_git_commit_push_too(self):
+    def test_rejects_at_git_expert_too(self):
         """The final-phase check that closes the gap where security_review's
         tickets never get resolved: a run that never routes back to
-        development would otherwise reach git_commit_push with open tickets
+        development would otherwise reach git_expert with open tickets
         and ship anyway."""
-        phase = Mock(name="git_commit_push", id="phase-1")
-        phase.name = "git_commit_push"
+        phase = Mock(name="git_expert", id="phase-1")
+        phase.name = "git_expert"
         task = Mock(phase_id="phase-1", workflow_id="wf-1")
         mock_ticket = Mock(id="ticket-abc123def", title="SQL injection in search")
         mock_session = Mock()
@@ -784,12 +784,12 @@ class TestVerifyNoOpenTickets:
         assert result is not None
         assert result["status"] == "failed"
         assert "1 open bug ticket" in result["message"]
-        # git_commit_push can't fix code itself -- message should say so,
+        # git_expert can't fix code itself -- message should say so,
         # not tell this agent to "fix the underlying issue".
         assert "route back to development" in result["message"]
 
-    def test_returns_none_for_git_commit_push_with_no_open_tickets(self):
-        phase = Mock(name="git_commit_push", id="phase-1")
+    def test_returns_none_for_git_expert_with_no_open_tickets(self):
+        phase = Mock(name="git_expert", id="phase-1")
         task = Mock(phase_id="phase-1", workflow_id="wf-1")
         mock_session = Mock()
         mock_session.query.return_value.filter.return_value.all.return_value = []

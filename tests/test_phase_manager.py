@@ -1226,7 +1226,7 @@ class TestGetOrchestratorPhaseOrderMap:
 
     def test_phase_order_map_wins_over_legacy_fallback(self, real_db):
         """Regression proof: the legacy hardcoded dict has
-        forensics_analysis/git_commit_push at the wrong orders relative to
+        forensics_analysis/git_expert at the wrong orders relative to
         an unusual real workflow -- a workflow-supplied phase_order_map
         must always be consulted first, never silently overridden by the
         fallback vocabulary."""
@@ -1358,10 +1358,10 @@ class TestPhaseNameToOrderLegacyFallback:
     no phase_order_map was supplied (e.g. an orchestrator constructed
     directly, not via PhaseManager._get_orchestrator). Regression: a prior
     fix corrected 10 of these 12 entries but swapped forensics_analysis and
-    git_commit_push, trusting workflow.yaml's session_roles dict key order
-    (which lists git_commit_push first) instead of each phase's own `id:`
+    git_expert, trusting workflow.yaml's session_roles dict key order
+    (which lists git_expert first) instead of each phase's own `id:`
     field in config/workflows/autopilot/*.yaml (forensics_analysis: id 11,
-    git_commit_push: id 12)."""
+    git_expert: id 12)."""
 
     def _orchestrator(self):
         from src.workflow_engine.orchestrator import (
@@ -1371,10 +1371,10 @@ class TestPhaseNameToOrderLegacyFallback:
 
         return WorkflowOrchestrator(OrchestratorConfig())
 
-    def test_forensics_analysis_before_git_commit_push(self):
+    def test_forensics_analysis_before_git_expert(self):
         orch = self._orchestrator()
         assert orch._phase_name_to_order("forensics_analysis") == 12
-        assert orch._phase_name_to_order("git_commit_push") == 13
+        assert orch._phase_name_to_order("git_expert") == 13
 
     def test_matches_real_phase_ids_in_every_autopilot_yaml(self):
         """Cross-checks the legacy fallback dict against the actual `id:`
@@ -1790,7 +1790,7 @@ class TestCompleteWorkflowRefusesWhenPhasesRemain:
     higher-order phase exists), but every caller treated ANY None the same
     way: complete the workflow. A goto-limit-exceeded forced "continue"
     past product_validation got treated as full completion while
-    doc_review/forensics_analysis/git_commit_push/deploy were all still
+    doc_review/forensics_analysis/git_expert/deploy were all still
     "pending" and had never run -- the workflow never reached the phase
     that actually merges to main. _complete_workflow must now independently
     verify no higher-order phase remains before marking the workflow done."""
@@ -1948,14 +1948,14 @@ class TestCompleteWorkflowRefusesWhenPhasesRemain:
 
 
 class TestCompleteWorkflowPausesForReviewMode:
-    """Regression: under review_mode, git_commit_push now dispatches like
+    """Regression: under review_mode, git_expert now dispatches like
     any other phase (the agent commits, pushes, and opens a PR --
     scripts/agent-safe-bin/git blocks only `git merge`/push-to-main until
     approved), so a workflow can genuinely reach "every phase done"
     without a human ever having reviewed/merged anything. Before this
     fix, _complete_workflow had no review-mode awareness at all and would
     mark the workflow "completed" outright the moment the last phase
-    (e.g. git_commit_push, having opened but not merged a PR) finished --
+    (e.g. git_expert, having opened but not merged a PR) finished --
     nothing would ever prompt the human to merge it.
 
     review_feature's approve branch (feature_routes.py) is what actually

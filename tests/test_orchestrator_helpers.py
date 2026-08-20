@@ -3831,7 +3831,7 @@ class TestRunOneFeatureThreadsProjectId:
 class TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn:
     """Regression: found live for a real feature ("Advisor Pattern and
     Runtime Integration" in project sotto) -- its workflow had genuinely
-    finished (git_commit_push ran, Workflow.status == "completed"), but the
+    finished (git_expert ran, Workflow.status == "completed"), but the
     Feature row's own status stayed "active" forever, so the UI kept
     showing the feature as still running.
 

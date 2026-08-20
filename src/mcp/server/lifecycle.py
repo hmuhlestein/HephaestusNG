@@ -16,7 +16,7 @@ from src.core.database import (
     Workflow,
 )
 from src.mcp.frontend import create_frontend_routes
-from src.mcp.server._shared import _build_phase_dict, _git_commit_push_already_landed, _tmux_session_alive, app, config, server_state
+from src.mcp.server._shared import _build_phase_dict, _git_expert_already_landed, _tmux_session_alive, app, config, server_state
 from src.mcp.server.background_loops import background_phase_advancement_sweep, background_queue_processor
 
 # Import routers at module level for test compatibility
@@ -188,8 +188,8 @@ async def _resume_interrupted_workflows(
                     continue  # still alive (e.g., only the monitor restarted) — leave it
 
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
-                if task and _git_commit_push_already_landed(session, task, config):
-                    logger.info(f"[RESUME] Workflow {wf.id[:8]}: orphaned agent {agent.id[:8]}'s git_commit_push work already landed on {config.base_branch} -- marking done instead of redispatching")
+                if task and _git_expert_already_landed(session, task, config):
+                    logger.info(f"[RESUME] Workflow {wf.id[:8]}: orphaned agent {agent.id[:8]}'s git_expert work already landed on {config.base_branch} -- marking done instead of redispatching")
                     task.status = "done"
                     task.completed_at = datetime.utcnow()
                     task.failure_reason = None

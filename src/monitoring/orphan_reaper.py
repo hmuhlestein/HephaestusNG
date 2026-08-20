@@ -82,7 +82,7 @@ class OrphanSessionReaper:
                 #
                 # A workflow paused_by="review" is a special case, not a
                 # genuine stop: it means one specific manual-only phase
-                # (git_commit_push) is waiting on a human, but per
+                # (git_expert) is waiting on a human, but per
                 # _advance_phases's own paused_by=="review" carve-out
                 # (phase_transitions.py), every OTHER phase keeps
                 # advancing/dispatching normally while it waits. Excluding

@@ -321,7 +321,7 @@ def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:
 
 
 # Optional phases that can fail without blocking the pipeline
-OPTIONAL_PHASES = {"forensics_analysis", "git_commit_push"}
+OPTIONAL_PHASES = {"forensics_analysis", "git_expert"}
 
 
 def load_optional_phases(workflow_id: Optional[str] = None) -> set:

@@ -6,7 +6,7 @@ per design_docs/phase_1b_decomposition.md section 4.4.
 Covers:
   - verify_output_artifact (pre-commit output existence + OKF frontmatter)
   - verify_gate_result_schema (gated-phase structured JSON schema)
-  - verify_no_open_tickets (open-bug-ticket blocking for dev/git_commit_push)
+  - verify_no_open_tickets (open-bug-ticket blocking for dev/git_expert)
   - verify_output_survived_commit (post-commit re-check)
 
 The two _old_name_map dicts are intentionally duplicated (byte-identical)
@@ -287,7 +287,7 @@ def verify_gate_result_schema(session, task, phase=None) -> Optional[Dict[str, A
 
 
 def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]]:
-    """Open-ticket hard floor for development and git_commit_push: reject
+    """Open-ticket hard floor for development and git_expert: reject
     'done' while unresolved bug tickets exist for this workflow.
 
     development.yaml's own prompt already tells the agent to check for
@@ -297,7 +297,7 @@ def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]
     compliance-dependent, so a hard floor here means "fixed and marked
     resolved" is actually required, not just requested.
 
-    Also applies to git_commit_push -- the literal last phase before a
+    Also applies to git_expert -- the literal last phase before a
     feature ships. security_review creates tickets for its findings but
     has no content-scored workflow.yaml gate of its own (unlike
     qa_validation/product_validation, which score their own result
@@ -318,7 +318,7 @@ def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]
 
     if phase is None:
         phase = session.query(Phase).filter_by(id=task.phase_id).first()
-    if not phase or phase.name not in ("development", "git_commit_push"):
+    if not phase or phase.name not in ("development", "git_expert"):
         return None
     if not task.workflow_id:
         return None
@@ -347,7 +347,7 @@ def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]
     task.status = "failed"
     task.failure_reason = f"{len(open_tickets)} open bug ticket(s) not yet resolved: " + "; ".join(titles)
     session.commit()
-    # git_commit_push isn't the phase equipped to fix code -- its own
+    # git_expert isn't the phase equipped to fix code -- its own
     # retry loop would just hit this same rejection again. The message
     # is phrased for whichever agent reads it (development, if this
     # fires there directly; otherwise whoever investigates the resulting
@@ -356,7 +356,7 @@ def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]
     fix_instruction = (
         "Fix the underlying issue for each, then call update_ticket_status(new_status='shipped') before retrying update_task_status(done)."
         if phase.name == "development"
-        else ("This phase cannot fix code itself — the workflow needs to route back to development to resolve these before git_commit_push can proceed.")
+        else ("This phase cannot fix code itself — the workflow needs to route back to development to resolve these before git_expert can proceed.")
     )
     return {
         "status": "failed",

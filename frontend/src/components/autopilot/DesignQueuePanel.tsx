@@ -867,16 +867,16 @@ const FeatureRow: React.FC<{
   const isRealFeature = !feature.id.startsWith('phase0-') && !feature.id.startsWith('placeholder-');
   const hasWorkflow = !!feature.workflow_id;
   const reviewPending = !!feature.review_pending;
-  // reviewPending alone only means git_commit_push's dispatch was
+  // reviewPending alone only means git_expert's dispatch was
   // rejected pending approval -- it says nothing about whether OTHER
   // tasks in this same feature/workflow are still active. paused_by
   // "review" is workflow-wide (see phase_transitions.py's
   // _pause_for_manual_handoff), so a retried task in an unrelated phase
   // (e.g. adversarial_review) can still have a live agent running while
-  // git_commit_push sits paused waiting on a human. Surfacing "Review"
+  // git_expert sits paused waiting on a human. Surfacing "Review"
   // in that window invites approving a push before all the work it
   // should include even exists yet -- only show it once every OTHER
-  // task has resolved (done, failed, or superseded) and git_commit_push
+  // task has resolved (done, failed, or superseded) and git_expert
   // is the sole thing left. 'duplicated' counts as resolved (a
   // superseded copy of another task, not real outstanding work) --
   // observed live on feat-bd683e83: 4 duplicated architecture_design/
@@ -887,7 +887,7 @@ const FeatureRow: React.FC<{
   // validation_in_progress, needs_work) still means real work remains.
   const TERMINAL_TASK_STATUSES = ['done', 'failed', 'duplicated'];
   const readyForGitPushReview = tasks.length > 0 && tasks
-    .filter((t: any) => t.phase_name !== 'git_commit_push')
+    .filter((t: any) => t.phase_name !== 'git_expert')
     .every((t: any) => TERMINAL_TASK_STATUSES.includes(t.status));
   // In review mode, flag the feature currently in flight too, not just
   // one already paused awaiting approval -- gives an at-a-glance "this is

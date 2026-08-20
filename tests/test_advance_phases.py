@@ -423,14 +423,14 @@ class TestAdvancePhases:
         self, mock_create_agent, db_manager, sample_workflow
     ):
         """Regression: paused_by="review" means one specific phase
-        (MANUAL_ONLY_PHASES, i.e. git_commit_push) is waiting on a human --
+        (MANUAL_ONLY_PHASES, i.e. git_expert) is waiting on a human --
         it must not freeze every OTHER in-progress phase too. Before this
         fix, the top-level `if wf.status == "paused": return False` gate
         short-circuited _advance_phases entirely regardless of paused_by,
-        so a workflow paused for git_commit_push approval silently stopped
+        so a workflow paused for git_expert approval silently stopped
         retrying/self-healing every unrelated phase as well. Observed
         live: task a1efdda6 (an adversarial_review-phase task, nothing to
-        do with git_commit_push) sat orphaned and was never retried while
+        do with git_expert) sat orphaned and was never retried while
         the workflow was paused for a later phase's approval gate.
 
         phase-1 here is "requirements" -- not in MANUAL_ONLY_PHASES -- so a
@@ -444,7 +444,7 @@ class TestAdvancePhases:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             wf.status = "paused"
             wf.paused_by = "review"
-            wf.status_reason = "git_commit_push is manual-only; human approval is required"
+            wf.status_reason = "git_expert is manual-only; human approval is required"
 
             session.add(Agent(id="dead-agent", system_prompt="p", status="terminated", cli_type="pi"))
             session.add(Agent(id="fresh-agent", system_prompt="p", status="working", cli_type="pi"))
@@ -577,8 +577,8 @@ class TestCaseInProgressNoTasks:
 class TestMaybeRetryFailedTasks:
     """Tests for _maybe_retry_failed_tasks function."""
 
-    def test_git_commit_push_retries_normally_regardless_of_review_mode(self, db_manager, sample_workflow):
-        """git_commit_push dispatches and retries like any other phase in
+    def test_git_expert_retries_normally_regardless_of_review_mode(self, db_manager, sample_workflow):
+        """git_expert dispatches and retries like any other phase in
         both full autopilot and review mode -- the agent commits, pushes,
         and opens a PR either way; scripts/agent-safe-bin/git (not this
         retry path) is what actually blocks merge/push-to-main pending
@@ -590,7 +590,7 @@ class TestMaybeRetryFailedTasks:
             workflow = session.query(Workflow).filter_by(id="wf-1").first()
             workflow.project_id = "proj-1"
             phase = session.query(Phase).filter_by(id="phase-1").first()
-            phase.name = "git_commit_push"
+            phase.name = "git_expert"
             session.add(Task(
                 id="task-manual-git",
                 workflow_id="wf-1",
@@ -1947,13 +1947,13 @@ class TestReleasePendingPhasesWithOrphanedTask:
     invisible to every one of _advance_phases's four dispatch cases -- but
     for a non-terminal (orphaned) task instead of a done one. Its own
     "skip entirely if ANY phase is in_progress" guard doesn't hold here: a
-    manual-only phase (git_commit_push) sitting "in_progress" only because
+    manual-only phase (git_expert) sitting "in_progress" only because
     it's paused for review, with its own task already failed, must not
     block this repair for an unrelated phase behind it.
 
     Observed live: development (task 66e7c1ff) sat "pending" -- reverted
     by an earlier goto cycle -- for the entire time its workflow was
-    paused for git_commit_push review, invisible to every dispatch case."""
+    paused for git_expert review, invisible to every dispatch case."""
 
     def _seed_pending_task(self, db_manager, status="pending", phase_id="phase-1", workflow_id="wf-1"):
         with db_manager.session_scope() as session:

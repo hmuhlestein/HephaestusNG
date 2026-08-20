@@ -175,7 +175,7 @@ def _sync_stale_feature_statuses(logger: "OrchestratorLogger") -> int:
     complete on its own after the restart) days ago can have its
     Feature.status stuck "active" indefinitely, with nothing left to ever
     call _run_one_feature for it again. Observed live: a feature's
-    workflow status showed "completed" (git_commit_push had run) while its
+    workflow status showed "completed" (git_expert had run) while its
     Feature row still showed "active" in the UI, unresolved across
     multiple backend restarts.
 

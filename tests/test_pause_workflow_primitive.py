@@ -810,7 +810,7 @@ class TestReviewAndResumeReuseOldPendingTasks:
 
 
 class TestReviewFeatureApproveLocalMergeFallback:
-    """When git_commit_push couldn't create a PR (gh not installed/
+    """When git_expert couldn't create a PR (gh not installed/
     authenticated, no remote, etc -- its own instructions already say
     "or local merge if gh unavailable"), the reviewed work sits committed
     and pushed on the feature branch with nothing to merge it into main.

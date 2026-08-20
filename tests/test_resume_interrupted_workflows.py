@@ -259,7 +259,7 @@ def _make_git_repo_with_worktree(tmp_path, branch_merged: bool):
     its own branch with one commit -- mirrors this codebase's shared
     per-workflow worktree layout (<project>/.worktrees/wt_X on branch
     agent-X). branch_merged merges that branch into main first, matching a
-    git_commit_push task whose work already landed."""
+    git_expert task whose work already landed."""
     repo = tmp_path / "project"
     repo.mkdir()
     run = lambda *args, cwd=repo: subprocess.run(
@@ -286,17 +286,17 @@ def _make_git_repo_with_worktree(tmp_path, branch_merged: bool):
 
 
 class TestResumeInterruptedWorkflowsGitCommitPushRecovery:
-    """Regression, observed live: an orphaned git_commit_push agent whose
+    """Regression, observed live: an orphaned git_expert agent whose
     completion call was lost to a connection drop (a backend restart
     landed exactly on top of the agent's final complete_my_task call) got
     blindly redispatched to redo the whole git sequence from scratch, even
     though the merge+push had already succeeded (verified after the fact
     via `git log` -- the branch was already an ancestor of main).
-    _git_commit_push_already_landed checks git state directly so the
+    _git_expert_already_landed checks git state directly so the
     orphan-resume path can mark the task done instead of wasting a full
     re-run on an already-completed merge."""
 
-    def _seed(self, test_db, working_directory, phase_name="git_commit_push"):
+    def _seed(self, test_db, working_directory, phase_name="git_expert"):
         session = test_db.get_session()
         session.add(
             Workflow(
@@ -357,7 +357,7 @@ class TestResumeInterruptedWorkflowsGitCommitPushRecovery:
 
     @pytest.mark.asyncio
     async def test_does_not_apply_to_other_phases(self, test_db, tmp_path):
-        """Only git_commit_push has this external-state check -- any other
+        """Only git_expert has this external-state check -- any other
         phase falls straight through to the normal redispatch path even if
         its branch happens to already be merged."""
         wt_path = _make_git_repo_with_worktree(tmp_path, branch_merged=True)

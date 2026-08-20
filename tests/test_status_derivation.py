@@ -522,7 +522,7 @@ class TestDeriveWorkflowStatus:
         at tasks that EXIST -- a phase that hasn't been dispatched yet has
         ZERO tasks, invisible to that check entirely. A workflow whose only
         task (for product_validation) is "done" while doc_review,
-        forensics_analysis, git_commit_push, and deploy are all still
+        forensics_analysis, git_expert, and deploy are all still
         "pending" with no task ever created for them must NOT derive
         "completed" -- that's a workflow that hasn't reached the phase
         that actually merges to main, not a finished one."""

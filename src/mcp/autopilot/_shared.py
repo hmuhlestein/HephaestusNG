@@ -230,14 +230,14 @@ def _feature_status(metrics: dict) -> str:
     return "needs_review"
 
 def _extract_pr_url(db, workflow_id: str, phase_map: dict) -> Optional[str]:
-    """Extract PR URL from the git_commit_push task's key_learnings."""
+    """Extract PR URL from the git_expert task's key_learnings."""
     import re
     from src.core.database import Memory, Task, Phase
     if not workflow_id:
         return None
-    # Find the git_commit_push phase
+    # Find the git_expert phase
     git_phase = db.query(Phase).filter_by(
-        workflow_id=workflow_id, name="git_commit_push"
+        workflow_id=workflow_id, name="git_expert"
     ).first()
     if not git_phase:
         return None

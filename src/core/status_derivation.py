@@ -391,7 +391,7 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
     #      phase that hasn't been dispatched yet has ZERO tasks, invisible
     #      to task_statuses entirely. Observed live: a workflow with
     #      product_validation's task "done" but doc_review/forensics_
-    #      analysis/git_commit_push/deploy all still "pending" (zero tasks
+    #      analysis/git_expert/deploy all still "pending" (zero tasks
     #      ever created) derived "completed" purely because the one task
     #      that existed happened to be done.
     #   2. An old, superseded "failed" Task row from an early attempt that

@@ -193,7 +193,7 @@ class WorkflowOrchestrator:
     # was provided (see __init__) -- the autopilot pipeline's phase names,
     # matching each phase's own `id:` field in config/workflows/autopilot/
     # (NOT workflow.yaml's session_roles dict order, which lists
-    # git_commit_push before forensics_analysis but isn't itself load-
+    # git_expert before forensics_analysis but isn't itself load-
     # bearing for execution order -- a prior fix trusted that ordering and
     # got this pair backwards).
     _LEGACY_NAME_TO_ORDER: Dict[str, int] = {
@@ -210,7 +210,7 @@ class WorkflowOrchestrator:
         "product_validation": 10,
         "doc_review": 11,
         "forensics_analysis": 12,
-        "git_commit_push": 13,
+        "git_expert": 13,
         "deploy": 14,
     }
 
