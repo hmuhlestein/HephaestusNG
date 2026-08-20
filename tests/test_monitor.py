@@ -2871,6 +2871,14 @@ class TestCleanupOrphanedSessions:
     async def test_kills_orphans(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
+        """The grace period is timed per-session from when it was first
+        seen as an orphan candidate, not from the reaper's own last run --
+        so a session must be observed across two calls before it's
+        eligible to be killed (see orphan_reaper.py's fix for the
+        production bug this replaced: under the default ~60s monitoring
+        cadence, the old last-run-based check was true on nearly every
+        cycle, and orphaned sessions were essentially never actually
+        killed)."""
         session_mock = Mock()
         session_mock.name = "agent-orphan"
         session_mock.kill_session = Mock()
@@ -2881,17 +2889,20 @@ class TestCleanupOrphanedSessions:
         db_session.query.return_value.filter.return_value.first.return_value = None
         mock_db.get_session.return_value = db_session
 
-        # Set grace period past check on the orphan reaper.
-        # utcnow, not now: OrphanSessionReaper compares this against its own
-        # datetime.utcnow() clock, so a local-time value here is skewed by the
-        # host's UTC offset. West of UTC that skew happens to enlarge the
-        # delta and the test still passes; east of it the delta goes negative,
-        # the grace period triggers, and the test fails (verified: passes at
-        # UTC-6, fails at UTC+9).
+        # Past the "very first call ever" short-circuit.
         make_monitoring_loop._orphan_reaper.last_check_time = datetime.utcnow() - timedelta(
             seconds=200
         )
 
+        # First call: newly seen as an orphan candidate -- not killed yet.
+        await make_monitoring_loop._cleanup_orphaned_tmux_sessions()
+        session_mock.kill_session.assert_not_called()
+
+        # Backdate its own first-seen time past the grace period, then
+        # check again -- now it should be killed.
+        make_monitoring_loop._orphan_reaper._first_seen_orphan["agent-orphan"] = (
+            datetime.utcnow() - timedelta(seconds=200)
+        )
         await make_monitoring_loop._cleanup_orphaned_tmux_sessions()
         session_mock.kill_session.assert_called_once()
 

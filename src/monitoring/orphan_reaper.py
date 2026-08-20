@@ -13,7 +13,7 @@ reconciliation itself.
 
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,22 @@ class OrphanSessionReaper:
         self.db_manager = db_manager
         self.agent_manager = agent_manager
         self.last_check_time: Optional[datetime] = None
+        # session_name -> when it was FIRST observed as a orphan candidate
+        # (in tmux, agent-named, no matching active Agent row). The grace
+        # period is timed per-session from here, not from the reaper's own
+        # last run -- see the fix below GRACE_PERIOD_SECONDS's docstring.
+        self._first_seen_orphan: Dict[str, datetime] = {}
+
+    async def _tmux_sessions(self):
+        """libtmux's Server.sessions is a property that shells out to
+        `tmux list-sessions` -- blocking, offloaded so it doesn't stall
+        this process's event loop. Called at each of this file's several
+        points that need a fresh session list rather than fetched once,
+        since real time (including DB work) elapses between them."""
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, lambda: self.agent_manager.tmux_server.sessions)
 
     async def cleanup_orphaned_tmux_sessions(self) -> None:
         """Clean up tmux sessions that don't have corresponding active agents.
@@ -41,7 +57,7 @@ class OrphanSessionReaper:
         try:
             # Get all tmux sessions that start with 'agent' (the new naming convention)
             agent_sessions = []
-            for session in self.agent_manager.tmux_server.sessions:
+            for session in await self._tmux_sessions():
                 if session.name.startswith("agent"):
                     agent_sessions.append(session.name)
 
@@ -161,46 +177,73 @@ class OrphanSessionReaper:
                 session.close()
 
             # Find orphaned sessions (exist in tmux but not in database)
-            # Use grace period based on last check time to avoid killing newly-created sessions.
-            # utcnow, not now: self.last_check_time is only ever set from this
-            # same variable (below), but a local-time clock here would still
-            # disagree with the utcnow() comparison already used for
-            # last_activity earlier in this method. See CLAUDE.md's
+            # utcnow, not now: self._first_seen_orphan's timestamps are only
+            # ever set from this same clock (below), but a local-time value
+            # here would still disagree with the utcnow() comparison already
+            # used for last_activity earlier in this method. See CLAUDE.md's
             # utc-only invariant.
             current_time = datetime.utcnow()
 
-            # Track when we last checked - agents created since last check get grace period
+            # First-ever call: nothing has been tracked as a candidate yet,
+            # so every apparent orphan right now is one this reaper simply
+            # hasn't had a chance to observe twice -- skip entirely rather
+            # than seed _first_seen_orphan with a batch that might include
+            # sessions mid-registration at process startup.
             if self.last_check_time is None:
                 self.last_check_time = current_time
                 logger.debug(
                     "First orphan check - skipping all sessions for grace period"
                 )
                 return
+            self.last_check_time = current_time
 
-            time_since_last_check = (
-                current_time - self.last_check_time
-            ).total_seconds()
-
+            # Grace period is timed per-session from when THIS session was
+            # first seen as an orphan candidate, not from how long it's
+            # been since the reaper itself last ran. The previous version
+            # compared elapsed-time-since-last-run against
+            # GRACE_PERIOD_SECONDS directly -- under this monitor's default
+            # ~60s run cadence, that duration is almost always well under
+            # the 120s threshold, so the grace check was true on nearly
+            # every cycle and orphan sessions were essentially never
+            # actually killed in normal steady-state operation, regardless
+            # of how long they'd genuinely been orphaned.
             orphaned_sessions = []
-            for tmux_sess in self.agent_manager.tmux_server.sessions:
+            candidate_names = set()
+            for tmux_sess in await self._tmux_sessions():
                 if tmux_sess.name not in agent_sessions:
                     continue
                 if tmux_sess.name in active_session_names:
                     continue
 
-                # Apply grace period: if we just started monitoring or haven't checked in a while,
-                # skip orphan detection to let new agents get registered in DB
-                if time_since_last_check < self.GRACE_PERIOD_SECONDS:
+                candidate_names.add(tmux_sess.name)
+                first_seen = self._first_seen_orphan.get(tmux_sess.name)
+                if first_seen is None:
+                    self._first_seen_orphan[tmux_sess.name] = current_time
                     logger.debug(
-                        f"Skipping session {tmux_sess.name} - within grace period "
-                        f"({time_since_last_check:.0f}s < {self.GRACE_PERIOD_SECONDS}s)"
+                        f"Session {tmux_sess.name} newly seen as an orphan "
+                        f"candidate -- starting its own {self.GRACE_PERIOD_SECONDS}s grace period"
+                    )
+                    continue
+
+                orphaned_for = (current_time - first_seen).total_seconds()
+                if orphaned_for < self.GRACE_PERIOD_SECONDS:
+                    logger.debug(
+                        f"Skipping session {tmux_sess.name} - within its own grace period "
+                        f"({orphaned_for:.0f}s < {self.GRACE_PERIOD_SECONDS}s)"
                     )
                     continue
 
                 orphaned_sessions.append(tmux_sess.name)
 
-            # Update last check time
-            self.last_check_time = current_time
+            # Stop tracking anything that's no longer a candidate (it got
+            # registered to an active agent, or the session itself is gone)
+            # -- otherwise this dict grows without bound over a long-running
+            # process, and a stale entry could let a LATER, genuinely
+            # different session that happens to reuse the same name skip
+            # its own grace period entirely.
+            for name in list(self._first_seen_orphan):
+                if name not in candidate_names:
+                    del self._first_seen_orphan[name]
 
             if not orphaned_sessions:
                 logger.debug("No orphaned tmux sessions found")
@@ -245,9 +288,12 @@ class OrphanSessionReaper:
                         logger.debug(f"[STABLE-TRANSCRIPT] Final flush before reap failed: {e}")
 
                     # Find and kill the session
-                    for tmux_sess in self.agent_manager.tmux_server.sessions:
+                    for tmux_sess in await self._tmux_sessions():
                         if tmux_sess.name == session_name:
-                            tmux_sess.kill_session()
+                            import asyncio
+
+                            loop = asyncio.get_event_loop()
+                            await loop.run_in_executor(None, tmux_sess.kill_session)
                             logger.info(f"Killed orphaned tmux session: {session_name}")
                             killed_count += 1
                             break
