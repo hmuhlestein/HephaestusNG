@@ -7309,6 +7309,38 @@ class TestTerminateAgentInvariant:
         result = terminate_agent("nonexistent")
         assert result is False
 
+    @pytest.mark.parametrize("stray_status", ["under_review", "needs_work"])
+    def test_terminate_agent_resets_stray_task_in_review_or_needs_work(self, orch_db_env, stray_status):
+        """Regression: the stray-task reset only covered
+        assigned/in_progress/pending -- missing under_review (kept-alive-
+        for-validation) and needs_work (validator sent feedback to the
+        same still-running agent), both states where assigned_agent_id
+        still points at this agent. Terminating that agent left the task
+        permanently pointing at a dead agent, invisible to every self-heal
+        sweep scoped to assigned_agent_id."""
+        from src.autopilot.orchestrator.engine_client import terminate_agent
+        from src.core.database import Agent, Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="w", phases_folder_path="/tmp", status="active"))
+            session.add(Agent(
+                id="a-1", status="working", cli_type="pi",
+                system_prompt="x", current_task_id="t-1",
+            ))
+            session.add(Task(
+                id="t-1", workflow_id="wf-1", raw_description="x",
+                done_definition="x", status=stray_status,
+                assigned_agent_id="a-1",
+            ))
+
+        result = terminate_agent("a-1")
+        assert result is True
+
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="t-1").first()
+            assert task.status == "pending"
+            assert task.assigned_agent_id is None
+
     def test_terminate_agent_backward_compat_alias(self, orch_db_env):
         """terminate_agent_direct is a backward-compatible alias."""
         from src.autopilot.orchestrator.engine_client import (
@@ -7356,3 +7388,37 @@ class TestTerminateAgentInvariant:
             assert agent.terminated_at is not None
             assert task.status == "pending"
             assert task.assigned_agent_id is None
+
+
+class TestCheckPhaseSiblingActive:
+    """Regression: the sibling-active guard (used to prevent duplicate
+    task/agent creation on the same phase, including the validator spawn
+    path) only covered pending/assigned/in_progress/queued -- missing
+    under_review/validation_in_progress/needs_work. A sibling task mid-
+    review or mid-validation still owns the phase; missing it here means
+    a second task/agent can get spawned onto the same phase concurrently."""
+
+    @pytest.mark.parametrize(
+        "sibling_status", ["under_review", "validation_in_progress", "needs_work"]
+    )
+    def test_sees_sibling_in_review_or_validation_statuses(self, orch_db_env, sibling_status):
+        from src.autopilot.orchestrator.engine_client import check_phase_sibling_active
+        from src.core.database import Task, Workflow, Phase
+
+        with orch_db_env.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="w", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(
+                id="phase-1", workflow_id="wf-1", order=1, name="development",
+                description="d", done_definitions=["d"],
+            ))
+            session.add(Task(
+                id="t-sibling", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="x", done_definition="x", status=sibling_status,
+            ))
+
+        with orch_db_env.session_scope() as session:
+            sibling = check_phase_sibling_active(
+                session, "t-new", "phase-1", created_by_filter=False,
+            )
+            assert sibling is not None
+            assert sibling.id == "t-sibling"

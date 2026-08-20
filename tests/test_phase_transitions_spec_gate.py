@@ -190,6 +190,44 @@ class TestFireSpecGateIfReadyGoto:
         mock_create_task.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_mark_phase_complete_is_offloaded_to_executor(self, gate_db, tmp_path):
+        """Regression: mark_phase_complete can itself run an LLM evaluate()
+        call and, on completing the whole workflow, cascade into
+        _populate_feature_folder's recursive filesystem copies -- both
+        blocking, called directly (unoffloaded) right after the already-
+        offloaded build_phase_output call. Must go through run_in_executor
+        like its neighbor."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        self._seed(gate_db, tmp_path)
+
+        with gate_db.session_scope() as session:
+            from src.core.database import Task
+
+            task = session.query(Task).filter_by(id="task-adv").first()
+
+            fake_loop = MagicMock()
+            fake_loop.run_in_executor = AsyncMock(return_value={"action": "continue"})
+
+            with patch(
+                "src.autopilot.spec.GATED_PHASES", ("adversarial_review",)
+            ), patch(
+                "src.autopilot.spec.build_phase_output", return_value={"score": 0.9}
+            ), patch(
+                "asyncio.get_event_loop", return_value=fake_loop
+            ):
+                await fire_spec_gate_if_ready(session, task)
+
+        # First run_in_executor call is build_phase_output (pre-existing);
+        # the second must be mark_phase_complete.
+        assert fake_loop.run_in_executor.call_count == 2
+        second_call_args = fake_loop.run_in_executor.call_args_list[1].args
+        executor_arg, func_arg = second_call_args[0], second_call_args[1]
+        assert executor_arg is None
+        assert func_arg.func.__name__ == "mark_phase_complete"
+        assert func_arg.args[0] == "phase-adv"
+
+    @pytest.mark.asyncio
     async def test_arbitrate_triggers_arbitration(self, gate_db, tmp_path):
         """Regression: this synchronous "gate fired from completion path"
         checked action in ("already_completed", "goto", "continue") and

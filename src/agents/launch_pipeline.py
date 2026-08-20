@@ -2213,7 +2213,7 @@ class LaunchPipeline:
             session.commit()
 
             try:
-                await asyncio.sleep(25)
+                await self._wait_for_cli_ready(pane, cli_agent, restart_cli_type, agent_id)
                 term_race_result = await self._check_termination_race(
                     agent_id, restart_task_id, new_session_name,
                     agent_id_to_return=agent_id,

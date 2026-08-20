@@ -29,6 +29,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["memory", "results"])
 
 
+def _commit_validated_worktree(worktree_path: str, agent_id: str) -> bool:
+    """`git add -A` + commit any validated work in an agent's worktree --
+    real subprocess work, called via run_in_executor by
+    give_validation_review below. Returns True if a commit was made."""
+    from git import Repo
+
+    wt_repo = Repo(worktree_path)
+    wt_repo.git.add("-A")
+    if not (wt_repo.is_dirty() or wt_repo.untracked_files):
+        return False
+    wt_repo.git.commit(
+        "-m", f"[Agent {agent_id[:8]}] Validated work completed", "--no-verify",
+    )
+    return True
+
+
 def _get_server_state():
     """Get server state (lazy import to avoid circular deps)."""
     return get_app_state()
@@ -546,15 +562,14 @@ async def give_validation_review(
                         session, original_agent_id
                     )
                     if record and record.worktree_path:
-                        from git import Repo
-                        wt_repo = Repo(record.worktree_path)
-                        wt_repo.git.add("-A")
-                        if wt_repo.is_dirty() or wt_repo.untracked_files:
-                            wt_repo.git.commit(
-                                "-m",
-                                f"[Agent {original_agent_id[:8]}] Validated work completed",
-                                "--no-verify",
-                            )
+                        # GitPython does real subprocess work (git add/status/
+                        # commit) -- offloaded so it doesn't block the event
+                        # loop, same class of issue fixed elsewhere today.
+                        loop = asyncio.get_event_loop()
+                        committed = await loop.run_in_executor(
+                            None, _commit_validated_worktree, record.worktree_path, original_agent_id
+                        )
+                        if committed:
                             logger.info(
                                 f"Committed validated work in worktree for {original_agent_id[:8]}"
                             )
@@ -574,13 +589,13 @@ async def give_validation_review(
                     logger.warning(f"Failed to commit validated work: {e}")
 
             # Terminate both original and validator agents, then process queue
-            async def terminate_both_and_process_queue():
-                await server_state.agent_manager.terminate_agent(original_agent_id)
-                await server_state.agent_manager.terminate_agent(agent_id)
-                from src.mcp.server.background_loops import process_queue
-                await process_queue()
+            from src.mcp.server.background_loops import terminate_agents_and_process_queue
 
-            asyncio.create_task(terminate_both_and_process_queue())
+            asyncio.create_task(
+                terminate_agents_and_process_queue(
+                    server_state.agent_manager, [original_agent_id, agent_id]
+                )
+            )
 
             # Broadcast success
             from src.core.database import resolve_project_for_workflow
@@ -612,25 +627,30 @@ async def give_validation_review(
             task.last_validation_feedback = request.feedback
             session.commit()
 
-            # Send feedback to the still-running agent
+            # Send feedback to the still-running agent. Offloaded --
+            # shells out to `tmux send-keys`, blocking.
             from src.validation.validator_agent import send_feedback_to_agent
 
-            feedback_sent = send_feedback_to_agent(
-                agent_id=original_agent_id,
-                feedback=request.feedback,
-                iteration=task.validation_iteration,
+            loop = asyncio.get_event_loop()
+            feedback_sent = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    send_feedback_to_agent,
+                    agent_id=original_agent_id,
+                    feedback=request.feedback,
+                    iteration=task.validation_iteration,
+                ),
             )
 
             if not feedback_sent:
                 logger.error(f"Failed to send feedback to agent {original_agent_id}")
 
             # Terminate validator (its job is done) and process queue
-            async def terminate_validator_and_process_queue():
-                await server_state.agent_manager.terminate_agent(agent_id)
-                from src.mcp.server.background_loops import process_queue
-                await process_queue()
+            from src.mcp.server.background_loops import terminate_agents_and_process_queue
 
-            asyncio.create_task(terminate_validator_and_process_queue())
+            asyncio.create_task(
+                terminate_agents_and_process_queue(server_state.agent_manager, [agent_id])
+            )
 
             # Broadcast validation failure
             from src.core.database import resolve_project_for_workflow
