@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { CheckCircle2, XCircle, Clock, Play, Pause, Activity, Users, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, Play, Pause, Activity, Users, AlertTriangle, DollarSign } from 'lucide-react';
 import { formatTime } from '@/pages/Autopilot';
 import { CostDisplay } from '@/components/cost';
 
@@ -148,21 +148,24 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, pending
                 onClick={onBudgetClick}
                 className={`text-center px-3 py-2 rounded-lg transition-all border border-transparent ${
                   onBudgetClick
-                    ? 'cursor-pointer hover:bg-white/15 hover:border-white/20 hover:underline active:scale-95'
+                    ? 'cursor-pointer hover:bg-white/15 hover:border-white/20 active:scale-95'
                     : 'cursor-default'
                 }`}
                 title={costLimit != null ? 'View or change the spend limit' : 'No spend limit set — click to set one'}
               >
                 <div className="flex items-center justify-center gap-1 mb-1">
-                  <span className="text-xs text-white/60 uppercase tracking-wider">Budget</span>
+                  <DollarSign className="w-3 h-3 text-white/60" />
+                  <span className="text-xs text-white/60 uppercase tracking-wider">Cost</span>
                 </div>
                 <CostDisplay currentCost={costTotal} costLimit={costLimit} showProgress={false} variant="large" />
                 {/* Without this the tile shows spend only, with nothing to
                     indicate a limit CAN be set -- the feature was reachable
-                    but invisible unless you already knew to click. */}
+                    but invisible unless you already knew to click. A plain
+                    link reads as an action; the earlier "no limit · set one"
+                    hint read as a status caption, not something to click. */}
                 {costLimit == null && onBudgetClick && (
-                  <span className="mt-0.5 block text-[10px] leading-none text-white/50">
-                    no limit · set one
+                  <span className="mt-0.5 block text-xs font-medium text-violet-300 hover:text-violet-200 underline underline-offset-2">
+                    Set Budget
                   </span>
                 )}
               </button>
