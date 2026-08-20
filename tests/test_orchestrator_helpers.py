@@ -1038,29 +1038,6 @@ class TestCollectReportSummaries:
         assert len(result) == 8
 
 
-class TestCollectFilesCreated:
-    def test_collects_files(self, tmp_path):
-        from src.autopilot.orchestrator.reporting import collect_files_created
-
-        # Files at project_path level
-        (tmp_path / "code.py").write_text("print('hello')")
-        (tmp_path / "test.py").write_text("assert True")
-        (tmp_path / "style.css").write_text("body {}")
-        result = collect_files_created(tmp_path)
-        assert len(result) == 3
-
-    def test_skips_venv(self, tmp_path):
-        from src.autopilot.orchestrator.reporting import collect_files_created
-
-        venv = tmp_path / ".venv" / "lib"
-        venv.mkdir(parents=True)
-        (venv / "pkg.py").write_text("x = 1")
-        (tmp_path / "main.py").write_text("x = 2")
-        result = collect_files_created(tmp_path)
-        assert len(result) == 1
-        assert "main.py" in result[0]
-
-
 class TestRegisterOrchestratorAgent:
     """Regression: registering the orchestrator's own Agent row on restart
     tried to reuse Agent.tmux_session_name="orchestrator" by marking the

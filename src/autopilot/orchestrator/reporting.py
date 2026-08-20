@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 
 from src.core.database import (
@@ -72,31 +72,6 @@ def collect_report_summaries(project_path: Path) -> Dict[str, str]:
             summaries[key] = f"[{filename} not found]"
 
     return summaries
-
-
-def collect_files_created(project_path: Path, feature_folder: Path = None) -> List[str]:
-    files = []
-    dirs_to_scan = [project_path]
-    if feature_folder:
-        dirs_to_scan.append(feature_folder)
-
-    for scan_dir in dirs_to_scan:
-        for pattern in [
-            "**/*.py",
-            "**/*.ts",
-            "**/*.tsx",
-            "**/*.js",
-            "**/*.jsx",
-            "**/*.html",
-            "**/*.css",
-            "**/*.md",
-        ]:
-            for f in sorted(scan_dir.glob(pattern)):
-                if ".venv" in str(f) or "node_modules" in str(f) or "__pycache__" in str(f):
-                    continue
-                rel = f.relative_to(scan_dir)
-                files.append(str(rel))
-    return sorted(set(files))
 
 
 def _generate_design_report_html(
