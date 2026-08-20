@@ -216,16 +216,34 @@ Two live bugs surfaced within minutes of the gate coming back, both of the
   config already recorded in §1. Replaced with a real `spec.get_max_task_retries()`
   modelled on its neighbour `get_max_review_runs()`.
 
+- **Two MCP tools had never worked** (`1e4aa42`). `search_tickets` and
+  `update_ticket_status` are both advertised to agents in `MCP_TOOL_REGISTRY`.
+  `_tool_search_tickets` called `TicketSearchService(session)`, but that class defines
+  no `__init__` and only static methods — so it raised `TypeError:
+  TicketSearchService() takes no arguments` on its first line, before reaching
+  `search_tickets`, which does not exist either. `_tool_update_ticket_status` called
+  `TicketService.change_ticket_status`, which does not exist (it is `change_status`)
+  and which requires a `comment` the tool never collected. Neither was fixable by
+  rename alone: the advertised schemas omitted arguments the services require, so
+  `workflow_id` (required, matching the `create_task` convention in the same registry)
+  and `comment` (required) were added. `tags` stays advertised but is folded into the
+  query text — only `status`/`priority`/`ticket_type` are supported filter keys, while
+  `_ticket_text` indexes tags into the searchable document. 13 tests, 9 of which fail
+  against the pre-fix code in a clean worktree.
+
 **Baseline for whoever picks this up: 901 errors across 106 of 197 source files.** That
 is a backlog, not a to-do list, and it should not be attacked wholesale. The
 high-signal category is `[attr-defined]` (67) — the same class as both bugs above and
 as the `worktree.branch_path` defect found by hand in §2.14 — and it is worth mining
 first. `[union-attr]` (126) is dominated by `DatabaseManager | None` access, which is a
 real nullability question rather than noise. `[arg-type]` (265) and `[assignment]` (145)
-are mostly annotation debt. Several remaining `[attr-defined]` hits look like genuine
-bugs and are deliberately left unclaimed here: `devtools.py`'s `ConsoleEntry`
-attributes, `vector_store.py`'s `QdrantClient.search` (removed in newer
-qdrant-client), and `llm_interface.py`'s `"None" has no attribute "model_dump"`.
+are mostly annotation debt. Two of the flagged `[attr-defined]` hits turned out to be the dead MCP tools above.
+Three remain unclaimed and still look like genuine bugs: `devtools.py`'s `ConsoleEntry`
+attributes (7 sites), `vector_store.py`'s `QdrantClient.search` (removed in newer
+qdrant-client), and `llm_interface.py`'s `"None" has no attribute "model_dump"`. The
+~35 `"None" has no attribute ...` hits across `mcp/frontend/*_routes.py` are NOT bugs —
+they are the module-level `frontend_api = None` placeholder assigned at startup, i.e.
+annotation debt.
 `PipelineState._recovery_attempts`/`_design_branch`/`_design_worktree` are the dynamic
 undeclared attributes §2.3 already records, now confirmed by the type checker.
 
