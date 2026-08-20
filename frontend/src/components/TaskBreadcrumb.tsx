@@ -18,6 +18,8 @@ const TaskBreadcrumb: React.FC<TaskBreadcrumbProps> = ({ currentTaskId, onNaviga
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    let mounted = true;
+
     const buildHierarchy = async () => {
       setIsLoading(true);
       const hierarchy: BreadcrumbTask[] = [];
@@ -28,6 +30,7 @@ const TaskBreadcrumb: React.FC<TaskBreadcrumbProps> = ({ currentTaskId, onNaviga
         while (currentId && !visited.has(currentId)) {
           visited.add(currentId);
           const taskDetails = await apiService.getTaskFullDetails(currentId);
+          if (!mounted) return;
 
           hierarchy.unshift({
             id: taskDetails.id,
@@ -41,17 +44,21 @@ const TaskBreadcrumb: React.FC<TaskBreadcrumbProps> = ({ currentTaskId, onNaviga
             break;
           }
         }
-        setTaskHierarchy(hierarchy);
+        if (mounted) setTaskHierarchy(hierarchy);
       } catch (error) {
         console.error('Failed to build task hierarchy:', error);
       } finally {
-        setIsLoading(false);
+        if (mounted) setIsLoading(false);
       }
     };
 
     if (currentTaskId) {
       buildHierarchy();
     }
+
+    return () => {
+      mounted = false;
+    };
   }, [currentTaskId]);
 
   if (isLoading || taskHierarchy.length <= 1) {
