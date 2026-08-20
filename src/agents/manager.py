@@ -60,6 +60,7 @@ class AgentManager:
         db_manager: DatabaseManager,
         llm_provider: LLMProviderInterface,
         phase_manager=None,
+        tmux_server: Optional[libtmux.Server] = None,
     ):
         """Initialize agent manager.
 
@@ -67,12 +68,18 @@ class AgentManager:
             db_manager: Database manager instance
             llm_provider: LLM provider for generating prompts
             phase_manager: Phase manager instance (optional)
+            tmux_server: libtmux.Server instance (optional; defaults to a
+                real one). Injectable seam (SOLID review 3.10) -- without
+                it, AgentManager could only be unit-tested by patching the
+                libtmux.Server import itself, then overwriting the instance
+                attribute post-construction (see tests/test_agent_manager.py's
+                previous mock_agent_manager fixture).
         """
         self.db_manager = db_manager
         self.llm_provider = llm_provider
         self.phase_manager = phase_manager
         self.config = get_config()
-        self.tmux_server = libtmux.Server()
+        self.tmux_server = tmux_server if tmux_server is not None else libtmux.Server()
 
         # Branch manager for agent isolation
         self.branch_manager = WorktreeManager(db_manager)

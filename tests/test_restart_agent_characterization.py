@@ -46,14 +46,12 @@ def restart_agent_manager(db_manager):
     llm_provider = MagicMock()
     phase_manager = MagicMock()
 
-    with patch("src.agents.manager.libtmux.Server"):
-        manager = AgentManager(
-            db_manager=db_manager,
-            llm_provider=llm_provider,
-            phase_manager=phase_manager,
-        )
-
-    manager.tmux_server = MagicMock()
+    manager = AgentManager(
+        db_manager=db_manager,
+        llm_provider=llm_provider,
+        phase_manager=phase_manager,
+        tmux_server=MagicMock(),
+    )
     return manager
 
 
