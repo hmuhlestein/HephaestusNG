@@ -944,11 +944,26 @@ class LaunchPipeline:
         except Exception:
             pass  # Non-critical -- worst case the launch command fails visibly
 
-        # Keep a small scrollback — pipe-pane already captures the full
-        # transcript to a durable file, so large history-limit just wastes
-        # memory and slows tmux's rendering for no benefit.
+        # A large history-limit -- NOT the raw pipe-pane transcript below --
+        # is what the viewer's clean, human-readable transcript actually
+        # depends on. _poll_stable_transcript reconstructs correct text
+        # from tmux's own capture-pane rendering (cursor positioning,
+        # overwrites, and line wrapping already resolved) because the raw
+        # pipe-pane bytes below re-show every intermediate \r/cursor-
+        # redrawn TUI frame as its own line and can't always be turned
+        # back into correct text by regex stripping alone. capture-pane's
+        # own scrollback is bounded by history-limit, so any single poll
+        # interval producing more new output than that forces a lossy
+        # reset (see _capture_pane_lines/_poll_stable_transcript) --
+        # confirmed live: an architecture_design session's clean
+        # transcript started mid-paragraph, with everything before that
+        # point unrecoverably gone. 1000 was sized as if the durable
+        # pipe-pane file made this moot; it doesn't, since that file isn't
+        # what the viewer reads. Sized generously instead -- a few MB per
+        # session even at this size, negligible next to the cost of losing
+        # transcript history.
         try:
-            session.set_option("history-limit", "1000")
+            session.set_option("history-limit", "50000")
         except Exception:
             pass  # Non-critical
 
