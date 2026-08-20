@@ -354,8 +354,24 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
         if not is_orphan:
             increment_task_retry_count(task_id)
         try:
-            # Reset task status to pending
-            update_task_status(task_id, "pending")
+            # Reset task status to pending. Checked, not fire-and-forget:
+            # update_task_status swallows its own DB errors and returns
+            # False rather than raising -- previously that False was
+            # discarded here, so a transient failure to reset the status
+            # (task.status still "failed" in the DB) didn't stop the next
+            # line from dispatching a live agent anyway. Every downstream
+            # consistency check keying off Task.status (phase completion
+            # counts, this same function's own retry-candidate query,
+            # _clean_stale_assigned_tasks) could then double-dispatch or
+            # misclassify the task while a real agent was mid-work on it.
+            # Raising here routes the failure into this block's own
+            # existing except below, which already does the right thing:
+            # log it and leave/revert the task to "failed" for another
+            # retry pass to pick up.
+            if not update_task_status(task_id, "pending"):
+                raise RuntimeError(
+                    f"Failed to reset task {task_id[:8]} to pending before retry"
+                )
             # Create agent for it
             agent_data = create_agent_for_task_direct(task_id, workflow_id, phase_id)
             if not agent_data:
