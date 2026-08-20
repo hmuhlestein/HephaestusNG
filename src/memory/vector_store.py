@@ -199,9 +199,17 @@ class VectorStoreManager:
                 qdrant_filter = Filter(must=conditions)
 
         try:
-            results = self.client.search(
+            # query_points, not search: QdrantClient.search was removed in
+            # qdrant-client 1.x (1.18 is what's pinned here). Calling it
+            # raised AttributeError, which the handler below caught and
+            # reported as "Search failed" while returning [] -- so semantic
+            # search on the Qdrant backend silently produced no results at
+            # all, indistinguishable from "nothing matched". The default
+            # backend is turbovec, so only deployments using the documented
+            # VECTOR_STORE_BACKEND=qdrant fallback were affected.
+            response = self.client.query_points(
                 collection_name=full_name,
-                query_vector=query_vector,
+                query=query_vector,
                 limit=limit,
                 query_filter=qdrant_filter,
                 score_threshold=score_threshold,
@@ -217,7 +225,7 @@ class VectorStoreManager:
                         k: v for k, v in result.payload.items() if k != "content"
                     },
                 }
-                for result in results
+                for result in response.points
             ]
         except Exception as e:
             logger.error(f"Search failed in collection {full_name}: {e}")
