@@ -10,6 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 
+from src.core.agent_identity import is_root_agent
 from src.core.app_context import get_app_state
 from src.core.database import Agent, Task
 
@@ -397,7 +398,7 @@ async def get_agent_children(
 ):
     """Get all child agents for a parent agent."""
     server_state = _get_server_state()
-    if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
+    if requesting_agent_id != agent_id and not is_root_agent(requesting_agent_id):
         raise HTTPException(403, "Can only view your own children")
     from src.services.agent_communication import AgentCommunicationService
 
@@ -414,7 +415,7 @@ async def get_children_status(
 ):
     """Get summary of all children's status."""
     server_state = _get_server_state()
-    if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
+    if requesting_agent_id != agent_id and not is_root_agent(requesting_agent_id):
         raise HTTPException(403, "Can only view your own children")
     from src.services.agent_communication import AgentCommunicationService
 
@@ -433,7 +434,7 @@ async def get_child_logs(
 ):
     """Read logs from a child agent."""
     server_state = _get_server_state()
-    if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
+    if requesting_agent_id != agent_id and not is_root_agent(requesting_agent_id):
         raise HTTPException(403, "Can only view your own children's logs")
     from src.services.agent_communication import AgentCommunicationService
 
@@ -457,7 +458,7 @@ async def send_message_to_child(
 ):
     """Send a message from parent to child agent."""
     server_state = _get_server_state()
-    if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
+    if requesting_agent_id != agent_id and not is_root_agent(requesting_agent_id):
         raise HTTPException(403, "Can only message your own children")
     from src.services.agent_communication import AgentCommunicationService
 
@@ -485,7 +486,7 @@ async def nudge_child_agent(
 ):
     """Nudge a child agent that appears stuck."""
     server_state = _get_server_state()
-    if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
+    if requesting_agent_id != agent_id and not is_root_agent(requesting_agent_id):
         raise HTTPException(403, "Can only nudge your own children")
     from src.services.agent_communication import AgentCommunicationService
 
@@ -512,7 +513,7 @@ async def monitor_and_nudge_stuck_children(
 ):
     """Monitor all children and nudge any that appear stuck."""
     server_state = _get_server_state()
-    if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
+    if requesting_agent_id != agent_id and not is_root_agent(requesting_agent_id):
         raise HTTPException(403, "Can only monitor your own children")
     from src.services.agent_communication import AgentCommunicationService
 
