@@ -198,6 +198,45 @@ class CLIAgentInterface(ABC):
         """
         pass
 
+    def _parse_prompt_marker_output(self, output: str, prompt_marker: str) -> Dict[str, Any]:
+        """Shared parse_output body for CLIs whose prompt is marked by '›',
+        '>', or one CLI-specific string (e.g. 'pi>') (SOLID review 4.9) --
+        OpenCodeAgent/DroidAgent/PiAgent were byte-identical except for
+        that one marker string before converging on this helper.
+
+        Scans backward for the last line containing a marker, treats that
+        as "waiting for input," and collects everything between it and the
+        previous marker occurrence (scanning further backward) as the last
+        message.
+
+        Args:
+            output: Raw output from the CLI tool
+            prompt_marker: This CLI's own prompt string (e.g. "opencode>")
+
+        Returns:
+            Dict with last_message/is_waiting/total_lines, matching every
+            marker-based subclass's existing parse_output contract.
+        """
+        lines = output.strip().split("\n")
+        last_message = ""
+        is_waiting = False
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i]
+            if "›" in line or ">" in line or prompt_marker in line:
+                is_waiting = True
+                message_lines = []
+                for j in range(i - 1, -1, -1):
+                    if "›" in lines[j] or ">" in lines[j] or prompt_marker in lines[j]:
+                        break
+                    message_lines.insert(0, lines[j])
+                last_message = "\n".join(message_lines).strip()
+                break
+        return {
+            "last_message": last_message,
+            "is_waiting": is_waiting,
+            "total_lines": len(lines),
+        }
+
     def recovery_keystrokes(self) -> List[str]:
         """tmux key names to break this CLI out of a stuck/looping TUI before a nudge
         message is sent (e.g. ['Escape']). Empty = no mechanical keystroke recovery for
@@ -710,25 +749,7 @@ class OpenCodeAgent(CLIAgentInterface):
         ]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        lines = output.strip().split("\n")
-        last_message = ""
-        is_waiting = False
-        for i in range(len(lines) - 1, -1, -1):
-            line = lines[i]
-            if "›" in line or ">" in line or "opencode>" in line:
-                is_waiting = True
-                message_lines = []
-                for j in range(i - 1, -1, -1):
-                    if "›" in lines[j] or ">" in lines[j] or "opencode>" in lines[j]:
-                        break
-                    message_lines.insert(0, lines[j])
-                last_message = "\n".join(message_lines).strip()
-                break
-        return {
-            "last_message": last_message,
-            "is_waiting": is_waiting,
-            "total_lines": len(lines),
-        }
+        return self._parse_prompt_marker_output(output, "opencode>")
 
 
 class DroidAgent(CLIAgentInterface):
@@ -762,25 +783,7 @@ class DroidAgent(CLIAgentInterface):
         ]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        lines = output.strip().split("\n")
-        last_message = ""
-        is_waiting = False
-        for i in range(len(lines) - 1, -1, -1):
-            line = lines[i]
-            if "›" in line or ">" in line or "droid>" in line:
-                is_waiting = True
-                message_lines = []
-                for j in range(i - 1, -1, -1):
-                    if "›" in lines[j] or ">" in lines[j] or "droid>" in lines[j]:
-                        break
-                    message_lines.insert(0, lines[j])
-                last_message = "\n".join(message_lines).strip()
-                break
-        return {
-            "last_message": last_message,
-            "is_waiting": is_waiting,
-            "total_lines": len(lines),
-        }
+        return self._parse_prompt_marker_output(output, "droid>")
 
 
 class CodexAgent(CLIAgentInterface):
@@ -1109,25 +1112,7 @@ class PiAgent(CLIAgentInterface):
         return re.search(rf"Model:\s*\S*{re.escape(model)}", output) is not None
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        lines = output.strip().split("\n")
-        last_message = ""
-        is_waiting = False
-        for i in range(len(lines) - 1, -1, -1):
-            line = lines[i]
-            if "›" in line or ">" in line or "pi>" in line:
-                is_waiting = True
-                message_lines = []
-                for j in range(i - 1, -1, -1):
-                    if "›" in lines[j] or ">" in lines[j] or "pi>" in lines[j]:
-                        break
-                    message_lines.insert(0, lines[j])
-                last_message = "\n".join(message_lines).strip()
-                break
-        return {
-            "last_message": last_message,
-            "is_waiting": is_waiting,
-            "total_lines": len(lines),
-        }
+        return self._parse_prompt_marker_output(output, "pi>")
 
 
 class SwarmCodeAgent(CLIAgentInterface):
