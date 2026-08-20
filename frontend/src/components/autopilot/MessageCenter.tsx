@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -54,6 +54,14 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
   const [messageText, setMessageText] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+
+  // Without this, closing the Respond panel without submitting (backdrop
+  // click or the close button) leaves messageText behind -- the next
+  // human_input_required request's textarea then opens pre-filled with
+  // the previous request's leftover draft.
+  useEffect(() => {
+    setMessageText('');
+  }, [currentRequestId]);
   
   // Fetch archived message IDs from DB
   const { data: archivedData, refetch: refetchArchived } = useQuery({
