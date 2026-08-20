@@ -547,10 +547,24 @@ what the change actually did when it landed.
 Iteration is scoped **per feature**, not per design.
 
 ```
-Feature pipeline → Validation FAIL → Feature pipeline again → Validation PASS → feature done
+Feature pipeline → gate FAIL → back to development/architecture → gate PASS
+                 → remaining phases → git commit → feature done
 ```
 
-- Maximum iterations configurable via `--max-iterations` (default: 3, per feature)
+A feature is marked `completed` when its **workflow** reaches `completed` — that
+is, the pipeline ran to the end. Passing product validation (Phase 10) is not
+the finish line: doc review, forensics, git commit and deploy all still run
+after it, and `workflow.yaml`'s own `result_criteria` is "Feature validated
+**and committed to git**". Feature status is written from the workflow's final
+status, never from a single phase's gate result.
+
+- `--max-iterations` (default: 3) is a **design-level** retry concept. It does
+  NOT cap a feature's goto budget — that comes from `workflow.yaml`'s
+  `max_total_gotos` (30 for the autopilot definition), with per-gate limits from
+  each evaluation point's `max_retries`. Passing `--max-iterations` through to
+  feature workflows was a real bug: it capped every feature pipeline at 3 gotos
+  across all 13 phases, and `_run_one_feature` now deliberately does not forward
+  it. Raising it will not give a feature more retries
 - If a feature fails beyond max iterations it is marked `failed`
 - Sequential features whose `depends_on` list contains a failed feature are `skipped`
 - Parallel features continue regardless of other parallel feature outcomes
@@ -559,7 +573,7 @@ Feature pipeline → Validation FAIL → Feature pipeline again → Validation P
 
 | Condition | Scope | Action |
 |-----------|-------|--------|
-| Product validation passes | Feature | Mark feature completed; start next pending feature |
+| Pipeline runs to the end (git commit) | Feature | Mark feature completed; start next pending feature |
 | Hard error (crashed agent) | Feature | Stop this feature's pipeline |
 | Impasse (stuck agents) | Feature | Request human input |
 | API credits exhausted | Design | Request human input |
