@@ -11,6 +11,7 @@ These tests pin each strategy as independently reachable, which is the
 property the decomposition has to preserve.
 """
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,6 +32,17 @@ def no_db():
     db.__enter__ = MagicMock(return_value=db)
     db.__exit__ = MagicMock(return_value=False)
     return db
+
+
+@contextmanager
+def _session_cm(manager):
+    """get_db stand-in backed by a real DatabaseManager session."""
+    session = manager.get_session()
+    try:
+        yield session
+        session.commit()
+    finally:
+        session.close()
 
 
 def _dead_tmux(*args, **kwargs):
@@ -180,6 +192,109 @@ class TestStrategyIndependence:
             attempt_recovery("wf-1", logger)
 
         terminate.assert_called_once_with("agent-dead")
+
+
+class TestStaleTaskFailureReason:
+    """Uses a real DB rather than mocks -- the drift being guarded here is in
+    what gets written to the row, which a MagicMock session would happily
+    accept either way."""
+
+    def _seed(self, db_path):
+        from datetime import datetime
+
+        from src.core.database import Agent, DatabaseManager, Task, Workflow
+
+        manager = DatabaseManager(str(db_path))
+        manager.create_tables()
+        session = manager.get_session()
+        session.add(
+            Workflow(
+                id="wf-1",
+                name="wf",
+                phases_folder_path="/tmp",
+                status="active",
+                created_at=datetime.utcnow(),
+            )
+        )
+        session.add(
+            Agent(
+                id="agent-1",
+                system_prompt="p",
+                status="terminated",
+                cli_type="test",
+                agent_type="phase",
+            )
+        )
+        session.add(
+            Task(
+                id="task-1",
+                raw_description="do it",
+                done_definition="done",
+                status="in_progress",
+                workflow_id="wf-1",
+                assigned_agent_id="agent-1",
+                failure_reason="required output(s) invalid: docs/spec.md missing",
+            )
+        )
+        session.commit()
+        session.close()
+        return manager
+
+    def test_a_specific_failure_reason_is_not_clobbered(self, logger, tmp_path):
+        """update_task_status' verification records precisely why a "done"
+        claim was rejected, and _maybe_retry_failed_tasks feeds that reason
+        into the next attempt's prompt. Overwriting it with the generic
+        "agent terminated" message costs the retry the only feedback that
+        tells it what to fix. features.py's sibling implementation already
+        guards this; this copy had drifted.
+        """
+        from src.autopilot.orchestrator.policy import (
+            _fail_tasks_with_terminated_agents,
+        )
+        from src.core.database import Task
+
+        manager = self._seed(tmp_path / "recovery.db")
+
+        with patch(
+            "src.core.database.get_db",
+            lambda: _session_cm(manager),
+        ):
+            _fail_tasks_with_terminated_agents("wf-1", logger)
+
+        session = manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "failed"
+            assert task.failure_reason == (
+                "required output(s) invalid: docs/spec.md missing"
+            )
+        finally:
+            session.close()
+
+    def test_a_task_with_no_reason_still_gets_the_generic_one(self, logger, tmp_path):
+        from src.autopilot.orchestrator.policy import (
+            _fail_tasks_with_terminated_agents,
+        )
+        from src.core.database import Task
+
+        manager = self._seed(tmp_path / "recovery2.db")
+        session = manager.get_session()
+        session.query(Task).filter_by(id="task-1").first().failure_reason = None
+        session.commit()
+        session.close()
+
+        with patch(
+            "src.core.database.get_db",
+            lambda: _session_cm(manager),
+        ):
+            _fail_tasks_with_terminated_agents("wf-1", logger)
+
+        session = manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.failure_reason == "Agent agent-1 terminated unexpectedly"
+        finally:
+            session.close()
 
 
 class TestReturnContract:

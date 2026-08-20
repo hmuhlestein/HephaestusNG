@@ -195,7 +195,18 @@ def _fail_tasks_with_terminated_agents(workflow_id: str, logger: "OrchestratorLo
                     if agent and agent.status == "terminated":
                         logger.info(f"  Task {task.id[:8]} assigned to terminated agent {task.assigned_agent_id[:8]} — marking failed")
                         task.status = "failed"
-                        task.failure_reason = f"Agent {task.assigned_agent_id[:8]} terminated unexpectedly"
+                        # Don't clobber a real reason. update_task_status'
+                        # verification records exactly why a "done" claim was
+                        # rejected (e.g. "required output(s) invalid: ...") on
+                        # this same field before the agent's session ends, and
+                        # _maybe_retry_failed_tasks feeds failure_reason into
+                        # the next attempt's prompt -- overwriting it with the
+                        # generic message below costs the retry the feedback it
+                        # needs to fix anything. features.py's
+                        # _clean_stale_assigned_tasks, which does this same job,
+                        # already guards it this way; this copy had drifted.
+                        if not task.failure_reason:
+                            task.failure_reason = f"Agent {task.assigned_agent_id[:8]} terminated unexpectedly"
                         _db.commit()
                         recovered.append(f"cleaned stale task {task.id[:8]}")
     except Exception as e:
