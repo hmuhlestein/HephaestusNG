@@ -13,22 +13,11 @@ from pydantic import BaseModel, Field
 
 from src.core.database import get_db
 from src.services.ticket_search_service import TicketSearchService
+from src.services.ticket_service import TicketService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
-
-# Lazy imports to avoid circular dependency
-_ticket_service = None
-
-
-def _get_ticket_service():
-    """Get TicketService instance (lazy import to avoid circular deps)."""
-    global _ticket_service
-    if _ticket_service is None:
-        from src.services.ticket_service import TicketService
-        _ticket_service = TicketService
-    return _ticket_service
 
 
 def _get_workflow_id_for_ticket(ticket_id: str) -> Optional[str]:
@@ -432,9 +421,9 @@ async def create_ticket_endpoint(
         logger.info(f"[TICKET_CREATE] Using workflow_id: {workflow_id}")
 
         logger.info(
-            f"[TICKET_CREATE] Calling _get_ticket_service().create_ticket with workflow_id={workflow_id}"
+            f"[TICKET_CREATE] Calling TicketService.create_ticket with workflow_id={workflow_id}"
         )
-        result = await _get_ticket_service().create_ticket(
+        result = await TicketService.create_ticket(
             workflow_id=workflow_id,
             agent_id=created_by_agent_id,
             title=request.title,
@@ -452,7 +441,7 @@ async def create_ticket_endpoint(
         )
 
         logger.info(
-            "[TICKET_CREATE] ✅ _get_ticket_service().create_ticket returned successfully"
+            "[TICKET_CREATE] ✅ TicketService.create_ticket returned successfully"
         )
         logger.info(f"[TICKET_CREATE] Result: {result}")
         logger.info(f"[TICKET_CREATE] Ticket ID: {result.get('ticket_id')}")
@@ -515,7 +504,7 @@ async def update_ticket_endpoint(
     logger.info(f"Agent {agent_id} updating ticket {request.ticket_id}")
 
     try:
-        result = await _get_ticket_service().update_ticket(
+        result = await TicketService.update_ticket(
             ticket_id=request.ticket_id,
             agent_id=agent_id,
             updates=request.updates,
@@ -554,7 +543,7 @@ async def change_ticket_status_endpoint(
     )
 
     try:
-        result = await _get_ticket_service().change_status(
+        result = await TicketService.change_status(
             ticket_id=request.ticket_id,
             agent_id=agent_id,
             new_status=request.new_status,
@@ -594,7 +583,7 @@ async def add_comment_endpoint(
     logger.info(f"Agent {agent_id} adding comment to ticket {request.ticket_id}")
 
     try:
-        result = await _get_ticket_service().add_comment(
+        result = await TicketService.add_comment(
             ticket_id=request.ticket_id,
             agent_id=agent_id,
             comment_text=request.comment_text,
@@ -630,8 +619,8 @@ async def get_pending_review_count_endpoint():
     logger.info("[PENDING_REVIEW_COUNT] Fetching pending review count")
 
     try:
-        count = _get_ticket_service().get_pending_review_count()
-        ticket_ids = _get_ticket_service().get_pending_review_tickets()
+        count = TicketService.get_pending_review_count()
+        ticket_ids = TicketService.get_pending_review_tickets()
 
         logger.info(f"[PENDING_REVIEW_COUNT] Found {count} tickets pending review")
 
@@ -861,7 +850,7 @@ async def get_ticket_endpoint(
     logger.info(f"Agent {agent_id or 'anonymous'} fetching ticket {ticket_id}")
 
     try:
-        ticket = await _get_ticket_service().get_ticket(ticket_id)
+        ticket = await TicketService.get_ticket(ticket_id)
 
         if not ticket:
             raise HTTPException(
@@ -971,7 +960,7 @@ async def get_tickets_endpoint(
         if not include_completed:
             filters["include_completed"] = include_completed
 
-        ticket_service = _get_ticket_service()
+        ticket_service = TicketService
 
         if workflow_id:
             result = await ticket_service.get_tickets_by_workflow(
@@ -1020,7 +1009,7 @@ async def resolve_ticket_endpoint(
     logger.info(f"Agent {agent_id} resolving ticket {request.ticket_id}")
 
     try:
-        result = await _get_ticket_service().resolve_ticket(
+        result = await TicketService.resolve_ticket(
             ticket_id=request.ticket_id,
             agent_id=agent_id,
             resolution_comment=request.resolution_comment,
@@ -1059,7 +1048,7 @@ async def link_commit_endpoint(
     )
 
     try:
-        result = await _get_ticket_service().link_commit(
+        result = await TicketService.link_commit(
             ticket_id=request.ticket_id,
             agent_id=agent_id,
             commit_sha=request.commit_sha,
@@ -1157,7 +1146,7 @@ async def approve_ticket_endpoint(
 
         logger.info(f"[APPROVE_TICKET] Ticket ID: {ticket_id}")
 
-        result = await _get_ticket_service().approve_ticket(
+        result = await TicketService.approve_ticket(
             ticket_id=ticket_id,
             approved_by=agent_id,
         )
@@ -1174,7 +1163,7 @@ async def approve_ticket_endpoint(
                 "type": "ticket_approved",
                 "ticket_id": ticket_id,
                 "approved_by": agent_id,
-                "pending_count": _get_ticket_service().get_pending_review_count(),
+                "pending_count": TicketService.get_pending_review_count(),
             },
             project_id=bcast_project_id,
             project_name=bcast_project_name,
@@ -1221,7 +1210,7 @@ async def reject_ticket_endpoint(
             f"[REJECT_TICKET] Ticket ID: {ticket_id}, Reason: {rejection_reason}"
         )
 
-        result = await _get_ticket_service().reject_ticket(
+        result = await TicketService.reject_ticket(
             ticket_id=ticket_id,
             rejected_by=agent_id,
             rejection_reason=rejection_reason,
@@ -1240,7 +1229,7 @@ async def reject_ticket_endpoint(
                 "ticket_id": ticket_id,
                 "rejected_by": agent_id,
                 "rejection_reason": rejection_reason,
-                "pending_count": _get_ticket_service().get_pending_review_count(),
+                "pending_count": TicketService.get_pending_review_count(),
             },
             project_id=bcast_project_id,
             project_name=bcast_project_name,
@@ -1333,9 +1322,9 @@ async def get_commit_diff_endpoint(
         message = parts[3] if len(parts) > 3 else "No message"
 
         timestamp = (
-            datetime.fromtimestamp(timestamp_unix).isoformat()
+            datetime.utcfromtimestamp(timestamp_unix).isoformat() + "Z"
             if timestamp_unix > 0
-            else datetime.utcnow().isoformat()
+            else datetime.utcnow().isoformat() + "Z"
         )
 
         # Get file stats from the correct repository
