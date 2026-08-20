@@ -2440,11 +2440,23 @@ def _create_phase_task(
             # Create task
             task_id = str(uuid.uuid4())
             base_description = f"Execute {phase.name}: {phase.description}"
+            # Which of this phase's declared inputs actually exist right now.
+            # Phase prompts have always named their inputs in prose, which
+            # cannot distinguish "not produced this run" from "you guessed the
+            # path wrong" -- see build_input_manifest.
+            from src.autopilot.spec import build_input_manifest
+
+            wf_for_inputs = db.query(Workflow).filter_by(id=workflow_id).first()
+            input_manifest = (
+                build_input_manifest(workflow_id, phase.name, wf_for_inputs.working_directory)
+                if wf_for_inputs and wf_for_inputs.working_directory
+                else ""
+            )
             description = (
                 f"{base_description}\n\n{GOTO_REASON_PREFIX}{feedback}\nAddress this specifically -- this is not a fresh implementation pass, it's a return from review with a concrete issue to fix."
                 if feedback
                 else base_description
-            ) + prior_findings_block
+            ) + input_manifest + prior_findings_block
             task = Task(
                 id=task_id,
                 raw_description=description,
