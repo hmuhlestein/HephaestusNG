@@ -493,12 +493,26 @@ class AgentManager:
         """Send the CLI's mechanical recovery keystrokes (e.g. Esc for pi) to break a
         stuck/looping TUI. Generic + polymorphic via CLIAgentInterface.recovery_keystrokes()
         — the monitor stays harness-agnostic. Returns True if keys were sent."""
+        import functools
+
+        # Every blocking call below (DB query, tmux has_session/send_keys)
+        # is individually offloaded via run_in_executor rather than
+        # wrapping the whole method in one executor call -- the between-
+        # keystrokes pause needs a real, non-blocking asyncio.sleep() so
+        # other coroutines keep running while this one waits.
+        loop = asyncio.get_event_loop()
+
         session = self.db_manager.get_session()
         try:
-            agent = session.query(Agent).filter_by(id=agent_id).first()
+            agent = await loop.run_in_executor(
+                None, lambda: session.query(Agent).filter_by(id=agent_id).first()
+            )
             if not agent or not agent.tmux_session_name:
                 return False
-            if not self.tmux_server.has_session(agent.tmux_session_name):
+            has_session = await loop.run_in_executor(
+                None, self.tmux_server.has_session, agent.tmux_session_name
+            )
+            if not has_session:
                 return False
             keys = get_cli_agent(agent.cli_type).recovery_keystrokes()
             if not keys:
@@ -516,7 +530,10 @@ class AgentManager:
             pane = tmux_session.attached_window.attached_pane
             for k in keys:
                 # literal=False so tmux interprets key names like "Escape"
-                pane.send_keys(k, enter=False, literal=False)
+                await loop.run_in_executor(
+                    None,
+                    functools.partial(pane.send_keys, k, enter=False, literal=False),
+                )
                 await asyncio.sleep(0.3)
             logger.info(
                 f"[RECOVERY] Sent {keys} to agent {agent_id[:8]} ({agent.cli_type}) to break stuck TUI"
@@ -528,7 +545,7 @@ class AgentManager:
             )
             return False
         finally:
-            session.close()
+            await loop.run_in_executor(None, session.close)
 
     async def send_message_to_agent(self, agent_id: str, message: str, session=None):
         """Send a message to an agent's tmux session.
