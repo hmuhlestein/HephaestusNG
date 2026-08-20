@@ -45,6 +45,62 @@ async def test_get_system_health_offloads_run_health_audit():
     assert fn_arg.__name__ == "run_health_audit"
 
 
+def test_run_health_audit_checks_unmerged_branches_for_every_active_project(
+    db, tmp_path, monkeypatch
+):
+    """Regression: run_health_audit's unmerged-branches check used
+    .filter_by(is_active=True).first() -- under the documented
+    concurrent-active-projects model (max_concurrent_projects), more than
+    one project can be active at once, and .first() silently skipped
+    every active project except whichever one the query happened to
+    return."""
+    from src.core.database import AutopilotProject
+    from src.mcp.autopilot.control_routes import run_health_audit
+
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(tmp_path / "test.db"))
+
+    project_a = tmp_path / "project-a"
+    project_b = tmp_path / "project-b"
+    project_a.mkdir()
+    project_b.mkdir()
+
+    session = db.get_session()
+    session.add(AutopilotProject(
+        id="proj-a", name="proj-a", base_dir=str(project_a),
+        is_active=True, created_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+    ))
+    session.add(AutopilotProject(
+        id="proj-b", name="proj-b", base_dir=str(project_b),
+        is_active=True, created_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+    ))
+    session.commit()
+    session.close()
+
+    def fake_run(cmd, **kwargs):
+        result = MagicMock()
+        if cmd[:2] == ["git", "branch"]:
+            cwd = kwargs.get("cwd")
+            if cwd == str(project_a):
+                result.returncode = 0
+                result.stdout = "agent-a1\n"
+            elif cwd == str(project_b):
+                result.returncode = 0
+                result.stdout = "agent-b1\nagent-b2\n"
+            else:
+                result.returncode = 1
+                result.stdout = ""
+        else:
+            result.returncode = 1
+            result.stdout = ""
+        return result
+
+    with patch("subprocess.run", side_effect=fake_run):
+        result = run_health_audit(db_manager=db)
+
+    unmerged = [f for f in result["findings"] if f["type"] == "unmerged_branches"]
+    assert {f["project_path"] for f in unmerged} == {str(project_a), str(project_b)}
+
+
 @pytest.mark.asyncio
 async def test_remove_project_design_offloads_tmux_kill(db, tmp_path):
     from src.core.database import AutopilotDesign, AutopilotProject

@@ -1105,6 +1105,9 @@ class PhaseManager:
                 - should_continue: bool
         """
         session = self.db_manager.get_session()
+        # Bound before the try: the handler reads it, and a failure in the
+        # very first query would otherwise raise NameError inside it.
+        phase_name_for_error = None
         try:
             phase = session.query(Phase).filter_by(id=phase_id).first()
             if not phase:
@@ -1117,6 +1120,10 @@ class PhaseManager:
 
             from src.core.log_context import set_log_context
             set_log_context(phase=phase.name, workflow=phase.workflow_id or "")
+            # Read off the ORM object now: session.rollback() in the handler
+            # below expires these attributes, and re-reading them there would
+            # issue a query on a session that just failed.
+            phase_name_for_error = phase.name
 
             execution = (
                 session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
@@ -1228,13 +1235,38 @@ class PhaseManager:
             }
 
         except Exception as e:
-            logger.error(f"Failed to mark phase complete: {e}")
+            # Escalate to arbitration, never "continue". This handler used to
+            # return should_continue=True on ANY failure, so a phase whose
+            # completion blew up was advanced exactly as if its gates had
+            # passed -- and it also converted ConditionEvaluationError back
+            # into the silent pass that exception exists to prevent.
+            # _fire_phase_transition routes "arbitrate" to
+            # _trigger_arbitration, which spawns an arbiter to decide rather
+            # than guessing here on a session that just rolled back. That call
+            # is idempotent per phase and hard-capped at 3, so a persistently
+            # failing phase escalates a bounded number of times rather than
+            # looping.
+            #
+            # No _reopen_phase_execution here, unlike
+            # _handle_evaluation_arbitrate. That handler reopens because the
+            # normal path closes the execution to "completed" before deciding
+            # to arbitrate. This path never got that far: the idempotency
+            # guard above returns early when the execution is already
+            # completed, and the rollback undoes anything uncommitted -- so
+            # the execution is still open and needs no reopening. Touching it
+            # here would also mean writing through a session that just
+            # failed.
+            logger.error(
+                f"Failed to mark phase complete, escalating to arbitration: {e}",
+                exc_info=True,
+            )
             session.rollback()
             return {
-                "action": "continue",
-                "target_phase": None,
-                "target_phase_id": None,
+                "action": "arbitrate",
+                "target_phase": phase_name_for_error,
+                "target_phase_id": phase_id,
                 "should_continue": True,
+                "reason": f"Phase completion failed and could not be evaluated: {e}",
             }
         finally:
             session.close()

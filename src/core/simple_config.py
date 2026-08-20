@@ -324,6 +324,9 @@ class MonitoringConfig(_ConfigSection):
             "guardian_min_agent_age_seconds", 60
         )
         self.max_ignored_steering = monitoring.get("max_ignored_steering", 3)
+        self.stranded_task_grace_seconds = monitoring.get(
+            "stranded_task_grace_seconds", 900
+        )
         self.stuck_detection_minutes = monitoring.get("stuck_detection_minutes", 30)
         self.guardian_nudge_delay_minutes = monitoring.get(
             "guardian_nudge_delay_minutes", 15
