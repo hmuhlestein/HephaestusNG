@@ -2720,7 +2720,14 @@ def _shutdown_pipeline(
             "elapsed_seconds": state.total_elapsed,
         },
     )
-    _update_orchestrator_status("terminated")
+    # terminate_agent_direct, not _update_orchestrator_status("terminated")
+    # -- that raw status="terminated" write never set current_task_id=None
+    # or terminated_at, the exact class of bug terminate_agent()'s own
+    # docstring says every such write site must route through instead
+    # (recurred independently 8 times in this codebase's history; this
+    # was the 9th, for the orchestrator's own self-registered Agent row).
+    if _orchestrator_agent_id:
+        terminate_agent_direct(_orchestrator_agent_id)
 
     # Pause all active autopilot workflows belonging to THIS project.
     # Unscoped, this would forcibly pause an unrelated active workflow
