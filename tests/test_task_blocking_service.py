@@ -2,6 +2,8 @@
 
 from unittest.mock import Mock, patch
 
+import pytest
+
 
 class TestCheckTaskBlocked:
     def test_task_not_found(self):
@@ -116,3 +118,75 @@ class TestGetAllBlockedTasks:
             result = TaskBlockingService.get_all_blocked_tasks()
             assert isinstance(result, list)
             assert len(result) == 0
+
+
+class TestSyncTaskBlockingStatusSessionLifecycle:
+    """Regression: sync_task_blocking_status held its own get_db() session
+    open for the ENTIRE per-task loop, while check_task_blocked/block_task/
+    unblock_task each opened a SECOND, independent get_db() session per
+    task -- needlessly serializing N+1 SQLite connections against each
+    other for the whole sync. The outer session is only ever used to fetch
+    the task list; it must be released before the loop starts."""
+
+    @pytest.fixture
+    def blocked_task(self, db_manager):
+        from src.core.database import Agent, Task, Ticket, Workflow
+
+        session = db_manager.get_session()
+        try:
+            session.add(Workflow(
+                id="wf-1", name="Test Workflow",
+                phases_folder_path="/test/phases", status="active",
+            ))
+            session.add(Agent(
+                id="agent-1", system_prompt="x", status="working", cli_type="claude",
+            ))
+            session.add(Ticket(
+                id="ticket-blocker", workflow_id="wf-1", created_by_agent_id="agent-1",
+                title="Blocker", description="x", ticket_type="task",
+                priority="medium", status="backlog",
+            ))
+            session.add(Ticket(
+                id="ticket-1", workflow_id="wf-1", created_by_agent_id="agent-1",
+                title="Blocked ticket", description="x", ticket_type="task",
+                priority="medium", status="backlog",
+                blocked_by_ticket_ids=["ticket-blocker"],
+            ))
+            session.add(Task(
+                id="task-1", raw_description="x", enriched_description="x",
+                done_definition="x", status="pending", priority="medium",
+                ticket_id="ticket-1",
+            ))
+            session.commit()
+        finally:
+            session.close()
+        return "task-1"
+
+    def test_outer_session_closed_before_per_task_loop(self, db_manager, blocked_task):
+        import contextlib
+
+        from src.core.database import get_db as real_get_db
+        from src.services.task_blocking_service import TaskBlockingService
+
+        open_count = 0
+        max_open = 0
+
+        @contextlib.contextmanager
+        def tracking_get_db(*args, **kwargs):
+            nonlocal open_count, max_open
+            with real_get_db(*args, **kwargs) as db:
+                open_count += 1
+                max_open = max(max_open, open_count)
+                try:
+                    yield db
+                finally:
+                    open_count -= 1
+
+        with patch(
+            "src.services.task_blocking_service.get_db", side_effect=tracking_get_db
+        ):
+            result = TaskBlockingService.sync_task_blocking_status()
+
+        assert result["success"] is True
+        assert result["tasks_blocked"] == 1
+        assert max_open == 1
