@@ -28,6 +28,41 @@ class AutoRestart:
         self.agent_manager = agent_manager
         self.guardian = guardian
 
+    def _reset_stuck_task(self, task_id: str, agent_id: str) -> None:
+        """Sync helper for requeue_and_terminate -- run via run_in_executor
+        since session_scope() does blocking DB I/O."""
+        from src.core.database import Task as _Task
+
+        with self.db_manager.session_scope() as session:
+            stuck_task = (
+                session.query(_Task)
+                .filter_by(id=task_id)
+                .filter(_Task.status.in_(["assigned", "in_progress"]))
+                .first()
+            )
+            if stuck_task:
+                stuck_task.status = "pending"
+                stuck_task.assigned_agent_id = None
+                stuck_task.failure_reason = None
+                logger.info(
+                    f"[AUTO-RESTART] Task {stuck_task.id[:8]} reset to pending before restarting agent {agent_id[:8]}"
+                )
+
+    def _terminate_and_reset_agent(self, agent_id: str) -> None:
+        """Sync helper for requeue_and_terminate -- run via run_in_executor
+        since session_scope() does blocking DB I/O."""
+        with self.db_manager.session_scope() as session:
+            # Re-query the agent from this session to avoid detached object bugs
+            db_agent = session.query(Agent).filter_by(id=agent_id).first()
+            if db_agent:
+                terminate_agent(agent_id, session=session)
+                # health_check_failures reset is auto-restart-specific.
+                db_agent = session.query(Agent).filter_by(id=agent_id).first()
+                if db_agent:
+                    db_agent.health_check_failures = 0
+            else:
+                logger.warning(f"Agent {agent_id} not found in DB during restart")
+
     async def requeue_and_terminate(self, agent: Agent) -> None:
         """Kill a stuck agent's tmux session, terminate it, and requeue its
         task for a DIFFERENT agent to pick up later.
@@ -59,26 +94,17 @@ class AutoRestart:
         budget and failed with no visible cause -- while the agent's tmux
         session kept running to completion in the background, orphaned.
         """
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+
         try:
             task_id = agent.current_task_id
             if task_id:
                 try:
-                    with self.db_manager.session_scope() as session:
-                        from src.core.database import Task as _Task
-
-                        stuck_task = (
-                            session.query(_Task)
-                            .filter_by(id=task_id)
-                            .filter(_Task.status.in_(["assigned", "in_progress"]))
-                            .first()
-                        )
-                        if stuck_task:
-                            stuck_task.status = "pending"
-                            stuck_task.assigned_agent_id = None
-                            stuck_task.failure_reason = None
-                            logger.info(
-                                f"[AUTO-RESTART] Task {stuck_task.id[:8]} reset to pending before restarting agent {agent.id[:8]}"
-                            )
+                    await loop.run_in_executor(
+                        None, self._reset_stuck_task, task_id, agent.id
+                    )
                 except Exception as e:
                     logger.error(f"[AUTO-RESTART] Failed to reset task {task_id[:8]} before restarting agent {agent.id[:8]}: {e}")
 
@@ -100,25 +126,12 @@ class AutoRestart:
                 # libtmux's kill_session shells out to the tmux binary --
                 # blocking, offloaded so it doesn't stall this process's
                 # event loop.
-                import asyncio
-
-                loop = asyncio.get_event_loop()
                 await loop.run_in_executor(
                     None, self.agent_manager.tmux_server.kill_session, agent.tmux_session_name
                 )
                 logger.info(f"Killed tmux session {agent.tmux_session_name}")
 
-            with self.db_manager.session_scope() as session:
-                # Re-query the agent from this session to avoid detached object bugs
-                db_agent = session.query(Agent).filter_by(id=agent.id).first()
-                if db_agent:
-                    terminate_agent(agent.id, session=session)
-                    # health_check_failures reset is auto-restart-specific.
-                    db_agent = session.query(Agent).filter_by(id=agent.id).first()
-                    if db_agent:
-                        db_agent.health_check_failures = 0
-                else:
-                    logger.warning(f"Agent {agent.id} not found in DB during restart")
+            await loop.run_in_executor(None, self._terminate_and_reset_agent, agent.id)
 
             # Record the restart
             self.guardian.record_auto_restart(
