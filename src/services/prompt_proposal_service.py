@@ -387,3 +387,70 @@ def revert_proposal(
     )
     logger.info(f"[PROMPT-PROPOSAL] Reverted {proposal_id[:8]} on {phase_name}.{field}")
     return {"path": str(path), "commit_sha": sha}
+
+
+def create_proposal(
+    phase_name: str,
+    field: str,
+    proposed_value: Any,
+    rationale: str,
+    evidence: Optional[str] = None,
+    quoted_current_value: Optional[Any] = None,
+    workflow_definition: str = "autopilot",
+    workflow_id: Optional[str] = None,
+    proposing_phase: Optional[str] = None,
+    created_by_agent_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Validate and persist one proposal.
+
+    Shared by the HTTP route and the MCP tool so the guards cannot diverge --
+    a tool path that skipped validate_proposal would be a second, unguarded
+    door into the same edit engine.
+
+    Raises ValueError with the reason if the proposal is not allowed; the
+    callers turn that into a 400 or a tool error respectively. Rejecting at
+    creation matters: the agent still has the context to write a different
+    proposal, whereas a bad row discovered later in the review UI is just
+    noise a human has to clear.
+    """
+    import uuid as _uuid
+    from datetime import datetime as _dt
+
+    from src.core.database import PromptProposal, get_db
+
+    problem = validate_proposal(
+        workflow_definition, phase_name, field, proposed_value, proposing_phase
+    )
+    if problem:
+        raise ValueError(problem)
+    if not rationale or not str(rationale).strip():
+        raise ValueError(
+            "rationale is required -- a prompt change with no recorded reason "
+            "cannot be reviewed, only guessed at"
+        )
+
+    proposal_id = f"prop-{_uuid.uuid4().hex[:8]}"
+    with get_db() as db:
+        db.add(
+            PromptProposal(
+                id=proposal_id,
+                workflow_id=workflow_id,
+                created_by_agent_id=created_by_agent_id,
+                workflow_definition=workflow_definition,
+                phase_name=phase_name,
+                field=field,
+                proposing_phase=proposing_phase,
+                proposed_value=proposed_value,
+                quoted_current_value=quoted_current_value,
+                rationale=rationale,
+                evidence=evidence,
+                status="pending",
+                created_at=_dt.utcnow(),
+            )
+        )
+        db.commit()
+    logger.info(
+        f"[PROMPT-PROPOSAL] {proposal_id} filed against {phase_name}.{field} "
+        f"by {proposing_phase or 'unknown'}"
+    )
+    return {"id": proposal_id, "phase_name": phase_name, "field": field, "status": "pending"}

@@ -655,6 +655,28 @@ export const apiService = {
     return data;
   },
 
+  // Prompt proposals (forensics-proposed prompt rewrites awaiting review).
+  getPromptProposals: async (status?: string): Promise<any> => {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+    const { data } = await api.get(`/autopilot/prompt_proposals${qs}`);
+    return data;
+  },
+
+  approvePromptProposal: async (id: string, note?: string): Promise<any> => {
+    const { data } = await api.post(`/autopilot/prompt_proposals/${id}/approve`, { note });
+    return data;
+  },
+
+  rejectPromptProposal: async (id: string, note?: string): Promise<any> => {
+    const { data } = await api.post(`/autopilot/prompt_proposals/${id}/reject`, { note });
+    return data;
+  },
+
+  revertPromptProposal: async (id: string): Promise<any> => {
+    const { data } = await api.post(`/autopilot/prompt_proposals/${id}/revert`);
+    return data;
+  },
+
   getAutopilotQueue: async (): Promise<any[]> => {
     const { data } = await api.get('/autopilot/queue');
     return data;

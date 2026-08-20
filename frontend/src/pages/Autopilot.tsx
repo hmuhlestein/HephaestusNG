@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Rocket, ListOrdered, History, MessageSquare,
   Clock, CheckCircle2, XCircle, AlertTriangle,
-  Terminal
+  Terminal, Lightbulb
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import PipelineStatusCard from '@/components/autopilot/PipelineStatusCard';
@@ -18,12 +18,13 @@ import LoadDesignModal from '@/components/autopilot/LoadDesignModal';
 import HumanInputBanner from '@/components/autopilot/HumanInputBanner';
 import ReviewModeToggle from '@/components/autopilot/ReviewModeToggle';
 import FeatureReviewModal from '@/components/autopilot/FeatureReviewModal';
+import ImprovementsPanel from '@/components/autopilot/ImprovementsPanel';
 import ProjectSettingsModal from '@/components/ProjectSettingsModal';
 import { useProject } from '@/context/ProjectContext';
 import toast from 'react-hot-toast';
 
-type Tab = 'queue' | 'features' | 'messages' | 'logs';
-const VALID_TABS: Tab[] = ['queue', 'features', 'messages', 'logs'];
+type Tab = 'queue' | 'features' | 'improvements' | 'messages' | 'logs';
+const VALID_TABS: Tab[] = ['queue', 'features', 'improvements', 'messages', 'logs'];
 
 const Autopilot: React.FC = () => {
   const { tab: urlTab } = useParams<{ tab?: string }>();
@@ -268,9 +269,17 @@ const Autopilot: React.FC = () => {
     setReviewFeature(feature);
   };
 
+  // Pending prompt-rewrite proposals, for the Improvements tab badge.
+  const { data: promptProposals } = useQuery({
+    queryKey: ['prompt-proposals'],
+    queryFn: () => apiService.getPromptProposals(),
+    refetchInterval: 30000,
+  });
+
   const tabs: { id: Tab; label: string; icon: React.ElementType; badge?: number; reviewBadge?: boolean }[] = [
     { id: 'queue', label: 'Design Queue', icon: ListOrdered, badge: status?.queue_depth, reviewBadge: (status?.features_awaiting_review ?? 0) > 0 },
     { id: 'features', label: 'Completed', icon: History, badge: featuresList?.length },
+    { id: 'improvements', label: 'Improvements', icon: Lightbulb, badge: promptProposals?.pending_count },
     { id: 'messages', label: 'Messages', icon: MessageSquare, badge: messages?.length },
     { id: 'logs', label: 'Logs', icon: Terminal },
   ];
@@ -382,6 +391,8 @@ const Autopilot: React.FC = () => {
               onStatusFilterChange={setFeatureStatusFilter}
             />
           )}
+          {activeTab === 'improvements' && <ImprovementsPanel />}
+
           {activeTab === 'messages' && <MessageCenter projectId={projectId} />}
           {activeTab === 'logs' && <LogsPanel projectId={projectId} />}
         </motion.div>

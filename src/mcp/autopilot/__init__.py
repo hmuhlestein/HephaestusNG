@@ -8,6 +8,7 @@ from src.mcp.autopilot import (
     intervention_routes,
     message_routes,
     project_routes,
+    prompt_proposal_routes,
     queue_routes,
 )
 
@@ -19,3 +20,4 @@ router.include_router(project_routes.router)
 router.include_router(feature_routes.router)
 router.include_router(message_routes.router)
 router.include_router(intervention_routes.router)
+router.include_router(prompt_proposal_routes.router)
