@@ -4,7 +4,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 from src.core.database import (
@@ -165,28 +165,16 @@ def _escalate_stale_active_workflows(
     return still_blocking
 
 
-def attempt_recovery(workflow_id: str, logger: "OrchestratorLogger") -> Tuple[bool, str]:
-    """Attempt to recover issues found by is_design_fully_complete.
+def _fail_tasks_with_terminated_agents(workflow_id: str, logger: "OrchestratorLogger") -> List[str]:
+    """Clean stale "assigned" tasks whose agent is terminated.
 
-    Actions:
-    1. Retry failed tasks by creating new agents
-    2. Merge unmerged agent branches to main
-    3. Terminate stale agents
-
-    Returns:
-        (success, message) tuple
+    Includes "pending", not just "assigned"/"in_progress" -- a task can carry
+    assigned_agent_id while still "pending" (see _clean_stale_assigned_tasks
+    in features.py, which had the identical gap, and _advance_phases's own
+    phase-scoped handling of this exact live-observed state in
+    phase_transitions.py).
     """
-    recovered = []
-
-    # 1. Retry failed tasks
-    recovered.extend(_retry_failed_tasks(workflow_id, logger))
-
-    # 1b. Clean stale "assigned" tasks whose agent is terminated. Includes
-    # "pending", not just "assigned"/"in_progress" -- a task can carry
-    # assigned_agent_id while still "pending" (see
-    # _clean_stale_assigned_tasks in features.py, which had the identical
-    # gap, and _advance_phases's own phase-scoped handling of this exact
-    # live-observed state in phase_transitions.py).
+    recovered: List[str] = []
     try:
         from src.core.database import Agent as _Agent
         from src.core.database import Task as _Task
@@ -212,28 +200,39 @@ def attempt_recovery(workflow_id: str, logger: "OrchestratorLogger") -> Tuple[bo
                         recovered.append(f"cleaned stale task {task.id[:8]}")
     except Exception as e:
         logger.error(f"  Failed to clean stale assigned tasks: {e}")
+    return recovered
 
-    # 2. Clean stale merge state if repo is dirty (do NOT merge branches here —
-    #    the WorktreeManager handles merges in update_task_status. Raw git merge
-    #    corrupts the repo because attempt_recovery runs from the orchestrator's
-    #    thread, not the agent's worktree context.)
+
+def _resolve_recovery_project_path(workflow_id: str) -> Optional[str]:
+    """The workflow's working directory, falling back to $PROJECT_PATH."""
     try:
-        # Get project path from workflow's working directory
-        project_path = None
-        try:
-            with get_db() as _db:
-                _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
-                if _wf and _wf.working_directory and Path(_wf.working_directory).exists():
-                    project_path = _wf.working_directory
-        except Exception:
-            pass
+        with get_db() as _db:
+            _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
+            if _wf and _wf.working_directory and Path(_wf.working_directory).exists():
+                return _wf.working_directory
+    except Exception:
+        pass
+    return os.getenv("PROJECT_PATH")
+
+
+def _clean_stale_repo_state(workflow_id: str, logger: "OrchestratorLogger") -> List[str]:
+    """Clear a wedged repo (dirty tree or half-finished merge).
+
+    Deliberately does NOT merge branches -- WorktreeManager handles merges in
+    update_task_status. A raw git merge here corrupts the repo, because this
+    runs on the orchestrator's thread rather than in the agent's worktree
+    context.
+    """
+    recovered: List[str] = []
+    try:
+        project_path = _resolve_recovery_project_path(workflow_id)
         if not project_path:
-            project_path = os.getenv("PROJECT_PATH")
-        if not project_path:
-            if recovered:
-                return True, f"Recovered: {', '.join(recovered)}"
-            return False, "No recovery actions needed"  # Can't determine project path
-        # Check if repo needs cleanup
+            # Nothing this strategy can do. Returning (rather than the
+            # `return` out of attempt_recovery this used to be) is the point:
+            # the strategies that follow don't need a project path and must
+            # still run.
+            return recovered
+
         status_result = subprocess.run(
             ["git", "status", "--porcelain"],
             capture_output=True,
@@ -276,18 +275,24 @@ def attempt_recovery(workflow_id: str, logger: "OrchestratorLogger") -> Tuple[bo
             recovered.append("cleaned repo state")
     except Exception as e:
         logger.warning(f"  Failed to clean repo state: {e}")
+    return recovered
 
-    # 3. Terminate stale agents -- only genuinely stale ones (dead tmux
-    # session), never merely "still working". This function runs on every
-    # recovery cycle (every POLL_INTERVAL) whenever is_design_fully_complete
-    # says the workflow isn't done -- which is the normal state for a
-    # workflow with real in-progress work, e.g. right after a restart
-    # reloads state.current_workflow_id into this branch. Terminating every
-    # "working" agent unconditionally here killed live, actively-progressing
-    # agents roughly once a minute until the workflow ran out of retries
-    # (observed live: a security_review agent got killed and replaced three
-    # times in six minutes, purely because this step never checked whether
-    # the agent was actually still alive).
+
+def _terminate_dead_agents(workflow_id: str, logger: "OrchestratorLogger") -> List[str]:
+    """Terminate only genuinely stale agents (dead tmux session).
+
+    Never terminates an agent merely because it is "working". This runs on
+    every recovery cycle (every POLL_INTERVAL) whenever
+    is_design_fully_complete says the workflow isn't done -- which is the
+    normal state for a workflow with real in-progress work, e.g. right after
+    a restart reloads state.current_workflow_id into this branch.
+    Terminating every "working" agent unconditionally here killed live,
+    actively-progressing agents roughly once a minute until the workflow ran
+    out of retries (observed live: a security_review agent got killed and
+    replaced three times in six minutes, purely because this step never
+    checked whether the agent was actually still alive).
+    """
+    recovered: List[str] = []
     agents = get_agents(workflow_id=workflow_id)
     active_agents = [a for a in agents if a.get("status") in ("working", "starting", "idle")]
     for agent in active_agents:
@@ -313,6 +318,36 @@ def attempt_recovery(workflow_id: str, logger: "OrchestratorLogger") -> Tuple[bo
             recovered.append(f"terminated agent {aid[:8]}")
         except Exception as e:
             logger.warning(f"  Failed to terminate {aid[:8]}: {e}")
+    return recovered
+
+
+# Recovery strategies, run in order. Each is independent and best-effort:
+# it swallows its own failures and reports what it managed to recover, so no
+# strategy can suppress the ones after it. That independence is the fix for
+# SOLID review 2.5 -- these used to share one function body, where the
+# git-cleanup step's "can't resolve a project path" guard `return`ed out of
+# the whole function and silently skipped stale-agent termination, which
+# needs no project path at all.
+_RECOVERY_STRATEGIES = (
+    _retry_failed_tasks,
+    _fail_tasks_with_terminated_agents,
+    _clean_stale_repo_state,
+    _terminate_dead_agents,
+)
+
+
+def attempt_recovery(workflow_id: str, logger: "OrchestratorLogger") -> Tuple[bool, str]:
+    """Attempt to recover issues found by is_design_fully_complete.
+
+    Runs every strategy in _RECOVERY_STRATEGIES and reports what was
+    recovered.
+
+    Returns:
+        (success, message) tuple
+    """
+    recovered: List[str] = []
+    for strategy in _RECOVERY_STRATEGIES:
+        recovered.extend(strategy(workflow_id, logger))
 
     if recovered:
         return True, f"Recovered: {', '.join(recovered)}"
