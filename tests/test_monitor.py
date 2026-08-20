@@ -646,7 +646,7 @@ class TestDetectUnconfirmedTaskCompletion:
         agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
         self._mock_session_with_task(mock_db, "in_progress")
-        make_monitoring_loop._auto_restart.restart_agent = AsyncMock()
+        make_monitoring_loop._auto_restart.requeue_and_terminate = AsyncMock()
 
         threshold = make_monitoring_loop.UNCONFIRMED_COMPLETION_ESCALATE_AFTER
         for i in range(threshold):
@@ -657,14 +657,14 @@ class TestDetectUnconfirmedTaskCompletion:
 
         # Exactly `threshold` nudges sent, no restart yet.
         assert mock_agent_manager.send_message_to_agent.call_count == threshold
-        make_monitoring_loop._auto_restart.restart_agent.assert_not_called()
+        make_monitoring_loop._auto_restart.requeue_and_terminate.assert_not_called()
 
         # One more crosses the threshold -- restart, not another nudge.
         result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
 
         assert result is True
         assert mock_agent_manager.send_message_to_agent.call_count == threshold
-        make_monitoring_loop._auto_restart.restart_agent.assert_called_once_with(agent)
+        make_monitoring_loop._auto_restart.requeue_and_terminate.assert_called_once_with(agent)
 
     @pytest.mark.asyncio
     async def test_escalation_count_resets_for_a_different_task(
@@ -679,7 +679,7 @@ class TestDetectUnconfirmedTaskCompletion:
         agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
         mock_agent_manager.send_message_to_agent.reset_mock()
-        make_monitoring_loop._auto_restart.restart_agent = AsyncMock()
+        make_monitoring_loop._auto_restart.requeue_and_terminate = AsyncMock()
 
         threshold = make_monitoring_loop.UNCONFIRMED_COMPLETION_ESCALATE_AFTER
         self._mock_session_with_task(mock_db, "in_progress", task_id="t1")
@@ -695,7 +695,7 @@ class TestDetectUnconfirmedTaskCompletion:
         result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
 
         assert result is True
-        make_monitoring_loop._auto_restart.restart_agent.assert_not_called()
+        make_monitoring_loop._auto_restart.requeue_and_terminate.assert_not_called()
         assert mock_agent_manager.send_message_to_agent.call_count == threshold + 1
 
 
@@ -1585,7 +1585,7 @@ class TestDetectCliModelFallback:
         unconfirmed switch."""
         from contextlib import contextmanager
 
-        from src.monitoring.monitor import MAX_FALLBACK_ATTEMPTS
+        from src.monitoring.patterns import MAX_FALLBACK_ATTEMPTS
 
         agent_row = Mock(cli_model="mimo-v2.5-pro")
         session = Mock()
@@ -1757,7 +1757,7 @@ class TestVerifyCliModelFallback:
         retries for this agent's task."""
         from contextlib import contextmanager
 
-        from src.monitoring.monitor import MAX_FALLBACK_ATTEMPTS
+        from src.monitoring.patterns import MAX_FALLBACK_ATTEMPTS
 
         agent_row = Mock(cli_model="mimo-v2.5-pro")
         session = Mock()

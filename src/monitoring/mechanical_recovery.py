@@ -19,6 +19,20 @@ from typing import Any, Dict
 from src.core.database import Agent, AgentLog, Task, Workflow
 from src.core.simple_config import get_config
 from src.interfaces import get_cli_agent
+from src.monitoring.patterns import (
+    _BAD_MODEL_ERROR_RE,
+    _COMPLETION_ATTEMPT_RE,
+    _CONNECTION_ERROR_RE,
+    _CONTEXT_OVERFLOW_RE,
+    _CREDIT_EXHAUSTED_RE,
+    _DANGEROUS_CMD_RE,
+    _MAX_TOKEN_LIMIT_RE,
+    _MCP_DISCONNECTED_RE,
+    _SESSION_LIMIT_RE,
+    _SPEND_LIMIT_RE,
+    MAX_FALLBACK_ATTEMPTS,
+    _strip_sgr,
+)
 from src.prompts.loader import get_monitor_nudge
 
 logger = logging.getLogger(__name__)
@@ -36,29 +50,6 @@ logger = logging.getLogger(__name__)
 # permanently pointing at a terminated agent with no other sweep watching
 # this exact combination.
 STUCK_TASK_STATUSES = ["assigned", "in_progress", "under_review", "needs_work"]
-
-# Regex patterns and constants from monitor.py module level.
-# Imported lazily (inside methods) to avoid circular import at module load,
-# since monitor.py will import MechanicalRecoveryDetector inside __init__.
-def _get_monitor_module():
-    """Lazy reference to monitor module for shared regex/constants."""
-    import src.monitoring.monitor as _mod
-    return _mod
-
-
-def _strip_sgr(text: str) -> str:
-    """Strip SGR color escape codes (\\\\x1b[...m)."""
-    return _get_monitor_module()._SGR_RE.sub("", text)
-
-
-def _get_regex(name: str):
-    """Retrieve a regex constant from the monitor module by name."""
-    return getattr(_get_monitor_module(), name)
-
-
-def _get_constant(name: str):
-    """Retrieve a numeric constant from the monitor module by name."""
-    return getattr(_get_monitor_module(), name)
 
 
 class MechanicalRecoveryDetector:
@@ -92,6 +83,28 @@ class MechanicalRecoveryDetector:
         self._paused_credit_exhausted: set = set()
         self._never_started_handled: set = set()
 
+    def _capture_stuck_check_pane(self, agent_id: str) -> str:
+        """Sync helper for mechanical_recovery_for_agent's stuck-detection
+        pane read -- run via run_in_executor since it does a blocking DB
+        query plus a blocking tmux capture-pane call."""
+        session = self.db_manager.get_session()
+        try:
+            _agent = session.query(Agent).filter_by(id=agent_id).first()
+            if not (_agent and _agent.tmux_session_name):
+                return ""
+            _sess = next(
+                (s for s in self.agent_manager.tmux_server.sessions
+                 if s.name == _agent.tmux_session_name), None
+            )
+            if not _sess:
+                return ""
+            raw = _sess.attached_window.attached_pane.cmd(
+                "capture-pane", "-p", "-S", "-40"
+            ).stdout
+            return "\n".join(raw) if raw else ""
+        finally:
+            session.close()
+
     async def mechanical_recovery_for_agent(self, agent) -> bool:
         """Cheap, no-LLM stuck detection + keystroke recovery (the CLI/keystroke-level
         monitor). If an agent's substantive TUI output is frozen for frozen_seconds
@@ -116,22 +129,14 @@ class MechanicalRecoveryDetector:
             out = None
             raw_text = ""
             try:
-                session = self.db_manager.get_session()
-                try:
-                    _agent = session.query(Agent).filter_by(id=agent.id).first()
-                    if _agent and _agent.tmux_session_name:
-                        _sess = next(
-                            (s for s in self.agent_manager.tmux_server.sessions
-                             if s.name == _agent.tmux_session_name), None
-                        )
-                        if _sess:
-                            raw = _sess.attached_window.attached_pane.cmd(
-                                "capture-pane", "-p", "-S", "-40"
-                            ).stdout
-                            raw_text = "\n".join(raw) if raw else ""
-                            out = raw_text
-                finally:
-                    session.close()
+                # Offloaded -- blocking DB session query + tmux capture-pane,
+                # same class of issue fixed elsewhere in this codebase today.
+                loop = asyncio.get_event_loop()
+                raw_text = await loop.run_in_executor(
+                    None, self._capture_stuck_check_pane, agent.id
+                )
+                if raw_text:
+                    out = raw_text
             except Exception as _pane_err:
                 logger.debug(f"Pane capture for stuck check failed: {_pane_err}")
 
@@ -145,8 +150,8 @@ class MechanicalRecoveryDetector:
             # appears in the live pane, not in the transcript log.
             stripped_raw = _strip_sgr(raw_text)
             if stripped_raw:
-                spend_limit_hit = _get_regex('_SPEND_LIMIT_RE').search(stripped_raw)
-                if spend_limit_hit or _get_regex('_SESSION_LIMIT_RE').search(stripped_raw):
+                spend_limit_hit = _SPEND_LIMIT_RE.search(stripped_raw)
+                if spend_limit_hit or _SESSION_LIMIT_RE.search(stripped_raw):
                     # Determine the specific limit kind for accurate logging
                     if spend_limit_hit:
                         matched_text = spend_limit_hit.group(0).lower()
@@ -356,7 +361,7 @@ class MechanicalRecoveryDetector:
             # current model. Terminate and restart with fresh context on
             # the fallback model rather than switching in-session (which
             # would inherit the bloated context and degrade performance).
-            if _get_regex('_CONTEXT_OVERFLOW_RE').search(sig):
+            if _CONTEXT_OVERFLOW_RE.search(sig):
                 logger.warning(
                     f"[CONTEXT-OVERFLOW] Agent {agent.id[:8]} ({agent.cli_type}) "
                     f"hit context size limit — terminating for fresh restart"
@@ -479,7 +484,7 @@ class MechanicalRecoveryDetector:
                     )
                     if "Operation aborted" in sig:
                         msg = get_monitor_nudge("operation_aborted", mcp_note=mcp_note)
-                    elif _get_regex('_MAX_TOKEN_LIMIT_RE').search(_strip_sgr(sig)):
+                    elif _MAX_TOKEN_LIMIT_RE.search(_strip_sgr(sig)):
                         msg = get_monitor_nudge("max_token_limit_recovery", mcp_note=mcp_note)
                     else:
                         msg = get_monitor_nudge("stuck_or_looping", mcp_note=mcp_note)
@@ -654,7 +659,7 @@ class MechanicalRecoveryDetector:
 
             # Restart-proof floor: _switched_to_fallback_model/_fallback_attempt_count
             # are in-memory only, so a routine `heph restart` used to reset an
-            # agent's exhausted _get_constant('MAX_FALLBACK_ATTEMPTS') budget back to zero --
+            # agent's exhausted MAX_FALLBACK_ATTEMPTS budget back to zero --
             # observed live, agent e6633fe6 got two full fresh 2-attempt
             # episodes (18:13-18:21, then again 19:07-19:18 after a restart
             # in between), doubling the disruptive switch attempts and, worse,
@@ -693,7 +698,7 @@ class MechanicalRecoveryDetector:
             prior_attempts = max(
                 prior_attempts, getattr(self, "_fallback_attempt_count", {}).get(agent.id, 0)
             )
-            if gave_up or prior_attempts >= _get_constant('MAX_FALLBACK_ATTEMPTS'):
+            if gave_up or prior_attempts >= MAX_FALLBACK_ATTEMPTS:
                 self._switched_to_fallback_model.add(agent.id)
                 return False
 
@@ -718,7 +723,7 @@ class MechanicalRecoveryDetector:
             # fallback-aware) -- leave this one alone rather than risk
             # misdirecting a busy agent.
             recent_output = self.agent_manager.get_agent_output(agent.id, lines=20) or ""
-            if _get_regex('_CONNECTION_ERROR_RE').search(_strip_sgr(recent_output)):
+            if _CONNECTION_ERROR_RE.search(_strip_sgr(recent_output)):
                 return False
 
             self._switched_to_fallback_model.add(agent.id)
@@ -732,7 +737,7 @@ class MechanicalRecoveryDetector:
             logger.warning(
                 f"[CLI-MODEL-FALLBACK] Agent {agent.id[:8]} ({agent.cli_type}) frozen "
                 f"{int(frozen_for)}s — switching to fallback model '{fallback}' "
-                f"(attempt {attempt_num}/{_get_constant('MAX_FALLBACK_ATTEMPTS')})"
+                f"(attempt {attempt_num}/{MAX_FALLBACK_ATTEMPTS})"
             )
             # Persist the switch to Agent.cli_model, not just the in-memory
             # one-shot set -- agent.cli_model is surfaced directly in API
@@ -775,7 +780,7 @@ class MechanicalRecoveryDetector:
                 # tmux session going away mid-send) would leave the agent
                 # permanently blocked by the one-shot gate with no pending
                 # entry ever created -- _verify_cli_model_fallback has
-                # nothing to check, so the _get_constant('MAX_FALLBACK_ATTEMPTS') retry budget
+                # nothing to check, so the MAX_FALLBACK_ATTEMPTS retry budget
                 # this function is supposed to enforce never even gets
                 # consulted. Treat it the same as an unconfirmed switch:
                 # revert the DB write, and allow a retry only if attempts
@@ -800,7 +805,7 @@ class MechanicalRecoveryDetector:
                     f"'{fallback}': {send_err}",
                     {"task_id": agent.current_task_id, "model": fallback, "attempt": attempt_num},
                 )
-                if attempt_num < _get_constant('MAX_FALLBACK_ATTEMPTS'):
+                if attempt_num < MAX_FALLBACK_ATTEMPTS:
                     self._switched_to_fallback_model.discard(agent.id)
                 return False
             # Reset the freeze baseline (not the whole _stuck_state entry) so
@@ -810,7 +815,7 @@ class MechanicalRecoveryDetector:
             # the same dict entry. Popping the entire entry here (as this
             # used to) reset recov back to 0 on every attempt, which is the
             # reason that generic backstop never independently escalated
-            # during the incident _get_constant('MAX_FALLBACK_ATTEMPTS') was added for.
+            # during the incident MAX_FALLBACK_ATTEMPTS was added for.
             stuck_entry = self._stuck_state.get(agent.id)
             if stuck_entry:
                 stuck_entry["since"] = None
@@ -871,7 +876,7 @@ class MechanicalRecoveryDetector:
             grace_seconds = 2 * getattr(self.config, "monitoring_interval_seconds", 60)
             if time.time() - switched_at >= grace_seconds:
                 attempt_count = getattr(self, "_fallback_attempt_count", {}).get(agent.id, 1)
-                gave_up = attempt_count >= _get_constant('MAX_FALLBACK_ATTEMPTS')
+                gave_up = attempt_count >= MAX_FALLBACK_ATTEMPTS
                 logger.warning(
                     f"[CLI-MODEL-FALLBACK] Agent {agent.id[:8]} switch to "
                     f"'{model}' not confirmed after "
@@ -886,7 +891,7 @@ class MechanicalRecoveryDetector:
                     f"{int(time.time() - switched_at)}s -- reverting recorded "
                     f"cli_model to '{original_model}'"
                     + (
-                        f" -- {attempt_count}/{_get_constant('MAX_FALLBACK_ATTEMPTS')} attempts used, not retrying again"
+                        f" -- {attempt_count}/{MAX_FALLBACK_ATTEMPTS} attempts used, not retrying again"
                         if gave_up
                         else ""
                     ),
@@ -908,12 +913,12 @@ class MechanicalRecoveryDetector:
                         f"{agent.id[:8]}: {revert_err}"
                     )
                 pending.pop(agent.id, None)
-                # Below _get_constant('MAX_FALLBACK_ATTEMPTS'): discard from the one-shot set so
+                # Below MAX_FALLBACK_ATTEMPTS: discard from the one-shot set so
                 # _detect_cli_model_fallback can try again next time this agent
                 # freezes long enough. At/past the cap: leave it in the set --
                 # permanently blocks further attempts for this agent's task,
                 # rather than retrying an interaction that keeps failing to
-                # confirm indefinitely (see _get_constant('MAX_FALLBACK_ATTEMPTS')).
+                # confirm indefinitely (see MAX_FALLBACK_ATTEMPTS).
                 if not gave_up:
                     getattr(self, "_switched_to_fallback_model", set()).discard(agent.id)
         except Exception as e:
@@ -1055,7 +1060,7 @@ class MechanicalRecoveryDetector:
             out = self.agent_manager.get_agent_output(agent.id, lines=40)
             if not out:
                 return
-            match = _get_regex('_DANGEROUS_CMD_RE').search(_strip_sgr(out))
+            match = _DANGEROUS_CMD_RE.search(_strip_sgr(out))
             if not match:
                 return
             command = match.group(1).strip()
@@ -1123,7 +1128,7 @@ class MechanicalRecoveryDetector:
             out = self.agent_manager.get_agent_output(agent.id, lines=40)
             if not out:
                 return
-            if not _get_regex('_MAX_TOKEN_LIMIT_RE').search(_strip_sgr(out)):
+            if not _MAX_TOKEN_LIMIT_RE.search(_strip_sgr(out)):
                 return
 
             # Cooldown, not a permanent one-shot flag -- same reasoning as
@@ -1193,7 +1198,7 @@ class MechanicalRecoveryDetector:
             # earlier one followed by more work (e.g. a self-review
             # round) means the agent has already moved on.
             match = None
-            for m in _get_regex('_COMPLETION_ATTEMPT_RE').finditer(_strip_sgr(out)):
+            for m in _COMPLETION_ATTEMPT_RE.finditer(_strip_sgr(out)):
                 match = m
             if not match:
                 return False
@@ -1240,7 +1245,7 @@ class MechanicalRecoveryDetector:
                     f"{state['count'] - 1} nudges — restarting instead of nudging again"
                 )
                 del self._unconfirmed_completion_state[agent.id]
-                await self._auto_restart.restart_agent(agent)
+                await self._auto_restart.requeue_and_terminate(agent)
                 return True
 
             logger.warning(
@@ -1295,7 +1300,7 @@ class MechanicalRecoveryDetector:
             out = self.agent_manager.get_agent_output(agent.id, lines=50)
             if not out:
                 return
-            if not _get_regex('_MCP_DISCONNECTED_RE').search(_strip_sgr(out)):
+            if not _MCP_DISCONNECTED_RE.search(_strip_sgr(out)):
                 # MCP reconnected — reset nudge count
                 if hasattr(self, "_mcp_disconnect_nudge_count"):
                     self._mcp_disconnect_nudge_count.pop(agent.id, None)
@@ -1389,7 +1394,7 @@ class MechanicalRecoveryDetector:
             if not out:
                 return False
             stripped = _strip_sgr(out)
-            if not _get_regex('_CONNECTION_ERROR_RE').search(stripped):
+            if not _CONNECTION_ERROR_RE.search(stripped):
                 return False
 
             # Check if we've already warned about this agent recently
@@ -1401,7 +1406,7 @@ class MechanicalRecoveryDetector:
             self._connection_error_warned[agent.id] = time.time()
 
             # Check if the error is persistent (more than 2 occurrences in the output)
-            error_count = len(_get_regex('_CONNECTION_ERROR_RE').findall(stripped))
+            error_count = len(_CONNECTION_ERROR_RE.findall(stripped))
             if error_count < 2:
                 logger.info(f"[CONNECTION-ERROR] Agent {agent.id[:8]} has {error_count} connection error(s) — waiting for recovery")
                 return False
@@ -1595,7 +1600,7 @@ class MechanicalRecoveryDetector:
             out = self.agent_manager.get_agent_output(agent.id, lines=40)
             if not out:
                 return False
-            if not _get_regex('_BAD_MODEL_ERROR_RE').search(_strip_sgr(out)):
+            if not _BAD_MODEL_ERROR_RE.search(_strip_sgr(out)):
                 return False
             self._fixed_bad_model.add(agent.id)
 
@@ -1688,7 +1693,7 @@ class MechanicalRecoveryDetector:
             out = self.agent_manager.get_agent_output(agent.id, lines=40)
             if not out:
                 return False
-            if not _get_regex('_CREDIT_EXHAUSTED_RE').search(_strip_sgr(out)):
+            if not _CREDIT_EXHAUSTED_RE.search(_strip_sgr(out)):
                 return False
             self._paused_credit_exhausted.add(agent.id)
 
