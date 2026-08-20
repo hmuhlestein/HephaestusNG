@@ -1,5 +1,6 @@
 """Test that validation agents are protected from duplicate termination."""
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -14,6 +15,21 @@ def mock_db_manager():
     """Create mock database manager."""
     db_manager = Mock()
     db_manager.get_session = Mock()
+
+    @contextmanager
+    def _session_scope():
+        # Conductor production code uses session_scope() rather than raw
+        # get_session()/close() for writes (SOLID review 3.10) -- route
+        # through the same mocked session so tests that configure
+        # get_session.return_value keep working.
+        session = db_manager.get_session()
+        try:
+            yield session
+            session.commit()
+        finally:
+            session.close()
+
+    db_manager.session_scope = Mock(side_effect=_session_scope)
     return db_manager
 
 
