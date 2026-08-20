@@ -18,6 +18,15 @@ thought to test. This asserts the property directly instead, the same way
 test_termination_invariant_single_writer.py does for its invariant -- mutate
 each leaf key and require that *something* observable changes.
 
+Scope, stated precisely: this guards hephaestus_config.yaml, which covers the
+first and third bugs above but NOT the second -- max_task_retries lives in
+config/workflows/<id>/workflow.yaml, which has no single loader to diff
+against (spec.py reads it key by key, on demand). That file was checked
+separately and by hand: all 54 of its distinct key names do appear as string
+literals under src/, so it has no key nobody reads. That is a weaker
+guarantee than this test provides, and extending the mutate-and-diff
+technique there would need a per-key consumption map first.
+
 A key that legitimately does nothing to either config object must be listed
 in INERT_BY_DESIGN with a reason, which turns "silently ignored" into "an
 explicit, reviewed decision".
