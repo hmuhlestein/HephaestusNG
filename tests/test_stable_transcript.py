@@ -450,3 +450,44 @@ class TestGetAgentOutputUsesCleanTranscript:
 
         assert "clean-final-line" in output
         assert "garbledrawpipepanebytes" not in output
+
+
+class TestTmuxHistoryLimit:
+    """Regression: history-limit was set to a bare 1000 on the assumption
+    that the raw pipe-pane transcript "already captures the full
+    transcript", making a larger value "no benefit" -- but the viewer's
+    clean transcript is built entirely from tmux's own capture-pane
+    (_poll_stable_transcript), which is itself bounded by history-limit,
+    not from the raw pipe-pane file. A poll interval whose agent produces
+    more than history-limit lines of new output forces
+    _poll_stable_transcript's lossy full-reset fallback, permanently
+    dropping everything before it. Confirmed live: an architecture_design
+    session's clean transcript started mid-paragraph, with nothing before
+    that point recoverable. Verifies the real tmux option, not just the
+    call arguments, since libtmux's own set_option/show_option round trip
+    is part of what needs to be correct here."""
+
+    def test_new_session_gets_a_generous_history_limit(self, agent_manager, request):
+        import libtmux
+
+        session_name = f"test_history_limit_{uuid.uuid4().hex[:8]}"
+        server = agent_manager._launch.tmux_server
+
+        def _cleanup():
+            try:
+                if server.has_session(session_name):
+                    server.kill_session(session_name)
+            except Exception:
+                pass
+
+        request.addfinalizer(_cleanup)
+
+        agent_manager._launch._create_tmux_session(session_name)
+
+        session = server.sessions.get(session_name=session_name)
+        limit = int(session.show_option("history-limit"))
+        assert limit >= 50000, (
+            f"history-limit={limit} is too small -- a burst of agent "
+            "output between two polls can exceed it, forcing a lossy "
+            "transcript reset (see _poll_stable_transcript)"
+        )
