@@ -249,10 +249,8 @@ class TestConductor:
         return mock_llm
 
     @pytest.mark.asyncio
-    @patch("src.interfaces.get_llm_provider")
     async def test_conductor_detects_duplicates(
         self,
-        mock_get_llm,
         mock_db_manager,
         mock_agent_manager,
     ):
@@ -272,11 +270,11 @@ class TestConductor:
             "termination_recommendations": [],
             "coordination_needs": [],
         }
-        mock_get_llm.return_value = mock_llm
 
         conductor = Conductor(
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
+            llm_provider=mock_llm,
         )
 
         # Create Guardian summaries showing duplicate work
@@ -313,10 +311,8 @@ class TestConductor:
         assert "agent-2" in [duplicate["agent1"], duplicate["agent2"]]
 
     @pytest.mark.asyncio
-    @patch("src.interfaces.get_llm_provider")
     async def test_conductor_system_coherence(
         self,
-        mock_get_llm,
         mock_db_manager,
         mock_agent_manager,
     ):
@@ -329,11 +325,11 @@ class TestConductor:
             "termination_recommendations": [],
             "coordination_needs": [],
         }
-        mock_get_llm.return_value = mock_llm
 
         conductor = Conductor(
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
+            llm_provider=mock_llm,
         )
 
         # Mix of aligned and misaligned agents
@@ -365,10 +361,8 @@ class TestConductor:
         assert coherence["score"] < 0.7  # Low due to misaligned agents
 
     @pytest.mark.asyncio
-    @patch("src.interfaces.get_llm_provider")
     async def test_conductor_makes_decisions(
         self,
-        mock_get_llm,
         mock_db_manager,
         mock_agent_manager,
     ):
@@ -394,11 +388,11 @@ class TestConductor:
             ],
             "coordination_needs": [],
         }
-        mock_get_llm.return_value = mock_llm
 
         conductor = Conductor(
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
+            llm_provider=mock_llm,
         )
 
         # Setup scenario requiring decisions

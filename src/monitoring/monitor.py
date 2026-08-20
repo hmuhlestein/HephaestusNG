@@ -199,6 +199,7 @@ class MonitoringLoop:
         self.conductor = Conductor(
             db_manager=db_manager,
             agent_manager=agent_manager,
+            llm_provider=llm_provider,
         )
 
         self.config = get_config()

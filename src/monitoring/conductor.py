@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 
 from src.agents.manager import AgentManager
 from src.core.database import Agent, AgentLog, DatabaseManager, Task
+from src.interfaces import LLMProviderInterface
 from src.prompts.loader import get_prompt
 
 logger = logging.getLogger(__name__)
@@ -39,15 +40,18 @@ class Conductor:
         self,
         db_manager: DatabaseManager,
         agent_manager: AgentManager,
+        llm_provider: LLMProviderInterface,
     ):
         """Initialize System Conductor.
 
         Args:
             db_manager: Database manager
             agent_manager: Agent manager for operations
+            llm_provider: LLM provider for system coherence analysis
         """
         self.db_manager = db_manager
         self.agent_manager = agent_manager
+        self.llm_provider = llm_provider
 
         # Track system state
         self.system_state = {
@@ -78,16 +82,8 @@ class Conductor:
         """
         # Get the actual model name being used
         model_name = "Unknown"
-        llm_provider = None
-
-        try:
-            from src.interfaces import get_llm_provider
-
-            llm_provider = get_llm_provider()
-            if hasattr(llm_provider, "get_model_for_component"):
-                model_name = llm_provider.get_model_for_component("conductor_analysis")
-        except Exception:
-            pass
+        if hasattr(self.llm_provider, "get_model_for_component"):
+            model_name = self.llm_provider.get_model_for_component("conductor_analysis")
 
         logger.info(
             f"Conductor analyzing system with {len(guardian_summaries)} agents using {model_name}"
@@ -97,16 +93,6 @@ class Conductor:
             return self._get_empty_analysis()
 
         try:
-            # Get LLM provider for analysis
-            if not llm_provider:
-                from src.interfaces import get_llm_provider
-
-                llm_provider = get_llm_provider()
-                if hasattr(llm_provider, "get_model_for_component"):
-                    model_name = llm_provider.get_model_for_component(
-                        "conductor_analysis"
-                    )
-
             # Prepare system goals
             system_goals = {
                 "primary": "Complete all assigned tasks efficiently",
@@ -146,7 +132,7 @@ class Conductor:
                 )
             logger.info("=" * 60)
 
-            gpt5_analysis = await llm_provider.analyze_system_coherence(
+            gpt5_analysis = await self.llm_provider.analyze_system_coherence(
                 guardian_summaries=guardian_summaries,
                 system_goals=system_goals,
             )

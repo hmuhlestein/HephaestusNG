@@ -26,9 +26,21 @@ def mock_agent_manager():
 
 
 @pytest.fixture
-def conductor(mock_db_manager, mock_agent_manager):
+def mock_llm_provider():
+    """Create mock LLM provider."""
+    mock = AsyncMock()
+    mock.get_model_for_component = Mock(return_value="test-model")
+    return mock
+
+
+@pytest.fixture
+def conductor(mock_db_manager, mock_agent_manager, mock_llm_provider):
     """Create Conductor instance with mocked dependencies."""
-    return Conductor(db_manager=mock_db_manager, agent_manager=mock_agent_manager)
+    return Conductor(
+        db_manager=mock_db_manager,
+        agent_manager=mock_agent_manager,
+        llm_provider=mock_llm_provider,
+    )
 
 
 class TestConductor:
@@ -37,51 +49,46 @@ class TestConductor:
     @pytest.mark.asyncio
     async def test_analyze_system_state_with_duplicates(self, conductor):
         """Test Conductor detects duplicate work."""
-        # Mock LLM provider - patch where it's used, not where it's defined
-        with patch("src.interfaces.get_llm_provider") as mock_get_llm:
-            mock_llm = AsyncMock()
-            mock_llm.get_model_for_component = Mock(return_value="test-model")
-            mock_llm.analyze_system_coherence = AsyncMock(
-                return_value={
-                    "coherence_score": 0.5,
-                    "duplicates": [
-                        {
-                            "agent1": "agent-1",
-                            "agent2": "agent-2",
-                            "similarity": 0.9,
-                            "work": "Both implementing authentication",
-                        }
-                    ],
-                    "alignment_issues": ["Two agents duplicating work"],
-                    "termination_recommendations": [
-                        {"agent_id": "agent-2", "reason": "Duplicate with agent-1"}
-                    ],
-                    "coordination_needs": [],
-                    "system_summary": "System has duplicates needing resolution",
-                }
-            )
-            mock_get_llm.return_value = mock_llm
+        conductor.llm_provider.analyze_system_coherence = AsyncMock(
+            return_value={
+                "coherence_score": 0.5,
+                "duplicates": [
+                    {
+                        "agent1": "agent-1",
+                        "agent2": "agent-2",
+                        "similarity": 0.9,
+                        "work": "Both implementing authentication",
+                    }
+                ],
+                "alignment_issues": ["Two agents duplicating work"],
+                "termination_recommendations": [
+                    {"agent_id": "agent-2", "reason": "Duplicate with agent-1"}
+                ],
+                "coordination_needs": [],
+                "system_summary": "System has duplicates needing resolution",
+            }
+        )
 
-            # Guardian summaries showing duplicate work
-            summaries = [
-                {
-                    "agent_id": "agent-1",
-                    "trajectory_summary": "Implementing auth module",
-                    "accumulated_goal": "Build JWT authentication",
-                    "current_phase": "implementation",
-                    "trajectory_aligned": True,
-                },
-                {
-                    "agent_id": "agent-2",
-                    "trajectory_summary": "Creating auth system",
-                    "accumulated_goal": "Implement JWT auth",
-                    "current_phase": "implementation",
-                    "trajectory_aligned": True,
-                },
-            ]
+        # Guardian summaries showing duplicate work
+        summaries = [
+            {
+                "agent_id": "agent-1",
+                "trajectory_summary": "Implementing auth module",
+                "accumulated_goal": "Build JWT authentication",
+                "current_phase": "implementation",
+                "trajectory_aligned": True,
+            },
+            {
+                "agent_id": "agent-2",
+                "trajectory_summary": "Creating auth system",
+                "accumulated_goal": "Implement JWT auth",
+                "current_phase": "implementation",
+                "trajectory_aligned": True,
+            },
+        ]
 
-            # Execute
-            result = await conductor.analyze_system_state(summaries)
+        # Execute
+        result = await conductor.analyze_system_state(summaries)
 
         # Assert
         assert result["num_agents"] == 2
@@ -100,26 +107,22 @@ class TestConductor:
     @pytest.mark.asyncio
     async def test_analyze_system_state_low_coherence(self, conductor):
         """Test Conductor handles low system coherence."""
-        with patch("src.interfaces.get_llm_provider") as mock_get_llm:
-            mock_llm = AsyncMock()
-            mock_llm.get_model_for_component = Mock(return_value="test-model")
-            mock_llm.analyze_system_coherence = AsyncMock(
-                return_value={
-                    "coherence_score": 0.3,  # Very low coherence
-                    "duplicates": [],
-                    "alignment_issues": [
-                        "Agents working on unrelated tasks",
-                        "No coordination between agents",
-                    ],
-                    "termination_recommendations": [],
-                    "coordination_needs": [],
-                    "system_summary": "System coherence critically low",
-                }
-            )
-            mock_get_llm.return_value = mock_llm
+        conductor.llm_provider.analyze_system_coherence = AsyncMock(
+            return_value={
+                "coherence_score": 0.3,  # Very low coherence
+                "duplicates": [],
+                "alignment_issues": [
+                    "Agents working on unrelated tasks",
+                    "No coordination between agents",
+                ],
+                "termination_recommendations": [],
+                "coordination_needs": [],
+                "system_summary": "System coherence critically low",
+            }
+        )
 
-            summaries = [{"agent_id": "agent-1"}, {"agent_id": "agent-2"}]
-            result = await conductor.analyze_system_state(summaries)
+        summaries = [{"agent_id": "agent-1"}, {"agent_id": "agent-2"}]
+        result = await conductor.analyze_system_state(summaries)
 
         # Should escalate due to low coherence
         assert result["coherence"]["score"] == 0.3
@@ -132,29 +135,25 @@ class TestConductor:
     @pytest.mark.asyncio
     async def test_analyze_system_state_coordination_needs(self, conductor):
         """Test Conductor identifies resource coordination needs."""
-        with patch("src.interfaces.get_llm_provider") as mock_get_llm:
-            mock_llm = AsyncMock()
-            mock_llm.get_model_for_component = Mock(return_value="test-model")
-            mock_llm.analyze_system_coherence = AsyncMock(
-                return_value={
-                    "coherence_score": 0.7,
-                    "duplicates": [],
-                    "alignment_issues": [],
-                    "termination_recommendations": [],
-                    "coordination_needs": [
-                        {
-                            "agents": ["agent-1", "agent-2"],
-                            "resource": "database/schema.sql",
-                            "action": "agent-1 goes first",
-                        }
-                    ],
-                    "system_summary": "Good coherence but needs coordination",
-                }
-            )
-            mock_get_llm.return_value = mock_llm
+        conductor.llm_provider.analyze_system_coherence = AsyncMock(
+            return_value={
+                "coherence_score": 0.7,
+                "duplicates": [],
+                "alignment_issues": [],
+                "termination_recommendations": [],
+                "coordination_needs": [
+                    {
+                        "agents": ["agent-1", "agent-2"],
+                        "resource": "database/schema.sql",
+                        "action": "agent-1 goes first",
+                    }
+                ],
+                "system_summary": "Good coherence but needs coordination",
+            }
+        )
 
-            summaries = [{"agent_id": "agent-1"}, {"agent_id": "agent-2"}]
-            result = await conductor.analyze_system_state(summaries)
+        summaries = [{"agent_id": "agent-1"}, {"agent_id": "agent-2"}]
+        result = await conductor.analyze_system_state(summaries)
 
         # Check coordination decision
         coord_decisions = [
@@ -237,16 +236,12 @@ class TestConductor:
     @pytest.mark.asyncio
     async def test_llm_failure_handling(self, conductor):
         """Test handling when LLM analysis fails."""
-        with patch("src.interfaces.get_llm_provider") as mock_get_llm:
-            mock_llm = AsyncMock()
-            mock_llm.get_model_for_component = Mock(return_value="test-model")
-            mock_llm.analyze_system_coherence = AsyncMock(
-                side_effect=Exception("LLM Error")
-            )
-            mock_get_llm.return_value = mock_llm
+        conductor.llm_provider.analyze_system_coherence = AsyncMock(
+            side_effect=Exception("LLM Error")
+        )
 
-            summaries = [{"agent_id": "agent-1"}]
-            result = await conductor.analyze_system_state(summaries)
+        summaries = [{"agent_id": "agent-1"}]
+        result = await conductor.analyze_system_state(summaries)
 
         # Should return empty analysis on failure
         assert result["num_agents"] == 0
