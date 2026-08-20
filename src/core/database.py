@@ -1381,6 +1381,29 @@ class SessionCostCheckpoint(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class SchemaMigration(Base):
+    """Records that DatabaseManager's own schema migration `id` has been
+    attempted, so create_tables() doesn't re-run and re-log every one of
+    them on every single app startup forever (SOLID review 4.1).
+
+    Deliberately tracks "attempted", not "fully succeeded": each migration
+    function still owns its own internal resilience (multiple independent
+    ALTER-TABLE-or-skip-if-exists sub-steps per function, several already
+    isolating their own failures from each other) and still never raises
+    to its caller -- changing that contract is a separate, larger change
+    this pass doesn't make. What changes here is purely bookkeeping +
+    making a genuine failure visible (see _run_schema_migration's own
+    warning-level log, replacing the previous debug-level one that could
+    silently mask a real bug until it resurfaced later as a confusing
+    "no such column" error somewhere unrelated).
+    """
+
+    __tablename__ = "schema_migrations"
+
+    id = Column(String, primary_key=True)
+    applied_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class DatabaseManager:
     """Manager for database operations.
 
@@ -1474,25 +1497,76 @@ class DatabaseManager:
         # Create indexes for performance optimization
         self._create_indexes()
 
-        # Migrate new columns for existing databases
-        self._migrate_task_dependency_columns()
-        self._migrate_autopilot_designs_columns()
-        self._migrate_feature_model_columns()
-        self._migrate_total_gotos_column()
-        self._migrate_workflow_gotos_reset_at_column()
-        self._migrate_task_retry_count_column()
-        self._migrate_phase_retry_count_column()
-        self._migrate_self_review_columns()
-        self._migrate_phase_execution_task_claim_column()
-        self._migrate_autopilot_designs_error_column()
-        self._migrate_workflow_paused_by_column()
-        self._migrate_workflow_status_reason_column()
-        self._migrate_workflow_paused_at_column()
-        self._migrate_workflow_paused_retry_count_column()
-        self._migrate_task_action_target_phase_column()
-        self._migrate_cost_tracking_columns()
-        self._migrate_phase_fallback_columns()
-        self._migrate_review_mode_columns()
+        # Migrate new columns for existing databases. Each migration still
+        # owns its own internal resilience (SOLID review 4.1) -- this just
+        # adds "have we attempted this before" bookkeeping in
+        # schema_migrations so create_tables() doesn't re-run and re-log
+        # every one of these on every single app startup forever.
+        for migration_id, fn in (
+            ("_migrate_task_dependency_columns", self._migrate_task_dependency_columns),
+            ("_migrate_autopilot_designs_columns", self._migrate_autopilot_designs_columns),
+            ("_migrate_feature_model_columns", self._migrate_feature_model_columns),
+            ("_migrate_total_gotos_column", self._migrate_total_gotos_column),
+            ("_migrate_workflow_gotos_reset_at_column", self._migrate_workflow_gotos_reset_at_column),
+            ("_migrate_task_retry_count_column", self._migrate_task_retry_count_column),
+            ("_migrate_phase_retry_count_column", self._migrate_phase_retry_count_column),
+            ("_migrate_self_review_columns", self._migrate_self_review_columns),
+            ("_migrate_phase_execution_task_claim_column", self._migrate_phase_execution_task_claim_column),
+            ("_migrate_autopilot_designs_error_column", self._migrate_autopilot_designs_error_column),
+            ("_migrate_workflow_paused_by_column", self._migrate_workflow_paused_by_column),
+            ("_migrate_workflow_status_reason_column", self._migrate_workflow_status_reason_column),
+            ("_migrate_workflow_paused_at_column", self._migrate_workflow_paused_at_column),
+            ("_migrate_workflow_paused_retry_count_column", self._migrate_workflow_paused_retry_count_column),
+            ("_migrate_task_action_target_phase_column", self._migrate_task_action_target_phase_column),
+            ("_migrate_cost_tracking_columns", self._migrate_cost_tracking_columns),
+            ("_migrate_phase_fallback_columns", self._migrate_phase_fallback_columns),
+            ("_migrate_review_mode_columns", self._migrate_review_mode_columns),
+        ):
+            self._run_schema_migration(migration_id, fn)
+
+    def _run_schema_migration(self, migration_id: str, fn) -> None:
+        """Run one schema migration at most once per database, recorded in
+        schema_migrations (SOLID review 4.1).
+
+        `fn` (one of the _migrate_* methods below) keeps its own existing
+        internal resilience unchanged -- multiple independent ALTER-TABLE-
+        or-skip-if-already-exists sub-steps per method, several already
+        isolating their own failures from each other -- and still never
+        raises to this wrapper under normal operation. What this adds:
+
+        1. Skips re-running (and re-logging) a migration already recorded
+           as attempted, instead of unconditionally re-running all 18 of
+           these on every single app startup forever.
+        2. If checking/recording schema_migrations itself fails (e.g. the
+           table doesn't exist yet on a very first run before
+           Base.metadata.create_all has committed), falls through to
+           running fn() anyway -- matching every prior startup's behavior
+           of "just run the migration," never skipping one due to
+           bookkeeping trouble.
+        3. If fn() raises despite its own internal handling, logs at
+           WARNING (not silently) and does not record it as applied, so
+           it retries next startup instead of being masked forever.
+        """
+        try:
+            with self.session_scope() as session:
+                if session.query(SchemaMigration).filter_by(id=migration_id).first():
+                    return
+        except Exception as e:
+            logger.warning(
+                f"Could not check schema_migrations for {migration_id}, running it anyway: {e}"
+            )
+
+        try:
+            fn()
+        except Exception as e:
+            logger.warning(f"Schema migration {migration_id} failed: {e}")
+            return  # Don't record as applied -- retry next startup.
+
+        try:
+            with self.session_scope() as session:
+                session.add(SchemaMigration(id=migration_id))
+        except Exception as e:
+            logger.warning(f"Could not record schema_migrations entry for {migration_id}: {e}")
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1676,7 +1750,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated task dependency columns")
         except Exception as e:
-            logger.debug(f"Task dependency migration (may already exist): {e}")
+            logger.warning(f"Task dependency migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_autopilot_designs_columns(self):
         """Add status/content_hash/feature_folder/completed_at to autopilot_designs for existing databases."""
@@ -1709,7 +1783,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated autopilot_designs columns")
         except Exception as e:
-            logger.debug(f"autopilot_designs migration (may already exist): {e}")
+            logger.warning(f"autopilot_designs migration failed (not just 'already exists' -- check this): {e}")
 
         # Add thinking_level to phases for existing databases
         try:
@@ -1720,7 +1794,7 @@ class DatabaseManager:
                     pass  # Column already exists
                 conn.commit()
         except Exception as e:
-            logger.debug(f"phases.thinking_level migration (may already exist): {e}")
+            logger.warning(f"phases.thinking_level migration failed (not just 'already exists' -- check this): {e}")
 
         # Add design_id FK to workflows for existing databases (§9.7)
         try:
@@ -1731,7 +1805,7 @@ class DatabaseManager:
                     pass  # Column already exists
                 conn.commit()
         except Exception as e:
-            logger.debug(f"workflows.design_id migration (may already exist): {e}")
+            logger.warning(f"workflows.design_id migration failed (not just 'already exists' -- check this): {e}")
 
         # Add cli_model to agents table if missing
         try:
@@ -1743,7 +1817,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated agents.cli_model column")
         except Exception as e:
-            logger.debug(f"agents.cli_model migration (may already exist): {e}")
+            logger.warning(f"agents.cli_model migration failed (not just 'already exists' -- check this): {e}")
 
         # Add launched_at to agents table if missing
         try:
@@ -1755,7 +1829,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated agents.launched_at column")
         except Exception as e:
-            logger.debug(f"agents.launched_at migration (may already exist): {e}")
+            logger.warning(f"agents.launched_at migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_feature_model_columns(self):
         """Add Feature model columns to autopilot_designs and workflows for existing databases.
@@ -1786,7 +1860,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated autopilot_designs feature model columns")
         except Exception as e:
-            logger.debug(f"autopilot_designs feature model migration (may already exist): {e}")
+            logger.warning(f"autopilot_designs feature model migration failed (not just 'already exists' -- check this): {e}")
 
         # Add new columns to workflows
         try:
@@ -1809,14 +1883,14 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated workflows feature model columns")
         except Exception as e:
-            logger.debug(f"workflows feature model migration (may already exist): {e}")
+            logger.warning(f"workflows feature model migration failed (not just 'already exists' -- check this): {e}")
 
         # Create features table if it doesn't exist
         try:
             Base.metadata.create_all(self.engine, tables=[Feature.__table__], checkfirst=True)
             logger.info("Ensured features table exists")
         except Exception as e:
-            logger.debug(f"features table creation (may already exist): {e}")
+            logger.warning(f"features table creation failed (not just 'already exists' -- check this): {e}")
 
         # Create prompt_proposals table if it doesn't exist (finding 8).
         try:
@@ -1825,7 +1899,7 @@ class DatabaseManager:
             )
             logger.info("Ensured prompt_proposals table exists")
         except Exception as e:
-            logger.debug(f"prompt_proposals table creation (may already exist): {e}")
+            logger.warning(f"prompt_proposals table creation failed (not just 'already exists' -- check this): {e}")
 
         # Add pr_url column to features table for existing databases
         try:
@@ -1837,7 +1911,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated features.pr_url column")
         except Exception as e:
-            logger.debug(f"features.pr_url migration (may already exist): {e}")
+            logger.warning(f"features.pr_url migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_total_gotos_column(self):
         """Add workflows.total_gotos for existing databases.
@@ -1853,7 +1927,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated workflows.total_gotos column")
         except Exception as e:
-            logger.debug(f"workflows.total_gotos migration (may already exist): {e}")
+            logger.warning(f"workflows.total_gotos migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_workflow_gotos_reset_at_column(self):
         """Add workflows.gotos_reset_at for existing databases.
@@ -1869,7 +1943,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated workflows.gotos_reset_at column")
         except Exception as e:
-            logger.debug(f"workflows.gotos_reset_at migration (may already exist): {e}")
+            logger.warning(f"workflows.gotos_reset_at migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_task_retry_count_column(self):
         """Add tasks.retry_count for existing databases.
@@ -1885,7 +1959,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated tasks.retry_count column")
         except Exception as e:
-            logger.debug(f"tasks.retry_count migration (may already exist): {e}")
+            logger.warning(f"tasks.retry_count migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_phase_retry_count_column(self):
         """Add phases.retry_count for existing databases.
@@ -1901,7 +1975,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated phases.retry_count column")
         except Exception as e:
-            logger.debug(f"phases.retry_count migration (may already exist): {e}")
+            logger.warning(f"phases.retry_count migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_self_review_columns(self):
         """Add tasks.self_review_done and phases.self_review for existing databases.
@@ -1946,7 +2020,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated tasks.self_review_done / phases.self_review columns")
         except Exception as e:
-            logger.debug(f"self_review columns migration (may already exist): {e}")
+            logger.warning(f"self_review columns migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_phase_execution_task_claim_column(self):
         """Add phase_executions.task_creation_claimed_at for existing databases.
@@ -1962,7 +2036,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated phase_executions.task_creation_claimed_at column")
         except Exception as e:
-            logger.debug(f"phase_executions.task_creation_claimed_at migration (may already exist): {e}")
+            logger.warning(f"phase_executions.task_creation_claimed_at migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_autopilot_designs_error_column(self):
         """Add autopilot_designs.error for existing databases.
@@ -1978,7 +2052,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated autopilot_designs.error column")
         except Exception as e:
-            logger.debug(f"autopilot_designs.error migration (may already exist): {e}")
+            logger.warning(f"autopilot_designs.error migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_workflow_paused_by_column(self):
         """Add workflows.paused_by for existing databases.
@@ -1994,7 +2068,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated workflows.paused_by column")
         except Exception as e:
-            logger.debug(f"workflows.paused_by migration (may already exist): {e}")
+            logger.warning(f"workflows.paused_by migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_workflow_status_reason_column(self):
         """Add workflows.status_reason for existing databases.
@@ -2010,7 +2084,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated workflows.status_reason column")
         except Exception as e:
-            logger.debug(f"workflows.status_reason migration (may already exist): {e}")
+            logger.warning(f"workflows.status_reason migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_workflow_paused_at_column(self):
         """Add workflows.paused_at for existing databases.
@@ -2026,7 +2100,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated workflows.paused_at column")
         except Exception as e:
-            logger.debug(f"workflows.paused_at migration (may already exist): {e}")
+            logger.warning(f"workflows.paused_at migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_workflow_paused_retry_count_column(self):
         """Add workflows.paused_retry_count for existing databases.
@@ -2042,7 +2116,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated workflows.paused_retry_count column")
         except Exception as e:
-            logger.debug(f"workflows.paused_retry_count migration (may already exist): {e}")
+            logger.warning(f"workflows.paused_retry_count migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_task_action_target_phase_column(self):
         """Add tasks.action_target_phase for existing databases.
@@ -2058,7 +2132,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated tasks.action_target_phase column")
         except Exception as e:
-            logger.debug(f"tasks.action_target_phase migration (may already exist): {e}")
+            logger.warning(f"tasks.action_target_phase migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_cost_tracking_columns(self):
         """Add cost tracking columns and tables for existing databases.
@@ -2081,7 +2155,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated tasks.cost_total_usd column")
         except Exception as e:
-            logger.debug(f"tasks.cost_total_usd migration (may already exist): {e}")
+            logger.warning(f"tasks.cost_total_usd migration failed (not just 'already exists' -- check this): {e}")
 
         # Add cost_total_usd to features
         try:
@@ -2093,7 +2167,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated features.cost_total_usd column")
         except Exception as e:
-            logger.debug(f"features.cost_total_usd migration (may already exist): {e}")
+            logger.warning(f"features.cost_total_usd migration failed (not just 'already exists' -- check this): {e}")
 
         # Add cost_total_usd to autopilot_designs
         try:
@@ -2105,7 +2179,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated autopilot_designs.cost_total_usd column")
         except Exception as e:
-            logger.debug(f"autopilot_designs.cost_total_usd migration (may already exist): {e}")
+            logger.warning(f"autopilot_designs.cost_total_usd migration failed (not just 'already exists' -- check this): {e}")
 
         # Add cost_total_usd and cost_limit_usd to autopilot_projects
         try:
@@ -2121,7 +2195,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated autopilot_projects cost tracking columns")
         except Exception as e:
-            logger.debug(f"autopilot_projects cost migration (may already exist): {e}")
+            logger.warning(f"autopilot_projects cost migration failed (not just 'already exists' -- check this): {e}")
 
         # Add cost_total_usd to workflows
         try:
@@ -2133,7 +2207,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated workflows.cost_total_usd column")
         except Exception as e:
-            logger.debug(f"workflows.cost_total_usd migration (may already exist): {e}")
+            logger.warning(f"workflows.cost_total_usd migration failed (not just 'already exists' -- check this): {e}")
 
         # Create cost_entries and session_cost_checkpoints tables
         try:
@@ -2147,7 +2221,7 @@ class DatabaseManager:
             )
             logger.info("Ensured cost_entries and session_cost_checkpoints tables exist")
         except Exception as e:
-            logger.debug(f"Cost tracking tables creation (may already exist): {e}")
+            logger.warning(f"Cost tracking tables creation failed (not just 'already exists' -- check this): {e}")
 
         # Create indexes for cost_entries
         try:
@@ -2179,7 +2253,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Created cost_entries indexes")
         except Exception as e:
-            logger.debug(f"Cost entries indexes (may already exist): {e}")
+            logger.warning(f"Cost entries indexes failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_phase_fallback_columns(self):
         """Add fallback_cli_tool and fallback_cli_model columns to phases table."""
@@ -2210,9 +2284,9 @@ class DatabaseManager:
                         if result.rowcount > 0:
                             logger.info(f"Populated fallback for {result.rowcount} phases from global config")
             except Exception as e:
-                logger.debug(f"Could not populate phase fallbacks: {e}")
+                logger.warning(f"Could not populate phase fallbacks from global config: {e}")
         except Exception as e:
-            logger.debug(f"Phases fallback columns migration (may already exist): {e}")
+            logger.warning(f"Phases fallback columns migration failed (not just 'already exists' -- check this): {e}")
 
     def _migrate_review_mode_columns(self):
         """Add review_mode to autopilot_projects and review columns to features."""
@@ -2241,7 +2315,7 @@ class DatabaseManager:
                 conn.commit()
                 logger.info("Migrated review_mode columns")
         except Exception as e:
-            logger.debug(f"Review mode columns migration (may already exist): {e}")
+            logger.warning(f"Review mode columns migration failed (not just 'already exists' -- check this): {e}")
 
     def get_session(self):
         """Get a database session."""
