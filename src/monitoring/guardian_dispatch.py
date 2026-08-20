@@ -273,13 +273,13 @@ class GuardianDispatcher:
                                 f"Agent {agent.id[:8]} ignored steering {consecutive_stuck} times. "
                                 f"Auto-restarting..."
                             )
-                            await self._auto_restart.restart_agent(agent)
+                            await self._auto_restart.requeue_and_terminate(agent)
                     else:
                         logger.warning(
                             f"Agent {agent.id[:8]} ignored steering {consecutive_stuck} times. "
                             f"Auto-restarting..."
                         )
-                        await self._auto_restart.restart_agent(agent)
+                        await self._auto_restart.requeue_and_terminate(agent)
 
             # Update agent health based on trajectory alignment
             await self.update_agent_health_from_trajectory(agent, analysis)
