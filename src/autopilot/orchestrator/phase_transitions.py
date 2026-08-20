@@ -670,6 +670,10 @@ def _advance_phases(workflow_id: str, logger: "OrchestratorLogger") -> bool:
             # Same reasoning: a phase stuck "pending" despite a done task
             # is invisible to every dispatch case below otherwise.
             _release_pending_phases_with_done_tasks(db, workflow_id, logger)
+            # Sibling repair: a phase stuck "pending" despite an existing
+            # non-terminal (orphaned) task -- same blind spot, a task that
+            # never reached "done" instead of one that did.
+            _release_pending_phases_with_orphaned_task(db, workflow_id, logger)
 
             # Self-heal: tasks that are "done" but have a failure_reason
             # indicate gate validation failed after the task completed.
@@ -910,6 +914,76 @@ def _release_pending_phases_with_done_tasks(db, workflow_id: str, logger: "Orche
     # done_count/incomplete queries would wrongly exclude that same task
     # from what they treat as its own cycle.
     execution.started_at = execution.started_at or most_recent_done_task.created_at
+    db.commit()
+
+
+def _release_pending_phases_with_orphaned_task(db, workflow_id: str, logger: "OrchestratorLogger") -> None:
+    """Self-heal for a PhaseExecution stuck at status="pending" despite
+    already having a non-terminal (pending/assigned/in_progress/queued)
+    Task pointing at it -- the task's mere existence is proof something
+    already meant to work this phase (most commonly a goto/retry reset
+    that reverted the PhaseExecution without flipping it back), but no
+    dispatch case recognizes a "pending" phase that already has a task:
+    Case 0/0b act on a *lack* of tasks, Case 1 needs the *predecessor*
+    completed and skips outright if the successor already has a task, and
+    Case 2 only ever looks at phases already "in_progress".
+
+    Sibling to _release_pending_phases_with_done_tasks (same blind spot, a
+    non-terminal task instead of a done one) -- kept separate rather than
+    merged into it because that function's "skip entirely if ANY phase is
+    already in_progress" guard doesn't hold here: a manual-only phase
+    (git_commit_push) sitting "in_progress" only because it's paused
+    waiting on a human, with its own task already failed (not actively
+    consuming an agent), must not block this repair for an unrelated
+    phase behind it. Guards against real concurrency instead by checking
+    for an actually-live task (assigned/in_progress) anywhere in the
+    workflow, not merely a PhaseExecution.status column.
+
+    Observed live: development (task 66e7c1ff) sat "pending" -- reverted
+    by an earlier goto cycle -- for the entire time its workflow was
+    paused for git_commit_push review, invisible to every dispatch case,
+    because _release_pending_phases_with_done_tasks only matches a done
+    task and unconditionally skips whenever any phase (including the
+    parked git_commit_push one) is "in_progress".
+    """
+    live_task = (
+        db.query(Task)
+        .join(Phase, Task.phase_id == Phase.id)
+        .filter(Phase.workflow_id == workflow_id, Task.status.in_(["assigned", "in_progress"]))
+        .first()
+    )
+    if live_task:
+        return
+
+    orphaned_task = (
+        db.query(Task)
+        .join(Phase, Task.phase_id == Phase.id)
+        .join(PhaseExecution, PhaseExecution.phase_id == Phase.id)
+        .filter(
+            Phase.workflow_id == workflow_id,
+            PhaseExecution.status == "pending",
+            Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+            ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+        )
+        .order_by(Task.created_at.desc())
+        .first()
+    )
+    if not orphaned_task:
+        return
+
+    execution = db.query(PhaseExecution).filter_by(phase_id=orphaned_task.phase_id).first()
+    if not execution or execution.status != "pending":
+        return
+
+    phase = db.query(Phase).filter_by(id=execution.phase_id).first()
+    logger.warning(
+        f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: "
+        f"PhaseExecution stuck 'pending' despite existing task "
+        f"{orphaned_task.id[:8]} (status={orphaned_task.status}) -- "
+        "flipping to in_progress so dispatch can see it"
+    )
+    execution.status = "in_progress"
+    execution.started_at = execution.started_at or orphaned_task.created_at
     db.commit()
 
 
@@ -2225,6 +2299,29 @@ def _create_phase_task(
                     if not deploy_md.exists():
                         logger.info(f"[PHASE-TASK] deploy skipped — DEPLOY.md not found in {wf.working_directory}")
                         return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
+
+            # A manual-only phase (git_commit_push) under review mode must
+            # pause for a human, not attempt dispatch at all -- this is the
+            # THIRD, previously-unguarded place that could otherwise reach
+            # create_agent_for_task_direct for it (the other two,
+            # _case_in_progress_complete's orphan-check and
+            # _maybe_retry_failed_tasks, already carry this same guard).
+            # Without it: this function creates a fresh "pending" task,
+            # immediately calls create_agent_for_task_direct, which invokes
+            # AgentManager.create_agent_for_task, which raises PermissionError
+            # for git_commit_push in review mode -- caught by create_agent_
+            # for_task_direct's own generic `except Exception: return None`,
+            # landing right back here at the "Agent creation failed" branch
+            # below, which marks the task "failed" with NO failure_reason at
+            # all (unlike every other orphan/failure path in this file).
+            # Observed live: task ed85f8ec was marked failed this exact way,
+            # with a blank failure_reason, on the very first attempt to
+            # reach git_commit_push -- before either of the other two guards
+            # ever got a chance to run. Checking here, before creating any
+            # task, avoids manufacturing a misleading failure at all.
+            if phase_name in MANUAL_ONLY_PHASES and _manual_handoff_required(workflow_id):
+                _pause_for_manual_handoff(db, workflow_id, phase_name, logger)
+                return False
 
             # Check if phase already has an active task
             existing = (

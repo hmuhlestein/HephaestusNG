@@ -1973,6 +1973,164 @@ class TestReleasePendingPhasesWithDoneTasks:
             ).first().created_at
 
 
+class TestReleasePendingPhasesWithOrphanedTask:
+    """Regression, found live: sibling to _release_pending_phases_with_
+    done_tasks (same blind spot -- a PhaseExecution stuck "pending" is
+    invisible to every one of _advance_phases's four dispatch cases -- but
+    for a non-terminal (orphaned) task instead of a done one. Its own
+    "skip entirely if ANY phase is in_progress" guard doesn't hold here: a
+    manual-only phase (git_commit_push) sitting "in_progress" only because
+    it's paused for review, with its own task already failed, must not
+    block this repair for an unrelated phase behind it.
+
+    Observed live: development (task 66e7c1ff) sat "pending" -- reverted
+    by an earlier goto cycle -- for the entire time its workflow was
+    paused for git_commit_push review, invisible to every dispatch case."""
+
+    def _seed_pending_task(self, db_manager, status="pending", phase_id="phase-1", workflow_id="wf-1"):
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-orphan-1",
+                    workflow_id=workflow_id,
+                    phase_id=phase_id,
+                    raw_description="r",
+                    done_definition="d",
+                    status=status,
+                )
+            )
+
+    def test_pending_phase_with_orphaned_task_flips_to_in_progress(
+        self, db_manager, sample_workflow
+    ):
+        from src.core.database import PhaseExecution
+        from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_orphaned_task
+
+        self._seed_pending_task(db_manager)
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "pending"
+            execution.started_at = None
+
+        with db_manager.session_scope() as session:
+            _release_pending_phases_with_orphaned_task(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+            assert execution.started_at is not None
+
+    def test_pending_phase_with_no_task_is_left_alone(self, db_manager, sample_workflow):
+        from src.core.database import PhaseExecution
+        from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_orphaned_task
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "pending"
+
+        with db_manager.session_scope() as session:
+            _release_pending_phases_with_orphaned_task(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "pending"  # unchanged -- no task to justify the flip
+
+    def test_done_task_does_not_count_as_orphaned(self, db_manager, sample_workflow):
+        """A 'done' task is _release_pending_phases_with_done_tasks's own
+        territory -- this function only matches non-terminal statuses, so
+        it must not also fire for one, which would just be redundant (not
+        wrong, but worth locking down that the status filter is precise)."""
+        from src.core.database import PhaseExecution
+        from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_orphaned_task
+
+        self._seed_pending_task(db_manager, status="done")
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "pending"
+
+        with db_manager.session_scope() as session:
+            _release_pending_phases_with_orphaned_task(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "pending"
+
+    def test_does_not_flip_while_another_task_is_genuinely_active(
+        self, db_manager, sample_workflow
+    ):
+        """A real, live agent working elsewhere in the workflow (status
+        assigned/in_progress) must still block this repair -- flipping a
+        second phase to "in_progress" concurrently would let two agents
+        burn tokens on unrelated phases in the same shared worktree at
+        once, the exact hazard _release_pending_phases_with_done_tasks's
+        own 'skip if anything is in_progress' guard exists to prevent."""
+        from src.core.database import PhaseExecution
+        from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_orphaned_task
+
+        self._seed_pending_task(db_manager, phase_id="phase-1")
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "pending"
+            session.add(
+                Task(
+                    id="task-live-elsewhere",
+                    workflow_id="wf-1",
+                    phase_id="phase-2",
+                    raw_description="r",
+                    done_definition="d",
+                    status="in_progress",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            _release_pending_phases_with_orphaned_task(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "pending"  # left alone -- a real agent is active elsewhere
+
+    def test_manual_only_phase_parked_in_progress_does_not_block_repair(
+        self, db_manager, sample_workflow
+    ):
+        """The exact live scenario: git_commit_push sits "in_progress"
+        only because it's paused waiting on a human (its own task already
+        "failed", no live agent), while development sits "pending" with
+        an orphaned task behind it. The manual-only phase's parked state
+        must not block development's repair."""
+        from src.core.database import PhaseExecution
+        from src.autopilot.orchestrator.phase_transitions import _release_pending_phases_with_orphaned_task
+
+        self._seed_pending_task(db_manager, phase_id="phase-1")
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "pending"
+            # phase-2 stands in for git_commit_push here: in_progress, but
+            # its own task already failed -- nothing live about it.
+            session.add(
+                Task(
+                    id="task-gcp-failed",
+                    workflow_id="wf-1",
+                    phase_id="phase-2",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="Orphaned: never dispatched to an agent",
+                )
+            )
+            exec2 = PhaseExecution(
+                id="exec-2", phase_id="phase-2", workflow_execution_id="wf-1",
+                status="in_progress",
+            )
+            session.add(exec2)
+
+        with db_manager.session_scope() as session:
+            _release_pending_phases_with_orphaned_task(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+
+
 class TestCaseCompletedWithSuccessor:
     """Regression: this case only ever fires when last_completed's
     PhaseExecution.status is ALREADY "completed" (that's what puts it in the
@@ -3930,3 +4088,75 @@ class TestManualHandoffPausesBeforeOrphanSweep:
                 "not failed out from under them with a misleading reason"
             )
             assert task.failure_reason is None
+
+
+class TestCreatePhaseTaskManualOnlyGuard:
+    """Regression: _create_phase_task is a THIRD place (besides
+    _case_in_progress_complete's orphan-check and _maybe_retry_failed_
+    tasks, both already guarded) that could reach create_agent_for_task_
+    direct for a manual-only phase (git_commit_push) under review mode.
+    Before this fix it created a fresh "pending" task, immediately tried
+    to dispatch it, got PermissionError (converted to a bare None by
+    create_agent_for_task_direct's own generic except-clause), and marked
+    the task "failed" with NO failure_reason at all -- unlike every other
+    failure path in this file. Observed live: task ed85f8ec was marked
+    failed exactly this way, with a blank failure_reason, on the very
+    first dispatch attempt, before either of the other two guards ever
+    got a chance to run."""
+
+    def _seed_git_commit_push_phase(self, db_manager):
+        with db_manager.session_scope() as session:
+            session.add(Workflow(id="wf-gcp2", name="w", status="active", phases_folder_path="/tmp"))
+            session.add(Phase(
+                id="phase-gcp2", workflow_id="wf-gcp2", name="git_commit_push", order=1,
+                description="d", done_definitions=["done"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-gcp2", phase_id="phase-gcp2", workflow_execution_id="wf-gcp2",
+                status="pending",
+            ))
+
+    @patch("src.autopilot.orchestrator.phase_transitions._manual_handoff_required", return_value=True)
+    def test_pauses_instead_of_creating_and_failing_a_task(self, mock_required, db_manager):
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+
+        self._seed_git_commit_push_phase(db_manager)
+
+        result = _create_phase_task("wf-gcp2", "phase-gcp2", "git_commit_push", "continue", MagicMock())
+
+        assert result is False
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-gcp2").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "review"
+
+            tasks = session.query(Task).filter_by(phase_id="phase-gcp2").all()
+            assert tasks == [], (
+                "no task should be created at all for a manual-only phase "
+                "pending review -- creating one and immediately failing it "
+                "manufactures a misleading failure"
+            )
+
+    @patch("src.autopilot.orchestrator.phase_transitions._manual_handoff_required", return_value=False)
+    def test_full_autopilot_still_creates_and_dispatches_normally(self, mock_required, db_manager):
+        """review_mode off (full autopilot) must retain the original
+        behavior -- git_commit_push dispatches like any other phase."""
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+
+        self._seed_git_commit_push_phase(db_manager)
+
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
+            return_value={"agent_id": "agent-x"},
+        ):
+            result = _create_phase_task("wf-gcp2", "phase-gcp2", "git_commit_push", "continue", MagicMock())
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-gcp2").first()
+            assert wf.status == "active"
+
+            task = session.query(Task).filter_by(phase_id="phase-gcp2").first()
+            assert task is not None
+            assert task.status == "in_progress"
+            assert task.assigned_agent_id == "agent-x"
