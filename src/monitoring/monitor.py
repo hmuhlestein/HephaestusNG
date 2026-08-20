@@ -170,6 +170,43 @@ class MonitoringLoop:
 
     UNCONFIRMED_COMPLETION_ESCALATE_AFTER = 3
 
+    # SOLID review finding 3.5: the mechanical-recovery sweep in
+    # _monitoring_cycle used to hardcode a 12-call sequential if-chain
+    # instead of iterating a list -- adding a new check meant editing that
+    # chain by hand, easy to get the early-exit-vs-accumulate semantics
+    # wrong. All 12 already share the same async (agent) -> bool shape
+    # (mechanical_recovery.py's own detect+intervene methods, exposed here
+    # via thin delegators tests call directly -- see tests/test_monitor.py),
+    # so a plain ordered name list is enough; no new Protocol/ABC needed for
+    # a shape every method already satisfies structurally.
+    #
+    # Early-exit checks: the first one to fire skips every later check for
+    # this agent this cycle -- these three conditions mean the agent isn't
+    # in a normal working state at all, so none of the CLI-interaction
+    # checks below make sense to run against it this cycle.
+    _EARLY_EXIT_CHECKS = (
+        "_detect_orphaned_idle_agent",
+        "_detect_credit_exhausted",
+        "_detect_agent_never_started",
+    )
+    # Accumulating checks: every one runs regardless of the others' results
+    # (an agent can match more than one condition in the same cycle).
+    # "_verify_cli_model_fallback" returns None (never adds to the
+    # intervened set) rather than bool, but fits this same iteration
+    # unmodified -- bool(None) is False like every other non-firing check.
+    _ACCUMULATING_CHECKS = (
+        "_mechanical_recovery_for_agent",
+        "_detect_cli_model_fallback",
+        "_verify_cli_model_fallback",
+        "_detect_repetition_loop",
+        "_detect_dangerous_command_confirmation",
+        "_detect_max_token_limit_error",
+        "_detect_unconfirmed_task_completion",
+        "_detect_mcp_disconnected",
+        "_detect_connection_errors",
+        "_detect_bad_model_error",
+    )
+
     def __init__(
         self,
         db_manager: DatabaseManager,
@@ -461,34 +498,14 @@ class MonitoringLoop:
         #      invoke that slash command itself
         mechanically_intervened = set()
         for agent in agents:
-            if await self._detect_orphaned_idle_agent(agent):
-                mechanically_intervened.add(agent.id)
-                continue
-            if await self._detect_credit_exhausted(agent):
-                mechanically_intervened.add(agent.id)
-                continue
-            if await self._detect_agent_never_started(agent):
-                mechanically_intervened.add(agent.id)
-                continue
-            if await self._mechanical_recovery_for_agent(agent):
-                mechanically_intervened.add(agent.id)
-            if await self._detect_cli_model_fallback(agent):
-                mechanically_intervened.add(agent.id)
-            await self._verify_cli_model_fallback(agent)
-            if await self._detect_repetition_loop(agent):
-                mechanically_intervened.add(agent.id)
-            if await self._detect_dangerous_command_confirmation(agent):
-                mechanically_intervened.add(agent.id)
-            if await self._detect_max_token_limit_error(agent):
-                mechanically_intervened.add(agent.id)
-            if await self._detect_unconfirmed_task_completion(agent):
-                mechanically_intervened.add(agent.id)
-            if await self._detect_mcp_disconnected(agent):
-                mechanically_intervened.add(agent.id)
-            if await self._detect_connection_errors(agent):
-                mechanically_intervened.add(agent.id)
-            if await self._detect_bad_model_error(agent):
-                mechanically_intervened.add(agent.id)
+            for check_name in self._EARLY_EXIT_CHECKS:
+                if await getattr(self, check_name)(agent):
+                    mechanically_intervened.add(agent.id)
+                    break
+            else:
+                for check_name in self._ACCUMULATING_CHECKS:
+                    if await getattr(self, check_name)(agent):
+                        mechanically_intervened.add(agent.id)
 
         # Phase 1: Guardian Analysis (Parallel)
         guardian_summaries = []
