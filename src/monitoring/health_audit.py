@@ -37,9 +37,18 @@ class SystemHealthAuditor:
 
         Delegates to shared run_health_audit() function.
         """
+        import asyncio
+
         from src.mcp.autopilot.control_routes import run_health_audit
 
-        result = run_health_audit(self.db_manager)
+        # run_health_audit does real subprocess work (pgrep, tmux
+        # list-panes, git branch --list; up to 10s each) -- offloaded so
+        # it doesn't stall this process's event loop. The /health HTTP
+        # endpoint already offloads the same shared function; this call
+        # site, awaited directly inside the Monitor's own loop, is a
+        # SEPARATE process from that endpoint and did not.
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, run_health_audit, self.db_manager)
 
         # Log findings
         for f in result["findings"]:

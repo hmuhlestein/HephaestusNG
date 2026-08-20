@@ -575,6 +575,45 @@ async def test_link_commit_to_ticket(
 
 
 @pytest.mark.asyncio
+async def test_link_commit_offloads_get_commit_stats(
+    db_manager, test_workflow, test_agent, test_board_config
+):
+    """Regression: _get_commit_stats shells out to `git show --numstat`
+    directly on the event loop -- blocking. Must go through
+    run_in_executor instead."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    ticket = await TicketService.create_ticket(
+        workflow_id=test_workflow,
+        agent_id=test_agent,
+        title="Test ticket",
+        description="Test description",
+        ticket_type="task",
+        priority="medium",
+    )
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = AsyncMock(
+        return_value={"files_changed": 0, "insertions": 0, "deletions": 0, "files_list": []}
+    )
+
+    with patch("asyncio.get_event_loop", return_value=fake_loop):
+        result = await TicketService.link_commit(
+            ticket_id=ticket["ticket_id"],
+            agent_id=test_agent,
+            commit_sha="abc123def456",
+            commit_message="Fix issue related to ticket",
+            link_method="manual",
+        )
+
+    assert result["success"] is True
+    fake_loop.run_in_executor.assert_called_once()
+    executor_arg, func_arg = fake_loop.run_in_executor.call_args.args[:2]
+    assert executor_arg is None
+    assert func_arg == TicketService._get_commit_stats
+
+
+@pytest.mark.asyncio
 async def test_get_tickets_by_workflow(
     db_manager, test_workflow, test_agent, test_board_config
 ):

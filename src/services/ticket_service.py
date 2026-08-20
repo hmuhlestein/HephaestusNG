@@ -1478,7 +1478,12 @@ class TicketService:
             if main_repo_path is None:
                 config = get_config()
                 main_repo_path = str(config.main_repo_path)
-            commit_stats = TicketService._get_commit_stats(commit_sha, main_repo_path)
+            # _get_commit_stats shells out to `git show --numstat` --
+            # blocking, offloaded so it doesn't stall the event loop.
+            loop = asyncio.get_event_loop()
+            commit_stats = await loop.run_in_executor(
+                None, TicketService._get_commit_stats, commit_sha, main_repo_path
+            )
 
             # Create commit link with real stats
             commit_id = f"tc-{uuid.uuid4()}"

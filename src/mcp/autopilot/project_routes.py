@@ -376,6 +376,36 @@ async def list_projects():
             )
         return result
 
+def _init_codegraph_index(resolved: str, project_name: str) -> None:
+    """`codegraph init` in a freshly-created project's directory, if
+    codegraph is installed and no index exists yet -- real subprocess work
+    (up to a 120s timeout) plus filesystem I/O, called via run_in_executor
+    by create_project below."""
+    try:
+        codegraph_dir = Path(resolved) / ".codegraph"
+        if not codegraph_dir.exists():
+            result = subprocess.run(
+                ["codegraph", "init", "."],
+                cwd=resolved,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode == 0:
+                logger.info(f"CodeGraph initialized for project {project_name} at {resolved}")
+                # Hide .codegraph from git without modifying .gitignore
+                exclude_file = Path(resolved) / ".git" / "info" / "exclude"
+                if exclude_file.exists():
+                    exclude_content = exclude_file.read_text()
+                    if ".codegraph/" not in exclude_content:
+                        exclude_file.write_text(exclude_content.rstrip() + "\n.codegraph/\n")
+            else:
+                logger.debug(f"CodeGraph init skipped/failed for {project_name}: {result.stderr[:200]}")
+    except FileNotFoundError:
+        logger.debug("codegraph not installed, skipping index initialization")
+    except Exception as e:
+        logger.debug(f"CodeGraph init skipped for {project_name}: {e}")
+
 @router.post("/projects", response_model=ProjectItem)
 async def create_project(
     req: ProjectCreate,
@@ -416,32 +446,12 @@ async def create_project(
         _invalidate("queue", "status")
 
     # Initialize codegraph index if codegraph is installed and .codegraph
-    # doesn't already exist in the project directory.
-    try:
-        import subprocess as _sp
-        codegraph_dir = Path(resolved) / ".codegraph"
-        if not codegraph_dir.exists():
-            result = _sp.run(
-                ["codegraph", "init", "."],
-                cwd=resolved,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            if result.returncode == 0:
-                logger.info(f"CodeGraph initialized for project {proj.name} at {resolved}")
-                # Hide .codegraph from git without modifying .gitignore
-                exclude_file = Path(resolved) / ".git" / "info" / "exclude"
-                if exclude_file.exists():
-                    exclude_content = exclude_file.read_text()
-                    if ".codegraph/" not in exclude_content:
-                        exclude_file.write_text(exclude_content.rstrip() + "\n.codegraph/\n")
-            else:
-                logger.debug(f"CodeGraph init skipped/failed for {proj.name}: {result.stderr[:200]}")
-    except FileNotFoundError:
-        logger.debug("codegraph not installed, skipping index initialization")
-    except Exception as e:
-        logger.debug(f"CodeGraph init skipped for {proj.name}: {e}")
+    # doesn't already exist in the project directory. Offloaded -- the
+    # subprocess call alone has a 120s timeout, blocking the whole event
+    # loop (every other in-flight request) for up to that long on a
+    # single POST /projects call.
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _init_codegraph_index, resolved, proj.name)
 
     return ProjectItem(
             id=proj.id,
@@ -1524,7 +1534,13 @@ async def remove_project_design(project_id: str, filename: str):
                 branch = _git.Repo(wt_path).active_branch.name
             except Exception:
                 branch = ""
-            _cleanup_worktree(wt_path, branch, Path(project_path_str), logger)
+            # _cleanup_worktree does real git/filesystem work
+            # (git worktree remove, dirty-check, archiving) -- offloaded
+            # so it doesn't block the event loop.
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None, _cleanup_worktree, wt_path, branch, Path(project_path_str), logger
+            )
         except Exception as e:
             logger.warning(f"[DELETE-DESIGN] Failed to clean up worktree {working_directory}: {e}")
 

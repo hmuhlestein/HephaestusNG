@@ -170,12 +170,22 @@ async def requeue_design(request: dict):
                     # false match with a prefix compare on project dirs.
                     if design_doc and Path(str(design_doc)).name == filename:
                         # Terminate agents for this workflow
+                        # Includes blocked/under_review/validation_in_progress/
+                        # needs_work, not just the plainly-active statuses --
+                        # a task mid-review/validation still has a live agent
+                        # attached; missing it here means that agent survives
+                        # this requeue's design-state wipe, left running
+                        # against state that no longer exists.
                         task_ids = [
                             t.id
                             for t in db.query(Task)
                             .filter(
                                 Task.workflow_id == wf.id,
-                                Task.status.in_(["pending", "queued", "assigned", "in_progress"]),
+                                Task.status.in_([
+                                    "pending", "queued", "assigned", "in_progress",
+                                    "blocked", "under_review", "validation_in_progress",
+                                    "needs_work",
+                                ]),
                             )
                             .all()
                         ]
@@ -530,7 +540,12 @@ async def rerun_design(request: dict):
                     branch = _git.Repo(wt_path).active_branch.name
                 except Exception:
                     branch = ""
-                _cleanup_worktree(wt_path, branch, Path(project_path_str), logger)
+                # _cleanup_worktree does real git/filesystem work --
+                # offloaded so it doesn't block the event loop.
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None, _cleanup_worktree, wt_path, branch, Path(project_path_str), logger
+                )
             except Exception as e:
                 logger.warning(f"[RERUN] Failed to clean up worktree {working_directory}: {e}")
     except Exception as e:

@@ -808,6 +808,39 @@ class TestReviewAndResumeReuseOldPendingTasks:
 
         spawn_mock.assert_called_once_with("task-old-pending", "wf-1-dev")
 
+    def _seed_needs_work_task_with_terminated_agent(self, db, workflow_id="wf-1"):
+        from src.core.database import Agent, Task
+
+        with db.session_scope() as session:
+            session.add(Agent(id="agent-dead", system_prompt="p", status="terminated", cli_type="pi"))
+            session.add(Task(
+                id="task-needs-work", workflow_id=workflow_id, phase_id=f"{workflow_id}-dev",
+                raw_description="r", done_definition="d", status="needs_work",
+                assigned_agent_id="agent-dead",
+            ))
+
+    @pytest.mark.asyncio
+    async def test_resume_feature_restarts_a_needs_work_task_with_a_dead_agent(
+        self, orch_db_env, monkeypatch,
+    ):
+        """needs_work is set when a validator rejects a task and sends
+        feedback back to the same (still-running) agent -- assigned_
+        agent_id still points at it. If that agent then dies before
+        acting on the feedback, the task must still be restartable, not
+        invisible to this same "restartable candidates" query."""
+        self._seed_review_mode_project_and_workflow(orch_db_env)
+        self._seed_needs_work_task_with_terminated_agent(orch_db_env)
+
+        from src.mcp.autopilot import feature_routes
+        spawn_mock = AsyncMock()
+        monkeypatch.setattr(feature_routes, "_spawn_agent_for_task", spawn_mock)
+
+        from src.mcp.autopilot.feature_routes import resume_feature
+        result = await resume_feature("feat-1")
+        assert result["success"] is True
+
+        spawn_mock.assert_called_once_with("task-needs-work", "wf-1-dev")
+
 
 class TestReviewFeatureApproveLocalMergeFallback:
     """When git_expert couldn't create a PR (gh not installed/
