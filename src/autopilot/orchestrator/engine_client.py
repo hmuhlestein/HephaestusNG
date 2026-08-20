@@ -134,11 +134,19 @@ def terminate_agent(
         if not agent:
             return False
 
-        # 1. Reset stray tasks FIRST (before flipping agent row).
+        # 1. Reset stray tasks FIRST (before flipping agent row). Includes
+        # under_review/needs_work, not just assigned/in_progress/pending --
+        # a task can be under_review (kept-alive-for-validation) or
+        # needs_work (validator sent feedback to the same still-running
+        # agent) while this same agent_id still owns it. Without these two,
+        # terminating that agent leaves the task permanently pointing at a
+        # dead agent, invisible to every self-heal sweep that scopes to
+        # assigned_agent_id (see mechanical_recovery.py's identical
+        # STUCK_TASK_STATUSES fix for the same gap in its own detectors).
         stray_tasks = (
             s.query(Task)
             .filter_by(assigned_agent_id=agent_id)
-            .filter(Task.status.in_(["assigned", "in_progress", "pending"]))
+            .filter(Task.status.in_(["assigned", "in_progress", "pending", "under_review", "needs_work"]))
             .all()
         )
         for stray in stray_tasks:
@@ -525,10 +533,17 @@ def check_phase_sibling_active(
 
     from src.core.database import Task as _Task
 
+    # Includes under_review/validation_in_progress/needs_work, not just
+    # the plainly-active statuses -- a sibling task mid-review or mid-
+    # validation still owns this phase; missing it here means a second
+    # task/agent can get spawned onto the same phase concurrently.
     query = session.query(_Task).filter(
         _Task.phase_id == phase_id,
         _Task.id != task_id,
-        _Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+        _Task.status.in_([
+            "pending", "assigned", "in_progress", "queued",
+            "under_review", "validation_in_progress", "needs_work",
+        ]),
     )
     if created_by_filter:
         from sqlalchemy import or_

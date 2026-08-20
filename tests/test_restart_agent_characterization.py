@@ -651,3 +651,50 @@ class TestRestartGapClosings:
 
         restart_agent_manager._launch._detect_launch_failure.assert_called_once()
         restart_agent_manager._launch._send_initial_prompt_with_retry.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_restart_uses_active_readiness_detection_not_flat_sleep(
+        self, restart_agent_manager, db_manager, tmp_path
+    ):
+        """Regression: restart_agent's own launch sequence still used a
+        flat `await asyncio.sleep(25)` after the primary create_agent_
+        for_task path was already switched to active polling via
+        _wait_for_cli_ready (cli_agent.get_health_check_pattern()) --
+        same bug, same file, missed in the restart code path."""
+        agent_id = _setup_restart_prereqs(db_manager)
+
+        mock_session_obj = MagicMock()
+        mock_session_obj.name = "new-session"
+        restart_agent_manager.tmux_server.new_session.return_value = mock_session_obj
+        restart_agent_manager.tmux_server.sessions = [MagicMock(name="old-session")]
+        restart_agent_manager.tmux_server.has_session.return_value = True
+
+        import git as _git
+        wt_dir = tmp_path / "wt"
+        wt_dir.mkdir()
+        repo = _git.Repo.init(str(wt_dir))
+        (wt_dir / "README.md").write_text("# test")
+        repo.index.add(["README.md"])
+        repo.index.commit("init")
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-r").first()
+            wf.working_directory = str(wt_dir)
+
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli:
+            mock_cli = MagicMock()
+            mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
+            mock_cli.default_model = "test-model"
+            mock_cli.post_launch_confirmation_keys.return_value = []
+            mock_cli.get_launch_rejection_patterns.return_value = [r"command not found"]
+            mock_get_cli.return_value = mock_cli
+            restart_agent_manager._launch._send_initial_prompt_with_retry = AsyncMock()
+            restart_agent_manager._send_goal_command = AsyncMock()
+            restart_agent_manager._launch._record_cli_session = AsyncMock()
+            restart_agent_manager._launch._verify_instructions_file_read = AsyncMock()
+            restart_agent_manager._launch._check_termination_race = AsyncMock(return_value=None)
+            restart_agent_manager._launch._wait_for_cli_ready = AsyncMock()
+
+            await restart_agent_manager.restart_agent(agent_id, "Test")
+
+        restart_agent_manager._launch._wait_for_cli_ready.assert_called_once()

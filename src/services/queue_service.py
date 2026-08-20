@@ -163,8 +163,14 @@ class QueueService:
             Number of active agents
         """
         with self.db_manager.session_scope() as session:
+            # "stuck" included -- this docstring's own "not terminated"
+            # promise otherwise breaks silently: a stuck agent still holds
+            # its tmux session/task slot but wouldn't count against the
+            # concurrency cap, letting the system over-dispatch new agents
+            # past max_concurrent_agents exactly while stuck agents are
+            # already straining resources.
             query = session.query(Agent).filter(
-                Agent.status.in_(["working", "starting", "idle"])
+                Agent.status.in_(["working", "starting", "idle", "stuck"])
             )
             if project_id:
                 query = query.join(Task, Agent.current_task_id == Task.id).join(
@@ -252,10 +258,12 @@ class QueueService:
         combo -- the budget a per-cli/model concurrency limit is checked
         against, e.g. a local model with a single inference slot."""
         with self.db_manager.session_scope() as session:
+            # "stuck" included -- same reasoning as get_active_agent_count:
+            # a stuck agent still holds its slot on this exact combo.
             return (
                 session.query(Agent)
                 .filter(
-                    Agent.status.in_(["working", "starting", "idle"]),
+                    Agent.status.in_(["working", "starting", "idle", "stuck"]),
                     Agent.cli_type == cli_type,
                     Agent.cli_model == model,
                 )

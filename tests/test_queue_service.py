@@ -144,7 +144,12 @@ class TestGetActiveAgentCount:
         assert count == 0
 
     def test_only_active_agents(self, queue_service, db_manager):
-        """Should count only active agents (working, idle, starting)."""
+        """Should count active agents -- working, idle, starting, and
+        stuck. "stuck" counts too: a stuck agent still holds its tmux
+        session/task slot, so excluding it from the concurrency cap would
+        let the system over-dispatch new agents past max_concurrent_agents
+        exactly while stuck agents are already straining resources.
+        Only "terminated" (a real end state) is excluded."""
         create_test_agent(db_manager, status="working")
         create_test_agent(db_manager, status="idle")
         create_test_agent(db_manager, status="stuck")
@@ -152,8 +157,7 @@ class TestGetActiveAgentCount:
         create_test_agent(db_manager, status="terminated")
 
         count = queue_service.get_active_agent_count()
-        # Method counts working + starting + idle; stuck/terminated excluded
-        assert count == 2  # Only working + idle
+        assert count == 3  # working + idle + stuck
 
     def test_all_terminated(self, queue_service, db_manager):
         """Should return 0 when all agents are terminated."""
@@ -162,6 +166,18 @@ class TestGetActiveAgentCount:
 
         count = queue_service.get_active_agent_count()
         assert count == 0
+
+
+class TestGetActiveAgentCountForCliModel:
+    """get_active_agent_count_for_cli_model is the budget a per-cli/model
+    concurrency limit is checked against -- same "stuck must count" gap
+    as get_active_agent_count, on the same combo-scoped query."""
+
+    def test_stuck_agent_counts_against_the_combo_budget(self, queue_service, db_manager):
+        create_test_agent(db_manager, status="stuck", cli_type="pi", cli_model="qwen-local")
+
+        count = queue_service.get_active_agent_count_for_cli_model("pi", "qwen-local")
+        assert count == 1
 
 
 class TestShouldQueueTask:
