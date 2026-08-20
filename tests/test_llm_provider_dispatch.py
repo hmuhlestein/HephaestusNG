@@ -14,11 +14,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.llm_config import ModelAssignment, ProviderConfig
 from src.interfaces.langchain_llm_client import (
     _EMBEDDING_BUILDERS,
     _MODEL_BUILDERS,
     LangChainLLMClient,
-    ModelAssignment,
 )
 
 
@@ -98,28 +98,28 @@ class TestPerProviderConstruction:
         client = _client_with("openai", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
             "src.interfaces.langchain_llm_client.ChatOpenAI"
-        ) as Chat:
+        ) as chat_cls:
             client._create_model(_assignment("openai", model="gpt-4o", temperature=0.4))
-        assert Chat.call_args.kwargs["temperature"] == 0.4
+        assert chat_cls.call_args.kwargs["temperature"] == 0.4
 
     def test_gpt5_is_pinned_to_temperature_one(self):
         """GPT-5 rejects any temperature other than 1.0."""
         client = _client_with("openai", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
             "src.interfaces.langchain_llm_client.ChatOpenAI"
-        ) as Chat:
+        ) as chat_cls:
             client._create_model(
                 _assignment("openai", model="gpt-5-nano", temperature=0.4)
             )
-        assert Chat.call_args.kwargs["temperature"] == 1.0
+        assert chat_cls.call_args.kwargs["temperature"] == 1.0
 
     def test_groq_uses_the_groq_class(self):
         client = _client_with("groq", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
             "src.interfaces.langchain_llm_client.ChatGroq"
-        ) as Groq:
+        ) as groq_cls:
             client._create_model(_assignment("groq"))
-        assert Groq.call_args.kwargs["groq_api_key"] == "k"
+        assert groq_cls.call_args.kwargs["groq_api_key"] == "k"
 
     def test_openrouter_forces_single_provider_routing_and_requests_usage(self):
         client = _client_with(
@@ -127,11 +127,11 @@ class TestPerProviderConstruction:
         )
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
             "src.interfaces.langchain_llm_client.ChatOpenAI"
-        ) as Chat:
+        ) as chat_cls:
             client._create_model(
                 _assignment("openrouter", openrouter_provider="cerebras")
             )
-        extra = Chat.call_args.kwargs["model_kwargs"]["extra_body"]
+        extra = chat_cls.call_args.kwargs["model_kwargs"]["extra_body"]
         assert extra["provider"] == {"order": ["Cerebras"], "allow_fallbacks": False}
         # Cost tracking depends on usage being returned in the response.
         assert extra["usage"] == {"include": True}
@@ -140,18 +140,18 @@ class TestPerProviderConstruction:
         client = _client_with("openrouter", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
             "src.interfaces.langchain_llm_client.ChatOpenAI"
-        ) as Chat:
+        ) as chat_cls:
             client._create_model(_assignment("openrouter", reasoning_effort="off"))
-        extra = Chat.call_args.kwargs["model_kwargs"]["extra_body"]
+        extra = chat_cls.call_args.kwargs["model_kwargs"]["extra_body"]
         assert extra["reasoning"] == {"enabled": False}
 
     def test_openrouter_reasoning_effort_is_lowercased(self):
         client = _client_with("openrouter", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
             "src.interfaces.langchain_llm_client.ChatOpenAI"
-        ) as Chat:
+        ) as chat_cls:
             client._create_model(_assignment("openrouter", reasoning_effort="HIGH"))
-        extra = Chat.call_args.kwargs["model_kwargs"]["extra_body"]
+        extra = chat_cls.call_args.kwargs["model_kwargs"]["extra_body"]
         assert extra["reasoning"] == {"effort": "high"}
 
     def test_azure_without_endpoint_returns_none(self):
@@ -167,19 +167,40 @@ class TestPerProviderConstruction:
         )
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
             "src.interfaces.langchain_llm_client.AzureChatOpenAI"
-        ) as Azure:
+        ) as azure_cls:
             client._create_model(_assignment("azure_openai", model="my-deployment"))
-        kwargs = Azure.call_args.kwargs
+        kwargs = azure_cls.call_args.kwargs
         assert kwargs["azure_deployment"] == "my-deployment"
         assert kwargs["api_version"] == "2024-02-01"  # default when unset
+
+    def test_azure_reads_api_version_from_the_real_config_class(self):
+        """Regression: this module used to define its own ProviderConfig that
+        had drifted from the canonical one in src.core.llm_config -- the local
+        copy lacked api_version, which both Azure builders read. Production
+        survived only because the real class was duck-typed in at runtime.
+        Constructing with the genuine ProviderConfig must carry api_version
+        through to the client.
+        """
+        provider_config = ProviderConfig(
+            api_key_env="TEST_KEY",
+            base_url="https://x.openai.azure.com",
+            models=["dep-1"],
+            api_version="2025-01-01",
+        )
+        client = _client_with("azure_openai", provider_config)
+        with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
+            "src.interfaces.langchain_llm_client.AzureChatOpenAI"
+        ) as azure_cls:
+            client._create_model(_assignment("azure_openai", model="dep-1"))
+        assert azure_cls.call_args.kwargs["api_version"] == "2025-01-01"
 
     def test_google_ai_uses_the_gemini_class(self):
         client = _client_with("google_ai", _provider())
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
             "src.interfaces.langchain_llm_client.ChatGoogleGenerativeAI"
-        ) as Gemini:
+        ) as gemini_cls:
             client._create_model(_assignment("google_ai", model="gemini-2.5-flash"))
-        assert Gemini.call_args.kwargs["model"] == "gemini-2.5-flash"
+        assert gemini_cls.call_args.kwargs["model"] == "gemini-2.5-flash"
 
 
 class TestEmbeddingDispatch:
@@ -195,12 +216,12 @@ class TestEmbeddingDispatch:
         config = self._config("openai", {"openai": _provider()})
         with patch.dict(os.environ, {"TEST_KEY": "k"}), patch(
             "src.interfaces.langchain_llm_client.OpenAIEmbeddings"
-        ) as Emb:
+        ) as embeddings_cls:
             client = LangChainLLMClient(config)
-        Emb.assert_called_once_with(
+        embeddings_cls.assert_called_once_with(
             model="text-embedding-3-small", openai_api_key="k"
         )
-        assert client._embedding_model is Emb.return_value
+        assert client._embedding_model is embeddings_cls.return_value
 
     @pytest.mark.parametrize("provider", ["openrouter", "local", "fastembed"])
     def test_chat_only_providers_fall_back_to_fastembed(self, provider):
