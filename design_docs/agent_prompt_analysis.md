@@ -97,6 +97,20 @@ phases](../src/autopilot/spec.py#L221), because accepting a flat report as
 place, rejecting every completion. Fixed by declaring `"security.md"`, matching
 the convention and `GATE_RESULT_ARTIFACTS`.
 
+That declaration is snapshotted into `Phase.outputs` when a workflow is created
+and **never re-read from YAML**, while `GATED_PHASES` is read from YAML at
+import. So correcting the YAML fixes new workflows and does nothing for the ones
+already running: the moment `security_review` became gated, every in-flight
+workflow kept its stale declaration and could no longer complete the phase at
+all. The root cause is that the flat-location exclusion tested the phase's
+gated-ness rather than the path the candidate actually produces — and a name
+that already carries its own subdirectory yields
+`.hephaestus/security_review/security.md`, which is not flat and is precisely
+the file `read_okf_report` scores. The exclusion now tests the path. Verified
+both directions: the stale form resolves again, and a genuinely flat
+`.hephaestus/qa.md` for a gated phase is still rejected, with the existence
+check and the scorer still agreeing.
+
 That same mismatch had already been silently disabling something else.
 [`verify_output_artifact`](../src/services/task_completion/verification.py#L197)
 gates the MANDATORY ash-scan content check on `declared_output == "security.md"`
@@ -105,7 +119,8 @@ check has never run on any security review.** The prompt's "⚠️ YOUR REPORT W
 BE REJECTED WITHOUT IT ⚠️" was not enforced by anything. The existing test
 covering that check patches `get_phase_required_files` to return `["security.md"]`
 directly, which is why it passed while production never exercised the path.
-Declaring the bare filename repairs it.
+Declaring the bare filename repairs it — and the comparison is now on the
+basename, so it fires for in-flight workflows carrying the stale name too.
 
 Reviving the ash check also exposed two ways the phase could no longer complete,
 both previously masked by the check being dead:
@@ -303,18 +318,19 @@ contradicts.
 
 | File | Change |
 |---|---|
-| `src/autopilot/spec.py` | `score_security_review`; `security_review` added to `GATE_RESULT_ARTIFACTS`, `GATE_RESULT_REQUIRED_KEYS`, `GATE_RESULT_TYPE_OVERRIDE`, `synthetic_clean_result`, `build_phase_output`; `gate_finding_count` |
+| `src/autopilot/spec.py` | `score_security_review`; `security_review` added to `GATE_RESULT_ARTIFACTS`, `GATE_RESULT_REQUIRED_KEYS`, `GATE_RESULT_TYPE_OVERRIDE`, `synthetic_clean_result`, `build_phase_output`; `gate_finding_count`; `resolve_declared_output_path`'s flat-location exclusion tests the path, not the phase |
 | `src/phases/phase_manager.py` | findings history records the phase's own count via `gate_finding_count` |
 | `src/agents/prompt_builder.py` | injects `Artifacts Path (absolute)` |
 | `src/autopilot/orchestrator/phase_transitions.py` | `_stage_forensics_inputs`; called at forensics dispatch; `_cap_out_review_phase` docstring corrected |
-| `src/services/task_completion/verification.py` | `verify_no_open_tickets` docstring corrected — it backstops ticketed findings now, it is no longer the whole gate |
+| `src/services/task_completion/verification.py` | `verify_no_open_tickets` docstring corrected — it backstops ticketed findings now, it is no longer the whole gate; ash-scan check compares basenames so it fires for in-flight workflows |
 | `src/autopilot/orchestrator/worktree_integration.py` | missing-`scripts/ash` path writes the failure marker like every other path |
 | `config/workflows/autopilot/security_review.yaml` | `spec_gate: true`; gate frontmatter documented; count written after fixing, not before; declared output is the bare `security.md`; STEP 1 skip lists renumbered against the step titles; STEP 11 cross-reference corrected |
 | `config/workflows/autopilot/workflow.yaml` | `doc_review` conditions replaced with the reachable one |
 | `config/workflows/autopilot/forensics_analysis.yaml` | paths, inputs, output location, dead mode branch |
 | 6 other phase YAMLs | `Docs Path` → `Artifacts Path` |
 | `tests/test_ash_scan.py` | missing-script assertion inverted to the intended behaviour |
-| `tests/test_spec.py` | `TestScoreSecurityReview`, `TestSecurityReviewGateWiring`, `TestGateFindingCount`, `TestSecurityReviewClassificationSteps` (+22) |
+| `tests/test_spec.py` | `TestScoreSecurityReview`, `TestSecurityReviewGateWiring`, `TestGateFindingCount`, `TestSecurityReviewClassificationSteps`, `TestResolveDeclaredOutputSubdirPrefixed` (+25) |
+| `tests/test_task_completion_service.py` | ash-scan check fires for a subdir-prefixed declared output (+1) |
 | `tests/test_prompt_builder.py` | `TestArtifactsPathInjection` (+3) |
 | `tests/test_orchestrator_helpers.py` | `TestStageForensicsInputs` (+4); cap-out test retargeted to `doc_review`; `test_caps_out_security_review_via_its_gate_artifact` added |
 
@@ -391,7 +407,7 @@ config-only review.
 ## Verification
 
 ```
-tests/test_spec.py                   104 passed  (82 before)
+tests/test_spec.py                   107 passed  (82 before)
 tests/test_ash_scan.py                 6 passed
 tests/test_prompt_builder.py          28 passed  (25 before)
 tests/test_orchestrator_helpers.py   264 passed  (cap-out suite retargeted)

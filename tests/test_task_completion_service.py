@@ -227,6 +227,47 @@ class TestVerifyOutputArtifact:
             assert result is not None
             assert result["status"] == "failed"
 
+    def test_ash_scan_check_fires_for_a_subdir_prefixed_declared_output(self, tmp_path):
+        """The ash-scan check is gated on the declared output's name. It used
+        to compare for equality with "security.md", while security_review.yaml
+        actually declared "security_review/security.md" -- so this MANDATORY
+        check never ran on any real security review. The YAML now declares the
+        bare filename, but a workflow already in flight keeps the old value in
+        its Phase.outputs row (snapshotted at creation, never re-read), so the
+        comparison must be on the basename to cover those too.
+
+        Note the other tests in this class patch get_phase_required_files to
+        return a bare ["security.md"], which is why they passed while
+        production never exercised the path."""
+        phase = Mock(name="security_review", id="phase-1")
+        phase.name = "security_review"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        sub = tmp_path / ".hephaestus" / "security_review"
+        sub.mkdir(parents=True)
+        # Valid OKF, but NO "Automated Scan Results" section -- the check must
+        # catch that rather than waving it through.
+        (sub / "security.md").write_text(
+            "---\ntype: security_review_report\n---\n\n# Security Report\n\nLooks fine.\n"
+        )
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path), project_id=None)
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files",
+            return_value=["security_review/security.md"],
+        ), patch("src.autopilot.spec.load_optional_phases", return_value=[]):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "Automated Scan Results" in result["message"]
+
     def test_security_review_ash_scan_check_fails_closed_on_a_read_error(self, tmp_path):
         """Regression (SOLID review Theme E, 2026-08-20): the ash-scan
         content check for security_review's security.md used to swallow a

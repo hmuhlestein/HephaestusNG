@@ -194,7 +194,13 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
             # hiccup here previously skipped the check silently instead of
             # rejecting, letting a security review whose scan section
             # couldn't even be verified pass through undetected.
-            if phase.name == "security_review" and declared_output == "security.md":
+            # Basename comparison, not equality: an in-flight workflow's
+            # Phase.outputs row was snapshotted from YAML at creation and may
+            # still carry the old subdirectory-prefixed
+            # "security_review/security.md", which never matched a bare
+            # equality test -- so this MANDATORY check silently did not run
+            # for those workflows either.
+            if phase.name == "security_review" and _Path(declared_output).name == "security.md":
                 try:
                     content = found_path.read_text(errors="replace")
                     if "Automated Scan Results" not in content and "ash_results" not in content.lower():
