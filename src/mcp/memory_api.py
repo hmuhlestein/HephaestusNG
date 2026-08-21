@@ -329,7 +329,9 @@ async def save_memory(
                     session.commit()
                 session.close()
 
-        asyncio.create_task(process_memory_async())
+        from src.mcp.server._shared import spawn_background_task
+
+        spawn_background_task(process_memory_async())
 
         return SaveMemoryResponse(
             memory_id=memory_id,
@@ -590,9 +592,10 @@ async def give_validation_review(
                     logger.warning(f"Failed to commit validated work: {e}")
 
             # Terminate both original and validator agents, then process queue
+            from src.mcp.server._shared import spawn_background_task
             from src.mcp.server.background_loops import terminate_agents_and_process_queue
 
-            asyncio.create_task(
+            spawn_background_task(
                 terminate_agents_and_process_queue(
                     server_state.agent_manager, [original_agent_id, agent_id]
                 )
@@ -647,9 +650,10 @@ async def give_validation_review(
                 logger.error(f"Failed to send feedback to agent {original_agent_id}")
 
             # Terminate validator (its job is done) and process queue
+            from src.mcp.server._shared import spawn_background_task
             from src.mcp.server.background_loops import terminate_agents_and_process_queue
 
-            asyncio.create_task(
+            spawn_background_task(
                 terminate_agents_and_process_queue(server_state.agent_manager, [agent_id])
             )
 
@@ -815,7 +819,9 @@ async def submit_result(
                 except Exception as e:
                     logger.error(f"Failed to spawn result validator: {e}")
 
-            asyncio.create_task(spawn_validator_async())
+            from src.mcp.server._shared import spawn_background_task
+
+            spawn_background_task(spawn_validator_async())
             validation_triggered = True
 
         from src.core.database import resolve_project_for_workflow
@@ -937,9 +943,10 @@ async def submit_result_validation(
             )
 
         # Terminate validator agent and process queue
+        from src.mcp.server._shared import spawn_background_task
         from src.mcp.server.background_loops import terminate_agents_and_process_queue
 
-        asyncio.create_task(
+        spawn_background_task(
             terminate_agents_and_process_queue(server_state.agent_manager, [agent_id])
         )
 

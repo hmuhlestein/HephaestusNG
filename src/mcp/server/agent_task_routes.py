@@ -39,6 +39,7 @@ from src.mcp.server._shared import (
     UpdateTaskStatusResponse,
     _touch_agent_activity,
     server_state,
+    spawn_background_task,
     verify_agent_authentication,
 )
 from src.mcp.server._update_task_status_steps import (
@@ -148,7 +149,7 @@ async def create_task(
             except Exception as e:
                 await _handle_task_processing_failure(task_id, e)
 
-        asyncio.create_task(process_task_async())
+        spawn_background_task(process_task_async())
 
         # Return immediately with pending status
         return CreateTaskResponse(

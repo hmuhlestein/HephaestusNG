@@ -602,8 +602,10 @@ async def terminate_agent_endpoint(
             session.close()
 
         # Process queue after termination (don't block the response)
+        from src.mcp.server._shared import spawn_background_task
         from src.mcp.server.background_loops import process_queue
-        asyncio.create_task(process_queue())
+
+        spawn_background_task(process_queue())
 
         # Broadcast update
         from src.core.database import resolve_project_for_workflow
