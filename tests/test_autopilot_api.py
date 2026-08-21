@@ -1693,6 +1693,51 @@ class TestProjectDesigns:
         finally:
             session.close()
 
+    def test_get_design_content_resolves_docs_destination(self, project_client):
+        """content/status/delete all resolved unconditionally against
+        .hephaestus/designs/ (_get_design_queue_dir), ignoring
+        AutopilotDesign.file_path -- 404s for every docs/-stored design
+        even though the file exists on disk. Only pick_next_design
+        (queue.py) checked file_path first."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+        client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={"name": "Docs Test", "content": "hello from docs", "destination": "docs"},
+        )
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/Docs_Test.md/content")
+        assert resp.status_code == 200
+        assert resp.json()["content"] == "hello from docs"
+
+    def test_get_design_status_resolves_docs_destination(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+        client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={"name": "Docs Status", "content": "status body", "destination": "docs"},
+        )
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/Docs_Status.md/status")
+        assert resp.status_code == 200
+
+    def test_remove_design_resolves_docs_destination(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+        client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={"name": "Docs Remove", "content": "remove me", "destination": "docs"},
+        )
+        docs_file = dirs["project_dir"] / "docs" / "Docs_Remove.md"
+        assert docs_file.exists()
+
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/Docs_Remove.md")
+        assert resp.status_code == 200
+        assert not docs_file.exists()
+        # Must not have gone looking in (or deleted anything from) the
+        # unrelated .hephaestus/designs/ staging dir
+        assert not (dirs["design_dir"] / "Docs_Remove.md").exists()
+
     def test_remove_design(self, project_client):
         client, dirs = project_client
         pid = self._create_project(client, dirs)
