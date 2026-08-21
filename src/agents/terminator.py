@@ -142,7 +142,23 @@ class Terminator:
                 )
                 self._commit_wip_in_shared_worktree(agent_id, agent.current_task_id)
 
-            # Capture pane PIDs and final output BEFORE killing the tmux session
+            # Capture pane PIDs and final output BEFORE killing the tmux session.
+            # Termination fires the instant complete_my_task's HTTP handler
+            # returns (spawn_background_task, no delay) -- the CLI's own
+            # terminal rendering of its post-completion state (wrap-up text,
+            # "thinking" status line settling) is still in flight at that
+            # exact moment, racing this capture. Observed live: the captured
+            # "final" transcript repeatedly froze mid animation (e.g. Claude
+            # Code's "Sublimating…" status line), never showing the agent's
+            # true last output. agents.termination_delay (hephaestus_config.yaml,
+            # default 5s) already existed for exactly this purpose -- loaded
+            # into config.agents.agent_termination_delay and even exported to
+            # the SDK's env as TERMINATION_DELAY -- but nothing actually read
+            # it before this fix.
+            from src.core.simple_config import get_config
+
+            time.sleep(get_config().agents.agent_termination_delay)
+
             pane_pids = []
             final_output = ""
             if agent.tmux_session_name:
