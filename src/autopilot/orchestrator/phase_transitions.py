@@ -722,6 +722,39 @@ def _advance_phases(workflow_id: str, logger: "OrchestratorLogger") -> bool:
             pending = [p for p in phase_statuses if p["status"] == "pending"]
             in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
 
+            # First-match-wins chain. SOLID review 2.8 flagged that nothing
+            # here NAMES the priority order, leaving it "enforced only by
+            # convention" -- so here is what actually enforces it, checked
+            # case by case rather than assumed. **It is the guards, not the
+            # ordering, that make this correct**: no reordering of these four
+            # changes behaviour today.
+            #
+            #  - _case_start_first_phase requires (not in_progress and not
+            #    completed and pending); _case_completed_with_successor
+            #    requires (completed and pending and not in_progress). They
+            #    are mutually exclusive on `completed`, and BOTH are inert
+            #    whenever any in_progress phase exists. That last property is
+            #    load-bearing beyond this function: it is what makes the
+            #    arbitration path's _reopen_phase_execution(status=
+            #    "in_progress") genuinely protective rather than illusory,
+            #    since a phase parked awaiting arbitration cannot be raced
+            #    past by _case_completed_with_successor.
+            #
+            #  - _case_in_progress_no_tasks and _case_in_progress_complete
+            #    both iterate in_progress, so they are the one pair that
+            #    could in principle conflict -- except the second handles the
+            #    task-less case itself (`if total_cycle_tasks == 0`), against
+            #    a cycle-scoped count rather than an all-time one. Swapping
+            #    them changes WHICH case dispatches, not WHETHER a task is
+            #    dispatched.
+            #
+            # Deliberately not converted to a uniform dispatch table: the
+            # four cases take different subsets of pending/completed/
+            # in_progress, so a shared signature would mean widening all of
+            # them -- a larger change than the (currently zero) risk justifies.
+            # If you add a fifth case, re-derive the guard analysis above
+            # rather than assuming position in this list protects you.
+
             # Case 0: No in-progress phase and first phase is pending — start it
             result = _case_start_first_phase(db, workflow_id, pending, in_progress, completed, logger)
             if result is not None:
