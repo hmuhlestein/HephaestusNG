@@ -14,7 +14,12 @@ from unittest.mock import Mock
 
 import pytest
 
+from src.core import schema_migrations
 from src.core.database import DatabaseManager, SchemaMigration
+from src.core.schema_migrations import (
+    SCHEMA_MIGRATIONS,
+    migrate_self_review_columns,
+)
 
 
 @pytest.fixture
@@ -55,12 +60,38 @@ def test_all_18_migrations_recorded_after_create_tables(db_manager):
     assert expected <= recorded_ids
 
 
-def test_second_create_tables_call_does_not_rerun_already_recorded_migrations(db_manager):
+def _spy_on_migration(monkeypatch, migration_id):
+    """Wrap one entry of the SCHEMA_MIGRATIONS registry with a call counter.
+
+    The migrations moved out of DatabaseManager into
+    src/core/schema_migrations.py (SOLID review 4.1), so there is no
+    `db._migrate_*` bound method to reassign any more. Patching the module
+    attribute alone would not work either: SCHEMA_MIGRATIONS holds a direct
+    reference to the function object, so create_tables() would still call
+    the original. Replace the registry entry itself.
+    """
+    calls = []
+    original = next(fn for mid, fn in SCHEMA_MIGRATIONS if mid == migration_id)
+
+    def _spy(engine):
+        calls.append(1)
+        return original(engine)
+
+    patched = [
+        (mid, _spy if mid == migration_id else fn) for mid, fn in SCHEMA_MIGRATIONS
+    ]
+    # create_tables() imports SCHEMA_MIGRATIONS inside the function body, so
+    # it re-reads this module attribute on every call and picks the swap up.
+    monkeypatch.setattr(schema_migrations, "SCHEMA_MIGRATIONS", patched)
+    return calls
+
+
+def test_second_create_tables_call_does_not_rerun_already_recorded_migrations(
+    db_manager, monkeypatch
+):
     """The actual point of the registry: a migration already recorded as
     attempted must not be re-run on a later startup."""
-    calls = []
-    original = db_manager._migrate_self_review_columns
-    db_manager._migrate_self_review_columns = lambda: (calls.append(1), original())[1]
+    calls = _spy_on_migration(monkeypatch, "_migrate_self_review_columns")
 
     db_manager.create_tables()  # second call, same (already-migrated) database
 
@@ -75,9 +106,7 @@ def test_migration_not_yet_recorded_still_runs_on_a_fresh_db(tmp_path, monkeypat
     monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
     db = DatabaseManager(str(db_path))
 
-    calls = []
-    original = db._migrate_self_review_columns
-    db._migrate_self_review_columns = lambda: (calls.append(1), original())[1]
+    calls = _spy_on_migration(monkeypatch, "_migrate_self_review_columns")
 
     db.create_tables()
 
@@ -127,7 +156,8 @@ def test_running_a_migration_twice_directly_is_still_idempotent(db_manager):
     fresh app version running against a database that already has these
     columns from a previous version's un-registered migration calls)."""
     db_manager._run_schema_migration(
-        "_migrate_self_review_columns", db_manager._migrate_self_review_columns
+        "_migrate_self_review_columns",
+        lambda: migrate_self_review_columns(db_manager.engine),
     )
     with db_manager.session_scope() as session:
         count = (
