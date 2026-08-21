@@ -22,12 +22,10 @@ import {
   Download,
 } from 'lucide-react';
 import { isAxiosError } from 'axios';
-import ReactMarkdown from 'react-markdown';
-import rehypeHighlight from 'rehype-highlight';
-import remarkGfm from 'remark-gfm';
 import { format, formatDistanceToNow } from 'date-fns';
 
 import { apiService } from '@/services/api';
+import { MarkdownRenderer } from '@/utils/markdown';
 import {
   ResultSummary,
   ResultStatus,
@@ -250,58 +248,7 @@ const ResultContentDialog: React.FC<{
             {data && (
               <div className="rounded border">
               <div className="markdown-body p-4 overflow-x-auto max-w-full">
-                <ReactMarkdown
-                  rehypePlugins={[rehypeHighlight]}
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    a: ({ node, ...props }) => (
-                      <a
-                        {...props}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-600 underline hover:text-blue-700"
-                      />
-                    ),
-                    pre: ({ children, ...props }) => (
-                      <pre className="overflow-x-auto" {...props}>
-                        {children}
-                      </pre>
-                    ),
-                    code: ({ className, children, ...props }) => (
-                      !className ? (
-                        <code className="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs break-words" {...props}>
-                          {children}
-                        </code>
-                      ) : (
-                        <code className={className} {...props}>
-                          {children}
-                        </code>
-                      )
-                    ),
-                    p: ({ children, ...props }) => (
-                      <p className="break-words overflow-wrap-anywhere" {...props}>
-                        {children}
-                      </p>
-                    ),
-                    h1: ({ children, ...props }) => (
-                      <h1 className="break-words" {...props}>
-                        {children}
-                      </h1>
-                    ),
-                    h2: ({ children, ...props }) => (
-                      <h2 className="break-words" {...props}>
-                        {children}
-                      </h2>
-                    ),
-                    h3: ({ children, ...props }) => (
-                      <h3 className="break-words" {...props}>
-                        {children}
-                      </h3>
-                    ),
-                  }}
-                >
-                  {data.content}
-                </ReactMarkdown>
+                <MarkdownRenderer content={data.content} wrapLongContent />
               </div>
             </div>
             )}
@@ -454,58 +401,7 @@ const ResultValidationDialog: React.FC<{
                   <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Feedback</h4>
                   <ScrollArea className="max-h-[40vh] rounded border">
                     <div className="markdown-body p-4 overflow-x-auto max-w-full">
-                      <ReactMarkdown
-                        rehypePlugins={[rehypeHighlight]}
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          a: ({ node, ...props }) => (
-                            <a
-                              {...props}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-blue-600 underline hover:text-blue-700"
-                            />
-                          ),
-                          pre: ({ children, ...props }) => (
-                            <pre className="overflow-x-auto" {...props}>
-                              {children}
-                            </pre>
-                          ),
-                          code: ({ className, children, ...props }) => (
-                            !className ? (
-                              <code className="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs break-words" {...props}>
-                                {children}
-                              </code>
-                            ) : (
-                              <code className={className} {...props}>
-                                {children}
-                              </code>
-                            )
-                          ),
-                          p: ({ children, ...props }) => (
-                            <p className="break-words overflow-wrap-anywhere" {...props}>
-                              {children}
-                            </p>
-                          ),
-                          h1: ({ children, ...props }) => (
-                            <h1 className="break-words" {...props}>
-                              {children}
-                            </h1>
-                          ),
-                          h2: ({ children, ...props }) => (
-                            <h2 className="break-words" {...props}>
-                              {children}
-                            </h2>
-                          ),
-                          h3: ({ children, ...props }) => (
-                            <h3 className="break-words" {...props}>
-                              {children}
-                            </h3>
-                          ),
-                        }}
-                      >
-                        {data.feedback}
-                      </ReactMarkdown>
+                      <MarkdownRenderer content={data.feedback} wrapLongContent />
                     </div>
                   </ScrollArea>
                 </div>
