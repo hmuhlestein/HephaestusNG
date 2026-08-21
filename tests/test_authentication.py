@@ -1,6 +1,7 @@
 """Tests for authentication functionality."""
 
 import uuid
+from contextlib import contextmanager
 from datetime import timedelta
 from unittest.mock import Mock
 
@@ -182,7 +183,19 @@ def test_db():
 
     # Return a mock DatabaseManager that uses the test engine
     db_manager = Mock(spec=DatabaseManager)
-    db_manager.get_session.return_value = SessionLocal()
+    session = SessionLocal()
+    db_manager.get_session.return_value = session
+
+    # A bare Mock's session_scope() would return another Mock, which doesn't
+    # support `with ... as`; auth_api uses the real session_scope() (SOLID
+    # review 4.6), so this needs to actually behave like one -- same
+    # underlying session as get_session(), so tests reading via test_session
+    # see what auth routes wrote.
+    @contextmanager
+    def _session_scope():
+        yield session
+
+    db_manager.session_scope = _session_scope
     yield db_manager
     db_manager.get_session().close()
 

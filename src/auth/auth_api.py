@@ -83,7 +83,7 @@ async def register(request: UserRegisterRequest):
     try:
         AuthService.validate_password(request.password)
 
-        with db_manager.get_session() as db:
+        with db_manager.session_scope() as db:
             user = AuthService.register_user(db, request)
     except AuthError as e:
         raise HTTPException(
@@ -108,7 +108,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     db_manager = get_db_manager()
 
     try:
-        with db_manager.get_session() as db:
+        with db_manager.session_scope() as db:
             tokens = AuthService.authenticate(db, form_data.username, form_data.password)
     except AuthError as e:
         raise HTTPException(
@@ -129,7 +129,7 @@ async def refresh_token(request: RefreshTokenRequest):
     db_manager = get_db_manager()
 
     try:
-        with db_manager.get_session() as db:
+        with db_manager.session_scope() as db:
             tokens = AuthService.refresh_tokens(db, request.refresh_token)
     except AuthError as e:
         raise HTTPException(
@@ -162,7 +162,7 @@ async def get_my_profile(current_user: CurrentUser = Depends(_get_authenticated_
     this re-fetches the full row, same mapping as register()'s.
     """
     db_manager = get_db_manager()
-    with db_manager.get_session() as db:
+    with db_manager.session_scope() as db:
         user = db.query(User).filter(User.id == current_user.id).first()
         if not user:
             raise HTTPException(
