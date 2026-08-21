@@ -45,7 +45,7 @@
 
 Migrating the CLI to `/autopilot/projects/` requires adding those 3 endpoints to `project_routes.py` first. The underlying logic (`_apply_active_project`, `is_active` field) already exists — the endpoints just need to be created. This is a coordinated but feasible change.
 
-**Decision**: Migrated the CLI to use `/autopilot/projects/`. Added 3 missing endpoints to `project_routes.py`:
+**Decision**: Migrated the CLI to use `/autopilot/projects/`. **Note added 2026-08-21**: the prompt this sub-problem was scoped from (`phase2_solid_consolidations_prompt.md` §"Sub-problem 3") explicitly required product sign-off before retiring either route surface; no such sign-off is recorded here or elsewhere in this doc. The migration itself has since been verified correct (zero `/api/projects` references remain anywhere in `src/`/`frontend/src`, confirmed working via the full test suite) — this note exists to record the process gap honestly, not to imply the change should be reverted. Added 3 missing endpoints to `project_routes.py`:
 - `GET /projects/active` — lists active projects
 - `POST /projects/{project_id}/activate` — activates a project (with max_concurrent check)
 - `POST /projects/{project_id}/deactivate` — deactivates a project

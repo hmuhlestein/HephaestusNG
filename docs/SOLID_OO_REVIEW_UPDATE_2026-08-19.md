@@ -520,7 +520,11 @@ correctness risk over pure style:
    touched at all; still carry their original-review findings unchanged or worse.
    **Done, 2026-08-19** — 3.9, 3.11, 3.12, 3.13, and 4.10 all fixed (see §2 above).
 5. Everything else in §3 above, roughly in the order listed. **Done, 2026-08-20** — 3.1
-   (re-verified as a deliberate final boundary, not unfinished), 3.4 (`_monitoring_cycle`'s
+   (re-verified as a deliberate final boundary — this pass's *remediation* is complete,
+   not the underlying finding itself; §2's table below still and correctly lists 3.1 as
+   PARTIAL, which is not a contradiction, just a different word for the same status —
+   clarified 2026-08-21 after a re-audit flagged the two readings as easy to conflate),
+   3.4 (`_monitoring_cycle`'s
    inline DB-query blocks extracted to 2 named methods), 3.5 (12-check hardcoded chain
    replaced with list iteration), 3.6 (`steer_agent`'s side effects split into
    `_apply_steering`), 3.10 (`libtmux.Server` DIP half fixed via constructor injection),

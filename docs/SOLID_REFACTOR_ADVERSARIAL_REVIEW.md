@@ -218,7 +218,7 @@ All 22 findings have been addressed:
 - ✅ #18: Removed fragile two-way state sync for OrphanSessionReaper
 - ✅ #19: Created _advance_or_complete_with_phase_info to eliminate duplication
 - ✅ #20: Changed migration except Exception to sqlalchemy_exc.OperationalError
-- ✅ #21: Restored feature_id type contract, created _update_feature_status_by_key
+- ✅ #21: Restored feature_id type contract (required `str`, no `feature_key` split — corrected 2026-08-21, no separate method exists; see `docs/SOLID_OO_REVIEW_UPDATE_2026-08-21.md` §2)
 - ✅ #22: Replaced unbound-function dispatch table with getattr pattern
 
 ---
@@ -598,7 +598,7 @@ Consolidating findings #1-10 (existing) and #11-22 (new):
 | 14 | 🟢 Trivial | `hasattr` always-true in prompt_builder | 1-line fix | ✅ Fixed: `is not None` check |
 | 19 | 🟢 Low | `_handle_force_continue` duplicates `_advance_or_complete` | delegate refactor | ✅ Fixed: `_advance_or_complete_with_phase_info` |
 | 20 | 🟢 Low | Migration `except Exception` too broad | catch specific exception | ✅ Fixed: `sqlalchemy_exc.OperationalError` |
-| 21 | 🟢 Low | `_update_feature_status` type contract weakened | separate method | ✅ Fixed: `_update_feature_status_by_key` |
+| 21 | 🟢 Low | `_update_feature_status` type contract weakened | separate method | ✅ Fixed: `feature_id` restored to a required `str`, no `feature_key` split (corrected 2026-08-21 — no `_update_feature_status_by_key` method exists; verified against current code, not the commit message) |
 | 22 | 🟢 Low | `_EVALUATION_HANDLERS` unbound-function pattern | string-key dispatch | ✅ Fixed: `getattr` dispatch |
 | 6 | 🟢 Low | `build_dispatch_context_from_existing` duplicates | extract helper | ✅ Fixed: `_assemble_dispatch_dict` |
 | 7 | 🟢 Low | `process_queue` double-fetches RAG | reuse enrichment context | ✅ Fixed: `_enrichment_context` passthrough |
