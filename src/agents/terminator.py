@@ -15,6 +15,17 @@ from src.core.database import (
 
 logger = logging.getLogger(__name__)
 
+# How long to hold off killing an agent's tmux session after a message was
+# just sent to it (Agent.pending_message_sent_at, set by AgentMessenger.
+# send_message_to_agent) -- see _terminate_agent_sync's grace-period check.
+# Unconditional fixed wait, not a poll for an actual response: detecting
+# whether the agent addressed the message is a much harder, fuzzy problem
+# the messaging hardening doesn't attempt to solve. Confirmed live (agent
+# 335b2a1d, 2026-08-21): a task can reach genuine completion and trigger
+# termination moments after a message was sent, with the agent never
+# getting a chance to even notice it.
+_PENDING_MESSAGE_GRACE_SECONDS = 60
+
 
 class Terminator:
     """Agent termination — graceful shutdown, WIP commit, tmux cleanup. Extracted from AgentManager per design_docs/manager_py_decomposition_prompt.md."""
@@ -148,6 +159,26 @@ class Terminator:
                 # here was.
                 logger.debug(f"Agent {agent_id} already terminated -- skipping duplicate termination")
                 return
+
+            # Grace period: a message sent to this agent shortly before
+            # termination was requested hasn't had a chance to be noticed
+            # yet -- give it up to _PENDING_MESSAGE_GRACE_SECONDS from when
+            # it was sent (not a flat extra wait every time) before killing
+            # its tmux session out from under it. Cleared and committed
+            # before the wait so a crash/restart mid-sleep, or a second
+            # concurrent termination attempt, doesn't re-trigger it.
+            if agent.pending_message_sent_at:
+                elapsed = (datetime.utcnow() - agent.pending_message_sent_at).total_seconds()
+                remaining = _PENDING_MESSAGE_GRACE_SECONDS - elapsed
+                agent.pending_message_sent_at = None
+                session.commit()
+                if remaining > 0:
+                    logger.info(
+                        f"[TERMINATE] Agent {agent_id[:8]} has a message sent "
+                        f"{elapsed:.0f}s ago -- waiting {remaining:.0f}s more "
+                        "before terminating"
+                    )
+                    time.sleep(remaining)
 
             # Preserve any uncommitted work before teardown so a kill/restart is
             # non-destructive — a resume then continues from the committed branch

@@ -71,6 +71,9 @@ async def test_send_message_to_agent_offloads_blocking_calls(messenger, db_manag
     try:
         agent = session.query(Agent).filter_by(id="agent-1").first()
         assert agent.last_activity is not None
+        # Terminator's grace-period check reads this to avoid killing an
+        # agent's tmux session right after a message was sent to it.
+        assert agent.pending_message_sent_at is not None
     finally:
         session.close()
 
