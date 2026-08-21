@@ -54,6 +54,50 @@ class TestFilePlacementGuardrail:
         assert ".hephaestus/scratch/" in message
 
 
+class TestFeatureArchitectRepoAssignmentRule:
+    """REQ-19/20: unlike the standard 10 autopilot phases (development,
+    architectural_review, etc. -- each has a pre-generated pi agent file
+    under ~/.pi/agent/agents/, generated only from config/workflows/
+    autopilot/*.yaml by scripts/generate_pi_agents.py), feature_architect
+    has no such file: it's defined under config/workflows/feature_architect/,
+    a directory that generator never scans. PiAgent.get_launch_command's
+    agent_file branch is unreachable for it, so it falls to the branch
+    that uses `system_prompt` (built from feature_architect_system_prompt
+    via get_phase_system_prompt) directly -- unlike base_system_prompt's
+    now-removed FILE PLACEMENT guardrail above, this template's content
+    DOES reach the real agent for this one phase. Static text here is a
+    belt-and-suspenders duplicate of the same hard rule get_project_context()
+    injects dynamically into {project_context} for multi-repo projects
+    (REQ-19/20's dynamic mechanism, verified separately in
+    test_agent_dispatch_service.py and test_orchestrator_helpers.py)."""
+
+    def test_hard_rule_present_in_rendered_prompt(self):
+        from src.prompts.loader import get_phase_system_prompt
+
+        rendered = get_phase_system_prompt(
+            phase_name="feature_architect",
+            agent_id="agent-abc",
+            task_id="task-123",
+            memory_context="",
+            project_context="",
+        )
+
+        assert rendered is not None
+        assert "MUST be bound to exactly one" in rendered
+        assert "Feature.depends_on" in rendered
+
+    def test_no_other_phase_gets_this_specialized_prompt(self):
+        """Only feature_architect opts into a specialized template --
+        every other phase name falls back to base_system_prompt (per
+        get_phase_system_prompt's own documented convention)."""
+        from src.prompts.loader import get_phase_system_prompt
+
+        assert get_phase_system_prompt(
+            phase_name="development",
+            agent_id="a", task_id="t", memory_context="", project_context="",
+        ) is None
+
+
 class TestCreateTaskToolSignature:
     def test_uses_real_parameter_names(self):
         builder = AgentPromptBuilder(phase_manager=None)

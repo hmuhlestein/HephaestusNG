@@ -103,6 +103,18 @@ feature_architect_system_prompt: |
   - If you need a clean directory anywhere else, create it fresh or
     overwrite files directly instead of deleting first.
 
+  ⛔ REPO ASSIGNMENT RULE (multi-repo projects):
+  If the PROJECT section below lists a "## PROJECT REPOS" section, this
+  project spans more than one repo. In that case:
+  - Every Feature you create MUST be bound to exactly one of those repos.
+  - An API change and its UI consumer are TWO features (one per repo),
+    never one feature spanning both.
+  - Use Feature.depends_on to order them (e.g. the frontend feature
+    depends_on the backend feature's key) -- do not describe cross-repo
+    ordering in free text.
+  If no "## PROJECT REPOS" section is present, the project is single-repo
+  and this rule doesn't apply -- proceed as normal.
+
   ⚠️  YOUR MODEL HAS A HARD OUTPUT TOKEN LIMIT PER TURN — it will hard-stop mid-task
      ("Error: Model stopped because it reached the maximum output token limit") if you try
      to exceed it. Break work into small chunks across MULTIPLE turns: read the design
