@@ -95,3 +95,47 @@ async def test_requeue_does_not_match_a_design_merely_containing_the_name(
     with queue_db.session_scope() as session:
         assert session.query(Workflow).filter_by(id="wf-exact").first().status == "paused"
         assert session.query(Workflow).filter_by(id="wf-superset").first().status == "active"
+
+
+@pytest.mark.asyncio
+async def test_requeue_resets_a_queued_task_through_the_locked_path(
+    queue_db, isolate_queue_order, monkeypatch
+):
+    """Regression: the batch reset here used to include "queued" tasks in
+    the same unlocked status="pending" write as "assigned"/"in_progress"
+    ones -- an unlocked write racing claim_next_queued_task's locked
+    select-then-dequeue sequence (running on an executor thread) could let
+    a task this requeue just reset get dispatched anyway. Queued tasks are
+    now routed through QueueService.reset_queued_task_to_pending instead,
+    verified here by confirming the task actually lands on "pending" (not
+    left "queued", and not silently skipped)."""
+    from src.core.database import Task
+    from src.mcp.autopilot.queue_routes import requeue_design
+
+    _make_workflow(queue_db, "wf-mine", "proj-a", "/repos/a/designs/design.md")
+    with queue_db.session_scope() as session:
+        session.add(
+            Task(
+                id="task-queued", workflow_id="wf-mine", raw_description="r",
+                done_definition="d", status="queued",
+            )
+        )
+
+    from src.services.queue_service import QueueService
+
+    class _FakeServerState:
+        def __init__(self, db_manager):
+            self.queue_service = QueueService(db_manager, max_concurrent_agents=3)
+
+    monkeypatch.setattr(
+        "src.core.app_context.get_app_state",
+        lambda: _FakeServerState(queue_db),
+    )
+
+    result = await requeue_design({"filename": "design.md", "project_id": "proj-a"})
+
+    assert result["paused_workflows"] == 1
+    with queue_db.session_scope() as session:
+        task = session.query(Task).filter_by(id="task-queued").first()
+        assert task.status == "pending"
+        assert task.queue_position is None
