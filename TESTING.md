@@ -327,6 +327,132 @@ cd frontend && npx tsc --noEmit
 cd frontend && npm run lint
 ```
 
+### Visual/Browser Verification (Playwright)
+
+`tsc --noEmit` and `vite build` catch type and syntax errors, not rendering
+bugs — a component can type-check cleanly and still render the wrong
+color, drop dark-mode support, or silently fail to mount. CLAUDE.md's rule
+for UI changes ("start the dev server and use the feature in a browser
+before reporting the task as complete") means an actual headless-browser
+check, not just a clean build.
+
+**Toolchain**: `chromium-cli` isn't set up in this repo. Node Playwright
+isn't installed as a project dependency either — installing it fresh pulls
+a ~150MB Chromium binary. **Python Playwright is the path of least
+resistance** if it's already on the machine (`pip install playwright &&
+playwright install chromium`, or check first — `pyenv versions` /
+`which playwright` — before installing a duplicate copy). It drives the
+exact same Chromium build; only the driver language differs.
+
+```bash
+# Find an existing Python Playwright install before installing a new one
+which playwright
+pyenv which playwright 2>/dev/null   # if using pyenv, the CLI may be a shim
+python3 -c "import playwright" 2>&1  # confirm the module resolves in that interpreter
+ls ~/Library/Caches/ms-playwright/   # confirms browser binaries are already downloaded
+```
+
+**Dev server**: `frontend/vite.config.ts` proxies `/api` and `/ws` to
+`localhost:${BACKEND_PORT:-8300}` regardless of which port Vite itself
+picks — so a second frontend instance (e.g. because port 5300 is already
+taken by a running `heph start`) still talks to the same real backend and
+real data. Don't kill someone else's dev server to free the default port;
+let Vite pick the next one and read it from its own stdout.
+
+```bash
+cd frontend
+(npm run dev > /tmp/vite_dev.log 2>&1 &)
+timeout 30 bash -c 'until curl -sf http://localhost:5301 >/dev/null 2>&1; do sleep 1; done'
+grep "Local:" /tmp/vite_dev.log   # confirm the actual port Vite chose
+
+# When done, stop ONLY the instance you started -- never a broad pkill:
+lsof -ti:5301 -sTCP:LISTEN | xargs -r kill
+```
+
+**Driver script** — launch, navigate, screenshot both themes, check for
+runtime errors:
+
+```python
+from playwright.sync_api import sync_playwright
+
+BASE = "http://localhost:5301"
+errors = []
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(args=["--no-sandbox"])
+    for theme in ["light", "dark"]:
+        ctx = browser.new_context(color_scheme=theme, viewport={"width": 1440, "height": 1000})
+        page = ctx.new_page()
+        page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.goto(f"{BASE}/tasks", wait_until="networkidle", timeout=20000)
+        page.wait_for_timeout(1500)  # let the first data fetch settle
+        page.screenshot(path=f"/tmp/tasks_{theme}.png")
+        ctx.close()
+    browser.close()
+
+print("console errors:", errors or "(none)")
+```
+
+Run it with whichever interpreter actually has the `playwright` module —
+that may not be the `python3` on `PATH` (e.g. a pyenv-managed version):
+`/path/to/pyenv/versions/3.x.y/bin/python3 driver.py`.
+
+**Don't just eyeball the screenshot for dark mode — a color can look
+"dark enough" at thumbnail scale while the `dark:` Tailwind classes never
+actually applied** (e.g. this project's dark mode is class-based, toggled
+by a `dark` class on `<html>`, not `prefers-color-scheme` alone — a
+component with no wiring to that toggle would still get
+`color-scheme: dark` from Playwright's context but never receive the
+class). Confirm the classes actually took effect:
+
+```python
+info = page.eval_on_selector(
+    "span.rounded-full",
+    "el => ({class: el.className, bg: getComputedStyle(el).backgroundColor})"
+)
+print(info)  # bg should be the dark-mode color, not the light one
+```
+
+**No live data for the state you need to check?** Don't skip verification
+— render the component directly with `react-dom/server`, using `esbuild`
+to transpile on the fly (no build step, no test framework needed):
+
+```javascript
+// run from frontend/ so node_module resolution works: node render_check.mjs
+import { renderToStaticMarkup } from 'react-dom/server';
+import React from 'react';
+import esbuild from 'esbuild';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+
+function loadComponent(tsxPath, exportName) {
+  const result = esbuild.buildSync({
+    entryPoints: [tsxPath], bundle: true, write: false, format: 'cjs',
+    platform: 'node', jsx: 'automatic',
+    external: ['react', 'react-dom', 'clsx', 'lucide-react'],
+    loader: { '.tsx': 'tsx' },
+  });
+  const mod = { exports: {} };
+  new Function('module', 'exports', 'require', result.outputFiles[0].text)(
+    mod, mod.exports, (id) => (id === 'react' ? React : require(id))
+  );
+  return mod.exports[exportName] ?? mod.exports.default;
+}
+
+const Component = loadComponent('./src/components/StatusBadge.tsx', 'default');
+console.log(renderToStaticMarkup(React.createElement(Component, { status: 'failed', size: 'sm' })));
+```
+
+Diff the emitted HTML/class string against the pre-change component's
+output (or against a hand-computed expected class list) — this catches
+prop-plumbing and conditional-class bugs a screenshot of unrelated states
+can't.
+
+**Cleanup**: kill only the dev-server port you opened, and delete any
+scratch driver scripts/screenshots when done — they don't belong in the
+repo or its scratchpad past the session that needed them.
+
 ---
 
 ## 6. Integration Tests
