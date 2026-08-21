@@ -42,6 +42,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Hard per-phase arbitration cap (SOLID review 2.6) -- was a local variable
+# reinstantiated inline where it's checked, despite already being referenced
+# by name in comments/docstrings elsewhere in this module and in
+# phase_manager.py as if it were a real constant.
+MAX_ARBITRATIONS_PER_PHASE = 3
+
 
 ARBITRATION_CREATED_BY = "arbitration"
 
@@ -223,7 +229,6 @@ def _trigger_arbitration(
     )
 
     with get_db() as db:
-        max_arbitrations_per_phase = 3
         # Only count arbitrations since the workflow's last on-demand Retry
         # (Workflow.gotos_reset_at) -- historical arbitration Task rows are
         # never deleted, so counting all-time would mean a workflow that
@@ -243,7 +248,7 @@ def _trigger_arbitration(
                 Task.created_at > gotos_reset_at
             )
         prior_arbitrations = prior_arbitrations_query.count()
-        if prior_arbitrations >= max_arbitrations_per_phase:
+        if prior_arbitrations >= MAX_ARBITRATIONS_PER_PHASE:
             # Before giving up: the most recent arbitration may have already
             # reached a decision that was never acted on -- e.g.
             # _maybe_resolve_arbitration hasn't gotten to it on this sweep
@@ -269,7 +274,7 @@ def _trigger_arbitration(
                 )
                 if pending_decision:
                     logger.warning(
-                        f"[ARBITRATE] {phase_name} hit the {max_arbitrations_per_phase}-arbitration cap, "
+                        f"[ARBITRATE] {phase_name} hit the {MAX_ARBITRATIONS_PER_PHASE}-arbitration cap, "
                         f"but the last arbitration already decided '{pending_decision}' and was never "
                         "processed -- resolving it instead of failing the workflow."
                     )
@@ -313,7 +318,7 @@ def _trigger_arbitration(
                 )
                 if passes:
                     logger.warning(
-                        f"[ARBITRATE] {phase_name} exhausted its {max_arbitrations_per_phase}-arbitration "
+                        f"[ARBITRATE] {phase_name} exhausted its {MAX_ARBITRATIONS_PER_PHASE}-arbitration "
                         f"cap with nothing pending to resolve, but its current output already passes "
                         f"({fresh_reason}) -- advancing instead of failing the workflow."
                     )
@@ -414,7 +419,7 @@ def _trigger_arbitration(
         # actually satisfying the constraint. created_by_agent_id
         # (ARBITRATION_CREATED_BY) on the Task, not Agent.agent_type, is
         # what identifies/counts arbitration tasks elsewhere (the
-        # max_arbitrations_per_phase cap above) -- unaffected by this.
+        # MAX_ARBITRATIONS_PER_PHASE cap above) -- unaffected by this.
         agent_type="diagnostic",
         enriched_data_override={"validation_prompt": prompt},
     )
@@ -536,7 +541,7 @@ def _consume_arbitration_result(working_directory: Optional[str]) -> None:
     still sitting on disk for any later caller to read again.
 
     _trigger_arbitration's cap-exhausted fallback re-reads this file every
-    time it's invoked past max_arbitrations_per_phase, with no record of
+    time it's invoked past MAX_ARBITRATIONS_PER_PHASE, with no record of
     whether THIS exact decision already got acted on -- so a phase whose
     task_creation_claimed_at claim gets re-armed after the cap is hit (e.g.
     via _maybe_resolve_arbitration re-discovering the same "done"
