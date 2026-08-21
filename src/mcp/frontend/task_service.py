@@ -20,6 +20,31 @@ from src.phases import PhaseManager
 
 logger = logging.getLogger(__name__)
 
+
+def _task_summary_dict(task: Task, fields: tuple, **overrides: Any) -> Dict[str, Any]:
+    """Project a Task row into a small dict for embedding inside another
+    task's full-details response (parent/child/duplicate/related lists).
+
+    Each embedding site wants a different field subset -- child_tasks adds
+    priority, duplicated_tasks adds created_by_agent_id, related_tasks_details
+    needs a computed similarity score rather than the row's own column
+    (hence **overrides) -- so this builds the superset once and lets the
+    caller select which keys it actually wants instead of four near-identical
+    dict literals.
+    """
+    values = {
+        "id": task.id,
+        "description": (task.enriched_description or task.raw_description)[:100],
+        "status": task.status,
+        "priority": task.priority,
+        "similarity_score": task.similarity_score,
+        "created_at": task.created_at.isoformat() + "Z" if task.created_at else None,
+        "created_by_agent_id": task.created_by_agent_id,
+    }
+    values.update(overrides)
+    return {field: values[field] for field in fields}
+
+
 class TaskService:
     """API handlers for task listing, detail, and blocking status."""
 
@@ -214,17 +239,9 @@ class TaskService:
                 )
 
                 child_tasks = [
-                    {
-                        "id": child.id,
-                        "description": (
-                            child.enriched_description or child.raw_description
-                        )[:100],
-                        "status": child.status,
-                        "priority": child.priority,
-                        "created_at": child.created_at.isoformat() + "Z"
-                        if child.created_at
-                        else None,
-                    }
+                    _task_summary_dict(
+                        child, ("id", "description", "status", "priority", "created_at")
+                    )
                     for child in children
                 ]
 
@@ -234,16 +251,9 @@ class TaskService:
                 # Explicit parent_task_id is set
                 parent = session.query(Task).filter_by(id=task.parent_task_id).first()
                 if parent:
-                    parent_task = {
-                        "id": parent.id,
-                        "description": (
-                            parent.enriched_description or parent.raw_description
-                        )[:100],
-                        "status": parent.status,
-                        "created_at": parent.created_at.isoformat() + "Z"
-                        if parent.created_at
-                        else None,
-                    }
+                    parent_task = _task_summary_dict(
+                        parent, ("id", "description", "status", "created_at")
+                    )
             elif task.created_by_agent_id:
                 # No explicit parent_task_id, but we can infer it from the agent that created this task
                 # Find the task that was assigned to the agent that created this task
@@ -253,16 +263,9 @@ class TaskService:
                     .first()
                 )
                 if parent and parent.id != task.id:  # Make sure it's not the same task
-                    parent_task = {
-                        "id": parent.id,
-                        "description": (
-                            parent.enriched_description or parent.raw_description
-                        )[:100],
-                        "status": parent.status,
-                        "created_at": parent.created_at.isoformat() + "Z"
-                        if parent.created_at
-                        else None,
-                    }
+                    parent_task = _task_summary_dict(
+                        parent, ("id", "description", "status", "created_at")
+                    )
 
             # Get tasks that are duplicates of this task
             duplicated_tasks = []
@@ -273,17 +276,16 @@ class TaskService:
             )
             for dup in duplicates:
                 duplicated_tasks.append(
-                    {
-                        "id": dup.id,
-                        "description": (
-                            dup.enriched_description or dup.raw_description
-                        )[:100],
-                        "similarity_score": dup.similarity_score,
-                        "created_at": dup.created_at.isoformat() + "Z"
-                        if dup.created_at
-                        else None,
-                        "created_by_agent_id": dup.created_by_agent_id,
-                    }
+                    _task_summary_dict(
+                        dup,
+                        (
+                            "id",
+                            "description",
+                            "similarity_score",
+                            "created_at",
+                            "created_by_agent_id",
+                        ),
+                    )
                 )
 
             # Get related tasks with details
@@ -361,19 +363,17 @@ class TaskService:
 
                         if related_task:
                             related_tasks_details.append(
-                                {
-                                    "id": related_task.id,
-                                    "description": (
-                                        related_task.enriched_description
-                                        or related_task.raw_description
-                                    )[:100],
-                                    "status": related_task.status,
-                                    "similarity_score": similarity,
-                                    "created_at": related_task.created_at.isoformat()
-                                    + "Z"
-                                    if related_task.created_at
-                                    else None,
-                                }
+                                _task_summary_dict(
+                                    related_task,
+                                    (
+                                        "id",
+                                        "description",
+                                        "status",
+                                        "similarity_score",
+                                        "created_at",
+                                    ),
+                                    similarity_score=similarity,
+                                )
                             )
                 except (json.JSONDecodeError, TypeError) as e:
                     logger.error(f"Error parsing related tasks: {e}")
