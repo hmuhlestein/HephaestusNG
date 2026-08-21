@@ -18,14 +18,17 @@ def autopilot_dirs(tmp_path):
     features_dir.mkdir()
     state_dir.mkdir()
 
+    from src.autopilot import repair_service as repair_service_mod
     from src.mcp.autopilot import _shared as api_mod
-    from src.mcp.autopilot import intervention_routes, queue_routes
+    from src.mcp.autopilot import intervention_routes
 
     api_mod._cache.clear()
 
-    # AUTOPILOT_STATE_DIR is imported into each route module that reads it,
-    # so the rebind must fan out to every reader's module namespace
-    state_modules = (api_mod, queue_routes, intervention_routes)
+    # AUTOPILOT_STATE_DIR is imported into each module that reads it, so the
+    # rebind must fan out to every reader's module namespace. queue_routes
+    # no longer reads it directly -- rerun/repair moved into
+    # repair_service.py (SOLID review 1.11), which reads it instead.
+    state_modules = (api_mod, intervention_routes, repair_service_mod)
     old_state = {m: m.AUTOPILOT_STATE_DIR for m in state_modules}
     old_queue = api_mod.DESIGN_QUEUE_DIR
     old_features = api_mod.FEATURES_DIR
