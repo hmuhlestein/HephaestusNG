@@ -206,6 +206,12 @@ class DesignAddRequest(BaseModel):
     name: str
     content: str
     extension: str = ".md"
+    # "queue" (default): .hephaestus/designs/, not git-tracked -- used by
+    # "Load from Remote" (the file already lives somewhere in the project,
+    # nothing new is being introduced). "docs": a locally-uploaded file is
+    # new content coming from outside the repo, so it's persisted as a
+    # real, git-tracked file under docs/ instead of the hidden staging dir.
+    destination: str = "queue"
 
 _project_sync_locks: Dict[str, asyncio.Lock] = {}
 
@@ -1244,9 +1250,14 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
             raise HTTPException(404, "Project not found")
         base_dir = proj.base_dir
 
-    # Store in .hephaestus/designs/ (not git-tracked) so git commits
-    # don't delete design files.
-    design_dir = Path(base_dir) / DESIGN_CONTEXT_SUBDIR
+    if req.destination == "docs":
+        # Locally-uploaded content is new to the repo -- persist it as a
+        # real, git-tracked file instead of the hidden staging dir below.
+        design_dir = Path(base_dir) / "docs"
+    else:
+        # Store in .hephaestus/designs/ (not git-tracked) so git commits
+        # don't delete design files.
+        design_dir = Path(base_dir) / DESIGN_CONTEXT_SUBDIR
     design_dir.mkdir(parents=True, exist_ok=True)
 
     ext = req.extension if req.extension in ALLOWED_EXTENSIONS else ".md"
@@ -1273,6 +1284,12 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
             filename=filename,
             name=req.name,
             ordinal=max_ord + 1,
+            # Set for destination="docs" so pick_next_design (queue.py)
+            # resolves the design from docs/ instead of falling back to
+            # its DESIGN_CONTEXT_SUBDIR-based reconstruction, which would
+            # look in the wrong directory for a docs/-stored design. Left
+            # unset for destination="queue", unchanged from before.
+            file_path=str(filepath) if req.destination == "docs" else None,
             size_bytes=stat.st_size,
             extension=ext,
             modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),

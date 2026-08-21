@@ -1616,6 +1616,80 @@ class TestProjectDesigns:
         )
         assert resp.status_code == 409
 
+    def test_add_design_with_docs_destination_writes_to_docs_dir(self, project_client):
+        """Locally-uploaded designs (destination="docs") persist as a
+        real, git-tracked file under docs/ instead of the hidden
+        .hephaestus/designs/ staging dir."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={
+                "name": "Uploaded Feature",
+                "content": "# Uploaded Feature\nFrom the user's machine.",
+                "destination": "docs",
+            },
+        )
+        assert resp.status_code == 200
+
+        docs_file = dirs["project_dir"] / "docs" / "Uploaded_Feature.md"
+        assert docs_file.exists()
+        assert docs_file.read_text() == "# Uploaded Feature\nFrom the user's machine."
+        # Must NOT also land in the hidden staging dir
+        assert not (dirs["design_dir"] / "Uploaded_Feature.md").exists()
+
+    def test_add_design_with_docs_destination_rejects_conflict(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        docs_dir = dirs["project_dir"] / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "Existing.md").write_text("already here")
+
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={
+                "name": "Existing",
+                "content": "new content",
+                "destination": "docs",
+            },
+        )
+        assert resp.status_code == 409
+        # Original content must be untouched
+        assert (docs_dir / "Existing.md").read_text() == "already here"
+
+    def test_add_design_docs_destination_sets_file_path_for_pickup(self, project_client):
+        """AutopilotDesign.file_path must point at the docs/ location --
+        pick_next_design (queue.py) resolves this before falling back to
+        its DESIGN_CONTEXT_SUBDIR-based reconstruction, which would look
+        in the wrong directory for a docs/-stored design."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={
+                "name": "Path Check",
+                "content": "content",
+                "destination": "docs",
+            },
+        )
+        assert resp.status_code == 200
+        design_id = resp.json()["id"]
+
+        import os
+
+        from src.core.database import AutopilotDesign, DatabaseManager
+
+        db_manager = DatabaseManager(os.environ["HEPHAESTUS_TEST_DB"])
+        session = db_manager.get_session()
+        try:
+            design = session.query(AutopilotDesign).filter_by(id=design_id).first()
+            assert design.file_path == str(dirs["project_dir"] / "docs" / "Path_Check.md")
+        finally:
+            session.close()
+
     def test_remove_design(self, project_client):
         client, dirs = project_client
         pid = self._create_project(client, dirs)

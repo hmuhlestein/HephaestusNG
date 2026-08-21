@@ -95,12 +95,18 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
   const addMutation = useMutation({
     mutationFn: async (files: LoadedFile[]) => {
       if (!projectId) throw new Error('No project selected');
-      
+
       const results = [];
       for (const file of files) {
         const ext = file.name.endsWith('.txt') ? '.txt' : '.md';
         const name = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
-        const result = await apiService.addAutopilotProjectDesign(projectId, name, file.content, ext);
+        // Files picked from the user's own machine are new content being
+        // introduced into the project -- persist them as real, git-tracked
+        // files in docs/. Files picked via "Load from Remote" already live
+        // somewhere in the project, so they keep going to the existing
+        // .hephaestus/designs/ staging dir (unchanged behavior).
+        const destination = file.remotePath ? 'queue' : 'docs';
+        const result = await apiService.addAutopilotProjectDesign(projectId, name, file.content, ext, destination);
         results.push(result);
       }
       return results;
@@ -242,7 +248,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
                   {isDragOver ? 'Drop files here' : 'Click to select files or drag & drop'}
                 </p>
                 <p className="text-xs text-gray-400">
-                  Supports .md and .txt files
+                  Supports .md and .txt files &middot; stored in <code className="font-mono">docs/</code>
                 </p>
               </div>
 
