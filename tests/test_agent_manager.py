@@ -104,6 +104,22 @@ def mock_agent_manager(db_manager):
     return manager
 
 
+class _SimulatedProcessKill(BaseException):
+    """Stands in for an abrupt process kill in tests -- deliberately a direct
+    BaseException subclass, not Exception, so it isn't caught by
+    create_agent_for_task's own `except Exception` cleanup.
+
+    Not SystemExit/KeyboardInterrupt: asyncio's Task machinery treats those
+    two specifically as "the interpreter is exiting", immediately re-raising
+    them into the running event loop instead of delivering them to whatever
+    awaits the task -- since worktree resolution now runs as its own child
+    task under asyncio.gather (see create_agent_for_task), that special-cased
+    re-raise blows straight through a surrounding `pytest.raises`, crashing
+    the test runner instead of being caught. A plain BaseException subclass
+    doesn't get that special-cased treatment, so it propagates normally.
+    """
+
+
 class TestCreateAgentForTask:
     """Tests for create_agent_for_task method."""
 
@@ -250,17 +266,21 @@ class TestCreateAgentForTask:
         assign_to_task=True closes the gap by claiming the task in the SAME
         commit as the stub Agent row, before any of the slow work runs -- so
         even a process that dies partway through the worktree/tmux/prompt
-        setup (simulated here with SystemExit, which -- unlike a plain
-        Exception -- isn't caught by create_agent_for_task's own internal
-        `except Exception` cleanup, so it accurately models an abrupt
-        process kill rather than a handled in-process failure) already has
-        the claim durably committed.
+        setup (simulated here with _SimulatedProcessKill, a direct
+        BaseException subclass -- see its own docstring for why not
+        SystemExit) already has the claim durably committed.
         """
         mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
-            side_effect=SystemExit("simulated process kill mid-dispatch")
+            side_effect=_SimulatedProcessKill("simulated process kill mid-dispatch")
+        )
+        # Worktree resolution now runs concurrently with prompt generation
+        # (asyncio.gather), so generate_agent_prompt is awaited unconditionally
+        # even though this test only cares about the worktree side raising.
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
         )
 
-        with pytest.raises(SystemExit, match="simulated process kill mid-dispatch"):
+        with pytest.raises(_SimulatedProcessKill, match="simulated process kill mid-dispatch"):
             await mock_agent_manager.create_agent_for_task(
                 task=sample_task,
                 enriched_data={},
@@ -724,6 +744,13 @@ class TestCreateAgentForTaskMissingSharedWorktree:
                     status="pending",
                 )
             )
+
+        # Worktree resolution now runs concurrently with prompt generation
+        # (asyncio.gather), so generate_agent_prompt is awaited unconditionally
+        # even though this test only cares about the worktree side raising.
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
 
         with db_manager.session_scope() as session:
             task = session.query(Task).filter_by(id="task-shared").first()
