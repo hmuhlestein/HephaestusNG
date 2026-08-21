@@ -644,6 +644,55 @@ class TestDeriveWorkflowStatus:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "failed", "must not have been written back to active"
 
+    def test_respects_deliberate_failed_status_even_when_every_phase_is_complete(
+        self, db_manager
+    ):
+        """Regression, observed live: the FAILED guard above only fired
+        inside the incomplete_phase branch -- unreachable whenever every
+        phase happens to already look complete/skipped, exactly the shape
+        of an abandoned review-pause (the last real task, e.g.
+        feature_review, completed normally before the workflow was later
+        marked "failed" for an unrelated reason with no new task ever
+        created). Without this, the phase-completeness branch above
+        force-writes "completed" over a deliberate "failed" -- observed
+        live via the periodic design-status poll's write_back=True call,
+        which flipped a review-gate workflow from "failed" back to
+        "completed" every ~10s, resurrecting it behind the user's back and
+        making the Rerun/Recover button (which only matches status in
+        {active, paused, failed}) silently no-op."""
+        from src.core.database import Phase, PhaseExecution
+
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(
+                id="wf-1", name="Test", status="failed",
+                status_reason="Abandoned: no agent/task activity for 6 consecutive resume attempts",
+                paused_by="review",
+                phases_folder_path="/tmp/phases",
+            )
+            session.add(wf)
+            session.add(Phase(
+                id="phase-review", workflow_id="wf-1", order=1,
+                name="feature_review", description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-review", phase_id="phase-review",
+                workflow_execution_id="wf-1", status="completed",
+            ))
+            session.add(Task(
+                id="task-review", workflow_id="wf-1", phase_id="phase-review",
+                raw_description="feature review", done_definition="Done",
+                status="done",
+            ))
+
+        with db_manager.session_scope() as session:
+            result = derive_workflow_status(session, "wf-1")
+        assert result == "failed"
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "failed", "must not have been written back to completed"
+
     def test_completes_despite_an_old_superseded_failed_task(self, db_manager):
         """Regression, observed live: a long goto/retry history leaves old
         "failed" Task rows behind as real history even after a later retry

@@ -1612,6 +1612,22 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                             f"{phase.name}: {failed_count} task(s) exhausted the retry cap "
                             "without producing a valid output"
                         )
+                        # A concurrent, unrelated phase's review gate can
+                        # leave paused_by="review" set on this workflow
+                        # (_advance_phases deliberately keeps other
+                        # in-progress phases moving while one sits paused
+                        # for review). Left stale here, resume_workflow's
+                        # force=True approve path silently no-ops (it
+                        # requires status=="paused") while feature_routes'
+                        # approve handler doesn't check that return value
+                        # and sets Feature.status="active" anyway --
+                        # permanently stuck "failed" workflow, feature
+                        # shows active forever, Approve becomes a silent
+                        # no-op. See pause_workflow's own docstring: every
+                        # status/paused_by write must keep the two in
+                        # lockstep.
+                        wf.paused_by = None
+                        wf.paused_at = None
                     db.commit()
                     continue
             finally:
