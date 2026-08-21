@@ -1927,8 +1927,7 @@ def _fire_phase_transition(
         # Mark phase complete and get engine decision
         from src.core.database import DatabaseManager
 
-        pm = PhaseManager(DatabaseManager(None))
-        pm.workflow_id = workflow_id
+        pm = PhaseManager(DatabaseManager(None), workflow_id=workflow_id)
         result = (
             pm.mark_phase_complete(phase_id, "Phase completed", force_action="continue")
             if force_continue
@@ -3017,8 +3016,7 @@ async def fire_spec_gate_if_ready(session, task) -> None:
             functools.partial(build_phase_output, phase.name, Path(wf.working_directory)),
         )
         logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
-        pm = PhaseManager(DatabaseManager(None))
-        pm.workflow_id = task.workflow_id
+        pm = PhaseManager(DatabaseManager(None), workflow_id=task.workflow_id)
         # mark_phase_complete can itself run an LLM evaluate() call and,
         # on completing the whole workflow, cascade into
         # _populate_feature_folder's recursive filesystem copies of the

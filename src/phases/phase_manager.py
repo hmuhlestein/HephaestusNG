@@ -75,17 +75,21 @@ def substitute_params_in_list(items: List[str], params: Dict[str, Any]) -> List[
 class PhaseManager:
     """Manages workflow phases at runtime with support for multiple concurrent workflows."""
 
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager, workflow_id: Optional[str] = None):
         """Initialize phase manager.
 
         Args:
             db_manager: Database manager instance
+            workflow_id: Optional workflow to scope this instance to (SOLID
+                review 2.7) -- callers that construct a fresh PhaseManager for
+                one specific workflow should pass it here instead of setting
+                pm.workflow_id as a second step after construction.
         """
         self.db_manager = db_manager
 
         # Legacy single workflow support (for backward compatibility)
         self.active_workflow: Optional[WorkflowDefinition] = None
-        self.workflow_id: Optional[str] = None
+        self.workflow_id: Optional[str] = workflow_id
 
         # Multi-workflow support
         self.definitions: Dict[

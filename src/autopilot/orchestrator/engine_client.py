@@ -497,7 +497,20 @@ def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids:
             db.query(Task)
             .filter(
                 Task.workflow_id.in_(workflow_ids),
-                Task.status == "in_progress",
+                # Mirrors mechanical_recovery.STUCK_TASK_STATUSES: agents_to_
+                # terminate above kills any live agent regardless of its
+                # task's status, not just "in_progress" -- a
+                # bump_task_priority_endpoint dispatch commits status=
+                # "assigned" directly, and a task kept alive for validation
+                # sits "under_review"/"needs_work" with a still-live agent.
+                # Missing any of these means that task's agent gets killed
+                # but the task itself is left pointing at a corpse agent,
+                # uncaught until _clean_stale_assigned_tasks's own
+                # (unrelated, generic-reason) sweep eventually notices it.
+                # Inlined rather than imported to avoid engine_client (the
+                # orchestrator layer) depending on mechanical_recovery (the
+                # monitoring layer) -- the reverse dependency already exists.
+                Task.status.in_(["assigned", "in_progress", "under_review", "needs_work"]),
             )
             .all()
         )

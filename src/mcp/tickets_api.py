@@ -974,10 +974,8 @@ async def get_tickets_endpoint(
         if not include_completed:
             filters["include_completed"] = include_completed
 
-        ticket_service = TicketService
-
         if workflow_id:
-            result = await ticket_service.get_tickets_by_workflow(
+            result = await TicketService.get_tickets_by_workflow(
                 workflow_id=workflow_id,
                 filters=filters,
             )
@@ -990,7 +988,7 @@ async def get_tickets_endpoint(
                 ]
             result = []
             for wf_id in workflow_ids:
-                wf_tickets = await ticket_service.get_tickets_by_workflow(
+                wf_tickets = await TicketService.get_tickets_by_workflow(
                     workflow_id=wf_id,
                     filters=filters,
                 )
