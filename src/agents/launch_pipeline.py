@@ -736,14 +736,32 @@ class LaunchPipeline:
         model: str,
         *,
         excluded_types: Tuple[str, ...],
+        excluded_phases: Tuple[str, ...] = (),
     ) -> str:
         """Generate deterministic session ID for persistent agent sessions.
 
         Shared — create passes excluded_types including 'arbitration';
         restart passes a shorter tuple (Phase 3 mismatch, preserved as-is).
+
+        excluded_phases: only passed by the new-task dispatch call site, not
+        restart. A goto that re-enters a review-style gated phase (e.g.
+        feature_review) for the same design creates a NEW task, dispatched
+        here -- resuming the PRIOR review's session hands the "fresh
+        reviewer" agent that phase's own instructions demand the earlier
+        agent's finished conversation instead, and it echoes the old
+        verdict instead of re-checking current state (observed live:
+        feature_review re-reported 4 already-fixed BLOCKERs verbatim,
+        including the earlier agent's own id in its save_memory call,
+        because --resume replayed that agent's session). Restart, by
+        contrast, continues the SAME interrupted task/session and must
+        keep resuming -- excluded_phases is empty there.
         """
         session_id = ""
-        if task.workflow_id and agent_type not in excluded_types:
+        if (
+            task.workflow_id
+            and agent_type not in excluded_types
+            and phase_name not in excluded_phases
+        ):
             try:
                 _s = self.db_manager.get_session()
                 try:
@@ -1856,6 +1874,7 @@ class LaunchPipeline:
             session_id = self._resolve_session_id(
                 task, agent_type, phase_name, model,
                 excluded_types=("validator", "result_validator", "diagnostic", "arbitration"),
+                excluded_phases=("feature_review",),
             )
 
             initial_message = self._format_initial_message(
