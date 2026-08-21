@@ -276,11 +276,26 @@ retirement.
    lines), `task_admin_routes.py` (933 lines), `project_routes.py` (1690 lines),
    `feature_routes.py` (1483 lines) — all grew past their last-verified sizes with
    same-day modification timestamps.
-4. **Carried forward, unchanged priority.** 1.13/1.15/4.6 — the `except
-   Exception`/manual-session patterns remain the single highest-leverage
-   remaining structural gap (141 broad excepts, dozens of manual sessions); no
-   subsystem audit this pass found this materially improved or worsened since
-   08-19.
+4. **Carried forward, unchanged priority — triaged rather than bulk-fixed,
+   2026-08-21.** 1.13/1.15/4.6 — the `except Exception`/manual-session
+   patterns remain the single highest-leverage remaining structural gap
+   (141 broad excepts, dozens of manual sessions). An AST sweep for the
+   specific sub-pattern CLAUDE.md forbids — empty (`pass`-only) except
+   blocks hiding real failures — found 161 sites, not 141 (the earlier
+   figure undercounted; `schema_migrations.py` alone has ~50). Reading a
+   sample confirmed the plan's own "no single fix" framing is correct:
+   most are legitimate (idempotent git-command guards with an inline
+   comment explaining why, best-effort display-value fallbacks, migration
+   duplicate-column guards) and a blanket sweep would add noise, not
+   value. Four genuinely silent sites were real — `pipeline.py`'s
+   `run_single_workflow`/`_shutdown_pipeline` swallowed
+   `terminate_agent_direct`/`pause_workflow_direct` failures on a
+   meaningful state-changing operation with zero log trace on the failure
+   path (only success logged) — fixed with `logger.warning`s, commit
+   `d882d28`. The other ~157 sites remain untriaged; this confirms rather
+   than closes the "no single fix, needs sustained effort" assessment —
+   a full pass needs per-file review at this same depth, not a mechanical
+   rule.
 5. **Low-effort cleanup, newly found.** Consolidate the two independent
    `_find_tmux_session` definitions (`src/agents/manager.py:440`,
    `src/agents/output_capture.py:544`); the frontend's three independent
