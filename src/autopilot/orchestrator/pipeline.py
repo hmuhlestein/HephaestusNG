@@ -468,8 +468,8 @@ def run_single_workflow(
                         try:
                             terminate_agent_direct(agent["id"])
                             logger.info(f"  Terminated agent {agent['id'][:8]} for workflow {wf_id[:8]}")
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"Failed to terminate agent {agent['id'][:8]}: {e}")
                 # Mark workflow as paused
                 pause_workflow_direct(wf_id)
                 logger.info(f"  Paused workflow {wf_id[:8]}")
@@ -823,8 +823,8 @@ def run_single_workflow(
                             try:
                                 terminate_agent_direct(a["id"])
                                 logger.info(f"Terminated agent {a['id'][:8]} (skip)")
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.warning(f"Failed to terminate agent {a['id'][:8]}: {e}")
                         return FeatureRunStatus.SKIPPED
                     else:
                         # "c" (continue) or timeout — reset stuck count and keep watching
@@ -847,8 +847,8 @@ def run_single_workflow(
                         try:
                             terminate_agent_direct(agent["id"])
                             logger.info(f"  Terminated agent {agent['id'][:8]} on workflow cleanup")
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"Failed to terminate agent {agent['id'][:8]}: {e}")
 
                 wf_status = get_workflow_status(exec_id)
                 if wf_status.get("status") == "active":
@@ -2491,8 +2491,8 @@ def _shutdown_pipeline(
             try:
                 pause_workflow_direct(wf.get("id", ""))
                 logger.info(f"Paused workflow {wf.get('id', '')[:8]}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to pause workflow {wf.get('id', '')[:8]}: {e}")
     except Exception as e:
         logger.warning(f"Failed to pause workflows: {e}")
 
