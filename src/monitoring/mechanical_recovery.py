@@ -28,6 +28,7 @@ from src.monitoring.patterns import (
     _DANGEROUS_CMD_RE,
     _MAX_TOKEN_LIMIT_RE,
     _MCP_DISCONNECTED_RE,
+    _MONITOR_TIMEOUT_RE,
     _SESSION_LIMIT_RE,
     _SPEND_LIMIT_RE,
     MAX_FALLBACK_ATTEMPTS,
@@ -372,6 +373,26 @@ class MechanicalRecoveryDetector:
                 return
             frozen_for = now - st["since"] if st["since"] else 0
 
+            # A backgrounded tool call (Claude Code's own Monitor-tool UI,
+            # e.g. "Monitor started · task bg0fucqr2 · timeout 300s")
+            # legitimately leaves the pane static for as long as its own
+            # declared timeout -- exactly the kind of frozen signature this
+            # detector exists to catch, since none of the volatile-line
+            # filters above (spinner/%/$/MCP:/Took) touch a static status
+            # line. Without this, a wait run right up against frozen_seconds
+            # (itself 300s) is a straight race between this detector and
+            # Claude Code's own wait. Extend the tolerance to the declared
+            # timeout plus one poll cycle's worth of slack, rather than
+            # firing at the fixed floor.
+            effective_frozen_seconds = frozen_seconds
+            monitor_timeout_match = _MONITOR_TIMEOUT_RE.search(sig)
+            if monitor_timeout_match:
+                declared_timeout = int(monitor_timeout_match.group(1))
+                effective_frozen_seconds = max(
+                    frozen_seconds,
+                    declared_timeout + get_config().monitoring.monitoring_interval_seconds,
+                )
+
             # Context overflow: local model hit its context size limit.
             # This is a hard blocker — the agent can't continue with the
             # current model. Terminate and restart with fresh context on
@@ -448,7 +469,7 @@ class MechanicalRecoveryDetector:
             # prompt.  The output signature changed (so the 5-min clock reset),
             # but the agent won't self-rescue — 30 s is enough to be sure.
             abort_frozen = "Operation aborted" in sig and frozen_for >= 30
-            if (abort_frozen or frozen_for >= frozen_seconds) and st[
+            if (abort_frozen or frozen_for >= effective_frozen_seconds) and st[
                 "recov"
             ] < max_recov:
                 st["recov"] += 1
@@ -534,10 +555,10 @@ class MechanicalRecoveryDetector:
                     except Exception:
                         pass
                     return True
-            elif (abort_frozen or frozen_for >= frozen_seconds) and st["recov"] >= max_recov:
+            elif (abort_frozen or frozen_for >= effective_frozen_seconds) and st["recov"] >= max_recov:
                 # All recovery attempts exhausted and agent is still frozen.
                 # Mirrors the nudge-trigger condition above (abort_frozen or
-                # frozen_for >= frozen_seconds), not just frozen_seconds --
+                # frozen_for >= effective_frozen_seconds), not just frozen_seconds --
                 # without this, an "Operation aborted" agent that exhausts
                 # max_recov via the fast 30s abort_frozen path then has to
                 # sit frozen for the FULL frozen_seconds (300s, timed from

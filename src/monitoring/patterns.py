@@ -64,6 +64,17 @@ _SPEND_LIMIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Claude Code's own UI for a backgrounded tool call, e.g. "Monitor started ·
+# task bg0fucqr2 · timeout 300s" -- a legitimate, bounded wait that
+# otherwise leaves the pane signature static long enough to trip the
+# frozen-output stuck detector (mechanical_recovery.py's frozen_seconds),
+# right around the same 300s ceiling as the declared timeout itself.
+# Deliberately NOT re.DOTALL: "Monitor started" and "timeout Ns" must be on
+# the SAME line (the real format), not just both present somewhere in the
+# 40-line pane -- otherwise an unrelated later line mentioning a timeout
+# (e.g. an agent's own prose about an API's timeout) could false-positive.
+_MONITOR_TIMEOUT_RE = re.compile(r"Monitor started.*?timeout\s+(\d+)s", re.IGNORECASE)
+
 # pi's status-line MCP indicator, e.g. "MCP: 0/1 servers". The denominator
 # group excludes "0/0" (no servers configured at all -- not a failure) by
 # requiring at least one digit that isn't a leading zero. Only observable

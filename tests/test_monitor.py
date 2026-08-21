@@ -2088,6 +2088,52 @@ class TestMechanicalRecovery:
         mock_agent_manager.send_recovery_keystrokes.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_monitor_tool_wait_not_flagged_stuck_within_its_declared_timeout(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Claude Code's own backgrounded-tool-call UI (e.g. "Monitor
+        started · task bg0fucqr2 · timeout 300s") legitimately leaves the
+        pane static for as long as its own declared timeout -- a
+        legitimate wait, not a stuck agent. Frozen for longer than the
+        default frozen_seconds (300s) floor but still within the declared
+        timeout + one poll cycle's slack must NOT trigger recovery."""
+        from src.core.simple_config import get_config
+
+        agent = Agent(id="a1", cli_type="claude")
+        frozen_output = "Working on it...\nMonitor started · task bg0fucqr2 · timeout 300s"
+        mock_agent_manager.get_agent_output.return_value = frozen_output
+        mock_agent_manager.send_recovery_keystrokes = AsyncMock(return_value=True)
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)  # baseline
+        buffer = get_config().monitoring.monitoring_interval_seconds
+        # 300 (declared) + buffer - 10s: still inside the extended tolerance.
+        make_monitoring_loop._stuck_state["a1"]["since"] = time.time() - (300 + buffer - 10)
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        mock_agent_manager.send_recovery_keystrokes.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_monitor_tool_wait_flagged_stuck_past_its_declared_timeout_plus_buffer(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Same declared-timeout wait as above, but frozen past declared
+        timeout + buffer -- Claude Code's own wait should have resolved by
+        now, so this is a real stuck agent and recovery must still fire."""
+        from src.core.simple_config import get_config
+
+        agent = Agent(id="a1", cli_type="claude")
+        frozen_output = "Working on it...\nMonitor started · task bg0fucqr2 · timeout 300s"
+        mock_agent_manager.get_agent_output.return_value = frozen_output
+        mock_agent_manager.send_recovery_keystrokes = AsyncMock(return_value=True)
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)  # baseline
+        buffer = get_config().monitoring.monitoring_interval_seconds
+        make_monitoring_loop._stuck_state["a1"]["since"] = time.time() - (300 + buffer + 10)
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        mock_agent_manager.send_recovery_keystrokes.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_output_change_refreshes_last_activity(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
