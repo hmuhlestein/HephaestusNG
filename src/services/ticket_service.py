@@ -1547,7 +1547,7 @@ class TicketService:
                     cwd=main_repo_path, capture_output=True, timeout=5,
                 ).returncode == 0,
             )
-        except OSError as e:
+        except (OSError, subprocess.SubprocessError) as e:
             logger.warning(
                 f"[TICKET-COMMIT] Could not check commit {commit_sha} against "
                 f"resolved repo {main_repo_path}: {e} -- linking anyway per "

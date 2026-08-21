@@ -180,6 +180,43 @@ class TestLinkCommitUsesOwnProjectRepo:
         assert result["success"] is True
         assert call_count["n"] == 1
 
+    @pytest.mark.asyncio
+    async def test_survives_git_cat_file_timeout(self, db_manager, monkeypatch):
+        """Adversarial review WARNING (run 3): the soft commit-existence
+        check's `except OSError` didn't catch subprocess.TimeoutExpired
+        (a SubprocessError, not an OSError) -- a hung/wedged git process
+        crashed the link instead of soft-failing per the check's own
+        "must not crash the link" docstring."""
+        import subprocess
+
+        from src.services.ticket_service import TicketService
+
+        _seed_project_workflow_ticket(
+            db_manager, project_id="proj-c", base_dir="/repo/proj-c",
+            workflow_id="wf-c", ticket_id="ticket-c",
+        )
+
+        monkeypatch.setattr(
+            TicketService, "_get_commit_stats",
+            staticmethod(lambda commit_sha, repo_path: {
+                "files_changed": 0, "insertions": 0, "deletions": 0, "files_list": [],
+            }),
+        )
+
+        def timing_out_run(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="git cat-file -e", timeout=5)
+
+        monkeypatch.setattr(subprocess, "run", timing_out_run)
+
+        result = await TicketService.link_commit(
+            ticket_id="ticket-c",
+            agent_id="agent-1",
+            commit_sha="abc999",
+            commit_message="fix things",
+        )
+
+        assert result["success"] is True
+
 
 class TestResolveRepoPathForCommit:
     def test_resolves_via_linked_ticket(self, db_manager):
