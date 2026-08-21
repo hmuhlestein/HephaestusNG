@@ -3,6 +3,7 @@
 Extracted from src/mcp/server.py (design_docs/phase_1c_server_decomposition.md).
 """
 
+import asyncio
 import logging
 from typing import Any, Dict
 
@@ -73,8 +74,7 @@ async def _devtools_get_performance(browser, arguments):
     return {"success": True, "metrics": metrics}
 
 async def _devtools_get_page_info(browser, arguments):
-    title = await browser.get_page_title()
-    url = await browser.get_page_url()
+    title, url = await asyncio.gather(browser.get_page_title(), browser.get_page_url())
     return {"success": True, "title": title, "url": url}
 
 async def _devtools_check_broken_images(browser, arguments):

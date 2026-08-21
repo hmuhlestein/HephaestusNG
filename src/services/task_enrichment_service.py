@@ -8,6 +8,7 @@ duplicated in create_task's process_task_async closure and in
 process_queue — see docs/SOLID_OO_REVIEW.md findings 1.2/1.3.
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, Optional, Tuple
@@ -145,12 +146,16 @@ class TaskEnrichmentService:
 
         server_state = get_app_state()
 
-        context_memories = await server_state.rag_system.retrieve_for_task(
-            task_description=raw_description,
-            requesting_agent_id=requesting_agent_id,
+        # retrieve_for_task() (embedding + vector search) and
+        # get_project_context() (DB reads) don't read each other's output --
+        # the phase-context append below only needs project_context.
+        context_memories, project_context = await asyncio.gather(
+            server_state.rag_system.retrieve_for_task(
+                task_description=raw_description,
+                requesting_agent_id=requesting_agent_id,
+            ),
+            server_state.agent_manager.get_project_context(),
         )
-
-        project_context = await server_state.agent_manager.get_project_context()
         if phase_context_str:
             project_context = f"{project_context}\n\n{phase_context_str}"
 
