@@ -26,6 +26,7 @@ from src.mcp.server._shared import (
     _resolve_worktree_head_sha,
     _resolve_worktree_path,
     server_state,
+    spawn_background_task,
 )
 from src.mcp.server.background_loops import terminate_agents_and_process_queue
 
@@ -252,7 +253,7 @@ async def _spawn_validation_for_task(session, task: Task, agent_id: str, request
 
     from src.services.task_completion_service import TaskCompletionService
 
-    asyncio.create_task(
+    spawn_background_task(
         TaskCompletionService.spawn_validation(
             agent_id=agent_id,
             task_id=request.task_id,
@@ -334,9 +335,9 @@ async def _complete_task_normally(
         # unblock BOTH a capacity-queued task (already handled) and a
         # dependency-gated one (this), independent reasons a pending task
         # might not have dispatched yet.
-        asyncio.create_task(_dispatch_ready_dependents(task.id, task.workflow_id))
+        spawn_background_task(_dispatch_ready_dependents(task.id, task.workflow_id))
 
-    asyncio.create_task(
+    spawn_background_task(
         terminate_agents_and_process_queue(server_state.agent_manager, [agent_id])
     )
 

@@ -715,7 +715,7 @@ class TestHistoricalPauseSiteConsistency:
             _review_phase0_decomposition,
         )
 
-        with patch("src.autopilot.orchestrator.finalize_phase0_workflow"):
+        with patch("src.autopilot.orchestrator.pipeline.finalize_phase0_workflow"):
             result = await _review_phase0_decomposition(
                 "wf-1", FeatureReviewRequest(action="approve")
             )

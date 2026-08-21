@@ -398,8 +398,16 @@ async def resume_feature(feature_id: str):
     # block the response and (as a prior version did via a synchronous HTTP
     # call to this same server with a 30s timeout) time out before the agent
     # ever finished starting, leaving the task stuck at 'pending' forever.
+    #
+    # spawn_background_task, not a bare asyncio.create_task: an unreferenced
+    # task can be silently garbage-collected before it runs -- confirmed
+    # live elsewhere (c1cc687) to strand a task exactly this same "stuck at
+    # pending forever" way, just via a different mechanism than the timeout
+    # this comment already guards against.
+    from src.mcp.server._shared import spawn_background_task
+
     for task_id, phase_id in to_restart:
-        asyncio.create_task(_spawn_agent_for_task(task_id, phase_id))
+        spawn_background_task(_spawn_agent_for_task(task_id, phase_id))
 
     return {
         "success": True,
@@ -606,7 +614,9 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
         db.commit()
 
     logger.info(f"[REVIEW] Spawning agent for Phase 0 re-decomposition task {task_id}")
-    asyncio.create_task(_spawn_agent_for_task(task_id, phase_id))
+    from src.mcp.server._shared import spawn_background_task
+
+    spawn_background_task(_spawn_agent_for_task(task_id, phase_id))
 
     _invalidate("status")
     return {"success": True, "message": "Changes requested — re-decomposition queued"}
@@ -909,9 +919,11 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
         db.commit()
 
     # Spawn agents for restarted tasks (out of DB session, same as resume_feature)
+    from src.mcp.server._shared import spawn_background_task
+
     for task_id, phase_id in to_restart:
         logger.info(f"[REVIEW] Spawning agent for task {task_id} (phase {phase_id})")
-        asyncio.create_task(_spawn_agent_for_task(task_id, phase_id))
+        spawn_background_task(_spawn_agent_for_task(task_id, phase_id))
 
     _invalidate("status")
     return {

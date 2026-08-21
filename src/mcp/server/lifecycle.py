@@ -16,7 +16,7 @@ from src.core.database import (
     Workflow,
 )
 from src.mcp.frontend import create_frontend_routes
-from src.mcp.server._shared import _build_phase_dict, _git_expert_already_landed, _tmux_session_alive, app, config, server_state
+from src.mcp.server._shared import _build_phase_dict, _git_expert_already_landed, _tmux_session_alive, app, config, server_state, spawn_background_task
 from src.mcp.server.background_loops import background_phase_advancement_sweep, background_queue_processor
 
 # Import routers at module level for test compatibility
@@ -227,7 +227,7 @@ async def _resume_interrupted_workflows(
                     # normal completion paths.
                     from src.mcp.server._create_task_steps import _dispatch_ready_dependents
 
-                    asyncio.create_task(_dispatch_ready_dependents(task.id, task.workflow_id))
+                    spawn_background_task(_dispatch_ready_dependents(task.id, task.workflow_id))
                     resumed += 1
                     continue
 
