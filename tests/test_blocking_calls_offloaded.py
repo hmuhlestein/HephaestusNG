@@ -9,7 +9,7 @@ get_commit_diff_endpoint fix has its own coverage in
 tests/test_mcp_server_tickets.py::TestGetCommitDiffTimeouts, which also
 now exercises the offloaded path end-to-end):
 - control_routes.get_system_health -> run_health_audit
-- project_routes.remove_project_design's per-agent tmux kill-session
+- design_file_routes.remove_project_design's per-agent tmux kill-session
 - feature_routes.review_feature's `gh pr merge`
 """
 
@@ -104,7 +104,7 @@ def test_run_health_audit_checks_unmerged_branches_for_every_active_project(
 @pytest.mark.asyncio
 async def test_remove_project_design_offloads_tmux_kill(db, tmp_path):
     from src.core.database import AutopilotDesign, AutopilotProject
-    from src.mcp.autopilot import project_routes
+    from src.mcp.autopilot import design_file_routes
 
     session = db.get_session()
     session.add(
@@ -169,9 +169,9 @@ async def test_remove_project_design_offloads_tmux_kill(db, tmp_path):
             "src.autopilot.orchestrator.engine_client.terminate_agent",
             return_value=True,
         ),
-        patch.object(project_routes, "_invalidate", return_value=None),
+        patch.object(design_file_routes, "_invalidate", return_value=None),
     ):
-        result = await project_routes.remove_project_design("proj-1", "des.md")
+        result = await design_file_routes.remove_project_design("proj-1", "des.md")
 
     assert result == {"removed": "des.md"}
     fake_loop.run_in_executor.assert_called_once()
