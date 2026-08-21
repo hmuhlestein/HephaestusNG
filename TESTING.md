@@ -325,17 +325,9 @@ cd frontend && npx tsc --noEmit
 cd frontend && npm run build
 ```
 
-If you want an actual test suite (component tests, not just type/build
-checks), it needs to be built from scratch: install `vitest` +
-`@testing-library/react` + `jsdom`, add `vitest.config.ts`, wire up
-`test`/`test:coverage` scripts, and write the first tests — this is new
-infrastructure, not a config fix. Same story for linting: no eslint
-config exists, so adding one is a from-scratch setup (ESLint v9+ needs a
-flat `eslint.config.*`, not the legacy `.eslintrc.*`).
-
-Until that exists, the practical verification path for a frontend change
-is: `tsc --noEmit` + `npm run build` for correctness, and the
-Playwright-driven browser check below for anything visual.
+The practical verification path for a frontend change is `tsc --noEmit` +
+`npm run build` for correctness, and the Playwright-driven browser check
+below for anything visual.
 
 ### Visual/Browser Verification (Playwright)
 
