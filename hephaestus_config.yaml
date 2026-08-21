@@ -141,6 +141,9 @@ autopilot:
   paused_workflow_retry_cooldown_seconds: 300
   # Give up permanently (requires manual resume) after this many auto-retry cycles
   paused_workflow_max_retry_cycles: 10
+  # How long sdk.start() waits for the backend's /health check when
+  # launching the autopilot pipeline
+  sdk_start_timeout_seconds: 60
 ticket_tracking:
   enabled: true
   default_human_review: false
