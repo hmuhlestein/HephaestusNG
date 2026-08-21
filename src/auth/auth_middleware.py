@@ -7,10 +7,10 @@ from typing import List, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-from src.core.database import DatabaseManager
 from src.core.user_models import Permission, Role, RolePermission, User, UserRole
 
 from . import verify_access_token
+from .auth_db import get_db_manager
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
         )
 
     # Get user from database
-    db_manager = DatabaseManager(None)
+    db_manager = get_db_manager()
     with db_manager.get_session() as db:
         user = db.query(User).filter(User.id == user_id).first()
 
