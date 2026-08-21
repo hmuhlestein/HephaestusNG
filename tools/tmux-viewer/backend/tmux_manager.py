@@ -1,11 +1,18 @@
 """Core tmux session management - create, read, write, and kill tmux sessions."""
 
 import logging
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import libtmux
 
 logger = logging.getLogger(__name__)
+
+# How many ancestor directories of the pane's cwd to check for a
+# Hephaestus .hephaestus/tmux/ dir -- an agent's pane can `cd` anywhere
+# during its work, so its cwd at read time isn't necessarily the worktree
+# root the session started in.
+_HEPHAESTUS_TMUX_SEARCH_DEPTH = 6
 
 
 class TmuxSessionManager:
@@ -91,6 +98,18 @@ class TmuxSessionManager:
     def get_output(self, session_name: str, lines: int = 200) -> str:
         """Capture recent output from a tmux session's active pane.
 
+        Live `capture-pane` only ever returns whatever currently fits in
+        tmux's own scrollback -- which is effectively just the visible
+        pane height for a full-screen TUI CLI (Claude Code, Codex, pi)
+        running in the alternate screen buffer, since tmux does not
+        scroll back the alt screen at all. Prefer a Hephaestus-launched
+        agent's own `.clean.log` (maintained continuously by the main
+        HephaestusNG backend's stability-tracked transcript poller,
+        already correctly terminal-rendered -- see
+        AgentOutputCapture._poll_stable_transcript) when one exists,
+        falling back to live capture-pane only for sessions with no such
+        file (e.g. a plain shell, or a session this tool created itself).
+
         Args:
             session_name: Name of the tmux session.
             lines: Number of lines to capture from the scrollback buffer.
@@ -105,11 +124,53 @@ class TmuxSessionManager:
 
         try:
             pane = session.attached_window.attached_pane
+        except Exception as e:
+            logger.error(f"Failed to get pane for '{session_name}': {e}")
+            return ""
+
+        clean_log = self._find_hephaestus_clean_log(session_name, pane)
+        if clean_log is not None:
+            try:
+                text = clean_log.read_text(errors="replace")
+                out_lines = text.splitlines()
+                if lines > 0:
+                    out_lines = out_lines[-lines:]
+                return "\n".join(out_lines)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to read Hephaestus clean log for '{session_name}' "
+                    f"({clean_log}), falling back to capture-pane: {e}"
+                )
+
+        try:
             output = pane.cmd("capture-pane", "-p", f"-S -{lines}").stdout
             return "\n".join(output) if output else ""
         except Exception as e:
             logger.error(f"Failed to capture output from '{session_name}': {e}")
             return ""
+
+    def _find_hephaestus_clean_log(self, session_name: str, pane) -> Optional[Path]:
+        """Look for `.hephaestus/tmux/{session_name}.clean.log` at or above
+        the pane's current working directory. Returns None if the pane's
+        cwd can't be read, no such file exists within the search depth, or
+        the file exists but is empty (nothing stable written yet -- let
+        the capture-pane fallback handle that case instead)."""
+        try:
+            cwd = pane.pane_current_path
+        except Exception:
+            cwd = None
+        if not cwd:
+            return None
+
+        current = Path(cwd)
+        for _ in range(_HEPHAESTUS_TMUX_SEARCH_DEPTH):
+            candidate = current / ".hephaestus" / "tmux" / f"{session_name}.clean.log"
+            if candidate.exists() and candidate.stat().st_size > 0:
+                return candidate
+            if current.parent == current:
+                break
+            current = current.parent
+        return None
 
     def send_message(self, session_name: str, message: str, enter: bool = True) -> bool:
         """Send a message (keystrokes) to a tmux session.
