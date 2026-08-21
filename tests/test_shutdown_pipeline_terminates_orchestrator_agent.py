@@ -39,7 +39,7 @@ def test_shutdown_pipeline_terminates_orchestrator_agent(db_manager, tmp_path, m
             cli_type="claude", agent_type="orchestrator", current_task_id="stray-task-1",
         ))
 
-    monkeypatch.setattr(orchestrator, "_orchestrator_agent_id", "orch-agent-1")
+    monkeypatch.setitem(orchestrator._orchestrator_agent_ids, "proj-1", "orch-agent-1")
     monkeypatch.setattr(orchestrator, "get_active_workflows", lambda *a, **k: [])
 
     log_dir = tmp_path / "logs"

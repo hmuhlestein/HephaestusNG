@@ -60,6 +60,8 @@ from src.autopilot.orchestrator.runtime_registries import (
     _is_workflow_monitored as _is_workflow_monitored,
 )
 from src.autopilot.orchestrator.phase_transitions import _negotiate_validation_fix
+from src.autopilot.orchestrator.runtime_registries import _get_orchestrator_agent_id
+from src.autopilot.orchestrator.runtime_registries import _orchestrator_agent_ids
 from src.autopilot.orchestrator.runtime_registries import _register_monitored_workflow
 from src.autopilot.orchestrator.agent_registration import _register_orchestrator_agent
 from src.autopilot.orchestrator.features import _relink_features_to_workflows
@@ -138,8 +140,9 @@ MAX_PARALLEL_FEATURES = 4  # max concurrent feature pipelines
 # killed by that other escalation before this one ever gets a chance to
 # clear it and let the workflow self-heal instead.
 
-# Module-level orchestrator agent ID (set during registration)
-_orchestrator_agent_id: Optional[str] = None
+# Orchestrator agent IDs are now tracked per-project in runtime_registries's
+# _orchestrator_agent_ids (SOLID review 2.4) -- see that module for why a
+# single bare global here was a live cross-project bug.
 
 
 
@@ -2725,8 +2728,9 @@ def _shutdown_pipeline(
     # docstring says every such write site must route through instead
     # (recurred independently 8 times in this codebase's history; this
     # was the 9th, for the orchestrator's own self-registered Agent row).
-    if _orchestrator_agent_id:
-        terminate_agent_direct(_orchestrator_agent_id)
+    _own_orchestrator_agent_id = _get_orchestrator_agent_id(current_project_id)
+    if _own_orchestrator_agent_id:
+        terminate_agent_direct(_own_orchestrator_agent_id)
 
     # Pause all active autopilot workflows belonging to THIS project.
     # Unscoped, this would forcibly pause an unrelated active workflow
@@ -2821,9 +2825,12 @@ def run_continuous_pipeline(args) -> None:
 
     sdk, cli_tool = _build_and_start_pipeline_sdk(args, project_path, logger)
 
-    # Register orchestrator as an agent
-    global _orchestrator_agent_id
-    _orchestrator_agent_id = _register_orchestrator_agent(log_dir, cli_tool, logger)
+    # Register orchestrator as an agent, keyed by project_id so a second
+    # project's pipeline running concurrently can't overwrite this one's
+    # registration (SOLID review 2.4).
+    _orchestrator_agent_ids[current_project_id] = _register_orchestrator_agent(
+        log_dir, cli_tool, logger
+    )
 
     # NOTE: this used to unconditionally fail (or complete) every workflow
     # still "active" at startup, on the theory that "active" + backend-just-
@@ -3082,7 +3089,7 @@ def run_continuous_pipeline(args) -> None:
                         "processed": len(processed_hashes),
                     }
                     logger.save_state(state)
-                    _update_orchestrator_status("idle")
+                    _update_orchestrator_status("idle", current_project_id)
                     persistent_state.save(state, processed_hashes)
                     _interruptible_sleep(DESIGN_QUEUE_SCAN_INTERVAL, current_project_id)
                     continue
@@ -3095,7 +3102,7 @@ def run_continuous_pipeline(args) -> None:
                     "current": next_design.name,
                     "processed": len(processed_hashes),
                 }
-                _update_orchestrator_status("working")
+                _update_orchestrator_status("working", current_project_id)
                 # Checkpoint immediately, not just after run_single_design
                 # returns (see save_state_only's docstring) -- a design's
                 # run can take minutes to hours, and the status endpoint's
@@ -3142,7 +3149,7 @@ def run_continuous_pipeline(args) -> None:
                     "succeeded": state.designs_succeeded,
                     "failed": state.designs_failed,
                 }
-                _update_orchestrator_status("idle")
+                _update_orchestrator_status("idle", current_project_id)
                 logger.save_state(state)
                 persistent_state.save(state, processed_hashes)
 
