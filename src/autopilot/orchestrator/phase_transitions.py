@@ -2173,7 +2173,17 @@ def _get_phase_max_retries(workflow_id: str, phase_name: str) -> Optional[int]:
 
     pm = PhaseManager(DatabaseManager(None))
     with get_db() as db:
-        orchestrator = pm._get_orchestrator(db, workflow_id)
+        try:
+            orchestrator = pm._get_orchestrator(db, workflow_id)
+        except Exception as e:
+            # _get_orchestrator raises rather than returning None on failure,
+            # so the gate-evaluation path can escalate instead of silently
+            # going sequential. Here the documented contract is different --
+            # "falls back to 5 when no orchestrator config exists" -- and
+            # defaulting a retry budget is safe in a way that skipping every
+            # gate is not, so this caller keeps its fallback deliberately.
+            logger.error(f"[PHASE-TASK] max_retries lookup failed for {phase_name}, using default: {e}")
+            return None
         if not orchestrator:
             return None
         eval_point = orchestrator._find_evaluation_point(phase_name)

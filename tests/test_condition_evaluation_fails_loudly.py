@@ -167,3 +167,68 @@ class TestMarkPhaseCompleteEscalates:
 
         assert result["action"] == "arbitrate"
         assert result["target_phase"] is None
+
+
+class TestOrchestratorLoadFailureDoesNotGoSequential:
+    """_get_orchestrator returns None for three legitimate answers -- no
+    workflow, no orchestrator_config, sequential mode -- and
+    mark_phase_complete treats None as sequential, which advances the phase
+    past every gate. It also used to return None from `except Exception`,
+    so a transient DB error while loading the config silently bypassed all
+    evaluation: the same fail-open as the unevaluable-condition bug above.
+    """
+
+    def _manager(self, session):
+        from src.phases.phase_manager import PhaseManager
+
+        db_manager = MagicMock()
+        db_manager.get_session.return_value = session
+        manager = PhaseManager.__new__(PhaseManager)
+        manager.db_manager = db_manager
+        manager.workflow_id = "wf-1"
+        manager._orchestrators = {}
+        return manager
+
+    def test_load_failure_raises_instead_of_reading_as_sequential(self):
+        session = MagicMock()
+        session.query.side_effect = RuntimeError("db gone")
+        manager = self._manager(session)
+
+        with pytest.raises(RuntimeError):
+            manager._get_orchestrator(session, "wf-1")
+
+    def test_a_genuinely_absent_config_still_returns_none(self):
+        """The legitimate answers must keep working -- this is not "raise on
+        everything", it is "stop conflating failure with absence"."""
+        session = MagicMock()
+        session.query.return_value.filter_by.return_value.first.return_value = None
+        manager = self._manager(session)
+
+        assert manager._get_orchestrator(session, "wf-1") is None
+
+    def test_the_failure_reaches_arbitration_rather_than_advancing(self):
+        """End to end: a config-load failure during mark_phase_complete must
+        escalate, not fall through to sequential mode and advance."""
+        from src.phases.phase_manager import PhaseManager
+
+        phase = MagicMock()
+        phase.name = "adversarial_review"
+        phase.workflow_id = "wf-1"
+
+        first_query = MagicMock()
+        first_query.filter_by.return_value.first.return_value = phase
+
+        session = MagicMock()
+        session.query.side_effect = [first_query, RuntimeError("db gone")]
+
+        db_manager = MagicMock()
+        db_manager.get_session.return_value = session
+        manager = PhaseManager.__new__(PhaseManager)
+        manager.db_manager = db_manager
+        manager.workflow_id = "wf-1"
+        manager._orchestrators = {}
+
+        result = manager.mark_phase_complete("phase-1", "done")
+
+        assert result["action"] == "arbitrate"
+        assert result["action"] != "continue"
