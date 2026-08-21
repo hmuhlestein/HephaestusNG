@@ -287,6 +287,123 @@ Each step should land with its own red→green regression tests before the
 next starts, per the usual discipline — this list is a sequencing proposal,
 not a commitment to build all of it in one pass.
 
+## Requirements
+
+Grouped by feature area, mirroring the sections above. IDs are stable
+references for implementation/tracking, not a commit-by-commit checklist —
+one commit may satisfy several REQs in a group, per the implementation
+order above.
+
+### Feature: Data Model
+
+- **REQ-DM-1**: Add a `ProjectRepo` model (`id`, `project_id` FK, `label`,
+  `path`, `is_primary`) with unique constraints on `(project_id, path)` and
+  `(project_id, label)`.
+- **REQ-DM-2**: Add a nullable `repo_id` FK (→ `project_repos.id`) to
+  `Task`, `Ticket`, `TicketCommit`, and `AgentWorktree`/`AgentBranch`.
+- **REQ-DM-3**: `ProjectRepo.path` is stored absolute — a child repo is not
+  required to live under `AutopilotProject.base_dir`.
+
+### Feature: Migration
+
+- **REQ-MIG-1**: On upgrade, auto-create one `ProjectRepo` per existing
+  `AutopilotProject`, with `path = base_dir` and `is_primary = True`.
+- **REQ-MIG-2**: Migration must not modify `AutopilotProject.base_dir` or
+  require backfilling `repo_id` on historical `Task`/`TicketCommit` rows.
+- **REQ-MIG-3**: Any code path resolving `repo_id` that finds it unset falls
+  back to the project's primary `ProjectRepo` (preserves existing
+  single-repo behavior unchanged).
+
+### Feature: Write/Read Scoping
+
+- **REQ-WRS-1**: `WorktreeManager` is instantiable per `(project, repo)`
+  pair, parameterized by a `ProjectRepo` path instead of hardcoded to
+  `project.base_dir`.
+- **REQ-WRS-2**: A task's worktree/branch/commit machinery is created
+  against exactly its assigned `repo_id`; an agent never holds more than one
+  worktree.
+- **REQ-WRS-3**: Sibling repos are exposed to an agent as read-only paths at
+  their canonical `ProjectRepo.path` (not worktree'd), documented in the
+  task's launch context/prompt (see Feature Architect & Agent Prompts
+  below).
+- **REQ-WRS-4**: Commit-linking validates that a task's committed files fall
+  under its assigned `repo_id`'s path before recording a `TicketCommit`
+  (soft/code-level enforcement).
+- **REQ-WRS-5** *(explicitly out of scope for v1)*: Hard filesystem
+  enforcement (read-only bind mounts/chmod) of sibling-repo read access —
+  revisit only if soft enforcement (REQ-WRS-4 + prompt instruction) proves
+  insufficient in practice.
+
+### Feature: Design/Doc Storage
+
+- **REQ-DOC-1**: `docs/`-destination design uploads resolve to the primary
+  `ProjectRepo`'s path, not the project's workspace root, so the feature
+  stays git-tracked in a multi-repo project.
+- **REQ-DOC-2**: `.hephaestus/designs/` staging continues to resolve at the
+  workspace-root (`base_dir`) level, unaffected by repo count.
+
+### Feature: Commit Resolution
+
+- **REQ-COMMIT-1**: `_resolve_repo_path_for_commit` (`tickets_api.py:37`)
+  accepts/resolves `repo_id` and returns the correct child repo's path
+  instead of assuming one project-wide path.
+- **REQ-COMMIT-2**: Every `git show`/`git diff` call site in
+  `tickets_api.py` (`:1341,1368,1396`) operates against the resolved repo
+  path for the commit in question.
+
+### Feature: Recovery/Cleanup
+
+- **REQ-RECOVER-1**: `policy.py`'s recovery commands, `worktree_integration.py`'s
+  cleanup, and `terminator.py` accept/resolve `repo_id` to target the
+  correct child repo's worktree, instead of assuming one project path.
+
+### Feature: Feature Architect & Agent Prompts
+
+- **REQ-PROMPT-1**: `AgentManager.get_project_context()` includes the
+  project's repo list (label + path) whenever a project has more than one
+  `ProjectRepo`.
+- **REQ-PROMPT-2**: For an implementation-phase agent, injected context
+  states plainly which repo is writable (its own) vs. read-only reference
+  (siblings).
+- **REQ-PROMPT-3**: `feature_architect_system_prompt` instructs the
+  architect, as a hard rule, that every `Feature` it creates must be bound
+  to exactly one repo — e.g. an API change and its UI consumer are two
+  features (one per repo), never one feature spanning both.
+- **REQ-PROMPT-4**: `feature_architect_system_prompt` instructs the
+  architect to express cross-repo ordering via the existing
+  `Feature.depends_on`/`execution` mechanism, not a free-text note in a
+  feature's description.
+- **REQ-PROMPT-5**: For single-repo projects, `get_project_context()` emits
+  no additional text — no prompt/behavior change for the existing common
+  case.
+
+### Feature: Frontend
+
+- **REQ-UI-1**: Multi-repo projects (`ProjectRepo` count > 1) are detected
+  and handled by existing views using data the backend already returns — no
+  bespoke new "multi-repo mode" UI.
+- **REQ-UI-2**: `GitDiffModal`/commit views display which repo a commit
+  belongs to, sourced from `repo_id`/label already returned by the resolved
+  commit endpoint (REQ-COMMIT-1).
+- **REQ-UI-3**: Project-settings UI gets a minimal addition to add/label
+  child repos on a project — the one new UI surface that can't be inferred
+  from existing data.
+- **REQ-UI-4**: Task/ticket repo assignment is not exposed as a user-facing
+  picker — assignment is the feature architect's responsibility
+  (REQ-PROMPT-3).
+
+### Feature: Cross-Design Parallelism *(deferred, out of scope for v1)*
+
+- **REQ-FUTURE-1**: `pick_next_design` returns the next design per repo
+  with no in-flight work, instead of one next design per project.
+- **REQ-FUTURE-2**: `run_continuous_pipeline` runs one loop per
+  `(project, repo)` with in-flight work, instead of one per project, bounded
+  by a new concurrency cap alongside `max_concurrent_projects`.
+- Both deferred per "Future work" below — revisit only if real usage shows
+  people uploading independent per-repo design docs often enough to justify
+  it; the feature-level mechanism (REQ-PROMPT-4) already covers the common
+  case of one design spanning both repos.
+
 ## Future work: cross-design parallelism
 
 Narrowed significantly from an earlier pass of this doc, which assumed no
