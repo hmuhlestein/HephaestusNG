@@ -627,6 +627,92 @@ def migrate_review_mode_columns(engine):
         logger.warning(f"Review mode columns migration failed (not just 'already exists' -- check this): {e}")
 
 
+
+
+def migrate_project_repos_table(engine):
+    """REQ-01/03/04/05: create project_repos, backfill from base_dir.
+
+    REQ-02: add nullable repo_id FK to tasks, tickets, ticket_commits,
+    agent_worktrees, features. NULLable -- no backfill of historical rows
+    (REQ-05); resolve_primary_repo() is the runtime fallback (REQ-06).
+    """
+    from sqlalchemy import inspect
+
+    # Imported here, not at module scope: src.core.database imports
+    # this module, so a top-level import back into it would be circular.
+    from src.core.database import AutopilotProject, ProjectRepo
+
+    try:
+        inspector = inspect(engine)
+        existing_tables = inspector.get_table_names()
+
+        # Create project_repos table if it doesn't exist
+        if "project_repos" not in existing_tables:
+            try:
+                ProjectRepo.__table__.create(bind=engine)
+                logger.info("Created project_repos table")
+            except Exception as e:
+                logger.warning(f"project_repos table creation failed: {e}")
+
+        # Backfill one ProjectRepo per existing AutopilotProject
+        try:
+            import uuid
+            from sqlalchemy.orm import Session
+
+            with Session(engine) as session:
+                projects_without_repo = (
+                    session.query(AutopilotProject)
+                    .filter(~AutopilotProject.repos.any())
+                    .all()
+                )
+                for project in projects_without_repo:
+                    session.add(ProjectRepo(
+                        id=f"repo-{uuid.uuid4().hex[:12]}",
+                        project_id=project.id,
+                        label="main",
+                        path=project.base_dir,
+                        is_primary=True,
+                    ))
+                session.commit()
+                if projects_without_repo:
+                    logger.info(
+                        f"Backfilled {len(projects_without_repo)} ProjectRepo rows"
+                    )
+        except Exception as e:
+            logger.warning(f"ProjectRepo backfill failed: {e}")
+
+        # Add nullable repo_id FK to tasks, tickets, ticket_commits,
+        # agent_worktrees, features (REQ-02)
+        for table, column in [
+            ("tasks", "repo_id"),
+            ("tickets", "repo_id"),
+            ("ticket_commits", "repo_id"),
+            ("agent_worktrees", "repo_id"),
+            ("features", "repo_id"),
+        ]:
+            try:
+                existing_cols = {
+                    c["name"] for c in inspector.get_columns(table)
+                }
+                if column not in existing_cols:
+                    with engine.connect() as conn:
+                        conn.execute(text(
+                            f"ALTER TABLE {table} ADD COLUMN {column} TEXT "
+                            f"REFERENCES project_repos(id)"
+                        ))
+                        conn.commit()
+                    logger.info(f"Added {table}.{column} column")
+            except Exception as e:
+                logger.warning(
+                    f"{table}.{column} migration failed: {e}"
+                )
+
+        logger.info("migrate_project_repos_table completed")
+    except Exception as e:
+        logger.warning(
+            f"Project repos migration failed (not just 'already exists'): {e}"
+        )
+
 # ── Registry ─────────────────────────────────────────────────────────
 # (id, function). Ids match the pre-split method names -- see module
 # docstring for why they must not be renamed.
@@ -649,4 +735,5 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_cost_tracking_columns", migrate_cost_tracking_columns),
     ("_migrate_phase_fallback_columns", migrate_phase_fallback_columns),
     ("_migrate_review_mode_columns", migrate_review_mode_columns),
+    ("_migrate_project_repos_table", migrate_project_repos_table),
 ]
