@@ -6,7 +6,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NotRequired, Optional, TypedDict
 
 from src.agents.manager import AgentManager
 from src.core.database import Agent, AgentLog, DatabaseManager, Task
@@ -14,6 +14,55 @@ from src.interfaces import LLMProviderInterface
 from src.prompts.loader import get_prompt
 
 logger = logging.getLogger(__name__)
+
+
+class GuardianTrajectoryAnalysis(TypedDict):
+    """Canonical shape of analyze_agent_with_trajectory's return value
+    (SOLID review 3.7) -- guardian_dispatch.py builds a GuardianAnalysis
+    DB row (src/core/database.py) straight from this dict's keys, and this
+    codebase has independently found the same bug shape here twice: an LLM
+    response key ("steering_recommendation") renamed to a different result
+    key ("steering_message") with the old name still read downstream, and
+    "last_claude_message_marker" simply never copied out of the raw LLM
+    response despite the prompt asking for it. A plain Dict[str, Any]
+    return type let both drift silently; this doesn't, since a wrong key
+    name here is now a type error, not a runtime None.
+
+    NotRequired fields are ones _get_default_analysis/
+    _get_timeout_escalation_analysis genuinely don't set -- those paths
+    skip _build_accumulated_context entirely (no LLM call was analyzed),
+    so they have nothing real to report for them; GuardianAnalysis's
+    corresponding DB columns get None in that case, which is the correct
+    degraded value, not a bug.
+
+    current_focus is a known separate gap, not a naming mismatch: it has a
+    DB column, a prompt-template placeholder, and a frontend consumer, but
+    no producer anywhere ever computes a real value for it -- always
+    "Unknown"/None end-to-end. Left unimplemented here rather than
+    invented; a real fix means deciding what "current focus" should
+    actually derive from, which is its own scoping decision.
+    """
+
+    # Any, not str: these come straight from a SQLAlchemy Column(String)
+    # attribute, which mypy sees as Column[str] rather than str at the
+    # class-definition sites that populate this dict (a pre-existing,
+    # repo-wide ORM/mypy friction, not something specific to this dict).
+    agent_id: Any
+    agent_type: Any
+    trajectory_summary: str
+    current_phase: str
+    trajectory_aligned: bool
+    alignment_score: float
+    alignment_issues: List[str]
+    needs_steering: bool
+    steering_type: Optional[str]
+    steering_message: Optional[str]
+    accumulated_goal: str
+    active_constraints: List[str]
+    last_claude_message_marker: NotRequired[Optional[str]]
+    conversation_length: NotRequired[int]
+    session_duration: NotRequired[str]
+    current_focus: NotRequired[Optional[str]]
 
 # Consecutive Guardian LLM-analysis timeouts (see analyze_agent_with_trajectory's
 # GUARDIAN_LLM_TIMEOUT) before the timeout pattern itself is treated as a stuck
@@ -117,7 +166,7 @@ class Guardian:
         agent: Agent,
         tmux_output: str,
         past_summaries: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+    ) -> GuardianTrajectoryAnalysis:
         """
         Analyze agent using GPT-5 with trajectory thinking.
 
@@ -247,7 +296,7 @@ class Guardian:
 
             # GPT-5 returns the complete trajectory analysis
             # Extract and enhance the results
-            result = {
+            result: GuardianTrajectoryAnalysis = {
                 "agent_id": agent.id,
                 "agent_type": agent.agent_type,  # Include agent type for Conductor
                 "trajectory_summary": analysis.get(
@@ -739,7 +788,7 @@ class Guardian:
                 },
             }
 
-    def _get_default_analysis(self, agent: Agent) -> Dict[str, Any]:
+    def _get_default_analysis(self, agent: Agent) -> GuardianTrajectoryAnalysis:
         """Get default analysis when LLM analysis fails."""
         return {
             "agent_id": agent.id,
@@ -758,7 +807,7 @@ class Guardian:
 
     def _get_timeout_escalation_analysis(
         self, agent: Agent, consecutive_timeouts: int
-    ) -> Dict[str, Any]:
+    ) -> GuardianTrajectoryAnalysis:
         """Analysis returned after GUARDIAN_TIMEOUT_ESCALATION_THRESHOLD consecutive
         Guardian LLM-analysis timeouts for this agent.
 
