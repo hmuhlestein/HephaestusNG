@@ -69,7 +69,7 @@ class AgentDispatchService:
         if workflow_id:
             try:
                 from src.core.database import resolve_project_for_workflow
-                project_id = resolve_project_for_workflow(workflow_id)
+                project_id, _project_name = resolve_project_for_workflow(workflow_id)
             except Exception:
                 pass
 

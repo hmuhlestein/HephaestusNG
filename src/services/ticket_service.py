@@ -1508,7 +1508,9 @@ class TicketService:
         # project repo rather than assuming it's whichever project the
         # process-wide singleton currently points at.
         # REQ-10/14: resolve via repo_id, stamp on TicketCommit.
+        # Resolve once and reuse for both path and stamping (BLOCKER #3 fix).
         main_repo_path = None
+        resolved_repo_id = None
         task_repo_id = None
         if ticket.workflow_id:
             wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
@@ -1521,6 +1523,7 @@ class TicketService:
                 repo = resolve_repo(db, wf.project_id, task_repo_id)
                 if repo:
                     main_repo_path = repo.path
+                    resolved_repo_id = repo.id
                     if task_repo_id and repo.id != task_repo_id:
                         # REQ-10: repo_id was set but didn't resolve to
                         # itself -- log, don't block.
@@ -1556,16 +1559,8 @@ class TicketService:
         )
 
         # Create commit link with real stats
-        # REQ-10/14: stamp repo_id from resolved repo
+        # REQ-10/14: stamp repo_id from the already-resolved repo
         commit_id = f"tc-{uuid.uuid4()}"
-        resolved_repo_id = None
-        if ticket.workflow_id:
-            wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
-            if wf and wf.project_id:
-                from src.core.repo_resolution import resolve_repo
-                repo = resolve_repo(db, wf.project_id, task_repo_id)
-                resolved_repo_id = repo.id if repo else None
-
         ticket_commit = TicketCommit(
             id=commit_id,
             ticket_id=ticket_id,
