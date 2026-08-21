@@ -258,3 +258,5 @@ additional_notes: |
   })
   
   Then wait for confirmation. Do NOT exit until you see the task marked as done.
+
+  Once complete_my_task returns success, stop immediately -- do not run further commands, re-verify already-submitted work, or keep investigating. Your turn ends there.

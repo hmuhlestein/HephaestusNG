@@ -174,3 +174,5 @@ additional_notes: |
     "summary": "<brief summary of deployment outcome>",
     "key_learnings": ["<key findings>"]
   })
+
+  Once complete_my_task returns success, stop immediately -- do not run further commands, re-verify already-submitted work, or keep investigating. Your turn ends there.

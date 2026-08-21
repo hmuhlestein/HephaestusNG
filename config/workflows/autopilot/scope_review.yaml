@@ -233,3 +233,5 @@ additional_notes: |
     "summary": "SCOPE_PASS: ..." or "SCOPE_FAIL: ...",
     "key_learnings": ["<list of in-scope, out-of-scope, missing items>"]
   })
+
+  Once complete_my_task returns success, stop immediately -- do not run further commands, re-verify already-submitted work, or keep investigating. Your turn ends there.
