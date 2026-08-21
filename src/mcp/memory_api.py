@@ -249,19 +249,17 @@ async def save_memory(
         memory_id = str(uuid.uuid4())
 
         # Create initial memory record in database
-        session = server_state.db_manager.get_session()
-        memory = Memory(
-            id=memory_id,
-            agent_id=agent_id,
-            content=request.memory_content,
-            memory_type=request.memory_type,
-            embedding_id=None,
-            tags=request.tags,
-            related_files=request.related_files,
-        )
-        session.add(memory)
-        session.commit()
-        session.close()
+        with server_state.db_manager.session_scope() as session:
+            memory = Memory(
+                id=memory_id,
+                agent_id=agent_id,
+                content=request.memory_content,
+                memory_type=request.memory_type,
+                embedding_id=None,
+                tags=request.tags,
+                related_files=request.related_files,
+            )
+            session.add(memory)
 
         # Process the embedding and deduplication asynchronously
         async def process_memory_async():
@@ -295,39 +293,33 @@ async def save_memory(
                         },
                     )
 
-                    session = server_state.db_manager.get_session()
-                    memory = session.query(Memory).filter_by(id=memory_id).first()
-                    if memory:
-                        memory.embedding_id = memory_id if success else None
-                        session.commit()
-                    session.close()
+                    with server_state.db_manager.session_scope() as session:
+                        memory = session.query(Memory).filter_by(id=memory_id).first()
+                        if memory:
+                            memory.embedding_id = memory_id if success else None
 
                     logger.info(
                         f"Memory {memory_id} indexed successfully in background"
                     )
                 else:
-                    session = server_state.db_manager.get_session()
-                    memory = session.query(Memory).filter_by(id=memory_id).first()
-                    if memory:
-                        memory.tags = (memory.tags or []) + [
-                            f"duplicate_of:{similar[0]['id']}"
-                        ]
-                        session.commit()
-                    session.close()
+                    with server_state.db_manager.session_scope() as session:
+                        memory = session.query(Memory).filter_by(id=memory_id).first()
+                        if memory:
+                            memory.tags = (memory.tags or []) + [
+                                f"duplicate_of:{similar[0]['id']}"
+                            ]
                     logger.info(
                         f"Memory {memory_id} marked as duplicate of {similar[0]['id']}"
                     )
 
             except Exception as e:
                 logger.error(f"Failed to process memory {memory_id} in background: {e}")
-                session = server_state.db_manager.get_session()
-                memory = session.query(Memory).filter_by(id=memory_id).first()
-                if memory:
-                    memory.tags = (memory.tags or []) + [
-                        f"indexing_error:{str(e)[:50]}"
-                    ]
-                    session.commit()
-                session.close()
+                with server_state.db_manager.session_scope() as session:
+                    memory = session.query(Memory).filter_by(id=memory_id).first()
+                    if memory:
+                        memory.tags = (memory.tags or []) + [
+                            f"indexing_error:{str(e)[:50]}"
+                        ]
 
         from src.mcp.server._shared import spawn_background_task
 

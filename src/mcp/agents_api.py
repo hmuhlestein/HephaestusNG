@@ -692,68 +692,66 @@ async def get_task_progress(
     """Get progress of specific task or all active tasks."""
     server_state = _get_server_state()
     try:
-        session = server_state.db_manager.get_session()
+        with server_state.db_manager.session_scope() as session:
+            if task_id:
+                task = session.query(Task).filter_by(id=task_id).first()
+                if not task:
+                    raise HTTPException(status_code=404, detail="Task not found")
 
-        if task_id:
-            task = session.query(Task).filter_by(id=task_id).first()
-            if not task:
-                raise HTTPException(status_code=404, detail="Task not found")
-
-            result = {
-                "id": task.id,
-                "status": task.status,
-                "description": task.enriched_description or task.raw_description,
-                "assigned_agent_id": task.assigned_agent_id,
-                "started_at": task.started_at.isoformat() + "Z" if task.started_at else None,
-                "completed_at": task.completed_at.isoformat() + "Z"
-                if task.completed_at
-                else None,
-                "phase_id": task.phase_id,
-                "workflow_id": task.workflow_id,
-            }
-            if task.phase_id:
-                # SOLID review 1.10: this branch bypassed resolve_task_phase,
-                # unlike the multi-task branch just below it in this same
-                # function -- a raw Phase.filter_by(id=...) doesn't handle
-                # phase_id given as a numeric order vs. a real UUID, or scope
-                # to the task's own workflow, so this could silently resolve
-                # the wrong phase (or none) depending on which form task_id
-                # was passed as, inconsistent with every other endpoint.
-                phase = resolve_task_phase(session, task)
-                if phase:
-                    result["phase_name"] = phase.name
-                    result["phase_order"] = phase.order
-        else:
-            tasks = (
-                session.query(Task)
-                .filter(Task.status.in_(["pending", "assigned", "in_progress"]))
-                .all()
-            )
-
-            result = []
-            for t in tasks:
-                phase_name = None
-                phase_order = None
-                if t.phase_id:
-                    from src.core.database import Phase
-                    phase = resolve_task_phase(session, t)
+                result = {
+                    "id": task.id,
+                    "status": task.status,
+                    "description": task.enriched_description or task.raw_description,
+                    "assigned_agent_id": task.assigned_agent_id,
+                    "started_at": task.started_at.isoformat() + "Z" if task.started_at else None,
+                    "completed_at": task.completed_at.isoformat() + "Z"
+                    if task.completed_at
+                    else None,
+                    "phase_id": task.phase_id,
+                    "workflow_id": task.workflow_id,
+                }
+                if task.phase_id:
+                    # SOLID review 1.10: this branch bypassed resolve_task_phase,
+                    # unlike the multi-task branch just below it in this same
+                    # function -- a raw Phase.filter_by(id=...) doesn't handle
+                    # phase_id given as a numeric order vs. a real UUID, or scope
+                    # to the task's own workflow, so this could silently resolve
+                    # the wrong phase (or none) depending on which form task_id
+                    # was passed as, inconsistent with every other endpoint.
+                    phase = resolve_task_phase(session, task)
                     if phase:
-                        phase_name = phase.name
-                        phase_order = phase.order
-                result.append({
-                    "id": t.id,
-                    "status": t.status,
-                    "description": (t.enriched_description or t.raw_description)[:200],
-                    "assigned_agent_id": t.assigned_agent_id,
-                    "started_at": t.started_at.isoformat() + "Z" if t.started_at else None,
-                    "completed_at": t.completed_at.isoformat() + "Z" if t.completed_at else None,
-                    "phase_id": t.phase_id,
-                    "workflow_id": t.workflow_id,
-                    "phase_name": phase_name,
-                    "phase_order": phase_order,
-                })
+                        result["phase_name"] = phase.name
+                        result["phase_order"] = phase.order
+            else:
+                tasks = (
+                    session.query(Task)
+                    .filter(Task.status.in_(["pending", "assigned", "in_progress"]))
+                    .all()
+                )
 
-        session.close()
+                result = []
+                for t in tasks:
+                    phase_name = None
+                    phase_order = None
+                    if t.phase_id:
+                        from src.core.database import Phase
+                        phase = resolve_task_phase(session, t)
+                        if phase:
+                            phase_name = phase.name
+                            phase_order = phase.order
+                    result.append({
+                        "id": t.id,
+                        "status": t.status,
+                        "description": (t.enriched_description or t.raw_description)[:200],
+                        "assigned_agent_id": t.assigned_agent_id,
+                        "started_at": t.started_at.isoformat() + "Z" if t.started_at else None,
+                        "completed_at": t.completed_at.isoformat() + "Z" if t.completed_at else None,
+                        "phase_id": t.phase_id,
+                        "workflow_id": t.workflow_id,
+                        "phase_name": phase_name,
+                        "phase_order": phase_order,
+                    })
+
         return result
 
     except HTTPException:
