@@ -30,6 +30,7 @@ from src.mcp.memory_api import (
     router as memory_router,
 )
 from src.mcp.messaging_api import router as messaging_router
+from src.mcp.server.connection_broadcaster import ConnectionBroadcaster
 
 # Import routers at module level for test compatibility
 from src.mcp.tickets_api import router as tickets_router
@@ -243,11 +244,33 @@ class ServerState:
         self.embedding_service: Optional[EmbeddingProvider] = None
         self.task_similarity_service: Optional[TaskSimilarityService] = None
         self.queue_service: Optional[QueueService] = None
-        self.active_websockets: List[WebSocket] = []
-        self.sse_queues: List[asyncio.Queue] = []
+        # Connection fan-out (SOLID review 1.6): a distinct responsibility
+        # from composing the service instances above, extracted to
+        # ConnectionBroadcaster. active_websockets/sse_queues/broadcast_update
+        # stay on ServerState as properties/a delegator -- several call sites
+        # mutate or reassign them directly on server_state (append/remove, and
+        # one test's monkeypatch.setattr), and this keeps that surface
+        # unchanged rather than pushing the migration onto every caller.
+        self._broadcaster = ConnectionBroadcaster()
         self.background_queue_processor_task: Optional[asyncio.Task] = None
         self.phase_advancement_sweep_task: Optional[asyncio.Task] = None
         self.shutdown_event: asyncio.Event = asyncio.Event()
+
+    @property
+    def active_websockets(self) -> List[WebSocket]:
+        return self._broadcaster.active_websockets
+
+    @active_websockets.setter
+    def active_websockets(self, value: List[WebSocket]) -> None:
+        self._broadcaster.active_websockets = value
+
+    @property
+    def sse_queues(self) -> List[asyncio.Queue]:
+        return self._broadcaster.sse_queues
+
+    @sse_queues.setter
+    def sse_queues(self, value: List[asyncio.Queue]) -> None:
+        self._broadcaster.sse_queues = value
 
     async def initialize(self):
         """Initialize server components."""
@@ -398,37 +421,10 @@ class ServerState:
     ):
         """Broadcast update to all connected WebSocket and SSE clients.
 
-        project_id/project_name: when known, merged into the payload so
-        clients can filter events by their currently-selected project
-        (and label them by name) instead of rendering every project's
-        activity indiscriminately -- with more than one project able to
-        run concurrently, an unfiltered feed mixes together events from
-        projects the viewer isn't even looking at. Broadcasting itself
-        stays global (every connected client still receives every message;
-        there's no per-connection project subscription to route through)
-        -- this only adds the fields a client-side filter/label needs.
-        Callers that don't have a project in scope (e.g. non-project-scoped
-        triggers) omit these rather than guess.
+        Delegates to ConnectionBroadcaster -- see its docstring for the
+        project_id/project_name behaviour.
         """
-        if project_id:
-            message = {**message, "project_id": project_id, "project_name": project_name}
-        disconnected = []
-        for websocket in self.active_websockets:
-            try:
-                await websocket.send_json(message)
-            except Exception:
-                disconnected.append(websocket)
-
-        # Remove disconnected clients
-        for ws in disconnected:
-            self.active_websockets.remove(ws)
-
-        # Send to SSE clients
-        for queue in self.sse_queues:
-            try:
-                queue.put_nowait(message)
-            except asyncio.QueueFull:
-                logger.warning("SSE queue full, skipping event")
+        return await self._broadcaster.broadcast_update(message, project_id, project_name)
 
 
 
