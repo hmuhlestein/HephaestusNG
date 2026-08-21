@@ -648,7 +648,7 @@ class TestRunPhase0ReviewMode:
         ), patch(
             "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
         ), patch(
-            "src.autopilot.orchestrator._wait_for_phase0_review_clearance",
+            "src.autopilot.orchestrator.pipeline._wait_for_phase0_review_clearance",
             return_value=True,
         ) as mock_wait:
             features_json, _ = run_phase0(
@@ -692,7 +692,7 @@ class TestRunPhase0ReviewMode:
         ), patch(
             "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
         ), patch(
-            "src.autopilot.orchestrator._wait_for_phase0_review_clearance"
+            "src.autopilot.orchestrator.pipeline._wait_for_phase0_review_clearance"
         ) as mock_wait:
             features_json, _ = run_phase0(
                 sdk=MagicMock(),
@@ -729,7 +729,7 @@ class TestRunPhase0ReviewMode:
         ), patch(
             "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
         ), patch(
-            "src.autopilot.orchestrator._wait_for_phase0_review_clearance",
+            "src.autopilot.orchestrator.pipeline._wait_for_phase0_review_clearance",
             return_value=False,
         ):
             result = run_phase0(
@@ -794,7 +794,7 @@ class TestRunPhase0ReviewMode:
         with patch(
             "src.autopilot.orchestrator.pipeline.run_single_workflow"
         ) as mock_run, patch(
-            "src.autopilot.orchestrator._wait_for_phase0_review_clearance",
+            "src.autopilot.orchestrator.pipeline._wait_for_phase0_review_clearance",
             return_value=True,
         ) as mock_wait:
             features_json, returned_folder = run_phase0(
