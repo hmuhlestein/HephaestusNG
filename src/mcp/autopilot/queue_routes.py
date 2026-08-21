@@ -218,6 +218,22 @@ async def requeue_design(request: dict):
                         # pause could silently get reverted within one
                         # sweep tick the moment a done task shows up in the
                         # workflow's in-progress phase.
+                        #
+                        # NOTE: this is a different flavor of paused_by=
+                        # "user" than /stop's (control_routes.py's
+                        # pause_project_workflows, which also clears
+                        # AutopilotService's persisted "was running" marker
+                        # via .stop()) -- that one means "leave this off
+                        # until I say otherwise" and correctly survives a
+                        # server restart. This one is a short-lived
+                        # technical guard around the reset above; the tasks
+                        # it just reset to "pending" are meant to continue
+                        # once the pipeline's normal queue processing (or a
+                        # restart, via the still-live AutopilotService
+                        # marker) re-engages this workflow. Don't make this
+                        # pause block restart-resume the way a /stop pause
+                        # does -- that would strand every requeued design
+                        # paused across the next restart.
                         from src.autopilot.orchestrator.engine_client import pause_workflow
                         pause_workflow(wf.id, reason="user", session=db)
                         paused_count += 1
