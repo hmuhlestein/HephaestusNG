@@ -182,9 +182,6 @@ const Graph: React.FC = () => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [hoveredNode, setHoveredNode] = useState<string | null>(null);
-  const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set());
-  const [highlightedEdges, setHighlightedEdges] = useState<Set<string>>(new Set());
   const [layoutDirection, setLayoutDirection] = useState<LayoutDirection>('TB');
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(15);
@@ -225,7 +222,14 @@ const Graph: React.FC = () => {
     return { nodes: visitedNodes, edges: connectedEdges };
   }, []);
 
-  // Process and layout data
+  // Process and layout data. SOLID review 5.5: this used to also depend on
+  // highlightedNodes/highlightedEdges/hoveredNode, so hovering a node re-ran
+  // the full filter/phase-join/dagre-layout pipeline on every mouseenter --
+  // a real O(n log n) re-layout per hover on a large graph, for what's
+  // purely a styling overlay. Highlight/dim state is applied directly by
+  // onNodeMouseEnter/onNodeMouseLeave below instead, patching the
+  // already-laid-out nodes/edges in place -- dagre only reruns when the
+  // underlying data or layout direction actually changes.
   useEffect(() => {
     if (!data) return;
 
@@ -259,48 +263,45 @@ const Graph: React.FC = () => {
       position: { x: 0, y: 0 }, // Will be set by layout
       data: {
         ...node.data,
-        isHighlighted: highlightedNodes.has(node.id),
-        isDimmed: hoveredNode && !highlightedNodes.has(node.id),
+        isHighlighted: false,
+        isDimmed: false,
       },
     }));
 
     // Convert to React Flow edges
-    const flowEdges: Edge[] = subtaskEdges.map((edge: GraphEdge) => {
-      const isHighlighted = highlightedEdges.has(edge.id);
-      return {
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        type: 'smoothstep',
-        animated: isHighlighted,
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          width: 16,
-          height: 16,
-        },
-        style: {
-          stroke: isHighlighted ? '#FF6B6B' : '#F59E0B',
-          strokeWidth: isHighlighted ? 4 : 2,
-          opacity: hoveredNode && !isHighlighted ? 0.3 : 1,
-        },
-        label: 'spawned',
-        labelStyle: {
-          fontSize: 10,
-          fill: '#6B7280',
-        },
-        labelBgStyle: {
-          fill: '#ffffff',
-          fillOpacity: 0.8,
-        },
-      };
-    });
+    const flowEdges: Edge[] = subtaskEdges.map((edge: GraphEdge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: 'smoothstep',
+      animated: false,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 16,
+        height: 16,
+      },
+      style: {
+        stroke: '#F59E0B',
+        strokeWidth: 2,
+        opacity: 1,
+      },
+      label: 'spawned',
+      labelStyle: {
+        fontSize: 10,
+        fill: '#6B7280',
+      },
+      labelBgStyle: {
+        fill: '#ffffff',
+        fillOpacity: 0.8,
+      },
+    }));
 
     // Apply Dagre layout
     const layoutedNodes = getLayoutedElements(flowNodes, flowEdges, layoutDirection);
 
     setNodes(layoutedNodes);
     setEdges(flowEdges);
-  }, [data, layoutDirection, highlightedNodes, highlightedEdges, hoveredNode, setNodes, setEdges]);
+  }, [data, layoutDirection, setNodes, setEdges]);
 
   // Subscribe to WebSocket updates
   useEffect(() => {
@@ -318,17 +319,41 @@ const Graph: React.FC = () => {
   }, []);
 
   const onNodeMouseEnter = useCallback((_event: React.MouseEvent, node: Node) => {
-    setHoveredNode(node.id);
     const chain = findConnectedChain(node.id, edges);
-    setHighlightedNodes(chain.nodes);
-    setHighlightedEdges(chain.edges);
-  }, [edges, findConnectedChain]);
+    setNodes((nds) => nds.map((n) => ({
+      ...n,
+      data: {
+        ...n.data,
+        isHighlighted: chain.nodes.has(n.id),
+        isDimmed: !chain.nodes.has(n.id),
+      },
+    })));
+    setEdges((eds) => eds.map((e) => {
+      const isHighlighted = chain.edges.has(e.id);
+      return {
+        ...e,
+        animated: isHighlighted,
+        style: {
+          ...e.style,
+          stroke: isHighlighted ? '#FF6B6B' : '#F59E0B',
+          strokeWidth: isHighlighted ? 4 : 2,
+          opacity: isHighlighted ? 1 : 0.3,
+        },
+      };
+    }));
+  }, [edges, findConnectedChain, setNodes, setEdges]);
 
   const onNodeMouseLeave = useCallback(() => {
-    setHoveredNode(null);
-    setHighlightedNodes(new Set());
-    setHighlightedEdges(new Set());
-  }, []);
+    setNodes((nds) => nds.map((n) => ({
+      ...n,
+      data: { ...n.data, isHighlighted: false, isDimmed: false },
+    })));
+    setEdges((eds) => eds.map((e) => ({
+      ...e,
+      animated: false,
+      style: { ...e.style, stroke: '#F59E0B', strokeWidth: 2, opacity: 1 },
+    })));
+  }, [setNodes, setEdges]);
 
   // Calculate stats
   const stats = useMemo(() => {
