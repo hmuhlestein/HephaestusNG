@@ -706,3 +706,12 @@ async def shutdown_event():
     # Close all WebSocket connections
     for ws in server_state.active_websockets:
         await ws.close()
+
+    # Close any CDP browser sessions the devtools MCP tools opened -- left
+    # open otherwise, since nothing else ever calls close_all().
+    try:
+        from src.mcp.devtools import devtools_manager
+
+        await devtools_manager.close_all()
+    except Exception as e:
+        logger.error(f"Failed to close devtools browser sessions: {e}")
