@@ -3442,7 +3442,7 @@ class TestDetectZombieAgent:
         assert result is False
         mock_agent_manager.terminate_agent.assert_not_called()
 
-    @pytest.mark.parametrize("agent_status", ["working", "starting", "idle"])
+    @pytest.mark.parametrize("agent_status", ["working", "starting", "idle", "stuck"])
     @pytest.mark.parametrize("task_status", ["done", "failed", "duplicated"])
     @pytest.mark.asyncio
     async def test_terminal_task_reaps_the_agent(

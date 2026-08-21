@@ -89,6 +89,26 @@ class Terminator:
             if not agent:
                 logger.warning(f"Agent {agent_id} not found")
                 return
+            if agent.status == "terminated":
+                # Idempotency guard, not a full fix for the underlying race:
+                # this call and another terminate_agent(agent_id) call for
+                # the SAME agent can both pass this check before either
+                # commits its own terminated status (a classic check-then-
+                # act race, since each runs in its own executor thread with
+                # its own DB session) -- so this narrows the window rather
+                # than closing it outright. Added for monitor.py's new
+                # detect_zombie_agent: it can legitimately fire in the brief
+                # gap between a task's completion handler committing
+                # task.status="done" and that SAME handler's own (now
+                # correctly non-dropped, see c1cc687) termination call
+                # actually finishing. Without this, that overlap redundantly
+                # re-runs the WIP commit, tmux/subprocess kills, and cost
+                # collection below a second time for no benefit --
+                # collect_task_cost's own per-session checkpoint already
+                # makes ITS specific double-call harmless, but nothing else
+                # here was.
+                logger.debug(f"Agent {agent_id} already terminated -- skipping duplicate termination")
+                return
 
             # Preserve any uncommitted work before teardown so a kill/restart is
             # non-destructive — a resume then continues from the committed branch
