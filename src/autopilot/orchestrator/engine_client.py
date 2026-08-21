@@ -6,7 +6,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import requests
 
@@ -426,13 +426,27 @@ def fail_workflow_direct(workflow_id: str) -> bool:
         return False
 
 
-def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids: tuple = None) -> int:
+def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids: tuple = None) -> Tuple[int, List[str]]:
     """Pause all active workflows for a project and terminate their agents.
 
     Resets in-progress tasks back to pending so they get re-dispatched
     on resume. Called from both the user stop-button path
     (autopilot_api.py) and the budget-enforcement path
     (cost_derivation.py).
+
+    Also collects the IDs of any "queued" tasks belonging to the paused
+    workflows -- still eligible for QueueService.claim_next_queued_task to
+    dispatch otherwise, even after their workflow was just paused (same
+    gap stop_workflow/cancel_workflow/pause_feature had). NOT reset here:
+    QueueService.reset_queued_task_to_pending opens its own locked session
+    per call, and calling it before this function's caller commits `db`
+    would race that still-open transaction. The caller must apply it
+    AFTER committing -- see stop_pipeline (control_routes.py) for the
+    pattern. Deliberately not applied from the budget-enforcement path
+    (cost_derivation.py): that caller's own `db` commit boundary lives
+    several frames further up (see derive_project_cost's "caller will
+    commit"), too indirect to safely thread this through without risking
+    the same race it exists to avoid.
 
     Args:
         db: Database session
@@ -442,7 +456,8 @@ def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids:
             DESIGN_WORKFLOW_DEFINITION_IDS (autopilot + phase0 + feature_architect).
 
     Returns:
-        Number of workflows paused.
+        (number of workflows paused, IDs of queued tasks belonging to
+        them -- see this docstring's note on why they aren't reset here).
     """
     from src.core.constants import DESIGN_WORKFLOW_DEFINITION_IDS
     from src.core.database import Agent, Task
@@ -531,8 +546,16 @@ def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids:
                 task.failure_reason = "User terminated: workflow was paused"
             logger.info(f"[PAUSE] Reset task {task.id[:8]} to pending")
 
+        queued_task_ids = [
+            t.id
+            for t in db.query(Task)
+            .filter(Task.workflow_id.in_(workflow_ids), Task.status == "queued")
+            .all()
+        ]
+
         logger.info(f"[PAUSE] Paused {paused_count} workflows for project {project_id[:8]}")
-    return paused_count
+        return paused_count, queued_task_ids
+    return paused_count, []
 
 
 def check_phase_sibling_active(
