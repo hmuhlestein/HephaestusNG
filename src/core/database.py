@@ -1491,11 +1491,13 @@ class DatabaseManager:
         """Create all database tables."""
         Base.metadata.create_all(bind=self.engine)
 
-        # Create FTS5 virtual table for ticket search
-        self._create_fts5_tables()
+        # FTS5 search tables and performance indexes live in
+        # src/core/schema_ddl.py (SOLID review 4.1) -- ~150 lines of raw SQL
+        # that only need the engine, same as the migrations below.
+        from src.core.schema_ddl import create_fts5_tables, create_indexes
 
-        # Create indexes for performance optimization
-        self._create_indexes()
+        create_fts5_tables(self.engine)
+        create_indexes(self.engine)
 
         # Migrate new columns for existing databases. Each migration still
         # owns its own internal resilience (SOLID review 4.1) -- this just
@@ -1557,163 +1559,6 @@ class DatabaseManager:
                 session.add(SchemaMigration(id=migration_id))
         except Exception as e:
             logger.warning(f"Could not record schema_migrations entry for {migration_id}: {e}")
-
-    def _create_fts5_tables(self):
-        """Create FTS5 virtual tables and triggers for ticket search."""
-        try:
-            with self.engine.connect() as conn:
-                # Create FTS5 virtual table for tickets
-                conn.execute(
-                    text(
-                        """
-                    CREATE VIRTUAL TABLE IF NOT EXISTS ticket_fts USING fts5(
-                        ticket_id UNINDEXED,
-                        title,
-                        description,
-                        tags
-                    )
-                """
-                    )
-                )
-
-                # Create triggers to keep FTS5 in sync with tickets table
-                # Trigger for INSERT
-                conn.execute(
-                    text(
-                        """
-                    CREATE TRIGGER IF NOT EXISTS tickets_fts_insert AFTER INSERT ON tickets BEGIN
-                        INSERT INTO ticket_fts(ticket_id, title, description, tags)
-                        VALUES (new.id, new.title, new.description,
-                                COALESCE(json_extract(new.tags, '$'), ''));
-                    END
-                """
-                    )
-                )
-
-                # Trigger for UPDATE
-                conn.execute(
-                    text(
-                        """
-                    CREATE TRIGGER IF NOT EXISTS tickets_fts_update AFTER UPDATE ON tickets BEGIN
-                        DELETE FROM ticket_fts WHERE ticket_id = old.id;
-                        INSERT INTO ticket_fts(ticket_id, title, description, tags)
-                        VALUES (new.id, new.title, new.description,
-                                COALESCE(json_extract(new.tags, '$'), ''));
-                    END
-                """
-                    )
-                )
-
-                # Trigger for DELETE
-                conn.execute(
-                    text(
-                        """
-                    CREATE TRIGGER IF NOT EXISTS tickets_fts_delete AFTER DELETE ON tickets BEGIN
-                        DELETE FROM ticket_fts WHERE ticket_id = old.id;
-                    END
-                """
-                    )
-                )
-
-                conn.commit()
-                logger.info("Created FTS5 virtual table and triggers for ticket search")
-        except Exception as e:
-            logger.debug(f"FTS5 table setup (may already exist): {e}")
-
-    def _create_indexes(self):
-        """Create database indexes for performance optimization."""
-        try:
-            with self.engine.connect() as conn:
-                # Tickets table indexes
-                conn.execute(
-                    text(
-                        """
-                    CREATE INDEX IF NOT EXISTS idx_tickets_workflow_status
-                    ON tickets(workflow_id, status)
-                """
-                    )
-                )
-
-                conn.execute(
-                    text(
-                        """
-                    CREATE INDEX IF NOT EXISTS idx_tickets_workflow_priority
-                    ON tickets(workflow_id, priority)
-                """
-                    )
-                )
-
-                conn.execute(
-                    text(
-                        """
-                    CREATE INDEX IF NOT EXISTS idx_tickets_assigned_agent
-                    ON tickets(assigned_agent_id)
-                """
-                    )
-                )
-
-                conn.execute(
-                    text(
-                        """
-                    CREATE INDEX IF NOT EXISTS idx_tickets_created_at
-                    ON tickets(created_at)
-                """
-                    )
-                )
-
-                # Ticket comments index
-                conn.execute(
-                    text(
-                        """
-                    CREATE INDEX IF NOT EXISTS idx_ticket_comments_ticket_id
-                    ON ticket_comments(ticket_id)
-                """
-                    )
-                )
-
-                # Ticket history index
-                conn.execute(
-                    text(
-                        """
-                    CREATE INDEX IF NOT EXISTS idx_ticket_history_ticket_id
-                    ON ticket_history(ticket_id)
-                """
-                    )
-                )
-
-                # Ticket commits index
-                conn.execute(
-                    text(
-                        """
-                    CREATE INDEX IF NOT EXISTS idx_ticket_commits_ticket_id
-                    ON ticket_commits(ticket_id)
-                """
-                    )
-                )
-
-                conn.execute(
-                    text(
-                        """
-                    CREATE INDEX IF NOT EXISTS idx_ticket_commits_sha
-                    ON ticket_commits(commit_sha)
-                """
-                    )
-                )
-
-                # Tasks table indexes for ticket tracking
-                conn.execute(
-                    text(
-                        """
-                    CREATE INDEX IF NOT EXISTS idx_tasks_ticket_id
-                    ON tasks(ticket_id)
-                """
-                    )
-                )
-
-                conn.commit()
-                logger.info("Created performance indexes for ticket tracking system")
-        except Exception as e:
-            logger.debug(f"Index creation (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""
