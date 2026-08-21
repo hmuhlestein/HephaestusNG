@@ -1260,9 +1260,14 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
         base_dir = proj.base_dir
 
     if req.destination == "docs":
-        # Locally-uploaded content is new to the repo -- persist it as a
-        # real, git-tracked file instead of the hidden staging dir below.
-        design_dir = Path(base_dir) / "docs"
+        # REQ-12: resolve to primary ProjectRepo's path for git-tracked docs
+        from src.core.repo_resolution import resolve_primary_repo
+
+        with get_db() as db:
+            primary = resolve_primary_repo(db, project_id)
+        if not primary:
+            raise HTTPException(500, f"Project {project_id} has no primary repo")
+        design_dir = Path(primary.path) / "docs"
     else:
         # Store in .hephaestus/designs/ (not git-tracked) so git commits
         # don't delete design files.
@@ -1688,3 +1693,100 @@ async def get_project_design_status(project_id: str, filename: str):
     design_name = filepath.stem.replace("_", " ").replace("-", " ")
 
     return await get_design_status(project_id, filename, base_dir, design_content, design_name)
+
+
+# ── ProjectRepo CRUD Endpoints (REQ-24) ─────────────────────────────────
+
+
+class ProjectRepoItem(BaseModel):
+    id: str
+    project_id: str
+    label: str
+    path: str
+    is_primary: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AddProjectRepoRequest(BaseModel):
+    label: str
+    path: str
+
+
+@router.get("/projects/{project_id}/repos", response_model=List[ProjectRepoItem])
+async def list_project_repos(project_id: str):
+    from src.core.database import get_db
+    from src.core.repo_resolution import list_repos
+
+    with get_db() as db:
+        repos = list_repos(db, project_id)
+        return [ProjectRepoItem.model_validate(r) for r in repos]
+
+
+@router.post("/projects/{project_id}/repos", response_model=ProjectRepoItem)
+async def add_project_repo(project_id: str, req: AddProjectRepoRequest):
+    """REQ-24: Add a child repo to a project.
+
+    path must be absolute (REQ-03) and an existing git repo.
+    is_primary is always False -- set only by migration for the first repo.
+    """
+    import uuid
+
+    import git
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.database import AutopilotProject, ProjectRepo, get_db
+
+    if not os.path.isabs(req.path):
+        raise HTTPException(400, "path must be absolute")
+    try:
+        git.Repo(req.path)
+    except (git.InvalidGitRepositoryError, git.NoSuchPathError):
+        raise HTTPException(400, f"Not a git repository: {req.path}")
+
+    # Validate label is non-empty (WARNING fix)
+    if not req.label or not req.label.strip():
+        raise HTTPException(400, "label must be non-empty")
+    req.label = req.label.strip()
+
+    with get_db() as db:
+        if not db.query(AutopilotProject).filter_by(id=project_id).first():
+            raise HTTPException(404, "Project not found")
+
+        # Pre-check for specific error messages (WARNING fix)
+        from src.core.database import ProjectRepo as ProjectRepoModel
+        existing_path = db.query(ProjectRepoModel).filter_by(
+            project_id=project_id, path=req.path
+        ).first()
+        if existing_path:
+            raise HTTPException(
+                409, f"A repo with path '{req.path}' already exists for this project"
+            )
+        existing_label = db.query(ProjectRepoModel).filter_by(
+            project_id=project_id, label=req.label
+        ).first()
+        if existing_label:
+            raise HTTPException(
+                409, f"A repo with label '{req.label}' already exists for this project"
+            )
+
+        repo = ProjectRepo(
+            id=f"repo-{uuid.uuid4().hex[:12]}",
+            project_id=project_id,
+            label=req.label,
+            path=req.path,
+            is_primary=False,
+        )
+        db.add(repo)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                409,
+                f"A repo with path '{req.path}' or label '{req.label}' "
+                f"already exists for this project",
+            )
+        return ProjectRepoItem.model_validate(repo)

@@ -35,12 +35,13 @@ def _get_workflow_id_for_ticket(ticket_id: str) -> Optional[str]:
 
 
 def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[str]:
-    """Resolve which project's repo a commit lives in via the ticket it's
-    linked to. Returns None (never raises) when the commit isn't linked to
-    any ticket, or the ticket/workflow/project chain doesn't resolve --
-    callers fall back to the process-wide active project in that case."""
+    """Resolve which repo a commit lives in via the ticket it's linked to.
+    REQ-14: prefers TicketCommit.repo_id -> ProjectRepo.path; falls back to
+    the project's primary repo (REQ-06) when repo_id is unset. Returns
+    None (never raises) when the commit isn't linked to any ticket."""
     try:
-        from src.core.database import AutopilotProject, Ticket, TicketCommit, Workflow, get_db
+        from src.core.database import Ticket, TicketCommit, Workflow, get_db
+        from src.core.repo_resolution import resolve_repo
 
         with get_db() as db:
             commit = db.query(TicketCommit).filter_by(commit_sha=commit_sha).first()
@@ -52,10 +53,34 @@ def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[str]:
             wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
             if not wf or not wf.project_id:
                 return None
-            proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
-            return proj.base_dir if proj else None
-    except Exception:
+            repo = resolve_repo(db, wf.project_id, commit.repo_id)
+            return repo.path if repo else None
+    except Exception as e:
+        logger.warning(f"_resolve_repo_path_for_commit({commit_sha[:8]}) failed: {e}")
         return None
+
+
+def _resolve_repo_info_for_commit(commit_sha: str) -> tuple[Optional[str], Optional[str]]:
+    """Resolve repo path and label for a commit. REQ-14/REQ-23."""
+    try:
+        from src.core.database import Ticket, TicketCommit, Workflow, get_db
+        from src.core.repo_resolution import resolve_repo
+
+        with get_db() as db:
+            commit = db.query(TicketCommit).filter_by(commit_sha=commit_sha).first()
+            if not commit:
+                return None, None
+            ticket = db.query(Ticket).filter_by(id=commit.ticket_id).first()
+            if not ticket or not ticket.workflow_id:
+                return None, None
+            wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
+            if not wf or not wf.project_id:
+                return None, None
+            repo = resolve_repo(db, wf.project_id, commit.repo_id)
+            return (repo.path, repo.label) if repo else (None, None)
+    except Exception as e:
+        logger.warning(f"_resolve_repo_info_for_commit({commit_sha[:8]}) failed: {e}")
+        return None, None
 
 
 async def _broadcast_update(data: dict, workflow_id: Optional[str] = None):
@@ -1149,6 +1174,7 @@ class CommitDiffResponse(BaseModel):
     total_deletions: int
     total_files: int
     files: List[FileDiff]
+    repo_label: Optional[str] = None  # REQ-23: repo attribution for multi-repo projects
 
 
 @router.post("/approve", response_model=ApproveTicketResponse)
@@ -1307,7 +1333,8 @@ async def get_commit_diff_endpoint(
         # it's linked to -- falls back to the process-wide "active project"
         # singleton (today's behavior) when the commit isn't linked to any
         # ticket, e.g. commits made outside the ticket-linking flow.
-        main_repo_path = _resolve_repo_path_for_commit(commit_sha)
+        # REQ-23: also resolve repo_label for multi-repo attribution.
+        main_repo_path, repo_label = _resolve_repo_info_for_commit(commit_sha)
         if main_repo_path is None:
             config = get_config()
             main_repo_path = str(config.git.main_repo_path)
@@ -1438,6 +1465,7 @@ async def get_commit_diff_endpoint(
             total_deletions=total_deletions,
             total_files=len(files_data),
             files=files_data,
+            repo_label=repo_label,  # REQ-23
         )
 
     except subprocess.CalledProcessError as e:

@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import os
-import tempfile
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -154,100 +153,6 @@ def _build_google_ai_model(assignment: "ModelAssignment", provider_config, api_k
         temperature=assignment.temperature,
         max_tokens=assignment.max_tokens,
     )
-
-
-# Timeout for a single CLIFallbackChatModel.ainvoke() call -- the fallback
-# pays full CLI process startup on every call (no persistent session), so
-# this needs more headroom than a direct API call; matches the existing
-# GUARDIAN_LLM_TIMEOUT/CONDUCTOR_LLM_TIMEOUT budget those callers already
-# apply on top of their own model call.
-CLI_FALLBACK_TIMEOUT = 90
-
-
-class _CLIFallbackResponse:
-    """Duck-types the subset of a LangChain response _invoke_and_record and
-    every call site actually read: response.content (text), and
-    response_metadata defaulting to {} so cost recording's `getattr(...,
-    "response_metadata", {}) or {}` no-ops instead of raising -- there's no
-    per-call token/cost data to report for a CLI subprocess call."""
-
-    def __init__(self, content: str):
-        self.content = content
-        self.response_metadata: Dict[str, Any] = {}
-
-
-class CLIFallbackChatModel:
-    """Stand-in chat model used when a provider's API key is missing --
-    shells out to the locally authenticated CLI tool for a single non-
-    interactive request/response instead of the caller falling straight to
-    its own dumb static default (every LLMProviderInterface method already
-    has one, e.g. "medium" complexity or a canned task-enrichment dict --
-    this makes that path an actual LLM answer when there's no API key
-    configured, not a crash: on subprocess failure/timeout this raises,
-    which every existing caller already catches and handles the same way
-    it handles a real API error).
-
-    Only implements .ainvoke(messages), the entire surface LangChainLLMClient
-    touches on a model instance -- not a langchain BaseChatModel subclass,
-    since nothing here needs streaming, tool-calling, or the rest of that
-    interface.
-    """
-
-    def __init__(self, cli_tool: str, cli_model: str):
-        self.cli_tool = cli_tool
-        self.cli_model = cli_model
-
-    @staticmethod
-    def _flatten_messages(messages: list) -> str:
-        parts = []
-        for m in messages:
-            role = getattr(m, "type", None) or m.__class__.__name__.replace("Message", "").lower()
-            parts.append(f"{role.capitalize()}: {m.content}")
-        return "\n\n".join(parts)
-
-    async def ainvoke(self, messages: list) -> _CLIFallbackResponse:
-        if self.cli_tool != "claude":
-            # Only claude's non-interactive `-p` mode is implemented -- the
-            # only CLI tool this fallback has ever actually been run
-            # against. A differently-configured default_cli_tool raises
-            # here rather than silently mis-invoking it; the caller's own
-            # except-block turns this into the same static default as a
-            # missing API key would have.
-            raise NotImplementedError(
-                f"CLI fallback not implemented for cli_tool={self.cli_tool!r} (only 'claude')"
-            )
-
-        prompt = self._flatten_messages(messages)
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", "--model", self.cli_model, "--dangerously-skip-permissions",
-            # cwd=tempdir, not this process's own cwd: the backend runs from
-            # HephaestusNG's own repo root, and Claude Code auto-loads
-            # whatever project-level CLAUDE.md sits at its cwd -- these
-            # calls are generic completions (task enrichment, trajectory
-            # analysis for an arbitrary MANAGED project, ticket wording),
-            # not "work on HephaestusNG" ones, so this repo's own opinionated
-            # instructions (commit policy, SOLID review conventions, output
-            # style) have no business shaping the answer.
-            cwd=tempfile.gettempdir(),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(prompt.encode()), timeout=CLI_FALLBACK_TIMEOUT
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise RuntimeError(f"CLI fallback ({self.cli_tool}) timed out after {CLI_FALLBACK_TIMEOUT}s")
-
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"CLI fallback ({self.cli_tool}) exited {proc.returncode}: {stderr.decode(errors='replace')[:500]}"
-            )
-
-        return _CLIFallbackResponse(stdout.decode(errors="replace").strip())
 
 
 # Chat-model construction, one builder per provider. Adding a provider means
@@ -410,17 +315,6 @@ class LangChainLLMClient:
 
         api_key = os.getenv(provider_config.api_key_env)
         if not api_key:
-            if provider == "openrouter":
-                from src.core.llm_config import get_config
-
-                cfg = get_config()
-                cli_tool = cfg.get("agents.default_cli_tool", "claude")
-                cli_model = cfg.get("agents.cli_model", "sonnet")
-                logger.warning(
-                    f"{provider_config.api_key_env} not set -- falling back to "
-                    f"CLI tool {cli_tool!r} ({cli_model}) for {provider}"
-                )
-                return CLIFallbackChatModel(cli_tool, cli_model)
             logger.error(f"API key not found for {provider}")
             return None
 

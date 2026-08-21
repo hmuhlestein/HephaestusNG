@@ -189,22 +189,6 @@ class HephaestusSDK:
             with open(yaml_file, "r") as f:
                 data = yaml.safe_load(f)
 
-            # Parse optional self_review block (see
-            # docs/GAP_CHECK_SELF_LOOP_DESIGN.md). Same guard as
-            # workflow_engine/yaml_loader.py: only a dict counts, so a
-            # malformed scalar doesn't become a truthy phase.self_review
-            # that _maybe_fire_self_review_gate then calls .get() on.
-            #
-            # This loader used to drop the key entirely, so every Phase row
-            # it created had self_review = NULL and the self-review gate
-            # silently never fired for those phases -- indistinguishable
-            # from a phase deliberately configured with it off.
-            self_review = (
-                data.get("self_review")
-                if isinstance(data.get("self_review"), dict)
-                else None
-            )
-
             # Parse into Phase object
             phase = Phase(
                 id=phase_id,
@@ -215,7 +199,6 @@ class HephaestusSDK:
                 additional_notes=data.get("Additional_Notes", ""),
                 outputs=data.get("Outputs", []),
                 next_steps=data.get("Next_Steps", []),
-                self_review=self_review,
             )
 
             self.phases_map[phase_id] = phase

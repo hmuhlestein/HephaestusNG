@@ -24,48 +24,6 @@ from src.sdk.models import (
 
 logger = logging.getLogger(__name__)
 
-# Every phase that calls complete_my_task needs the same completion
-# instructions -- previously copy-pasted (with 3-4 drifting variants) across
-# 15 separate phase YAML files' additional_notes. A phase's additional_notes
-# opts in with a literal <<COMPLETION_HEADER>>/<<COMPLETION_FOOTER>>/
-# <<COMPLETION_STOP_LINE>> marker (substituted below in build_phase); a
-# phase with none of these markers is untouched. Angle-bracket markers, not
-# {word} placeholders, deliberately: additional_notes also goes through
-# {var}-style substitution later (phase_manager.substitute_params,
-# prompts/assembler.substitute_variables, e.g. {design_name}/{date}) --
-# this substitution happens once, at load time, before any of that, so
-# there's no risk of colliding with or being caught by that later pass.
-_COMPLETION_HEADER = (
-    "## WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)\n"
-    "\n"
-    "CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.\n"
-    "You MUST call the complete_my_task tool. The system CANNOT detect you finished\n"
-    "without this call. The pipeline WILL get stuck."
-)
-
-_COMPLETION_STOP_LINE = (
-    "Once complete_my_task returns success, stop immediately -- do not run further "
-    "commands, re-verify already-submitted work, or keep investigating. Your turn "
-    "ends there."
-)
-
-_COMPLETION_FOOTER = (
-    "Then wait for confirmation. Do NOT exit until you see the task marked as done.\n"
-    "\n"
-    f"{_COMPLETION_STOP_LINE}"
-)
-
-
-def _apply_completion_markers(additional_notes: str) -> str:
-    """Substitute <<COMPLETION_*>> markers in a phase's additional_notes
-    with the shared completion-instructions text. No-op for a phase whose
-    additional_notes contains none of these markers."""
-    return (
-        additional_notes.replace("<<COMPLETION_HEADER>>", _COMPLETION_HEADER)
-        .replace("<<COMPLETION_FOOTER>>", _COMPLETION_FOOTER)
-        .replace("<<COMPLETION_STOP_LINE>>", _COMPLETION_STOP_LINE)
-    )
-
 
 def load_workflow_from_dir(workflow_dir: Path) -> dict:
     """Load raw config dict from a workflow directory.
@@ -162,7 +120,7 @@ def build_phase(phase_cfg: dict, default_model: str, default_thinking: str, defa
         name=phase_cfg["name"],
         description=phase_cfg.get("description", ""),
         done_definitions=phase_cfg.get("done_definitions", []),
-        additional_notes=_apply_completion_markers(phase_cfg.get("additional_notes", "")),
+        additional_notes=phase_cfg.get("additional_notes", ""),
         thinking_level=phase_cfg.get("thinking_level", default_thinking),
         cli_model=phase_cfg.get("model") or phase_cfg.get("cli_model") or default_model,
         working_directory=phase_cfg.get("working_directory", "."),

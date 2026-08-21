@@ -11,7 +11,6 @@ inconsistency (bump did fetch it, restart didn't — restart now does too).
 """
 
 import asyncio
-import functools
 import logging
 import os
 from datetime import datetime
@@ -52,6 +51,8 @@ class AgentDispatchService:
         phase_id: Optional[str],
         requesting_agent_id: str = "system",
         explicit_working_directory: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Gather everything needed to create an agent for a task.
 
@@ -63,41 +64,43 @@ class AgentDispatchService:
 
         server_state = get_app_state()
 
+        # Resolve project_id from workflow_id for repo-aware context
+        project_id = None
+        if workflow_id:
+            try:
+                from src.core.database import resolve_project_for_workflow
+                project_id, _project_name = resolve_project_for_workflow(workflow_id)
+            except Exception:
+                pass
+
         # get_project_context() (DB reads) and retrieve_for_task() (embedding
         # + vector search) don't read each other's output -- the phase-context
         # merge below only needs project_context, and is itself synchronous.
         project_context, context_memories = await asyncio.gather(
-            server_state.agent_manager.get_project_context(),
+            server_state.agent_manager.get_project_context(
+                project_id=project_id, repo_id=repo_id
+            ),
             server_state.rag_system.retrieve_for_task(
                 task_description=task_description_for_rag,
                 requesting_agent_id=requesting_agent_id,
             ),
         )
-        # get_phase_context (a Phase query) and _assemble_dispatch_dict (its
-        # own Phase query, for cli config) are both plain synchronous
-        # SQLAlchemy calls -- offloaded together since neither is async I/O
-        # and nothing after this point needs the event loop until the
-        # returned dict is used.
-        def _finalize_dispatch_dict_sync():
-            final_project_context = project_context
-            if phase_id and server_state.phase_manager:
-                phase_context = server_state.phase_manager.get_phase_context(phase_id)
-                if phase_context:
-                    final_project_context = (
-                        f"{project_context}\n\n{phase_context.to_prompt_context()}"
-                    )
+        if phase_id and server_state.phase_manager:
+            phase_context = server_state.phase_manager.get_phase_context(phase_id)
+            if phase_context:
+                project_context = (
+                    f"{project_context}\n\n{phase_context.to_prompt_context()}"
+                )
 
-            # FIX #6: Pass explicit_working_directory (may be None) to the assembler
-            # so the phase's configured working_directory can be used as fallback.
-            # Do NOT resolve to os.getcwd() here — that shadows the phase config.
-            return AgentDispatchService._assemble_dispatch_dict(
-                project_context=final_project_context,
-                context_memories=context_memories,
-                working_directory=explicit_working_directory,
-                phase_id=phase_id,
-            )
-
-        return await asyncio.get_event_loop().run_in_executor(None, _finalize_dispatch_dict_sync)
+        # FIX #6: Pass explicit_working_directory (may be None) to the assembler
+        # so the phase's configured working_directory can be used as fallback.
+        # Do NOT resolve to os.getcwd() here — that shadows the phase config.
+        return AgentDispatchService._assemble_dispatch_dict(
+            project_context=project_context,
+            context_memories=context_memories,
+            working_directory=explicit_working_directory,
+            phase_id=phase_id,
+        )
 
     @staticmethod
     def _assemble_dispatch_dict(
@@ -150,18 +153,12 @@ class AgentDispatchService:
         variant only adds the phase CLI config lookup on top of what the
         caller already has.
         """
-        # FIX #6: Delegate to _assemble_dispatch_dict. Offloaded: it does its
-        # own synchronous Phase query for cli config, which would otherwise
-        # block the event loop directly inside this async function.
-        return await asyncio.get_event_loop().run_in_executor(
-            None,
-            functools.partial(
-                AgentDispatchService._assemble_dispatch_dict,
-                project_context=project_context,
-                context_memories=memories,
-                working_directory=working_directory,
-                phase_id=phase_id,
-            ),
+        # FIX #6: Delegate to _assemble_dispatch_dict.
+        return AgentDispatchService._assemble_dispatch_dict(
+            project_context=project_context,
+            context_memories=memories,
+            working_directory=working_directory,
+            phase_id=phase_id,
         )
 
     @staticmethod

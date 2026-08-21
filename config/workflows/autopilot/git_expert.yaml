@@ -243,8 +243,12 @@ additional_notes: |
 
   If no open bug tickets exist, proceed with the merge normally.
   
-  <<COMPLETION_HEADER>>
-
+  ## WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+  
+  CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
+  You MUST call the complete_my_task tool. The system CANNOT detect you finished
+  without this call. The pipeline WILL get stuck.
+  
   After all git operations complete, call:
 
   complete_my_task({
@@ -252,5 +256,5 @@ additional_notes: |
     "summary": "<brief summary of what was committed and merged>",
     "key_learnings": ["<commit hash>", "<PR URL if created, or 'no PR'>"]
   })
-
-  <<COMPLETION_FOOTER>>
+  
+  Then wait for confirmation. Do NOT exit until you see the task marked as done.

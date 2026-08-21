@@ -3021,35 +3021,6 @@ async def fire_spec_gate_if_ready(session, task) -> None:
     if not phase or phase.name not in GATED_PHASES:
         return
 
-    # An arbitration task completing is NOT a normal phase-completion
-    # event. The generic gate below evaluates the phase's own artifacts
-    # (review.md/challenge.md -- which consume_gate_artifacts deletes after
-    # every goto, so they're stale or missing here by construction) and
-    # re-runs the same orchestrator evaluation that already exhausted the
-    # retry budget and requested arbitration in the first place: it can
-    # only ever return "arbitrate" again, and _trigger_arbitration then
-    # spawns yet another arbitration agent to re-answer the question the
-    # completing one JUST answered in arbitration_result.json. Observed
-    # live (workflow ca539a75): design_review hit its retry cap, and each
-    # arbitration task's completion re-fired this gate (score 0.4,
-    # "no challenge.md found"), dispatching a fresh arbiter every cycle --
-    # 3 consecutive arbitrations all independently concluding "continue"
-    # against the same already-fixed architecture.md. Resolve the decision
-    # the arbiter just wrote instead of re-evaluating the phase:
-    # _maybe_resolve_arbitration acts on it (continue/goto/fail), consumes
-    # the result file, and releases the phase's arbitration claim. The
-    # periodic sweep calls the same function, so this is just closing the
-    # gap between task completion and the next sweep tick.
-    if task.created_by_agent_id == ARBITRATION_CREATED_BY:
-        logger.info(
-            f"[SPEC-GATE] {phase.name}: arbitration task completed -- resolving its decision instead of re-running the phase gate"
-        )
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None, _maybe_resolve_arbitration, task.workflow_id, logger
-        )
-        return
-
     incomplete = session.query(Task).filter_by(phase_id=phase.id).filter(Task.status.in_(["pending", "assigned", "in_progress", "failed"])).count()
     if incomplete != 0:
         return

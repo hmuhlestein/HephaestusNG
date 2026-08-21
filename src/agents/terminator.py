@@ -80,45 +80,6 @@ class Terminator:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._terminate_agent_sync, agent_id)
 
-    def _wait_for_pane_idle(self, pane, cli_type: str, poll_interval: float = 0.5) -> None:
-        """Poll capture-pane until it matches the CLI's own idle/ready
-        pattern (CLIAgentInterface.get_health_check_pattern() -- the same
-        "back at the input prompt" signal _wait_for_cli_ready polls for at
-        startup, e.g. Claude Code's "›") or agents.termination_delay
-        (hephaestus_config.yaml) elapses, whichever comes first.
-
-        The shutdown-side mirror of _wait_for_cli_ready's startup polling:
-        same idea (poll for a real signal instead of blocking a fixed
-        amount of time), opposite transition (idle-after-a-turn instead of
-        ready-for-the-first-prompt). agents.termination_delay is the
-        ceiling here, not a flat wait -- an idle pattern match returns
-        immediately, so a fast turn doesn't pay the full delay.
-        """
-        import re
-
-        from src.core.simple_config import get_config
-        from src.interfaces.cli_interface import get_cli_agent
-
-        timeout = get_config().agents.agent_termination_delay
-        try:
-            pattern = get_cli_agent(cli_type).get_health_check_pattern()
-        except Exception:
-            # Unknown/unsupported cli_type -- no pattern to poll for, fall
-            # back to the flat wait this replaces.
-            time.sleep(timeout)
-            return
-
-        max_polls = max(1, int(timeout / poll_interval))
-        for _ in range(max_polls):
-            try:
-                captured = pane.cmd("capture-pane", "-p", "-S", "-10")
-                text = "\n".join(captured.stdout) if captured.stdout else ""
-            except Exception:
-                text = ""
-            if text and re.search(pattern, text):
-                return
-            time.sleep(poll_interval)
-
     def _terminate_agent_sync(self, agent_id: str) -> None:
         logger.info(f"Terminating agent {agent_id}")
 
@@ -183,17 +144,21 @@ class Terminator:
 
             # Capture pane PIDs and final output BEFORE killing the tmux session.
             # Termination fires the instant complete_my_task's HTTP handler
-            # returns (spawn_background_task, no delay), but the agent's own
-            # CLI keeps working after that tool call resolves -- its prompt
-            # explicitly tells it to "wait for confirmation, do NOT exit
-            # until you see the task marked as done" -- so there's no fixed
-            # settle time that's both safe and fast: long enough for a slow
-            # agent turn wastes time on every fast one, and a short one
-            # isn't always enough. Confirmed live: even a flat 5s
-            # (agents.termination_delay, tried first) still wasn't enough --
-            # a scope_review agent was captured still mid "thinking"
-            # animation 6.7s after termination started. See
-            # _wait_for_pane_idle below for the poll-based replacement.
+            # returns (spawn_background_task, no delay) -- the CLI's own
+            # terminal rendering of its post-completion state (wrap-up text,
+            # "thinking" status line settling) is still in flight at that
+            # exact moment, racing this capture. Observed live: the captured
+            # "final" transcript repeatedly froze mid animation (e.g. Claude
+            # Code's "Sublimating…" status line), never showing the agent's
+            # true last output. agents.termination_delay (hephaestus_config.yaml,
+            # default 5s) already existed for exactly this purpose -- loaded
+            # into config.agents.agent_termination_delay and even exported to
+            # the SDK's env as TERMINATION_DELAY -- but nothing actually read
+            # it before this fix.
+            from src.core.simple_config import get_config
+
+            time.sleep(get_config().agents.agent_termination_delay)
+
             pane_pids = []
             final_output = ""
             if agent.tmux_session_name:
@@ -227,7 +192,6 @@ class Terminator:
                         for tmux_sess in self.tmux_server.sessions:
                             if tmux_sess.name == agent.tmux_session_name:
                                 pane = tmux_sess.attached_window.attached_pane
-                                self._wait_for_pane_idle(pane, agent.cli_type)
                                 # Capture full scrollback for both tmux log and AgentLog.
                                 full_scrollback = "\n".join(
                                     pane.cmd("capture-pane", "-p", "-S", "-").stdout

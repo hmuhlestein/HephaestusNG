@@ -48,60 +48,41 @@ async def process_queue(project_id: Optional[str] = None):
     # would hand out a slot another dispatch is holding).
     reserved_cli_model = None
 
-    # This whole function was doing its DB work (capacity check, dequeue,
-    # phase resolution, enrichment write-back, task refresh) directly on the
-    # event loop -- plain synchronous SQLAlchemy (DatabaseManager uses a sync
-    # create_engine, see database.py), so every call blocks whatever thread
-    # runs it. Unlike the already-fixed asyncio.gather() sites (which only
-    # delayed THIS function's own completion), a synchronous DB call made
-    # directly in an `async def` stalls the entire event loop -- every other
-    # HTTP request, WebSocket push, and SSE stream this process is serving --
-    # for its duration. process_queue fires on every single task dispatch,
-    # far more often than background_phase_advancement_sweep's 20s sweep,
-    # which already offloads its own sync work the same way for the same
-    # reason (see that function's docstring). Each purely-synchronous segment
-    # below is offloaded via run_in_executor; the genuinely async calls
-    # (enrich, build_dispatch_context, dispatch, broadcast_update) stay as
-    # direct awaits.
-    loop = asyncio.get_event_loop()
-
     try:
-        def _dequeue_and_resolve_phase_sync():
-            # claim_next_queued_task does the capacity check, selection, and
-            # dequeue atomically under one lock -- see its docstring (and
-            # QueueService._dequeue_lock's) for why this can no longer be
-            # three separate calls now that this closure runs on a real
-            # executor thread instead of the single-threaded event loop.
-            task = server_state.queue_service.claim_next_queued_task(project_id)
-            if not task:
-                return None
-
-            logger.info(f"Processing queued task {task.id} (priority={task.priority}, boosted={task.priority_boosted})")
-
-            reservation = getattr(task, "_reserved_cli_model", None)
-
-            # Resolve phase_id once up front — reused for both enrichment (if
-            # needed) and agent dispatch below. Previously this exact
-            # digit-vs-UUID resolution was independently duplicated for each
-            # (see docs/SOLID_OO_REVIEW.md findings 1.2/1.3/1.4).
-            phase_id = None
-            if task.phase_id and server_state.phase_manager:
-                phase_id = TaskEnrichmentService.resolve_phase_id(
-                    phase_id_raw=task.phase_id,
-                    phase_order=None,
-                    workflow_id=task.workflow_id,
-                    requesting_agent_id="system",
-                )
-                if phase_id != task.phase_id:
-                    task.phase_id = phase_id  # update in-memory object too
-
-            return task, reservation, phase_id
-
-        dequeue_result = await loop.run_in_executor(None, _dequeue_and_resolve_phase_sync)
-        if dequeue_result is None:
+        # Check if we should queue (i.e., at capacity)
+        if server_state.queue_service.should_queue_task(project_id):
+            logger.debug(f"At capacity - not processing queue (project_id={project_id})")
             return
-        next_task, reserved_cli_model, resolved_phase_id = dequeue_result
+
+        # Get next task from queue
+        next_task = server_state.queue_service.get_next_queued_task(project_id)
+
+        if not next_task:
+            logger.debug("No queued tasks to process")
+            return
+
+        logger.info(f"Processing queued task {next_task.id} (priority={next_task.priority}, boosted={next_task.priority_boosted})")
+
+        reserved_cli_model = getattr(next_task, "_reserved_cli_model", None)
+
+        # Dequeue the task
+        server_state.queue_service.dequeue_task(next_task.id)
         dequeued_task_id = next_task.id
+
+        # Resolve phase_id once up front — reused for both enrichment (if
+        # needed) and agent dispatch below. Previously this exact
+        # digit-vs-UUID resolution was independently duplicated for each
+        # (see docs/SOLID_OO_REVIEW.md findings 1.2/1.3/1.4).
+        resolved_phase_id = None
+        if next_task.phase_id and server_state.phase_manager:
+            resolved_phase_id = TaskEnrichmentService.resolve_phase_id(
+                phase_id_raw=next_task.phase_id,
+                phase_order=None,
+                workflow_id=next_task.workflow_id,
+                requesting_agent_id="system",
+            )
+            if resolved_phase_id != next_task.phase_id:
+                next_task.phase_id = resolved_phase_id  # update in-memory object too
 
         # Tasks created with placeholder "[Processing] ..." (e.g. blocked on
         # creation and enrichment was skipped) need real LLM enrichment.
@@ -109,9 +90,7 @@ async def process_queue(project_id: Optional[str] = None):
         logger.info(f"[QUEUE_ENRICHMENT] Task {next_task.id} needs_enrichment={needs_enrichment}")
 
         if needs_enrichment:
-            phase_context_str, ctx_workflow_id = await loop.run_in_executor(
-                None, TaskEnrichmentService.get_phase_context_str, resolved_phase_id
-            )
+            phase_context_str, ctx_workflow_id = TaskEnrichmentService.get_phase_context_str(resolved_phase_id)
             workflow_id = ctx_workflow_id or next_task.workflow_id
 
             enrichment_result = await TaskEnrichmentService.enrich(
@@ -119,6 +98,8 @@ async def process_queue(project_id: Optional[str] = None):
                 done_definition=next_task.done_definition,
                 phase_context_str=phase_context_str,
                 requesting_agent_id="system",
+                workflow_id=workflow_id,
+                repo_id=next_task.repo_id,
             )
             enriched_task = enrichment_result["enriched_task"]
 
@@ -128,66 +109,57 @@ async def process_queue(project_id: Optional[str] = None):
                 "project_context": enrichment_result["project_context"],
             }
 
-            def _write_back_enrichment_sync():
-                session = server_state.db_manager.get_session()
-                try:
-                    task = session.query(Task).filter_by(id=next_task.id).first()
-                    if task:
-                        task.enriched_description = enriched_task["enriched_description"]
-                        task.estimated_complexity = enriched_task.get("estimated_complexity", 5)
-                        if resolved_phase_id:
-                            task.phase_id = resolved_phase_id
-                        if workflow_id:
-                            task.workflow_id = workflow_id
+            session = server_state.db_manager.get_session()
+            try:
+                task = session.query(Task).filter_by(id=next_task.id).first()
+                if task:
+                    task.enriched_description = enriched_task["enriched_description"]
+                    task.estimated_complexity = enriched_task.get("estimated_complexity", 5)
+                    if resolved_phase_id:
+                        task.phase_id = resolved_phase_id
+                    if workflow_id:
+                        task.workflow_id = workflow_id
 
-                        # Inherit validation from phase, if enabled there
-                        if resolved_phase_id:
-                            from src.core.database import Phase
+                    # Inherit validation from phase, if enabled there
+                    if resolved_phase_id:
+                        from src.core.database import Phase
 
-                            phase = session.query(Phase).filter_by(id=resolved_phase_id).first()
-                            if phase and phase.validation and phase.validation.get("enabled", True):
-                                task.validation_enabled = True
+                        phase = session.query(Phase).filter_by(id=resolved_phase_id).first()
+                        if phase and phase.validation and phase.validation.get("enabled", True):
+                            task.validation_enabled = True
 
-                        session.commit()
-                        return True
-                    else:
-                        logger.error(f"[QUEUE_ENRICHMENT] Task {next_task.id} not found in database!")
-                        return False
-                finally:
-                    session.close()
-
-            if await loop.run_in_executor(None, _write_back_enrichment_sync):
-                next_task._enriched_task_dict = enriched_task  # for dispatch below
-                logger.info(f"[QUEUE_ENRICHMENT] Enrichment complete for task {next_task.id}")
+                    session.commit()
+                    next_task._enriched_task_dict = enriched_task  # for dispatch below
+                    logger.info(f"[QUEUE_ENRICHMENT] Enrichment complete for task {next_task.id}")
+                else:
+                    logger.error(f"[QUEUE_ENRICHMENT] Task {next_task.id} not found in database!")
+            finally:
+                session.close()
         else:
             logger.info(f"[QUEUE_ENRICHMENT] Task {next_task.id} already enriched - skipping enrichment pipeline")
 
-        def _refresh_task_sync():
-            # Refresh task from DB to get post-enrichment data, and build the
-            # temp task object used for dispatch (mirrors create_task's pattern).
-            session = server_state.db_manager.get_session()
-            try:
-                refreshed_task = session.query(Task).filter_by(id=next_task.id).first()
-                if refreshed_task:
-                    agent_task = Task(
-                        id=refreshed_task.id,
-                        raw_description=refreshed_task.raw_description,
-                        enriched_description=refreshed_task.enriched_description,
-                        done_definition=refreshed_task.done_definition,
-                        phase_id=resolved_phase_id or refreshed_task.phase_id,
-                        created_by_agent_id=refreshed_task.created_by_agent_id,
-                        workflow_id=refreshed_task.workflow_id,
-                    )
-                    rag_description = refreshed_task.enriched_description or refreshed_task.raw_description
-                else:
-                    logger.warning("[QUEUE_AGENT_CREATE] Could not refresh task from DB - using stale task")
-                    agent_task = next_task
-                    rag_description = next_task.enriched_description or next_task.raw_description
-                return agent_task, rag_description
-            finally:
-                session.close()
-
-        task_for_agent, task_description_for_rag = await loop.run_in_executor(None, _refresh_task_sync)
+        # Refresh task from DB to get post-enrichment data, and build the
+        # temp task object used for dispatch (mirrors create_task's pattern).
+        session = server_state.db_manager.get_session()
+        try:
+            refreshed_task = session.query(Task).filter_by(id=next_task.id).first()
+            if refreshed_task:
+                task_for_agent = Task(
+                    id=refreshed_task.id,
+                    raw_description=refreshed_task.raw_description,
+                    enriched_description=refreshed_task.enriched_description,
+                    done_definition=refreshed_task.done_definition,
+                    phase_id=resolved_phase_id or refreshed_task.phase_id,
+                    created_by_agent_id=refreshed_task.created_by_agent_id,
+                    workflow_id=refreshed_task.workflow_id,
+                )
+                task_description_for_rag = refreshed_task.enriched_description or refreshed_task.raw_description
+            else:
+                logger.warning("[QUEUE_AGENT_CREATE] Could not refresh task from DB - using stale task")
+                task_for_agent = next_task
+                task_description_for_rag = next_task.enriched_description or next_task.raw_description
+        finally:
+            session.close()
 
         # If enrichment just ran, use the full LLM result dict; otherwise
         # (task was already enriched) build a minimal dict.
@@ -212,6 +184,8 @@ async def process_queue(project_id: Optional[str] = None):
                 task_description_for_rag=task_description_for_rag,
                 phase_id=task_for_agent.phase_id,
                 requesting_agent_id="system",
+                workflow_id=task_for_agent.workflow_id,
+                repo_id=task_for_agent.repo_id,
             )
 
         # QueueService.get_next_queued_task set this when the phase's
@@ -241,16 +215,14 @@ async def process_queue(project_id: Optional[str] = None):
                 reserved_cli_model = None
         logger.info(f"Created agent {agent.id} for queued task {next_task.id}")
 
-        def _finalize_dispatch_sync():
-            # Agent is now working — "in_progress" (not "assigned" like the
-            # other dispatch call sites), matching original process_queue behavior.
-            AgentDispatchService.mark_assigned(next_task.id, agent.id, status="in_progress")
+        # Agent is now working — "in_progress" (not "assigned" like the
+        # other dispatch call sites), matching original process_queue behavior.
+        AgentDispatchService.mark_assigned(next_task.id, agent.id, status="in_progress")
 
-            from src.core.database import resolve_project_for_workflow
+        # Broadcast update
+        from src.core.database import resolve_project_for_workflow
 
-            return resolve_project_for_workflow(task_for_agent.workflow_id)
-
-        bcast_project_id, bcast_project_name = await loop.run_in_executor(None, _finalize_dispatch_sync)
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(task_for_agent.workflow_id)
         await server_state.broadcast_update(
             {
                 "type": "task_dequeued",
@@ -340,19 +312,14 @@ async def background_queue_processor():
             # single-project mode), same as the sweep does.
             from src.core.database import AutopilotProject
 
-            def _get_active_project_ids_sync():
-                session = server_state.db_manager.get_session()
-                try:
-                    return [
-                        p.id
-                        for p in session.query(AutopilotProject).filter_by(is_active=True).all()
-                    ]
-                finally:
-                    session.close()
-
-            active_project_ids = await asyncio.get_event_loop().run_in_executor(
-                None, _get_active_project_ids_sync
-            )
+            session = server_state.db_manager.get_session()
+            try:
+                active_project_ids = [
+                    p.id
+                    for p in session.query(AutopilotProject).filter_by(is_active=True).all()
+                ]
+            finally:
+                session.close()
 
             if not active_project_ids:
                 queue_status = server_state.queue_service.get_queue_status()

@@ -226,12 +226,10 @@ additional_notes: |
   - Do NOT create architecture or code. Just read, compare, and write JSON.
   - Do NOT edit any existing source code or test files — report only.
 
-  <<COMPLETION_HEADER>>
+  ## WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
 
   complete_my_task({
     "status": "done",
     "summary": "SCOPE_PASS: ..." or "SCOPE_FAIL: ...",
     "key_learnings": ["<list of in-scope, out-of-scope, missing items>"]
   })
-
-  <<COMPLETION_FOOTER>>

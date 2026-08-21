@@ -552,10 +552,8 @@ class AgentOutputCapture:
 
     def _capture_pane_lines(self, session_name: str) -> Optional[List[str]]:
         """capture-pane the full available scrollback (bounded by the
-        session's own history-limit -- see launch_pipeline.py's
-        session.set_option("history-limit", ...) call for the configured
-        value) as a list of lines. Unlike raw pipe-pane bytes, this is
-        tmux's OWN terminal emulation output --
+        session's own history-limit, 1000) as a list of lines. Unlike raw
+        pipe-pane bytes, this is tmux's OWN terminal emulation output --
         cursor positioning, overwrites, and line wrapping are already
         correctly resolved into flat text. Returns None if the session is
         gone."""
@@ -602,19 +600,12 @@ class AgentOutputCapture:
         of re-deriving it from bytes ourselves.
 
         capture-pane -S - returns the FULL currently-remembered history
-        (bounded by the session's configured history-limit -- see
-        launch_pipeline.py) every call, always from the same starting
-        point -- so comparing this poll's lines to earlier polls' lines
-        position-for-position is valid without a scrolling-alignment
-        problem, as long as total output hasn't exceeded history-limit
-        between polls. This method only runs while the frontend viewer is
-        open and actively requesting output (get_agent_output triggers
-        it), so "between polls" isn't bounded by a fixed interval -- an
-        agent nobody has looked at yet can accumulate output for its
-        entire runtime before the first poll ever happens. A generous
-        history-limit reduces how often that first poll exceeds it; it
-        can't eliminate the possibility for an agent that runs long
-        enough unwatched.
+        (bounded by the session's history-limit, 1000) every call, always
+        from the same starting point -- so comparing this poll's lines to
+        earlier polls' lines position-for-position is valid without a
+        scrolling-alignment problem, as long as total output hasn't
+        exceeded history-limit between polls (an interactive agent
+        session polled every few seconds never gets close).
         """
         current_lines = self._capture_pane_lines(session_name)
         if current_lines is None:
@@ -644,10 +635,9 @@ class AgentOutputCapture:
         if last_lines and current_lines[:1] != last_lines[:1]:
             # Discontinuity: the capture window's start point shifted --
             # the common cause is the pane's total scrollback exceeding
-            # tmux's configured history-limit (see launch_pipeline.py)
-            # partway through a long-running session, scrolling some
-            # already-committed lines off the top rather than replacing
-            # the window wholesale.
+            # tmux's history-limit (1000 lines) partway through a
+            # long-running session, scrolling some already-committed lines
+            # off the top rather than replacing the window wholesale.
             # Blindly appending the full current_lines here (as an earlier
             # version did) re-writes everything already committed in prior
             # polls, duplicating large stretches of transcript every time

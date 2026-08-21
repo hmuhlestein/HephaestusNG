@@ -9,7 +9,7 @@ verifies that behavior is correct.
 """
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestResolvePhaseId:
@@ -388,3 +388,60 @@ class TestNormalizeEnrichedDescription:
         task = {"enriched_description": "already a string"}
         TaskEnrichmentService._normalize_enriched_description(task, "fallback")
         assert task["enriched_description"] == "already a string"
+
+
+class TestGatherDispatchContextRepoAwareness:
+    """Architectural review FIX #1: gather_dispatch_context() must resolve
+    workflow_id to project_id and pass project_id/repo_id to
+    get_project_context(), so agents dispatched through the enrichment
+    cache path (background_loops.py, _create_task_steps.py) get the
+    multi-repo "## PROJECT REPOS" section (REQ-17..21) same as
+    build_dispatch_context does."""
+
+    @patch("src.core.app_context.get_app_state")
+    @patch("src.core.database.resolve_project_for_workflow")
+    async def test_resolves_workflow_id_to_project_id_and_repo_id(
+        self, mock_resolve, mock_get_state
+    ):
+        from src.services.task_enrichment_service import TaskEnrichmentService
+
+        mock_resolve.return_value = ("proj-1", "My Project")
+
+        mock_state = MagicMock()
+        mock_state.agent_manager.get_project_context = AsyncMock(
+            return_value="project context"
+        )
+        mock_state.rag_system.retrieve_for_task = AsyncMock(return_value=[])
+        mock_get_state.return_value = mock_state
+
+        await TaskEnrichmentService.gather_dispatch_context(
+            raw_description="do the thing",
+            requesting_agent_id="system",
+            workflow_id="wf-1",
+            repo_id="repo-1",
+        )
+
+        mock_state.agent_manager.get_project_context.assert_awaited_once_with(
+            project_id="proj-1", repo_id="repo-1"
+        )
+
+    @patch("src.core.app_context.get_app_state")
+    async def test_no_workflow_id_passes_none_project_id(self, mock_get_state):
+        """Zero-behavior-change guarantee for callers with no workflow_id."""
+        from src.services.task_enrichment_service import TaskEnrichmentService
+
+        mock_state = MagicMock()
+        mock_state.agent_manager.get_project_context = AsyncMock(
+            return_value="project context"
+        )
+        mock_state.rag_system.retrieve_for_task = AsyncMock(return_value=[])
+        mock_get_state.return_value = mock_state
+
+        await TaskEnrichmentService.gather_dispatch_context(
+            raw_description="do the thing",
+            requesting_agent_id="system",
+        )
+
+        mock_state.agent_manager.get_project_context.assert_awaited_once_with(
+            project_id=None, repo_id=None
+        )

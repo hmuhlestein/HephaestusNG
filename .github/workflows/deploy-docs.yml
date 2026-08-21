@@ -20,20 +20,6 @@ concurrency:
 
 jobs:
   build:
-    # Off by default. Every push touching website/ used to run this, and a
-    # failing run emails the repo owner via GitHub's Actions notifications
-    # -- which are a per-ACCOUNT setting (github.com/settings/notifications),
-    # not something this repo can switch off. What the repo can control is
-    # whether the run happens at all, so the automatic trigger is gated here.
-    #
-    # To turn automatic deploys back on, set the repository variable
-    # DEPLOY_DOCS to "true":
-    #   gh variable set DEPLOY_DOCS --body true
-    #   (or Settings -> Secrets and variables -> Actions -> Variables)
-    #
-    # Manual runs (workflow_dispatch) ALWAYS work regardless, so the docs
-    # can still be published on demand without flipping the variable.
-    if: github.event_name == 'workflow_dispatch' || vars.DEPLOY_DOCS == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:

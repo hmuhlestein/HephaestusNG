@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, ChevronDown, ChevronRight, FileCode, FilePlus, FileX, FileEdit, Loader2 } from 'lucide-react';
+import { X, ChevronDown, ChevronRight, FileCode, FilePlus, FileX, FileEdit, Loader2, GitBranch } from 'lucide-react';
 import { format } from 'date-fns';
 import { apiService } from '@/services/api';
 import { cn } from '@/lib/utils';
@@ -111,6 +111,13 @@ const GitDiffModal: React.FC<GitDiffModalProps> = ({ commitSha, onClose }) => {
                       <span className="text-green-600 dark:text-green-400">+{commitDiff.total_insertions}</span>
                       <span className="text-red-600 dark:text-red-400">-{commitDiff.total_deletions}</span>
                       <span>{commitDiff.total_files} files</span>
+                      {/* REQ-23: repo attribution for multi-repo projects */}
+                      {commitDiff.repo_label && (
+                        <span className="flex items-center gap-1 px-2 py-0.5 bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 rounded">
+                          <GitBranch className="w-3 h-3" />
+                          {commitDiff.repo_label}
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}

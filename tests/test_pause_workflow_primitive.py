@@ -466,53 +466,6 @@ class TestHistoricalPauseSiteConsistency:
             assert task.assigned_agent_id is None
             assert task.failure_reason == "User terminated: workflow was paused"
 
-    def test_pause_project_workflows_collects_queued_task_ids(self, orch_db_env):
-        """"queued" tasks were previously left untouched entirely -- still
-        eligible for claim_next_queued_task to dispatch even after their
-        workflow was just paused. Not reset here (see this function's
-        docstring for why -- the caller must apply
-        QueueService.reset_queued_task_to_pending after committing), but
-        their IDs must be returned so a caller that DOES have a safe commit
-        boundary (stop_pipeline) can act on them."""
-        from src.autopilot.orchestrator.engine_client import pause_project_workflows
-        from src.core.database import AutopilotProject, Task, Workflow
-
-        with orch_db_env.session_scope() as session:
-            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp"))
-            session.add(
-                Workflow(
-                    id="wf-1", name="t", phases_folder_path="/tmp",
-                    status="active", project_id="proj-1",
-                    definition_id="autopilot",
-                )
-            )
-            session.add(
-                Task(
-                    id="task-queued", workflow_id="wf-1", raw_description="r",
-                    done_definition="d", status="queued",
-                )
-            )
-            session.add(
-                Task(
-                    id="task-pending", workflow_id="wf-1", raw_description="r",
-                    done_definition="d", status="pending",
-                )
-            )
-
-        with orch_db_env.session_scope() as session:
-            paused_count, queued_task_ids = pause_project_workflows(
-                session, "proj-1", paused_by="user", definition_ids=("autopilot",),
-            )
-
-        assert paused_count == 1
-        assert queued_task_ids == ["task-queued"]
-
-        with orch_db_env.session_scope() as session:
-            # Untouched by this function itself -- still "queued", per the
-            # docstring's note that the caller must reset it separately.
-            task = session.query(Task).filter_by(id="task-queued").first()
-            assert task.status == "queued"
-
     @pytest.mark.parametrize("task_status", ["assigned", "under_review", "needs_work"])
     def test_pause_resets_and_labels_tasks_beyond_in_progress(self, orch_db_env, task_status):
         """agents_to_terminate above kills any live (working/starting/idle)

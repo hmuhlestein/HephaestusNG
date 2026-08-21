@@ -1027,21 +1027,15 @@ class LaunchPipeline:
         # own scrollback is bounded by history-limit, so any single poll
         # interval producing more new output than that forces a lossy
         # reset (see _capture_pane_lines/_poll_stable_transcript) --
-        # confirmed live TWICE now (agents 3eab5529 and 09f35b63): each
-        # clean transcript started mid-paragraph/mid-sentence, everything
-        # before that point unrecoverably gone. 1000 (then 50000) was
-        # sized as if the durable pipe-pane file made this moot; it
-        # doesn't, since that file isn't what the viewer reads -- and
-        # since _poll_stable_transcript only runs when the frontend viewer
-        # is actually open and polling, the dangerous window isn't "output
-        # per second" but "output accumulated before anyone first looks,"
-        # which can be minutes on an unwatched agent. No history-limit
-        # fully closes that window, but a much larger one substantially
-        # shrinks how often it's hit. Sized generously -- tens of MB per
+        # confirmed live: an architecture_design session's clean
+        # transcript started mid-paragraph, with everything before that
+        # point unrecoverably gone. 1000 was sized as if the durable
+        # pipe-pane file made this moot; it doesn't, since that file isn't
+        # what the viewer reads. Sized generously instead -- a few MB per
         # session even at this size, negligible next to the cost of losing
         # transcript history.
         try:
-            session.set_option("history-limit", "500000")
+            session.set_option("history-limit", "50000")
         except Exception:
             pass  # Non-critical
 

@@ -379,7 +379,6 @@ async def stop_workflow(workflow_id: str, request: Request):
         terminated_count, tasks = await _terminate_workflow_agents(session, workflow_id)
         task_ids = [t.id for t in tasks]
 
-        queued_task_ids = []
         if task_ids:
             # Reset the tasks those agents were working on -- without this,
             # a task left "assigned"/"in_progress" pointing at a now-
@@ -393,14 +392,6 @@ async def stop_workflow(workflow_id: str, request: Request):
                 t.status = "pending"
                 t.assigned_agent_id = None
 
-            # "queued" tasks were previously left untouched here -- still
-            # eligible for claim_next_queued_task to dispatch even after
-            # the workflow was stopped. Collected now, applied after the
-            # commit below via the locked reset_queued_task_to_pending
-            # (same race class as cancel_workflow's queued-task handling;
-            # see that method's docstring).
-            queued_task_ids = [t.id for t in tasks if t.status == "queued"]
-
         # Sets status/paused_by/paused_at together (and cascades to any
         # linked Feature) so the background sweep's
         # _try_auto_resume_paused_workflow leaves this alone instead of
@@ -412,12 +403,6 @@ async def stop_workflow(workflow_id: str, request: Request):
         from src.autopilot.orchestrator.engine_client import pause_workflow
         pause_workflow(workflow_id, reason="user", session=session)
         session.commit()
-
-        # Each call opens its own locked session -- done after the commit
-        # above so it isn't racing this session's own open transaction
-        # (same ordering as cancel_workflow).
-        for queued_task_id in queued_task_ids:
-            server_state.queue_service.reset_queued_task_to_pending(queued_task_id)
 
         return {
             "status": "paused",
@@ -497,13 +482,9 @@ async def cancel_workflow(workflow_id: str, request: Request):
         # agent was just terminated above is left showing its last live
         # status (e.g. still "in_progress") even though nothing is working
         # on it anymore. Mirrors what pause_feature does for its "blocked" case.
-        # "queued" is handled separately below, through the locked cancel
-        # path -- an unlocked write here could land inside
-        # claim_next_queued_task's select-then-dequeue window (running on
-        # an executor thread) and let a task this cancel just "failed" get
-        # dispatched anyway (same race class as QueueService.cancel_queued_task).
-        non_terminal_not_queued = {
+        non_terminal = {
             "pending",
+            "queued",
             "blocked",
             "assigned",
             "in_progress",
@@ -511,9 +492,8 @@ async def cancel_workflow(workflow_id: str, request: Request):
             "validation_in_progress",
             "needs_work",
         }
-        queued_task_ids = [t.id for t in tasks if t.status == "queued"]
         for task in tasks:
-            if task.status in non_terminal_not_queued:
+            if task.status in non_terminal:
                 task.status = "failed"
                 task.failure_reason = "Workflow cancelled by user"
                 task.completed_at = datetime.utcnow()
@@ -521,14 +501,6 @@ async def cancel_workflow(workflow_id: str, request: Request):
         # Mark as failed (can't delete due to FK constraints, using failed to indicate user cancellation)
         workflow.status = "failed"
         session.commit()
-
-        # Each call opens its own locked session -- done after the commit
-        # above so it isn't racing this session's own open transaction.
-        for queued_task_id in queued_task_ids:
-            server_state.queue_service.cancel_queued_task(
-                queued_task_id, reason="Workflow cancelled by user"
-            )
-
         return {"cancelled": workflow_id, "agents_terminated": terminated_count}
     except Exception as e:
         session.rollback()

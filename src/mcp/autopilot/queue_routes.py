@@ -134,7 +134,6 @@ async def requeue_design(request: dict):
 
     # Pause any active workflow processing this design
     paused_count = 0
-    all_queued_task_ids = []
     try:
         with get_db() as db:
             # Scoped to the requesting project, mirroring rerun_design's
@@ -170,8 +169,9 @@ async def requeue_design(request: dict):
                         # attached; missing it here means that agent survives
                         # this requeue's design-state wipe, left running
                         # against state that no longer exists.
-                        matched_tasks = (
-                            db.query(Task)
+                        task_ids = [
+                            t.id
+                            for t in db.query(Task)
                             .filter(
                                 Task.workflow_id == wf.id,
                                 Task.status.in_([
@@ -181,17 +181,7 @@ async def requeue_design(request: dict):
                                 ]),
                             )
                             .all()
-                        )
-                        task_ids = [t.id for t in matched_tasks]
-                        # "queued" tasks are handled separately below, through
-                        # the locked QueueService.reset_queued_task_to_pending
-                        # -- an unlocked status="pending" write in the same
-                        # batch as the other statuses below could land inside
-                        # claim_next_queued_task's select-then-dequeue window
-                        # (running on an executor thread) and let a task this
-                        # requeue just reset get dispatched anyway. Same race
-                        # class as stop_workflow/cancel_workflow/pause_feature.
-                        queued_task_ids = [t.id for t in matched_tasks if t.status == "queued"]
+                        ]
 
                         if task_ids:
                             from src.autopilot.orchestrator.engine_client import terminate_agent
@@ -217,9 +207,7 @@ async def requeue_design(request: dict):
                             # fails it with a generic "terminated
                             # unexpectedly" reason instead of resetting it
                             # for a clean retry once this workflow resumes.
-                            for t in matched_tasks:
-                                if t.status == "queued":
-                                    continue
+                            for t in db.query(Task).filter(Task.id.in_(task_ids)).all():
                                 t.status = "pending"
                                 t.assigned_agent_id = None
 
@@ -249,19 +237,8 @@ async def requeue_design(request: dict):
                         from src.autopilot.orchestrator.engine_client import pause_workflow
                         pause_workflow(wf.id, reason="user", session=db)
                         paused_count += 1
-                        all_queued_task_ids.extend(queued_task_ids)
 
             db.commit()
-
-        # Each call opens its own locked session -- done after the commit
-        # above so it isn't racing this session's own open transaction
-        # (same ordering as cancel_workflow/stop_workflow/pause_feature/
-        # stop_pipeline).
-        from src.core.app_context import get_app_state
-
-        queue_service = get_app_state().queue_service
-        for queued_task_id in all_queued_task_ids:
-            queue_service.reset_queued_task_to_pending(queued_task_id)
     except Exception as e:
         logger.error(f"Error pausing workflows for requeue: {e}")
 

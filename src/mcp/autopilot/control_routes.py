@@ -505,28 +505,15 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
     try:
         from src.autopilot.orchestrator.engine_client import pause_project_workflows
 
-        all_queued_task_ids = []
         with get_db() as db:
             for pid in stopped_project_ids:
-                paused, queued_task_ids = pause_project_workflows(db, pid, paused_by="user")
+                paused = pause_project_workflows(db, pid, paused_by="user")
                 terminated_count += paused
-                all_queued_task_ids.extend(queued_task_ids)
                 # Deactivate the project so UI no longer shows it as Active
                 proj = db.query(AutopilotProject).filter_by(id=pid).first()
                 if proj:
                     proj.is_active = False
             db.commit()
-
-        # Each call opens its own locked session -- done after the commit
-        # above so it isn't racing this session's own open transaction
-        # (same ordering as cancel_workflow/stop_workflow/pause_feature;
-        # see pause_project_workflows' docstring for why this can't happen
-        # inside that function itself).
-        from src.core.app_context import get_app_state
-
-        queue_service = get_app_state().queue_service
-        for queued_task_id in all_queued_task_ids:
-            queue_service.reset_queued_task_to_pending(queued_task_id)
     except Exception as e:
         logger.error(f"Error cleaning up autopilot agents: {e}")
 

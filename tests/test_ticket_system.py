@@ -661,10 +661,16 @@ async def test_link_commit_offloads_get_commit_stats(
         )
 
     assert result["success"] is True
-    fake_loop.run_in_executor.assert_called_once()
-    executor_arg, func_arg = fake_loop.run_in_executor.call_args.args[:2]
+    # REQ-10 also offloads a `git cat-file -e` existence check through
+    # run_in_executor, so this must find the _get_commit_stats call
+    # specifically rather than assume it's the only (or last) one.
+    matching_calls = [
+        call for call in fake_loop.run_in_executor.call_args_list
+        if call.args[1] == TicketService._get_commit_stats
+    ]
+    assert len(matching_calls) == 1
+    executor_arg = matching_calls[0].args[0]
     assert executor_arg is None
-    assert func_arg == TicketService._get_commit_stats
 
 
 @pytest.mark.asyncio

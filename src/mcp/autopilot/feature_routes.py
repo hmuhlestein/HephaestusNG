@@ -279,17 +279,7 @@ async def pause_feature(feature_id: str):
         )
         from src.autopilot.orchestrator.engine_client import terminate_agent
 
-        # "queued" tasks are handled separately below, through the locked
-        # cancel-path's sibling (QueueService.pause_queued_task) -- an
-        # unlocked status="blocked" write here could land inside
-        # claim_next_queued_task's select-then-dequeue window (running on
-        # an executor thread) and let a task this pause just "blocked" get
-        # dispatched anyway. Same race class as cancel_workflow/
-        # stop_workflow's own queued-task handling.
-        queued_task_ids = [t.id for t in active_tasks if t.status == "queued"]
         for task in active_tasks:
-            if task.status == "queued":
-                continue
             if task.assigned_agent_id:
                 agent = db.query(Agent).filter_by(id=task.assigned_agent_id).first()
                 if agent and agent.status in ("working", "starting", "idle"):
@@ -312,13 +302,6 @@ async def pause_feature(feature_id: str):
         pause_workflow(feature.workflow_id, reason="user", cascade_to_feature=False, session=db)
         feature.status = "paused"
         db.commit()
-
-        # Each call opens its own locked session -- done after the commit
-        # above so it isn't racing this session's own open transaction
-        # (same ordering as cancel_workflow/stop_workflow).
-        for queued_task_id in queued_task_ids:
-            server_state.queue_service.pause_queued_task(queued_task_id)
-
         return {
             "success": True,
             "message": f"Paused feature {feature.name} ({len(active_tasks)} task(s) blocked)",

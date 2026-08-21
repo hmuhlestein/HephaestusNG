@@ -228,47 +228,6 @@ class TestFireSpecGateIfReadyGoto:
         assert func_arg.args[0] == "phase-adv"
 
     @pytest.mark.asyncio
-    async def test_arbitration_task_completion_resolves_decision_not_the_gate(
-        self, gate_db, tmp_path
-    ):
-        """Regression, observed live (workflow ca539a75): each arbitration
-        task's OWN completion re-fired the generic phase gate here, which
-        re-evaluated the phase against stale/consumed artifacts (score 0.4,
-        "no challenge.md found" -- consume_gate_artifacts deletes them after
-        every goto), hit the already-exhausted retry budget, and dispatched
-        yet another arbitration agent to re-answer the question the
-        completing one had JUST answered "continue" in
-        arbitration_result.json: 3 consecutive arbitrations independently
-        re-verifying the same already-fixed architecture.md, each spawning
-        the next. An arbitration task completing must route to
-        _maybe_resolve_arbitration (which acts on and consumes the
-        decision) instead of re-running the phase gate."""
-        self._seed(gate_db, tmp_path)
-
-        with gate_db.session_scope() as session:
-            from src.core.database import Task
-
-            task = session.query(Task).filter_by(id="task-adv").first()
-            task.created_by_agent_id = "arbitration"
-
-            with patch(
-                "src.phases.phase_manager.PhaseManager.mark_phase_complete"
-            ) as mock_mark_complete, patch(
-                "src.autopilot.spec.GATED_PHASES", ("adversarial_review",)
-            ), patch(
-                "src.autopilot.spec.build_phase_output"
-            ) as mock_build_output, patch(
-                "src.autopilot.orchestrator.phase_transitions._maybe_resolve_arbitration"
-            ) as mock_resolve:
-                await fire_spec_gate_if_ready(session, task)
-
-        mock_resolve.assert_called_once()
-        args, _ = mock_resolve.call_args
-        assert args[0] == "wf-1"
-        mock_mark_complete.assert_not_called()
-        mock_build_output.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_arbitrate_triggers_arbitration(self, gate_db, tmp_path):
         """Regression: this synchronous "gate fired from completion path"
         checked action in ("already_completed", "goto", "continue") and

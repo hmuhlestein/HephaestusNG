@@ -147,8 +147,6 @@ additional_notes: |
   ### Step 8: Mark Done
   Mark your task as done with a summary of the features created.
 
-  <<COMPLETION_STOP_LINE>>
-
   ## Example
 
   For a design document describing an authentication system:
