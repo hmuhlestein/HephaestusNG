@@ -98,6 +98,8 @@ async def process_queue(project_id: Optional[str] = None):
                 done_definition=next_task.done_definition,
                 phase_context_str=phase_context_str,
                 requesting_agent_id="system",
+                workflow_id=workflow_id,
+                repo_id=next_task.repo_id,
             )
             enriched_task = enrichment_result["enriched_task"]
 

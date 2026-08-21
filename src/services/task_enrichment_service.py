@@ -129,6 +129,8 @@ class TaskEnrichmentService:
         raw_description: str,
         requesting_agent_id: str,
         phase_context_str: str = "",
+        workflow_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """The RAG-memory + project-context half of enrich(), split out so a
         task that was already enriched once (its enriched_description is
@@ -139,12 +141,26 @@ class TaskEnrichmentService:
         enrich_task there would rewrite an already-good description a second
         time for no benefit and a real LLM-call cost.
 
+        workflow_id/repo_id (architectural review FIX #1): resolved to
+        project_id so multi-repo projects get the repo-aware section
+        (REQ-17..21) in this path too, matching build_dispatch_context.
+
         Returns a dict with `context_memories` (list of RAG memory dicts)
         and `project_context` (str, with phase context appended).
         """
         from src.core.app_context import get_app_state
 
         server_state = get_app_state()
+
+        project_id = None
+        if workflow_id:
+            try:
+                from src.core.database import resolve_project_for_workflow
+                project_id, _project_name = resolve_project_for_workflow(workflow_id)
+            except Exception as e:
+                logger.warning(
+                    f"[TASK_ENRICHMENT] resolve_project_for_workflow({workflow_id}) failed: {e}"
+                )
 
         # retrieve_for_task() (embedding + vector search) and
         # get_project_context() (DB reads) don't read each other's output --
@@ -154,7 +170,9 @@ class TaskEnrichmentService:
                 task_description=raw_description,
                 requesting_agent_id=requesting_agent_id,
             ),
-            server_state.agent_manager.get_project_context(),
+            server_state.agent_manager.get_project_context(
+                project_id=project_id, repo_id=repo_id
+            ),
         )
         if phase_context_str:
             project_context = f"{project_context}\n\n{phase_context_str}"
@@ -167,8 +185,13 @@ class TaskEnrichmentService:
         done_definition: Optional[str],
         phase_context_str: str,
         requesting_agent_id: str,
+        workflow_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run the RAG + LLM enrichment pipeline for a task description.
+
+        workflow_id/repo_id: threaded through to gather_dispatch_context for
+        repo-aware project context (REQ-17..21).
 
         Returns a dict with:
             enriched_task: dict from llm_provider.enrich_task, normalized
@@ -180,7 +203,8 @@ class TaskEnrichmentService:
         server_state = get_app_state()
 
         dispatch_context = await TaskEnrichmentService.gather_dispatch_context(
-            raw_description, requesting_agent_id, phase_context_str
+            raw_description, requesting_agent_id, phase_context_str,
+            workflow_id=workflow_id, repo_id=repo_id,
         )
         context_memories = dispatch_context["context_memories"]
         project_context = dispatch_context["project_context"]
