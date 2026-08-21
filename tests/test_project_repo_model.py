@@ -486,12 +486,12 @@ class TestProjectRepoMigration:
 class TestRepoResolution:
     """REQ-06: resolve_repo falls back to primary when repo_id is unset."""
 
-    def _setup_project_with_repos(self, session, num_repos=2):
+    def _setup_project_with_repos(self, session, num_repos=2, base_dir="/tmp/test"):
         """Helper: create a project with N repos."""
         project = AutopilotProject(
             id=f"proj-{uuid.uuid4().hex[:8]}",
             name="test-project",
-            base_dir="/tmp/test",
+            base_dir=base_dir,
         )
         session.add(project)
         session.flush()
@@ -554,6 +554,23 @@ class TestRepoResolution:
 
         result = resolve_repo(db_session, project.id, None)
         assert result is not None
+        assert result.is_primary is True
+
+    def test_resolve_repo_does_not_leak_across_projects(self, db_session):
+        """Bug ticket 081cf9cf: resolve_repo looked up repo_id by id alone,
+        with no project_id filter -- a repo_id belonging to a DIFFERENT
+        project would still resolve, instead of falling back to the
+        calling project's own primary repo like an invalid/unset repo_id
+        does."""
+        project_a, repos_a = self._setup_project_with_repos(db_session, base_dir="/tmp/test-a")
+        project_b, repos_b = self._setup_project_with_repos(db_session, base_dir="/tmp/test-b")
+        other_projects_repo_id = repos_b[0].id
+
+        result = resolve_repo(db_session, project_a.id, other_projects_repo_id)
+
+        assert result is not None
+        assert result.project_id == project_a.id
+        assert result.id != other_projects_repo_id
         assert result.is_primary is True
 
     def test_resolve_repo_with_empty_string_repo_id(self, db_session):

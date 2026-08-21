@@ -29,9 +29,16 @@ def resolve_primary_repo(session: Session, project_id: str) -> Optional[ProjectR
 def resolve_repo(
     session: Session, project_id: str, repo_id: Optional[str]
 ) -> Optional[ProjectRepo]:
-    """REQ-06: repo_id if set and valid, else the project's primary repo."""
+    """REQ-06: repo_id if set and valid, else the project's primary repo.
+
+    repo_id is looked up scoped to project_id -- a repo_id belonging to a
+    different project must not resolve (cross-project repo lookup bug)."""
     if repo_id:
-        repo = session.query(ProjectRepo).filter_by(id=repo_id).first()
+        repo = (
+            session.query(ProjectRepo)
+            .filter_by(id=repo_id, project_id=project_id)
+            .first()
+        )
         if repo:
             return repo
     return resolve_primary_repo(session, project_id)
