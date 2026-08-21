@@ -482,9 +482,13 @@ async def cancel_workflow(workflow_id: str, request: Request):
         # agent was just terminated above is left showing its last live
         # status (e.g. still "in_progress") even though nothing is working
         # on it anymore. Mirrors what pause_feature does for its "blocked" case.
-        non_terminal = {
+        # "queued" is handled separately below, through the locked cancel
+        # path -- an unlocked write here could land inside
+        # claim_next_queued_task's select-then-dequeue window (running on
+        # an executor thread) and let a task this cancel just "failed" get
+        # dispatched anyway (same race class as QueueService.cancel_queued_task).
+        non_terminal_not_queued = {
             "pending",
-            "queued",
             "blocked",
             "assigned",
             "in_progress",
@@ -492,8 +496,9 @@ async def cancel_workflow(workflow_id: str, request: Request):
             "validation_in_progress",
             "needs_work",
         }
+        queued_task_ids = [t.id for t in tasks if t.status == "queued"]
         for task in tasks:
-            if task.status in non_terminal:
+            if task.status in non_terminal_not_queued:
                 task.status = "failed"
                 task.failure_reason = "Workflow cancelled by user"
                 task.completed_at = datetime.utcnow()
@@ -501,6 +506,14 @@ async def cancel_workflow(workflow_id: str, request: Request):
         # Mark as failed (can't delete due to FK constraints, using failed to indicate user cancellation)
         workflow.status = "failed"
         session.commit()
+
+        # Each call opens its own locked session -- done after the commit
+        # above so it isn't racing this session's own open transaction.
+        for queued_task_id in queued_task_ids:
+            server_state.queue_service.cancel_queued_task(
+                queued_task_id, reason="Workflow cancelled by user"
+            )
+
         return {"cancelled": workflow_id, "agents_terminated": terminated_count}
     except Exception as e:
         session.rollback()
