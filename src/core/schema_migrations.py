@@ -681,7 +681,8 @@ def migrate_project_repos_table(engine):
                         f"Backfilled {len(projects_without_repo)} ProjectRepo rows"
                     )
         except Exception as e:
-            logger.warning(f"ProjectRepo backfill failed: {e}")
+            logger.error(f"ProjectRepo backfill failed (will retry on next startup): {e}")
+            raise  # Re-raise so migration records as failed and retries
 
         # Add nullable repo_id FK to tasks, tickets, ticket_commits,
         # agent_worktrees, features (REQ-02)
