@@ -143,6 +143,28 @@ class CLIAgentInterface(ABC):
         skips sending anything)."""
         return ""
 
+    def message_queued_confirmation_pattern(self) -> str:
+        """Regex to look for in the pane shortly after AgentMessenger.
+        send_message_to_agent delivers a message, confirming the CLI
+        actually registered it as queued/submitted input rather than
+        leaving the typed text sitting inert in an unsubmitted input box.
+
+        Confirmed live (agent 335b2a1d, 2026-08-21): a message sent while
+        Claude Code was deep in a long tool-call wait (no active render
+        cycle to receive the keypress) left the raw quoted text sitting
+        under a bare prompt, byte-for-byte identical across dozens of
+        screen redraws -- the Enter keypress never actually submitted it,
+        with no visible error and no way for the caller to tell without
+        checking. A later message sent while the CLI was actively
+        streaming landed correctly and showed this exact confirmation.
+
+        Empty = this CLI has no known confirmation signal, so the caller
+        skips verification and trusts the send unconditionally (the
+        original, unverified behavior) -- only opt in a pattern that's
+        actually been observed for that CLI, not a guess.
+        """
+        return ""
+
     @abstractmethod
     def get_launch_command(self, system_prompt: str, **kwargs) -> LaunchResult:
         """Generate the launch command for the CLI tool.
@@ -627,6 +649,12 @@ class ClaudeCodeAgent(CLIAgentInterface):
 
     def format_message(self, message: str) -> str:
         return message
+
+    def message_queued_confirmation_pattern(self) -> str:
+        # Claude Code's own footer hint once a message is confirmed queued
+        # behind an in-progress turn. See the base method's docstring for
+        # the live incident this closes.
+        return r"Press up to edit queued messages"
 
     def get_stuck_patterns(self) -> List[str]:
         return [
