@@ -230,6 +230,15 @@ def _get_design_queue_dir(project_base: str) -> Path:
     """
     return Path(project_base) / DESIGN_CONTEXT_SUBDIR
 
+def _resolve_design_filepath(file_path: Optional[str], fallback: Path) -> Path:
+    """Prefer AutopilotDesign.file_path when set over a queue-dir-relative
+    fallback. destination="docs" designs (add_project_design) live under
+    docs/, not .hephaestus/designs/ -- without this, content/status/delete
+    404 against the wrong directory for every locally-uploaded design
+    (LoadDesignModal's default destination), even though the file exists.
+    """
+    return Path(file_path) if file_path else fallback
+
 def _extract_ordinal(filename: str) -> Optional[int]:
     """Extract numeric ordinal from filename prefix (e.g. '01-foo.md' → 1).
 
@@ -1601,7 +1610,9 @@ async def remove_project_design(project_id: str, filename: str):
             logger.warning(f"[DELETE-DESIGN] Failed to clean up worktree {working_directory}: {e}")
 
     design_dir = _get_design_queue_dir(base_dir)
-    filepath = _safe_path(str(design_dir), filename)
+    filepath = _resolve_design_filepath(
+        d.file_path if d else None, _safe_path(str(design_dir), filename)
+    )
     if filepath.exists():
         filepath.unlink()
         found = True
@@ -1634,19 +1645,21 @@ async def remove_project_design(project_id: str, filename: str):
 
 @router.get("/projects/{project_id}/designs/{filename}/content")
 async def get_project_design_content(project_id: str, filename: str):
-    from src.core.database import AutopilotProject, get_db
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
         proj = db.query(AutopilotProject).get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         base_dir = proj.base_dir
+        design = db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
+        file_path_col = design.file_path if design else None
 
     design_dir = _get_design_queue_dir(base_dir)
     # Validate filename doesn't contain path traversal
     if ".." in filename or "/" in filename:
         raise HTTPException(400, "Invalid filename")
-    filepath = design_dir / filename
+    filepath = _resolve_design_filepath(file_path_col, design_dir / filename)
     if not filepath.exists():
         raise HTTPException(404, f"Design '{filename}' not found")
     return {"filename": filename, "content": filepath.read_text(errors="replace")}
@@ -1654,18 +1667,20 @@ async def get_project_design_content(project_id: str, filename: str):
 @router.get("/projects/{project_id}/designs/{filename}/status")
 async def get_project_design_status(project_id: str, filename: str):
     """Get full status for a design: workflow, tasks, branch, feature folder."""
-    from src.core.database import AutopilotProject, get_db
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
         proj = db.query(AutopilotProject).get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
         base_dir = proj.base_dir
+        design = db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
+        file_path_col = design.file_path if design else None
 
     design_dir = _get_design_queue_dir(base_dir)
     if ".." in filename or "/" in filename:
         raise HTTPException(400, "Invalid filename")
-    filepath = design_dir / filename
+    filepath = _resolve_design_filepath(file_path_col, design_dir / filename)
     if not filepath.exists():
         raise HTTPException(404, f"Design '{filename}' not found")
 
