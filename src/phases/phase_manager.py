@@ -1340,8 +1340,18 @@ class PhaseManager:
             self._orchestrators[workflow_id] = orchestrator
             return orchestrator
         except Exception as e:
-            logger.error(f"Failed to get orchestrator: {e}")
-            return None
+            # Do NOT return None here. The three `return None` paths above are
+            # legitimate answers -- no workflow, no orchestrator_config,
+            # sequential mode -- and mark_phase_complete treats None as
+            # "sequential", which advances the phase past every gate. Folding a
+            # failure into that same value meant a transient DB error while
+            # loading the orchestrator config silently bypassed all evaluation,
+            # the same fail-open shape as the unevaluable-condition bug
+            # (SOLID review 2.9). Raising lets mark_phase_complete's handler
+            # escalate to arbitration instead; callers that genuinely want a
+            # default on failure catch this themselves.
+            logger.error(f"Failed to get orchestrator: {e}", exc_info=True)
+            raise
 
     def _get_phase_history(self, session, workflow_id: str) -> List[Dict[str, Any]]:
         """Get history of completed phases."""
