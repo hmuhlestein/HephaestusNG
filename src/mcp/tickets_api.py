@@ -35,12 +35,13 @@ def _get_workflow_id_for_ticket(ticket_id: str) -> Optional[str]:
 
 
 def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[str]:
-    """Resolve which project's repo a commit lives in via the ticket it's
-    linked to. Returns None (never raises) when the commit isn't linked to
-    any ticket, or the ticket/workflow/project chain doesn't resolve --
-    callers fall back to the process-wide active project in that case."""
+    """Resolve which repo a commit lives in via the ticket it's linked to.
+    REQ-14: prefers TicketCommit.repo_id -> ProjectRepo.path; falls back to
+    the project's primary repo (REQ-06) when repo_id is unset. Returns
+    None (never raises) when the commit isn't linked to any ticket."""
     try:
-        from src.core.database import AutopilotProject, Ticket, TicketCommit, Workflow, get_db
+        from src.core.database import Ticket, TicketCommit, Workflow, get_db
+        from src.core.repo_resolution import resolve_repo
 
         with get_db() as db:
             commit = db.query(TicketCommit).filter_by(commit_sha=commit_sha).first()
@@ -52,8 +53,8 @@ def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[str]:
             wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
             if not wf or not wf.project_id:
                 return None
-            proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
-            return proj.base_dir if proj else None
+            repo = resolve_repo(db, wf.project_id, commit.repo_id)
+            return repo.path if repo else None
     except Exception:
         return None
 
