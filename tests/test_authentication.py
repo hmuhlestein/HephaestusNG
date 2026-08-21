@@ -398,6 +398,20 @@ class TestAuthenticationAPI:
         assert "Invalid refresh token" in response.json()["detail"]
 
 
+class TestAuthDbManagerSharedAccessor:
+    """Regression: auth_api.py and auth_middleware.py each independently
+    constructed their own DatabaseManager(None) against the same SQLite
+    file (SOLID_OO_REVIEW_UPDATE_2026-08-19.md, "DatabaseManager(None)
+    duplicated within src/auth/ itself, not just against src/mcp/") --
+    both must now route through the same shared auth_db.get_db_manager."""
+
+    def test_both_modules_import_the_same_accessor(self):
+        from src.auth import auth_api, auth_db, auth_middleware
+
+        assert auth_api.get_db_manager is auth_db.get_db_manager
+        assert auth_middleware.get_db_manager is auth_db.get_db_manager
+
+
 class TestAuthenticationMiddleware:
     """Test authentication middleware."""
 
@@ -418,12 +432,11 @@ class TestAuthenticationMiddleware:
         from src.auth import auth_middleware
         from src.core.user_models import User as UserModel
 
-        # auth_middleware.get_current_user constructs its own
-        # DatabaseManager(None) independently of auth_api.get_db_manager
-        # (see the live-bug note in docs/SOLID_OO_REVIEW_UPDATE_2026-08-19.md)
-        # -- must be pointed at the same test DB or the token's user
-        # lookup silently misses.
-        monkeypatch.setattr(auth_middleware, "DatabaseManager", lambda *_: test_db)
+        # auth_middleware.get_current_user and auth_api's routes both call
+        # auth_db.get_db_manager (each module imported the same function
+        # object into its own namespace) -- patch auth_middleware's own
+        # bound name to point this specific dependency at the test DB.
+        monkeypatch.setattr(auth_middleware, "get_db_manager", lambda: test_db)
 
         user = UserModel(
             id=str(uuid.uuid4()),

@@ -8,10 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
 
-from src.core.database import DatabaseManager
 from src.core.user_models import User
 
 from .auth_config import get_auth_config
+from .auth_db import get_db_manager
 from .auth_middleware import CurrentUser
 from .auth_middleware import get_current_user as _get_authenticated_user
 from .auth_service import AuthError, AuthService
@@ -66,12 +66,6 @@ class UserResponse(BaseModel):
     created_at: datetime
     email_verified: bool
     status: str
-
-
-# Helper functions
-def get_db_manager() -> DatabaseManager:
-    """Get database manager instance."""
-    return DatabaseManager(None)
 
 
 # API Endpoints
