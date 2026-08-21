@@ -44,8 +44,6 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
     enabled: !!featureId && !isPhase0,
   });
   const reportDoc = featureDocs?.docs.find((d: any) => d.name === 'feature_report.html');
-  // Also accept has_report from the feature prop as a fallback while docs load
-  const hasReport = !!reportDoc || !!feature?.has_report;
 
   // Fetch requirements document (real features) or the decomposition's
   // adversarial review.md (Phase 0) -- same tab, different source.
@@ -66,8 +64,18 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
       } catch {}
       return null;
     },
-    enabled: !!featureId && activeTab === 'requirements',
+    // Phase 0 also eagerly fetches on the report tab -- feature_review.md
+    // and feature_report.html are always written together by the same
+    // task (02_feature_review.yaml steps 4+6), so this doubles as the
+    // Phase 0 report-existence signal below (featureDocs, the real-feature
+    // equivalent, is disabled for phase0- ids and feature.has_report is
+    // never populated for pseudo-features -- without this, "Report not
+    // yet available" showed even when the report genuinely existed).
+    enabled: !!featureId && (isPhase0 || activeTab === 'requirements'),
   });
+
+  // Also accept has_report from the feature prop as a fallback while docs load
+  const hasReport = !!reportDoc || !!feature?.has_report || (isPhase0 && requirementsDoc != null);
 
   const reviewMutation = useMutation({
     mutationFn: ({ action, fb }: { action: 'approve' | 'request_changes'; fb?: string }) =>
