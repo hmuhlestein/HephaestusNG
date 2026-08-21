@@ -328,6 +328,16 @@ def _trigger_arbitration(
             if wf:
                 wf.status = "failed"
                 wf.status_reason = f"{phase_name}: arbitrated {prior_arbitrations} times without converging (last reason: {reason})"
+                # See the matching fix in phase_transitions.py's retry-cap
+                # exhaustion path: a concurrent, unrelated phase's review
+                # gate can leave paused_by="review" set here, which then
+                # permanently blocks resume_workflow (requires
+                # status=="paused") while feature_routes' approve handler
+                # doesn't check its return value -- silent no-op Approve,
+                # workflow stuck "failed" forever with a stale "review"
+                # marker.
+                wf.paused_by = None
+                wf.paused_at = None
                 db.commit()
             return False
 

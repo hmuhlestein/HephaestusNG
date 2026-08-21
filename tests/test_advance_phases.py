@@ -1545,6 +1545,52 @@ class TestCaseInProgressComplete:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.status == "failed"
 
+    @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
+    def test_exhausted_retry_cap_clears_a_stale_review_pause(
+        self, mock_fire, db_manager, sample_workflow
+    ):
+        """Regression, found live: this phase's own retry-cap-exhaustion
+        sets wf.status = "failed" directly, bypassing pause_workflow's
+        shared status/paused_by/paused_at primitive -- if an UNRELATED,
+        concurrent phase's review gate had already set paused_by="review"
+        on this same workflow (_advance_phases deliberately keeps other
+        in-progress phases moving while one sits paused for review), that
+        stale marker survived the "failed" write untouched. resume_workflow
+        then permanently no-ops (it requires status=="paused"), while
+        feature_routes' approve handler doesn't check that return value and
+        sets Feature.status="active" anyway -- a workflow stuck "failed"
+        forever with Approve as a silent no-op."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-exhausted-1",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="architectural_review's report has the wrong frontmatter type",
+                    retry_count=5,
+                )
+            )
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.paused_by = "review"
+            wf.paused_at = datetime.utcnow()
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "failed"
+            assert wf.paused_by is None
+            assert wf.paused_at is None
+
 
 class TestReleaseStaleTaskCreationClaims:
     """Regression, found live: _case_in_progress_complete's own claim check
@@ -3257,6 +3303,53 @@ class TestTriggerArbitration:
             assert wf.status == "failed"
             assert "requirements" in wf.status_reason
             assert "3 times" in wf.status_reason
+
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
+    def test_caps_repeated_arbitration_clears_a_stale_review_pause(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Regression, found live: same gap as phase_transitions' retry-cap
+        exhaustion path -- this sets wf.status = "failed" directly,
+        bypassing pause_workflow's shared status/paused_by/paused_at
+        primitive. If an unrelated, concurrent phase's review gate had
+        already set paused_by="review" on this workflow, it survived the
+        "failed" write untouched, permanently blocking resume_workflow
+        (requires status=="paused") while feature_routes' approve handler
+        doesn't check that return value -- Approve becomes a silent no-op,
+        workflow stuck "failed" forever."""
+        from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
+        with db_manager.session_scope() as session:
+            for i in range(3):
+                session.add(
+                    Task(
+                        id=f"prior-arb-{i}",
+                        raw_description="Arbitrate stuck phase: requirements",
+                        done_definition="x",
+                        status="done",
+                        phase_id="phase-1",
+                        workflow_id="wf-1",
+                        created_by_agent_id=ARBITRATION_CREATED_BY,
+                        action="arbitrate",
+                    )
+                )
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.paused_by = "review"
+            wf.paused_at = datetime.utcnow()
+
+        result = _trigger_arbitration(
+            "wf-1", "phase-1", "requirements", "still not converging", MagicMock()
+        )
+
+        assert result is False
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "failed"
+            assert wf.paused_by is None
+            assert wf.paused_at is None
 
     @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
     @patch("src.autopilot.orchestrator.arbitration.PhaseManager")

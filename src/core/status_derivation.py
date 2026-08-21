@@ -419,6 +419,29 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
     # to the task-status heuristics below unchanged.
     has_phases = db.query(Phase).filter_by(workflow_id=workflow_id).first() is not None
     if has_phases:
+        # Respect a deliberate workflow-level "failed" with no task-level
+        # trace -- checked BEFORE phase-completeness, not after. Those
+        # exist to rescue a workflow from stale TASK-level failure history
+        # (a single old, superseded "failed" task among otherwise-
+        # successful ones) -- a real problem, but a different one from a
+        # deliberate, workflow-level "failed" decision that has NO
+        # corresponding task-level trace at all, like _trigger_arbitration's
+        # exhausted-retries cap or an abandoned review-pause mark. Those set
+        # wf.status="failed" without ever creating a new task, so every
+        # EXISTING task/phase can still legitimately look "done" --
+        # checking phase-completeness FIRST would derive "completed" and
+        # silently resurrect an intentionally-terminated workflow. This
+        # guard used to sit after the completeness check, inside the
+        # incomplete-phase branch below -- unreachable in exactly the case
+        # that matters, since a workflow failed with no incomplete phase
+        # never reached it. Observed live: the design-status poll's
+        # write_back=True call flipped a review-gate workflow from
+        # "failed" to "completed" every ~10s, resurrecting it behind the
+        # user's back and making the Rerun/Recover button (which only
+        # matches status in {active, paused, failed}) silently no-op.
+        if workflow.status == WorkflowStatus.FAILED:
+            return WorkflowStatus.FAILED
+
         incomplete_phase = (
             db.query(PhaseExecution)
             .join(Phase, PhaseExecution.phase_id == Phase.id)
@@ -432,28 +455,6 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
             derived = WorkflowStatus.COMPLETED
             _apply_derived_status(db, workflow, derived, "Workflow", workflow_id, write_back)
             return derived
-
-        # A genuinely incomplete phase AND the workflow is already marked
-        # "failed": respect it, don't fall through to the task-status
-        # heuristics below. Those exist to rescue a workflow from stale
-        # TASK-level failure history (a single old, superseded "failed"
-        # task among otherwise-successful ones) -- a real problem, but a
-        # different one from a deliberate, workflow-level "failed" decision
-        # that has NO corresponding task-level trace at all, like
-        # _trigger_arbitration's exhausted-retries cap. That cap sets
-        # wf.status="failed" without ever creating a new task, so every
-        # EXISTING task can still legitimately be "done" -- task_statuses
-        # == {DONE} below would otherwise derive "active" and silently
-        # resurrect an intentionally-terminated workflow. Observed live:
-        # a workflow whose scope_review exhausted all 3 arbitration
-        # attempts got marked failed, then healed back to "active" within
-        # ~1-2 seconds every single cycle, forever -- re-triggering the
-        # same doomed evaluation, incrementing total_gotos into the
-        # hundreds with no possibility of ever actually progressing, since
-        # the cap check only prevents a NEW arbitration task, not another
-        # trip through this exact loop.
-        if workflow.status == WorkflowStatus.FAILED:
-            return WorkflowStatus.FAILED
 
     # Derive from task statuses. Reaching this point with has_phases True
     # means the block above already found a genuinely incomplete phase --
