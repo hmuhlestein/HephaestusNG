@@ -47,7 +47,7 @@ class WorkflowStuckDiagnostics:
 
         # Condition tracking for debug report
         conditions = {
-            "enabled": self.config.diagnostic_agent_enabled,
+            "enabled": self.config.diagnostic_agent.diagnostic_agent_enabled,
             "workflow_exists": False,
             "has_tasks": False,
             "all_tasks_finished": False,
@@ -56,7 +56,7 @@ class WorkflowStuckDiagnostics:
             "stuck_long_enough": False,
         }
 
-        if not self.config.diagnostic_agent_enabled:
+        if not self.config.diagnostic_agent.diagnostic_agent_enabled:
             logger.info("[DIAGNOSTIC MONITOR] ❌ Diagnostic agent disabled in config")
             self.log_diagnostic_status_report(
                 conditions, trigger=False, reason="Disabled in config"
@@ -210,14 +210,14 @@ class WorkflowStuckDiagnostics:
                 time_since_last = (
                     datetime.utcnow() - last_diagnostic.triggered_at
                 ).total_seconds()
-                if time_since_last < self.config.diagnostic_cooldown_seconds:
+                if time_since_last < self.config.diagnostic_agent.diagnostic_cooldown_seconds:
                     logger.info(
-                        f"[DIAGNOSTIC MONITOR] ❌ Cooldown active: {time_since_last:.0f}s / {self.config.diagnostic_cooldown_seconds}s required"
+                        f"[DIAGNOSTIC MONITOR] ❌ Cooldown active: {time_since_last:.0f}s / {self.config.diagnostic_agent.diagnostic_cooldown_seconds}s required"
                     )
                     self.log_diagnostic_status_report(
                         conditions,
                         trigger=False,
-                        reason=f"Cooldown active ({time_since_last:.0f}s < {self.config.diagnostic_cooldown_seconds}s)",
+                        reason=f"Cooldown active ({time_since_last:.0f}s < {self.config.diagnostic_agent.diagnostic_cooldown_seconds}s)",
                     )
                     return
                 else:
@@ -244,14 +244,14 @@ class WorkflowStuckDiagnostics:
             stuck_time = 0
             if latest_task_time:
                 stuck_time = (datetime.utcnow() - latest_task_time).total_seconds()
-                if stuck_time < self.config.diagnostic_min_stuck_time_seconds:
+                if stuck_time < self.config.diagnostic_agent.diagnostic_min_stuck_time_seconds:
                     logger.info(
-                        f"[DIAGNOSTIC MONITOR] ❌ Not stuck long enough: {stuck_time:.0f}s / {self.config.diagnostic_min_stuck_time_seconds}s required"
+                        f"[DIAGNOSTIC MONITOR] ❌ Not stuck long enough: {stuck_time:.0f}s / {self.config.diagnostic_agent.diagnostic_min_stuck_time_seconds}s required"
                     )
                     self.log_diagnostic_status_report(
                         conditions,
                         trigger=False,
-                        reason=f"Not stuck long enough ({stuck_time:.0f}s < {self.config.diagnostic_min_stuck_time_seconds}s)",
+                        reason=f"Not stuck long enough ({stuck_time:.0f}s < {self.config.diagnostic_agent.diagnostic_min_stuck_time_seconds}s)",
                     )
                     return
                 else:
@@ -432,7 +432,7 @@ class WorkflowStuckDiagnostics:
                     Agent.status.in_(["terminated"]),
                 )
                 .order_by(Agent.created_at.desc())
-                .limit(self.config.diagnostic_max_agents_to_analyze)
+                .limit(self.config.diagnostic_agent.diagnostic_max_agents_to_analyze)
                 .all()
             )
 
@@ -459,7 +459,7 @@ class WorkflowStuckDiagnostics:
             conductor_analyses = (
                 session.query(ConductorAnalysis)
                 .order_by(ConductorAnalysis.timestamp.desc())
-                .limit(self.config.diagnostic_max_conductor_analyses)
+                .limit(self.config.diagnostic_agent.diagnostic_max_conductor_analyses)
                 .all()
             )
 

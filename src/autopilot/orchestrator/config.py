@@ -11,7 +11,7 @@ def _get_workflow_timeout() -> int:
     try:
         from src.core.simple_config import get_config
 
-        return get_config().workflow_timeout_seconds
+        return get_config().autopilot.workflow_timeout_seconds
     except Exception:
         return 7200  # 2 hours default
 
@@ -21,7 +21,7 @@ def _get_phase0_timeout() -> int:
     try:
         from src.core.simple_config import get_config
 
-        return get_config().phase0_timeout_seconds
+        return get_config().autopilot.phase0_timeout_seconds
     except Exception:
         return 3600  # 1 hour default
 
@@ -31,7 +31,7 @@ def _get_paused_workflow_retry_cooldown_seconds() -> int:
     try:
         from src.core.simple_config import get_config
 
-        return get_config().paused_workflow_retry_cooldown_seconds
+        return get_config().autopilot.paused_workflow_retry_cooldown_seconds
     except Exception:
         return 300  # 5 min default
 
@@ -41,6 +41,6 @@ def _get_paused_workflow_max_retry_cycles() -> int:
     try:
         from src.core.simple_config import get_config
 
-        return get_config().paused_workflow_max_retry_cycles
+        return get_config().autopilot.paused_workflow_max_retry_cycles
     except Exception:
         return 10  # default

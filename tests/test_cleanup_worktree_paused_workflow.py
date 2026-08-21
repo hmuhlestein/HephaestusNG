@@ -31,7 +31,7 @@ def config(tmp_path, test_db):
     import src.core.simple_config
 
     cfg = src.core.simple_config.Config()
-    cfg.database_path = test_db.engine.url.database
+    cfg.paths.database_path = test_db.engine.url.database
     return cfg
 
 

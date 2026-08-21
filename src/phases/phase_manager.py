@@ -330,10 +330,10 @@ class PhaseManager:
                     # Read global defaults for human approval
                     config = get_config()
                     default_human_review = getattr(
-                        config, "default_human_review", False
+                        config.ticket_tracking, "default_human_review", False
                     )
                     default_approval_timeout = getattr(
-                        config, "default_approval_timeout", 1800
+                        config.ticket_tracking, "default_approval_timeout", 1800
                     )
 
                     board_config = BoardConfig(
@@ -2310,9 +2310,11 @@ class PhaseManager:
 
                 board_id = f"board-{str(uuid.uuid4())}"
                 config = get_config()
-                default_human_review = getattr(config, "default_human_review", False)
+                default_human_review = getattr(
+                    config.ticket_tracking, "default_human_review", False
+                )
                 default_approval_timeout = getattr(
-                    config, "default_approval_timeout", 1800
+                    config.ticket_tracking, "default_approval_timeout", 1800
                 )
                 board_config_data = workflow_config_data.get("board_config", {})
 

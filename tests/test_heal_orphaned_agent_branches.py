@@ -75,9 +75,9 @@ def config(test_db, temp_repo, monkeypatch):
     import src.core.simple_config
 
     cfg = src.core.simple_config.Config()
-    cfg.database_path = test_db.engine.url.database
-    cfg.base_branch = "main"
-    cfg.branch_prefix = "agent-"
+    cfg.paths.database_path = test_db.engine.url.database
+    cfg.git.base_branch = "main"
+    cfg.git.branch_prefix = "agent-"
     monkeypatch.setattr("src.core.simple_config.get_config", lambda: cfg)
 
     import src.autopilot.orchestrator.worktree_integration as _wi

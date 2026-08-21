@@ -113,7 +113,7 @@ class LaunchPipeline:
         import os
 
         token_env_var = glm_token_env or getattr(
-            self.config, "glm_api_token_env", "GLM_API_TOKEN"
+            self.config.agents, "glm_api_token_env", "GLM_API_TOKEN"
         )
         token = os.getenv(token_env_var)
         if not token:
@@ -513,12 +513,12 @@ class LaunchPipeline:
             except Exception as e:
                 logger.warning(f"Could not derive phase config for task {task.id}: {e}")
 
-        cli_type = phase_cli_tool or cli_type or self.config.default_cli_tool
+        cli_type = phase_cli_tool or cli_type or self.config.agents.default_cli_tool
 
-        if not fallback_cli_tool and self.config.default_fallback_cli_tool:
-            if self.config.default_fallback_cli_tool != cli_type:
-                fallback_cli_tool = self.config.default_fallback_cli_tool
-                fallback_cli_model = self.config.default_fallback_cli_model
+        if not fallback_cli_tool and self.config.agents.default_fallback_cli_tool:
+            if self.config.agents.default_fallback_cli_tool != cli_type:
+                fallback_cli_tool = self.config.agents.default_fallback_cli_tool
+                fallback_cli_model = self.config.agents.default_fallback_cli_model
 
         return PhaseConfig(
             cli_type=cli_type,
@@ -647,8 +647,8 @@ class LaunchPipeline:
         """
         cli_agent = get_cli_agent(cli_type)
         global_model = (
-            getattr(self.config, "cli_model", None)
-            if cli_type == self.config.default_cli_tool
+            getattr(self.config.agents, "cli_model", None)
+            if cli_type == self.config.agents.default_cli_tool
             else None
         )
         if agent_cli_model is not None:
@@ -676,7 +676,7 @@ class LaunchPipeline:
         if task.phase_id:
             env_vars["HEPHAESTUS_PHASE_ID"] = task.phase_id
         import os
-        _api_port = os.environ.get("HEPHAESTUS_PORT") or str(getattr(self.config, "mcp_port", 8300))
+        _api_port = os.environ.get("HEPHAESTUS_PORT") or str(getattr(self.config.server, "mcp_port", 8300))
         env_vars["HEPHAESTUS_API_URL"] = f"http://localhost:{_api_port}"
 
         return env_vars, model, cli_agent
@@ -711,7 +711,7 @@ class LaunchPipeline:
                 session.close()
 
         thinking_level = phase_thinking_override or getattr(
-            self.config, "cli_thinking_level", "medium"
+            self.config.agents, "cli_thinking_level", "medium"
         )
         return phase_name, phase_order, thinking_level
 
@@ -941,7 +941,7 @@ class LaunchPipeline:
         # Use provided working directory (which should be a worktree path)
         # Fallback to project root from config if not provided
         if not working_directory:
-            working_directory = str(self.config.project_root)
+            working_directory = str(self.config.paths.project_root)
             logger.warning(
                 f"No working directory provided, using project root: {working_directory}"
             )
@@ -1770,7 +1770,7 @@ class LaunchPipeline:
                 phase_glm_token_env=phase_config.glm_token_env,
             )
 
-            session_name = f"{self.config.tmux_session_prefix}_{agent_id[:8]}"
+            session_name = f"{self.config.agents.tmux_session_prefix}_{agent_id[:8]}"
             # _prepare_launch_environment calls _ensure_codegraph_initialized
             # (a `codegraph status .` subprocess with a 30s timeout -- 3.6s
             # measured live during this same investigation) and
@@ -2148,7 +2148,7 @@ class LaunchPipeline:
             )
             restart_wd = wt_resolution.branch_path
 
-            new_session_name = f"{self.config.tmux_session_prefix}_{agent_id[:8]}_r"
+            new_session_name = f"{self.config.agents.tmux_session_prefix}_{agent_id[:8]}_r"
 
             # Resolve phase name BEFORE preparing the launch environment: the
             # .hephaestus/ output dir is named by phase NAME (pre-split

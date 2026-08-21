@@ -164,8 +164,12 @@ def _default_allowed_roots() -> "list[Path]":
 
         config = get_config()
         config_read = True
-        for attr in ("main_repo_path", "project_root", "worktree_base_path"):
-            value = getattr(config, attr, None)
+        for attr, source in (
+            ("main_repo_path", config.git),
+            ("project_root", config.paths),
+            ("worktree_base_path", config.paths),
+        ):
+            value = getattr(source, attr, None)
             if not value:
                 continue
             try:

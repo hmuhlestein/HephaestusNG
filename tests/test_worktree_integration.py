@@ -60,13 +60,13 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
     import src.core.simple_config
 
     config = src.core.simple_config.Config()
-    config.worktree_base_path = Path(tempfile.mkdtemp())
-    config.main_repo_path = Path(temp_repo.working_dir)
+    config.paths.worktree_base_path = Path(tempfile.mkdtemp())
+    config.git.main_repo_path = Path(temp_repo.working_dir)
     config.worktree_branch_prefix = "test-agent-"
     config.conflict_resolution_strategy = "newest_file_wins"
     config.prefer_child_on_tie = True
     config.auto_merge_enabled = True
-    config.branch_retention_hours = {
+    config.git.branch_retention_hours = {
         "merged": 1,
         "failed": 24,
         "abandoned": 6,
@@ -88,7 +88,7 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
     yield manager
 
     # Cleanup worktrees
-    shutil.rmtree(config.worktree_base_path, ignore_errors=True)
+    shutil.rmtree(config.paths.worktree_base_path, ignore_errors=True)
 
 
 @pytest.fixture
@@ -100,9 +100,9 @@ def agent_manager(test_db, mock_llm_provider, worktree_manager, monkeypatch):
     # Must be a real CLI_AGENTS key -- get_cli_agent(cli_type) validates this
     # even though the actual tmux/process launch is mocked below, so a
     # placeholder like "test" raises ValueError: Unsupported CLI agent type.
-    config.default_cli_tool = "claude"
-    config.system_prompt_max_length = 4000
-    config.tmux_session_prefix = "test_agent"
+    config.agents.default_cli_tool = "claude"
+    config.llm.system_prompt_max_length = 4000
+    config.agents.tmux_session_prefix = "test_agent"
 
     monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
     # Same "from ... import get_config" name-binding issue as the
@@ -492,7 +492,7 @@ def test_cleanup_policies(worktree_manager, test_db):
 
     # Merged worktree should be eligible for cleanup after retention period
     config = worktree_manager.config
-    retention_hours = config.branch_retention_hours["merged"]  # 1 hour by default
+    retention_hours = config.git.branch_retention_hours["merged"]  # 1 hour by default
     assert merged_worktree.merged_at < datetime.utcnow() - timedelta(
         hours=retention_hours
     )

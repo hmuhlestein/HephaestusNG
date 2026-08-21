@@ -4670,9 +4670,9 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
         import src.core.simple_config
 
         cfg = src.core.simple_config.Config()
-        cfg.database_path = orch_db_env.engine.url.database
-        cfg.main_repo_path = repo_path
-        cfg.worktree_base_path = tmp_path / ".worktrees"
+        cfg.paths.database_path = orch_db_env.engine.url.database
+        cfg.git.main_repo_path = repo_path
+        cfg.paths.worktree_base_path = tmp_path / ".worktrees"
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: cfg)
 
         with orch_db_env.session_scope() as session:
@@ -4784,9 +4784,9 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
         import src.core.simple_config
 
         cfg = src.core.simple_config.Config()
-        cfg.database_path = orch_db_env.engine.url.database
-        cfg.main_repo_path = repo_path
-        cfg.worktree_base_path = tmp_path / ".worktrees"
+        cfg.paths.database_path = orch_db_env.engine.url.database
+        cfg.git.main_repo_path = repo_path
+        cfg.paths.worktree_base_path = tmp_path / ".worktrees"
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: cfg)
 
         with orch_db_env.session_scope() as session:
@@ -4894,9 +4894,9 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
         import src.core.simple_config
 
         cfg = src.core.simple_config.Config()
-        cfg.database_path = orch_db_env.engine.url.database
-        cfg.main_repo_path = repo_path
-        cfg.worktree_base_path = tmp_path / ".worktrees"
+        cfg.paths.database_path = orch_db_env.engine.url.database
+        cfg.git.main_repo_path = repo_path
+        cfg.paths.worktree_base_path = tmp_path / ".worktrees"
         monkeypatch.setattr("src.core.simple_config.get_config", lambda: cfg)
 
         with orch_db_env.session_scope() as session:
@@ -5956,7 +5956,7 @@ class TestGetOrCreateProjectId:
         from src.core.database import AutopilotProject
 
         mock_config = MagicMock()
-        mock_config.max_concurrent_projects = 2
+        mock_config.autopilot.max_concurrent_projects = 2
         monkeypatch.setattr(
             "src.core.simple_config.get_config", lambda: mock_config
         )
@@ -5996,7 +5996,7 @@ class TestGetOrCreateProjectId:
         from src.core.database import AutopilotProject, Workflow
 
         mock_config = MagicMock()
-        mock_config.max_concurrent_projects = 2
+        mock_config.autopilot.max_concurrent_projects = 2
         monkeypatch.setattr(
             "src.core.simple_config.get_config", lambda: mock_config
         )

@@ -573,11 +573,11 @@ def _merge_design_branch_into_main(
         from src.core.worktree_manager import WorktreeManager
 
         cfg = get_config()
-        wt_mgr = WorktreeManager(db_manager=DbManager(str(cfg.database_path)))
+        wt_mgr = WorktreeManager(db_manager=DbManager(str(cfg.paths.database_path)))
         wt_mgr.reload(Path(project_path))
 
         # Ensure main is clean
-        wt_mgr.main_repo.heads[wt_mgr.config.base_branch].checkout()
+        wt_mgr.main_repo.heads[wt_mgr.config.git.base_branch].checkout()
         try:
             wt_mgr.main_repo.git.merge("--abort")
         except Exception:
@@ -746,7 +746,7 @@ def run_single_workflow(
         from src.core.worktree_manager import WorktreeManager
 
         cfg = get_config()
-        db = DbManager(str(cfg.database_path))
+        db = DbManager(str(cfg.paths.database_path))
         wt_mgr = WorktreeManager(db_manager=db)
 
         # FIX: If project_path is already a worktree (contains .worktrees/),
@@ -2585,7 +2585,7 @@ def _build_and_start_pipeline_sdk(args, project_path: Path, logger: Orchestrator
     from src.sdk.models import WorkflowDefinition
 
     config = get_config()
-    cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL") or config.default_cli_tool
+    cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL") or config.agents.default_cli_tool
 
     autopilot_def = WorkflowDefinition(
         id="autopilot",

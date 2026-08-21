@@ -52,12 +52,12 @@ def manager(test_db, temp_repo, monkeypatch):
     import src.core.simple_config
 
     config = src.core.simple_config.Config()
-    config.main_repo_path = Path(temp_repo.working_dir)
-    config.project_root = Path(temp_repo.working_dir)
-    config.base_branch = "main"
-    config.branch_prefix = "agent-"
+    config.git.main_repo_path = Path(temp_repo.working_dir)
+    config.paths.project_root = Path(temp_repo.working_dir)
+    config.git.base_branch = "main"
+    config.git.branch_prefix = "agent-"
     config.conflict_resolution_strategy = "newest_file_wins"
-    config.worktree_base_path = None  # exercise the <repo>/.worktrees default
+    config.paths.worktree_base_path = None  # exercise the <repo>/.worktrees default
     # Patch where the name is actually looked up (the manager's own namespace),
     # not just the source module — otherwise the real singleton config is used.
     monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
