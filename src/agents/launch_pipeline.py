@@ -21,6 +21,7 @@ from src.core.database import (
     TaskStatus,
     get_db,
 )
+from src.core.phase_lookup import resolve_task_phase
 from src.core.worktree_manager import WorktreeManager
 from src.interfaces import LaunchResult, get_cli_agent
 
@@ -713,17 +714,9 @@ class LaunchPipeline:
         phase_name = None
         phase_order = "?"
         if task.phase_id:
-            from src.core.database import Phase
             session = self.db_manager.get_session()
             try:
-                if task.phase_id.isdigit():
-                    phase = (
-                        session.query(Phase)
-                        .filter_by(order=int(task.phase_id), workflow_id=task.workflow_id)
-                        .first()
-                    )
-                else:
-                    phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                phase = resolve_task_phase(session, task)
                 if phase:
                     phase_name = phase.name
                     phase_order = str(phase.order)
@@ -2175,17 +2168,9 @@ class LaunchPipeline:
             # behavior), not by the raw phase_id.
             restart_phase_name = None
             if task.phase_id:
-                from src.core.database import Phase
                 restart_session = self.db_manager.get_session()
                 try:
-                    if task.phase_id.isdigit():
-                        restart_phase = (
-                            restart_session.query(Phase)
-                            .filter_by(order=int(task.phase_id), workflow_id=task.workflow_id)
-                            .first()
-                        )
-                    else:
-                        restart_phase = restart_session.query(Phase).filter_by(id=task.phase_id).first()
+                    restart_phase = resolve_task_phase(restart_session, task)
                     if restart_phase:
                         restart_phase_name = restart_phase.name
                 except Exception:

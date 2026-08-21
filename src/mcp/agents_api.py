@@ -13,6 +13,7 @@ from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 from src.core.agent_identity import is_root_agent
 from src.core.app_context import get_app_state
 from src.core.database import Agent, Task
+from src.core.phase_lookup import resolve_task_phase
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def _get_server_state():
 def _serialize_agent(session, a) -> dict:
     """Build the API representation of a single agent, including its current
     (or, if terminated, most recent) task and workflow."""
-    from src.core.database import Phase, Workflow
+    from src.core.database import Workflow
 
     agent_data = {
         "id": a.id,
@@ -66,25 +67,7 @@ def _serialize_agent(session, a) -> dict:
                 "phase_info": None,
             }
             if task.phase_id:
-                if task.phase_id.isdigit():
-                    phase = (
-                        session.query(Phase)
-                        .filter_by(
-                            order=int(task.phase_id),
-                            workflow_id=task.workflow_id,
-                        )
-                        .first()
-                    )
-                    if not phase:
-                        phase = (
-                            session.query(Phase)
-                            .filter_by(order=int(task.phase_id))
-                            .first()
-                        )
-                else:
-                    phase = (
-                        session.query(Phase).filter_by(id=task.phase_id).first()
-                    )
+                phase = resolve_task_phase(session, task)
                 if phase:
                     task_data["phase_info"] = {
                         "id": phase.id,
@@ -137,17 +120,7 @@ def _serialize_agent(session, a) -> dict:
                 "phase_info": None,
             }
             if last_task.phase_id:
-                if last_task.phase_id.isdigit():
-                    phase = (
-                        session.query(Phase)
-                        .filter_by(
-                            order=int(last_task.phase_id),
-                            workflow_id=last_task.workflow_id,
-                        )
-                        .first()
-                    )
-                else:
-                    phase = session.query(Phase).filter_by(id=last_task.phase_id).first()
+                phase = resolve_task_phase(session, last_task)
                 if phase:
                     task_data["phase_info"] = {
                         "id": phase.id,
@@ -755,13 +728,7 @@ async def get_task_progress(
                 phase_order = None
                 if t.phase_id:
                     from src.core.database import Phase
-                    if t.phase_id.isdigit():
-                        phase = session.query(Phase).filter_by(
-                            order=int(t.phase_id),
-                            workflow_id=t.workflow_id,
-                        ).first()
-                    else:
-                        phase = session.query(Phase).filter_by(id=t.phase_id).first()
+                    phase = resolve_task_phase(session, t)
                     if phase:
                         phase_name = phase.name
                         phase_order = phase.order

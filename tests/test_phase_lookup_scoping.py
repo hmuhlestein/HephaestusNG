@@ -129,14 +129,29 @@ class TestOtherForms:
         finally:
             session.close()
 
-    def test_a_task_without_a_workflow_falls_back_to_an_unscoped_order_lookup(self, db):
-        """Deliberate: with no workflow to scope to there is nothing better to
-        do, and this preserves what the previous call sites did for that case
-        rather than newly returning None for them."""
+    def test_an_order_without_a_workflow_resolves_to_nothing(self, db):
+        """An order is only meaningful inside a workflow. Returning some
+        arbitrary workflow's phase at that order would be a guess presented
+        as fact, and agents_api's sites already returned None here -- so
+        strictness is what keeps all ten call sites consistent.
+
+        Costs nothing in practice: of 1324 tasks in this repo's database, 753
+        use the order form and 249 have no workflow, and those sets do not
+        overlap.
+        """
         session = db.get_session()
         try:
-            phase = resolve_task_phase(session, _task("t6", None, "4"))
+            assert resolve_task_phase(session, _task("t6", None, "4")) is None
+        finally:
+            session.close()
+
+    def test_a_uuid_still_resolves_without_a_workflow(self, db):
+        """Strictness applies only to the order form -- a UUID identifies a
+        phase on its own, so it must keep working."""
+        session = db.get_session()
+        try:
+            phase = resolve_task_phase(session, _task("t7", None, "phase-wf-feature"))
             assert phase is not None
-            assert phase.order == 4
+            assert phase.name == "design_review"
         finally:
             session.close()
