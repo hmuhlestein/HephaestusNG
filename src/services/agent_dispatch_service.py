@@ -10,6 +10,7 @@ config before this extraction; unifying them here also fixes that
 inconsistency (bump did fetch it, restart didn't — restart now does too).
 """
 
+import asyncio
 import logging
 import os
 from datetime import datetime
@@ -61,18 +62,22 @@ class AgentDispatchService:
 
         server_state = get_app_state()
 
-        project_context = await server_state.agent_manager.get_project_context()
+        # get_project_context() (DB reads) and retrieve_for_task() (embedding
+        # + vector search) don't read each other's output -- the phase-context
+        # merge below only needs project_context, and is itself synchronous.
+        project_context, context_memories = await asyncio.gather(
+            server_state.agent_manager.get_project_context(),
+            server_state.rag_system.retrieve_for_task(
+                task_description=task_description_for_rag,
+                requesting_agent_id=requesting_agent_id,
+            ),
+        )
         if phase_id and server_state.phase_manager:
             phase_context = server_state.phase_manager.get_phase_context(phase_id)
             if phase_context:
                 project_context = (
                     f"{project_context}\n\n{phase_context.to_prompt_context()}"
                 )
-
-        context_memories = await server_state.rag_system.retrieve_for_task(
-            task_description=task_description_for_rag,
-            requesting_agent_id=requesting_agent_id,
-        )
 
         # FIX #6: Pass explicit_working_directory (may be None) to the assembler
         # so the phase's configured working_directory can be used as fallback.

@@ -133,10 +133,15 @@ class CDPBrowser:
         self.ws = await self._open_websocket(self.ws_url)
         self._connected = True
         self._event_task = asyncio.create_task(self._reader_loop())
-        await self.send("Page.enable")
-        await self.send("Runtime.enable")
-        await self.send("Console.enable")
-        await self.send("Network.enable")
+        # Four independent CDP domain-enable calls -- send() assigns each its
+        # own msg_id and awaits its own response future, so they can run
+        # concurrently over the shared websocket without racing.
+        await asyncio.gather(
+            self.send("Page.enable"),
+            self.send("Runtime.enable"),
+            self.send("Console.enable"),
+            self.send("Network.enable"),
+        )
         logger.info("Connected to Chrome CDP: %s", self.ws_url)
 
     async def connect_to_url(self, url: str) -> None:
@@ -150,10 +155,15 @@ class CDPBrowser:
         self.ws = await self._open_websocket(self.ws_url)
         self._connected = True
         self._event_task = asyncio.create_task(self._reader_loop())
-        await self.send("Page.enable")
-        await self.send("Runtime.enable")
-        await self.send("Console.enable")
-        await self.send("Network.enable")
+        # Four independent CDP domain-enable calls -- send() assigns each its
+        # own msg_id and awaits its own response future, so they can run
+        # concurrently over the shared websocket without racing.
+        await asyncio.gather(
+            self.send("Page.enable"),
+            self.send("Runtime.enable"),
+            self.send("Console.enable"),
+            self.send("Network.enable"),
+        )
         logger.info("Connected to new tab: %s", url)
 
     async def _reader_loop(self) -> None:

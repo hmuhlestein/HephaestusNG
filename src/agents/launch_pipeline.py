@@ -1984,8 +1984,15 @@ class LaunchPipeline:
             await self._deliver_initial_prompt(
                 pane, cli_agent, cli_type, instructions_pointer, agent_id, task,
             )
-            await self._record_cli_session(cli_agent, session_id, branch_path, cli_launch_started_at)
-            await self._verify_instructions_file_read(pane, instructions_rel_path, agent_id)
+            # Neither reads the other's result: the session-record retry loop
+            # only touches cli_agent/session_id, the instructions-file check
+            # only reads the tmux pane. Concurrent instead of sequential turns
+            # the worst case (~5s record retries + a fixed 15s pane check)
+            # into ~15s.
+            await asyncio.gather(
+                self._record_cli_session(cli_agent, session_id, branch_path, cli_launch_started_at),
+                self._verify_instructions_file_read(pane, instructions_rel_path, agent_id),
+            )
 
             logger.info(f"=== END INITIAL PROMPT DELIVERY for agent {agent_id} ===")
 
@@ -2292,13 +2299,22 @@ class LaunchPipeline:
                         instructions_pointer if restart_wd else restart_message,
                         agent_id, task, agent_type=agent.agent_type or "phase",
                     )
-                    await self._record_cli_session(
+                    # See the create-path's identical comment: neither call
+                    # reads the other's result, so run them concurrently
+                    # when both apply (restart_wd gates whether there's an
+                    # instructions file to check at all).
+                    record_coro = self._record_cli_session(
                         cli_agent, session_id, restart_wd, cli_launch_started_at
                     )
                     if restart_wd:
-                        await self._verify_instructions_file_read(
-                            pane, instructions_rel_path, agent_id
+                        await asyncio.gather(
+                            record_coro,
+                            self._verify_instructions_file_read(
+                                pane, instructions_rel_path, agent_id
+                            ),
                         )
+                    else:
+                        await record_coro
                     logger.info(
                         f"[RESTART] Delivered continue-prompt to agent {agent_id} ({restart_cli_type})"
                     )

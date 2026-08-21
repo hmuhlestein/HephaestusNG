@@ -79,9 +79,18 @@ async def _terminate_workflow_agents(session, workflow_id: str):
             .all(),
         )
         for agent in agents:
-            await loop.run_in_executor(None, _kill_tmux_session, agent.tmux_session_name)
-            await loop.run_in_executor(
-                None, functools.partial(terminate_agent, agent.id, session=session)
+            # tmux teardown and the DB-invariant termination are independent
+            # (terminate_agent's docstring: "Scope is the DB invariant only")
+            # -- safe to run concurrently since _kill_tmux_session never
+            # touches `session`, so only one thread ever uses it at a time
+            # even with these two overlapping. The loop itself stays
+            # sequential across agents, since `session` is shared by all of
+            # them and isn't safe for concurrent use across iterations.
+            await asyncio.gather(
+                loop.run_in_executor(None, _kill_tmux_session, agent.tmux_session_name),
+                loop.run_in_executor(
+                    None, functools.partial(terminate_agent, agent.id, session=session)
+                ),
             )
             terminated_count += 1
 
