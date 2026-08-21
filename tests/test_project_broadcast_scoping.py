@@ -84,27 +84,25 @@ class TestResolveProjectForWorkflow:
         assert resolve_project_for_workflow(None) == (None, None)
 
 
-class FakeServerState:
-    """Minimal stand-in exposing exactly what broadcast_update touches --
-    avoids constructing a full ServerState (heavy init: agent manager,
-    LLM client, etc.) just to test the message-merging behavior."""
-
-    def __init__(self):
-        self.active_websockets = []
-        self.sse_queues = []
-
-
 class TestBroadcastUpdateProjectTagging:
+    """Targets ConnectionBroadcaster directly (SOLID review 1.6 extracted
+    broadcast_update's actual logic there; ServerState.broadcast_update is
+    now a thin delegator, covered separately below). Previously this class
+    called the unbound `ServerState.broadcast_update(fake, ...)` against a
+    duck-typed FakeServerState specifically to avoid ServerState's heavy
+    __init__ -- ConnectionBroadcaster's own __init__ is cheap enough that no
+    stand-in is needed at all now."""
+
     @pytest.mark.asyncio
     async def test_merges_project_id_and_name_into_message(self):
-        from src.mcp.server._shared import ServerState
+        from src.mcp.server.connection_broadcaster import ConnectionBroadcaster
 
-        fake = FakeServerState()
+        broadcaster = ConnectionBroadcaster()
         sent = asyncio.Queue()
-        fake.sse_queues = [sent]
+        broadcaster.sse_queues = [sent]
 
-        await ServerState.broadcast_update(
-            fake, {"type": "task_created", "task_id": "t1"},
+        await broadcaster.broadcast_update(
+            {"type": "task_created", "task_id": "t1"},
             project_id="proj-a", project_name="Project A",
         )
 
@@ -115,13 +113,13 @@ class TestBroadcastUpdateProjectTagging:
 
     @pytest.mark.asyncio
     async def test_omits_project_fields_when_not_given(self):
-        from src.mcp.server._shared import ServerState
+        from src.mcp.server.connection_broadcaster import ConnectionBroadcaster
 
-        fake = FakeServerState()
+        broadcaster = ConnectionBroadcaster()
         sent = asyncio.Queue()
-        fake.sse_queues = [sent]
+        broadcaster.sse_queues = [sent]
 
-        await ServerState.broadcast_update(fake, {"type": "task_created", "task_id": "t1"})
+        await broadcaster.broadcast_update({"type": "task_created", "task_id": "t1"})
 
         message = sent.get_nowait()
         assert "project_id" not in message
@@ -131,15 +129,63 @@ class TestBroadcastUpdateProjectTagging:
     async def test_does_not_mutate_caller_dict(self):
         """broadcast_update must not leak project_id into a dict the
         caller still holds a reference to and might reuse."""
-        from src.mcp.server._shared import ServerState
+        from src.mcp.server.connection_broadcaster import ConnectionBroadcaster
 
-        fake = FakeServerState()
-        fake.sse_queues = [asyncio.Queue()]
+        broadcaster = ConnectionBroadcaster()
+        broadcaster.sse_queues = [asyncio.Queue()]
         original = {"type": "task_created", "task_id": "t1"}
 
-        await ServerState.broadcast_update(fake, original, project_id="proj-a", project_name="A")
+        await broadcaster.broadcast_update(original, project_id="proj-a", project_name="A")
 
         assert "project_id" not in original
+
+
+class TestServerStateDelegatesToConnectionBroadcaster:
+    """ServerState.broadcast_update and its active_websockets/sse_queues
+    properties must reach the same ConnectionBroadcaster instance -- this is
+    what keeps server_state.active_websockets.append(...) (direct mutation,
+    used by the websocket route) and server_state.broadcast_update(...)
+    (used by ~30 call sites) seeing the same connected clients."""
+
+    def test_direct_list_mutation_is_visible_to_broadcast(self):
+        from src.mcp.server._shared import ServerState
+        from src.mcp.server.connection_broadcaster import ConnectionBroadcaster
+
+        state = ServerState.__new__(ServerState)
+        state._broadcaster = ConnectionBroadcaster()
+
+        fake_ws = object()
+        state.active_websockets.append(fake_ws)
+
+        assert state._broadcaster.active_websockets == [fake_ws]
+
+    def test_reassigning_the_property_writes_through(self):
+        """Covers tests/test_shutdown_closes_devtools_sessions.py's
+        monkeypatch.setattr(server_state, "active_websockets", []) -- a
+        read-only property would raise AttributeError there."""
+        from src.mcp.server._shared import ServerState
+        from src.mcp.server.connection_broadcaster import ConnectionBroadcaster
+
+        state = ServerState.__new__(ServerState)
+        state._broadcaster = ConnectionBroadcaster()
+
+        state.active_websockets = []
+        assert state._broadcaster.active_websockets == []
+
+    @pytest.mark.asyncio
+    async def test_broadcast_update_delegates(self):
+        from src.mcp.server._shared import ServerState
+        from src.mcp.server.connection_broadcaster import ConnectionBroadcaster
+
+        state = ServerState.__new__(ServerState)
+        state._broadcaster = ConnectionBroadcaster()
+        sent = asyncio.Queue()
+        state.sse_queues = [sent]
+
+        await state.broadcast_update({"type": "task_created"}, project_id="proj-a")
+
+        message = sent.get_nowait()
+        assert message["project_id"] == "proj-a"
 
 
 if __name__ == "__main__":
