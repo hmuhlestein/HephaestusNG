@@ -307,6 +307,33 @@ one at a time:
   process's behaviour at once. That is a per-setting decision for the owner, and the
   guard's allowlist is where each one is now visible rather than silent.
 
+### Orchestrator — both goto handlers fail open on an unresolvable target (2026-08-20)
+
+`_handle_evaluation_goto` (a gate's decision) and `_handle_force_goto` (an *arbiter's*
+decision) each do the same thing when the target phase cannot be resolved:
+
+    if not target_phase:
+        logger.warning(f"Target phase not found: {...}")
+        return self._advance_or_complete(session, phase.id)
+
+That is the opposite of the decision that was made. A gate says "go back to
+development", or an arbiter resolves an escalation with "goto X", and the pipeline
+advances instead — with a warning as the only trace. It matters more now that 2.9 and
+2.13 route failures *into* arbitration: `_handle_force_goto` is where an arbiter's
+resolution lands.
+
+**Latent, not live**: every `target:` in every shipped workflow resolves today
+(verified). The trigger is mundane — rename a phase, miss one `target:` reference, and
+every goto aimed at it silently becomes an advance. This repo renamed
+`git_commit_push` → `git_expert` recently, exactly that shape of change.
+
+`tests/test_goto_targets_resolve.py` (`9f0526f`) guards the config so the latent bug
+cannot become live, and is mutation-verified. **The runtime fail-open is deliberately
+left for an owner**: what a goto should do when its target is unresolvable is a policy
+call (escalate? fail the workflow?), and for `_handle_force_goto` it is specifically
+"what happens when the arbiter's own decision cannot be carried out" — escalating back
+to arbitration risks a loop, though `_trigger_arbitration` is capped at 3.
+
 ### MCP/API layer
 
 **`project_routes.py` (2098 lines) is a new god-file bundling 4 unrelated domains.**
