@@ -14,7 +14,8 @@ from unittest.mock import patch
 import pytest
 
 from src.core.database import Agent, DatabaseManager, Phase, Task, Workflow
-from src.mcp.frontend._shared import FrontendAPI
+from src.mcp.frontend.agent_service import AgentService
+from src.mcp.frontend.task_service import TaskService
 
 
 @pytest.fixture
@@ -27,7 +28,12 @@ def db_manager(tmp_path):
 
 @pytest.fixture
 def frontend_api(db_manager):
-    return FrontendAPI(db_manager=db_manager, agent_manager=None)
+    return TaskService(db_manager=db_manager, agent_manager=None)
+
+
+@pytest.fixture
+def agent_service_instance(db_manager):
+    return AgentService(db_manager=db_manager, agent_manager=None)
 
 
 def _seed_workflow_and_phase(db_manager, workflow_id="wf-1", phase_id="phase-1"):
@@ -77,7 +83,7 @@ async def test_get_task_resolves_phase_name_and_order(db_manager, frontend_api):
 
 
 @pytest.mark.asyncio
-async def test_get_phase_agents_started_at_prefers_launched_at(db_manager, frontend_api):
+async def test_get_phase_agents_started_at_prefers_launched_at(db_manager, agent_service_instance):
     _seed_workflow_and_phase(db_manager)
     launched = datetime.utcnow() - timedelta(minutes=2)
     created = datetime.utcnow() - timedelta(minutes=10)
@@ -104,7 +110,7 @@ async def test_get_phase_agents_started_at_prefers_launched_at(db_manager, front
             )
         )
 
-    result = await frontend_api.get_phase_agents("phase-1")
+    result = await agent_service_instance.get_phase_agents("phase-1")
 
     # Before the fix this always read agent.created_at under the key
     # "started_at" -- launched_at (the field that actually means "when
@@ -113,7 +119,7 @@ async def test_get_phase_agents_started_at_prefers_launched_at(db_manager, front
 
 
 @pytest.mark.asyncio
-async def test_get_phase_agents_started_at_falls_back_to_created_at(db_manager, frontend_api):
+async def test_get_phase_agents_started_at_falls_back_to_created_at(db_manager, agent_service_instance):
     _seed_workflow_and_phase(db_manager)
     created = datetime.utcnow() - timedelta(minutes=10)
     with db_manager.session_scope() as session:
@@ -139,7 +145,7 @@ async def test_get_phase_agents_started_at_falls_back_to_created_at(db_manager, 
             )
         )
 
-    result = await frontend_api.get_phase_agents("phase-1")
+    result = await agent_service_instance.get_phase_agents("phase-1")
 
     assert result["agents"][0]["started_at"] == created.isoformat() + "Z"
 

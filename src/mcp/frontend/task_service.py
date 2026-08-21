@@ -1,0 +1,494 @@
+"""Task listing, detail, and blocking-status queries.
+
+Split out of FrontendAPI (src/mcp/frontend/_shared.py) -- SOLID review 1.7:
+routing was already split into per-domain routers, but the class underneath
+stayed one 2673-line, 41-method god object. This is the task_routes.py
+domain's share of that split.
+"""
+
+import logging
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from fastapi import HTTPException
+from sqlalchemy import desc
+
+from src.agents.manager import AgentManager
+from src.core.database import Agent, CostEntry, DatabaseManager, Task, Workflow
+from src.core.phase_lookup import resolve_task_phase
+from src.phases import PhaseManager
+
+logger = logging.getLogger(__name__)
+
+class TaskService:
+    """API handlers for task listing, detail, and blocking status."""
+
+    def __init__(
+        self,
+        db_manager: DatabaseManager,
+        agent_manager: AgentManager,
+        phase_manager: PhaseManager = None,
+    ):
+        self.db_manager = db_manager
+        self.agent_manager = agent_manager
+        self.phase_manager = phase_manager
+
+    async def get_tasks(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        status: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get all tasks with pagination."""
+        session = self.db_manager.get_session()
+        try:
+            query = session.query(Task)
+
+            if status:
+                query = query.filter(Task.status == status)
+            if workflow_id:
+                query = query.filter(Task.workflow_id == workflow_id)
+            if project_id:
+                # Filter through workflow -> project_id
+                query = query.join(Workflow, Task.workflow_id == Workflow.id).filter(
+                    Workflow.project_id == project_id
+                )
+
+            tasks = (
+                query.order_by(desc(Task.created_at)).offset(skip).limit(limit).all()
+            )
+
+            result = []
+            for task in tasks:
+                task_data = {
+                    "id": task.id,
+                    "description": task.enriched_description or task.raw_description,
+                    "done_definition": task.done_definition,
+                    "status": task.status,
+                    "priority": task.priority,
+                    "assigned_agent_id": task.assigned_agent_id,
+                    "created_by_agent_id": task.created_by_agent_id,
+                    "parent_task_id": task.parent_task_id,
+                    "created_at": task.created_at.isoformat()
+                    + "Z",  # Add UTC timezone indicator
+                    "started_at": task.started_at.isoformat() + "Z"
+                    if task.started_at
+                    else None,
+                    "completed_at": task.completed_at.isoformat() + "Z"
+                    if task.completed_at
+                    else None,
+                    "estimated_complexity": task.estimated_complexity,
+                    "phase_id": task.phase_id,
+                    "workflow_id": task.workflow_id,
+                    "action": task.action or "",
+                    "action_target_phase": task.action_target_phase or None,
+                    "depends_on": task.depends_on,
+                    "parallel_group": task.parallel_group,
+                    "max_concurrent": task.max_concurrent,
+                }
+
+                # Add phase information if available
+                if task.phase_id:
+                    # Handle numeric phase_id (order) vs UUID phase_id
+                    phase = resolve_task_phase(session, task)
+
+                    if phase:
+                        task_data["phase_name"] = phase.name
+                        task_data["phase_order"] = phase.order
+
+                result.append(task_data)
+
+            return result
+        finally:
+            session.close()
+
+    async def get_task(self, task_id: str) -> Dict[str, Any]:
+        """Get a single task by ID with basic information."""
+        session = self.db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            task_data = {
+                "id": task.id,
+                "description": task.enriched_description or task.raw_description,
+                "done_definition": task.done_definition,
+                "status": task.status,
+                "priority": task.priority,
+                "assigned_agent_id": task.assigned_agent_id,
+                "created_by_agent_id": task.created_by_agent_id,
+                "parent_task_id": task.parent_task_id,
+                "created_at": task.created_at.isoformat() + "Z" if task.created_at else None,
+                "started_at": task.started_at.isoformat() + "Z" if task.started_at else None,
+                "completed_at": task.completed_at.isoformat() + "Z"
+                if task.completed_at
+                else None,
+                "estimated_complexity": task.estimated_complexity,
+                "phase_id": task.phase_id,
+                "phase_name": None,
+                "phase_order": None,
+                "workflow_id": task.workflow_id,
+                # Engine action (continue, retry, goto)
+                "action": task.action or "",
+                "action_target_phase": task.action_target_phase or None,
+                # Deduplication fields
+                "duplicate_of_task_id": task.duplicate_of_task_id,
+                "similarity_score": task.similarity_score,
+                "related_task_ids": task.related_task_ids
+                if task.related_task_ids
+                else [],
+            }
+
+            # SOLID review 1.10: this site never resolved phase_id -> phase
+            # name/order at all, unlike get_tasks()'s identical field pair --
+            # every caller of get_task() always saw phase_name/phase_order
+            # as null even when the task had a real phase_id.
+            if task.phase_id:
+                phase = resolve_task_phase(session, task)
+                if phase:
+                    task_data["phase_name"] = phase.name
+                    task_data["phase_order"] = phase.order
+
+            return task_data
+        finally:
+            session.close()
+
+    async def get_task_full_details(self, task_id: str) -> Dict[str, Any]:
+        """Get comprehensive task details including prompts and relationships."""
+        session = self.db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            if not task:
+                raise HTTPException(status_code=404, detail="Task not found")
+
+            # Get assigned agent details
+            agent_info = None
+            system_prompt = None
+            if task.assigned_agent_id:
+                agent = (
+                    session.query(Agent).filter_by(id=task.assigned_agent_id).first()
+                )
+                if agent:
+                    agent_info = {
+                        "id": agent.id,
+                        "status": agent.status,
+                        "cli_type": agent.cli_type,
+                        "cli_model": agent.cli_model,
+                        "created_at": agent.created_at.isoformat() + "Z"
+                        if agent.created_at
+                        else None,
+                        "last_activity": agent.last_activity.isoformat() + "Z"
+                        if agent.last_activity
+                        else None,
+                    }
+                    system_prompt = agent.system_prompt
+
+            # Get phase information
+            phase_info = None
+            if task.phase_id:
+                phase = resolve_task_phase(session, task)
+
+                if phase:
+                    phase_info = {
+                        "id": phase.id,
+                        "name": phase.name,
+                        "order": phase.order,
+                        "description": phase.description,
+                        "done_definitions": phase.done_definitions,
+                        "additional_notes": phase.additional_notes,
+                    }
+
+            # Get child tasks (tasks created by this task's agent)
+            child_tasks = []
+            if task.assigned_agent_id:
+                children = (
+                    session.query(Task)
+                    .filter(
+                        Task.created_by_agent_id == task.assigned_agent_id,
+                        Task.id != task.id,
+                    )
+                    .all()
+                )
+
+                child_tasks = [
+                    {
+                        "id": child.id,
+                        "description": (
+                            child.enriched_description or child.raw_description
+                        )[:100],
+                        "status": child.status,
+                        "priority": child.priority,
+                        "created_at": child.created_at.isoformat() + "Z"
+                        if child.created_at
+                        else None,
+                    }
+                    for child in children
+                ]
+
+            # Get parent task
+            parent_task = None
+            if task.parent_task_id:
+                # Explicit parent_task_id is set
+                parent = session.query(Task).filter_by(id=task.parent_task_id).first()
+                if parent:
+                    parent_task = {
+                        "id": parent.id,
+                        "description": (
+                            parent.enriched_description or parent.raw_description
+                        )[:100],
+                        "status": parent.status,
+                        "created_at": parent.created_at.isoformat() + "Z"
+                        if parent.created_at
+                        else None,
+                    }
+            elif task.created_by_agent_id:
+                # No explicit parent_task_id, but we can infer it from the agent that created this task
+                # Find the task that was assigned to the agent that created this task
+                parent = (
+                    session.query(Task)
+                    .filter_by(assigned_agent_id=task.created_by_agent_id)
+                    .first()
+                )
+                if parent and parent.id != task.id:  # Make sure it's not the same task
+                    parent_task = {
+                        "id": parent.id,
+                        "description": (
+                            parent.enriched_description or parent.raw_description
+                        )[:100],
+                        "status": parent.status,
+                        "created_at": parent.created_at.isoformat() + "Z"
+                        if parent.created_at
+                        else None,
+                    }
+
+            # Get tasks that are duplicates of this task
+            duplicated_tasks = []
+            duplicates = (
+                session.query(Task)
+                .filter_by(duplicate_of_task_id=task.id, status="duplicated")
+                .all()
+            )
+            for dup in duplicates:
+                duplicated_tasks.append(
+                    {
+                        "id": dup.id,
+                        "description": (
+                            dup.enriched_description or dup.raw_description
+                        )[:100],
+                        "similarity_score": dup.similarity_score,
+                        "created_at": dup.created_at.isoformat() + "Z"
+                        if dup.created_at
+                        else None,
+                        "created_by_agent_id": dup.created_by_agent_id,
+                    }
+                )
+
+            # Get related tasks with details
+            related_tasks_details = []
+            if task.related_task_ids:
+                import json
+
+                try:
+                    # Parse the related_task_ids if it's a JSON string
+                    related_data = (
+                        task.related_task_ids
+                        if isinstance(task.related_task_ids, list)
+                        else json.loads(task.related_task_ids)
+                    )
+
+                    # Backfill similarity scores for old-format related_data (plain ids,
+                    # no scores) by cosine over the already-stored task embeddings. Use the
+                    # embedding class's shared (static) cosine — no hardcoded math, no
+                    # OpenAI dependency, no model load.
+                    from src.memory.embedding_factory import EmbeddingProvider
+
+                    task_embedding = None
+
+                    # Check if we need to calculate similarities (old format without scores)
+                    needs_similarity_calculation = bool(
+                        related_data
+                    ) and not isinstance(related_data[0], dict)
+                    if needs_similarity_calculation and task.embedding:
+                        try:
+                            task_embedding = (
+                                task.embedding
+                                if isinstance(task.embedding, list)
+                                else json.loads(task.embedding)
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Could not parse task embedding for similarity calculation: {e}"
+                            )
+
+                    for item in related_data:
+                        # Handle both new format (dict with id and similarity) and old format (just string id)
+                        if isinstance(item, dict):
+                            task_id = item.get("id")
+                            similarity = item.get("similarity", 0.0)
+                        else:
+                            task_id = item
+                            similarity = 0.0  # Will calculate if possible
+
+                        # Fetch the related task
+                        related_task = session.query(Task).filter_by(id=task_id).first()
+
+                        # Try to calculate similarity for old format
+                        if (
+                            isinstance(item, str)
+                            and task_embedding
+                            and related_task
+                            and related_task.embedding
+                        ):
+                            try:
+                                related_embedding = (
+                                    related_task.embedding
+                                    if isinstance(related_task.embedding, list)
+                                    else json.loads(related_task.embedding)
+                                )
+                                similarity = (
+                                    EmbeddingProvider.calculate_cosine_similarity(
+                                        task_embedding, related_embedding
+                                    )
+                                )
+                            except Exception as e:
+                                logger.debug(
+                                    f"Could not calculate similarity for task {task_id}: {e}"
+                                )
+                                similarity = 0.0
+
+                        if related_task:
+                            related_tasks_details.append(
+                                {
+                                    "id": related_task.id,
+                                    "description": (
+                                        related_task.enriched_description
+                                        or related_task.raw_description
+                                    )[:100],
+                                    "status": related_task.status,
+                                    "similarity_score": similarity,
+                                    "created_at": related_task.created_at.isoformat()
+                                    + "Z"
+                                    if related_task.created_at
+                                    else None,
+                                }
+                            )
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.error(f"Error parsing related tasks: {e}")
+                    pass
+
+            # Calculate runtime
+            runtime_seconds = 0
+            if task.started_at:
+                end_time = task.completed_at or datetime.utcnow()
+                runtime_seconds = int((end_time - task.started_at).total_seconds())
+
+            result = {
+                "id": task.id,
+                "raw_description": task.raw_description,
+                "enriched_description": task.enriched_description,
+                "done_definition": task.done_definition,
+                "status": task.status,
+                "priority": task.priority,
+                "created_at": task.created_at.isoformat() + "Z"
+                if task.created_at
+                else None,
+                "started_at": task.started_at.isoformat() + "Z"
+                if task.started_at
+                else None,
+                "completed_at": task.completed_at.isoformat() + "Z"
+                if task.completed_at
+                else None,
+                "completion_notes": task.completion_notes,
+                "failure_reason": task.failure_reason,
+                "estimated_complexity": task.estimated_complexity,
+                "runtime_seconds": runtime_seconds,
+                "system_prompt": system_prompt,
+                "user_prompt": task.enriched_description or task.raw_description,
+                "workflow_id": task.workflow_id,
+                "action": task.action or "",
+                "action_target_phase": task.action_target_phase or None,
+                "phase_info": phase_info,
+                "agent_info": agent_info,
+                "parent_task": parent_task,
+                "child_tasks": child_tasks,
+                "has_results": task.has_results,
+                "validation_enabled": task.validation_enabled,
+                # Task deduplication fields
+                "duplicate_of_task_id": task.duplicate_of_task_id,
+                "similarity_score": task.similarity_score,
+                "related_task_ids": task.related_task_ids
+                if task.related_task_ids
+                else None,
+                "duplicated_tasks": duplicated_tasks,
+                "related_tasks_details": related_tasks_details,
+                # Ticket tracking integration
+                "ticket_id": task.ticket_id,
+                "related_ticket_ids": task.related_ticket_ids
+                if task.related_ticket_ids
+                else None,
+            }
+
+            # Get cost data for this task
+            from sqlalchemy import func
+            task_cost = session.query(func.sum(CostEntry.cost_usd)).filter(
+                CostEntry.task_id == task.id
+            ).scalar() or 0.0
+            result["cost_total_usd"] = round(task_cost, 4)
+
+            return result
+        finally:
+            session.close()
+
+    async def get_blocked_tasks(self, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all blocked tasks with blocker information."""
+        from src.services.task_blocking_service import TaskBlockingService
+
+        try:
+            blocked_tasks = TaskBlockingService.get_all_blocked_tasks(project_id)
+            return blocked_tasks
+        except Exception as e:
+            logger.error(f"Failed to get blocked tasks: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_task_blocker_details(self, task_id: str) -> Dict[str, Any]:
+        """Get detailed blocker information for a specific task."""
+        from src.services.task_blocking_service import TaskBlockingService
+
+        try:
+            blocker_info = TaskBlockingService.get_blocking_ticket_info(task_id)
+
+            if not blocker_info:
+                return {
+                    "task_id": task_id,
+                    "is_blocked": False,
+                    "blocker_count": 0,
+                    "blockers": [],
+                }
+
+            return blocker_info
+        except Exception as e:
+            logger.error(f"Failed to get blocker details for task {task_id}: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def sync_blocking_status(self) -> Dict[str, Any]:
+        """Manually trigger sync of task blocking status."""
+        import asyncio
+
+        from src.services.task_blocking_service import TaskBlockingService
+
+        try:
+            # Offloaded -- sync_task_blocking_status does N+1 blocking DB
+            # round trips (one query for all tasks, then a get_db() session
+            # per task), which would otherwise stall the event loop for the
+            # full duration of the sync.
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, TaskBlockingService.sync_task_blocking_status
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Failed to sync blocking status: {e}")
+            raise HTTPException(status_code=500, detail=str(e))

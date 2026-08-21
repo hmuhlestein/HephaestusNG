@@ -17,6 +17,9 @@ router.include_router(dashboard_router)
 
 
 def create_frontend_routes(db_manager, agent_manager, phase_manager=None):
-    """Configure the shared FrontendAPI instance and return the aggregate router."""
-    _shared.frontend_api = _shared.FrontendAPI(db_manager, agent_manager, phase_manager)
+    """Configure the shared per-domain services and return the aggregate router."""
+    _shared.dashboard_service = _shared.DashboardService(db_manager, agent_manager, phase_manager)
+    _shared.task_service = _shared.TaskService(db_manager, agent_manager, phase_manager)
+    _shared.phase_service = _shared.PhaseService(db_manager, agent_manager, phase_manager)
+    _shared.agent_service = _shared.AgentService(db_manager, agent_manager, phase_manager)
     return router
