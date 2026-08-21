@@ -20,8 +20,8 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
-  CheckCircle2, XCircle, Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, Layers,
-  PauseCircle, Square, RotateCcw, FileBarChart2, Eye
+  Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, Layers,
+  Square, RotateCcw, FileBarChart2, Eye
 } from 'lucide-react';
 import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -33,6 +33,7 @@ import FeatureRecordDetailModal from './FeatureRecordDetailModal';
 import RealTimeAgentOutput from '../RealTimeAgentOutput';
 import { Agent } from '@/types';
 import { CostDisplay, FeatureCostBadge } from '@/components/cost';
+import { DESIGN_FEATURE_STATUS_CONFIG, TASK_STATUS_CONFIG } from './statusConfig';
 
 interface DesignQueuePanelProps {
   projectId: string | null;
@@ -68,11 +69,11 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   const reviewMode = projectStatus?.review_mode ?? false;
 
   // Fetch design statuses using React Query (M-5 fix)
-  const { data: designStatuses = {} } = useQuery({
+  const { data: designStatuses = {}, refetch: refetchDesignStatuses } = useQuery({
     queryKey: ['autopilot-design-statuses', projectId, designs?.length],
     queryFn: async () => {
       if (!projectId || !designs || designs.length === 0) return {};
-      const statuses: Record<string, { status: string; workflowId?: string; error?: string | null; costTotal: number; costUnavailable?: boolean; pausedBy?: string | null; statusReason?: string | null }> = {};
+      const statuses: Record<string, { status: string; workflowId?: string; error?: string | null; costTotal: number; costUnavailable?: boolean; pausedBy?: string | null; statusReason?: string | null; features: any[] }> = {};
       await Promise.all(
         designs.map(async (d: any) => {
           try {
@@ -84,10 +85,17 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
               costTotal: status.cost_total_usd ?? 0,
               pausedBy: status.paused_by || null,
               statusReason: status.status_reason || null,
+              // SOLID review 5.2: this endpoint was already being called
+              // here every 10s for every design, but this field was
+              // discarded -- SortableDesignItem then ran its OWN
+              // per-expanded-row setInterval calling the identical
+              // endpoint again just to get this. Capturing it here
+              // eliminates that entire duplicate polling path.
+              features: status.features || [],
             };
           } catch (err) {
             console.error(`Failed to fetch status for design ${d.filename}:`, err);
-            statuses[d.filename] = { status: 'pending', costTotal: 0, costUnavailable: true };
+            statuses[d.filename] = { status: 'pending', costTotal: 0, costUnavailable: true, features: [] };
           }
         })
       );
@@ -347,6 +355,8 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   costTotal={designStatuses[item.filename]?.costTotal ?? 0}
                   costUnavailable={designStatuses[item.filename]?.costUnavailable ?? false}
                   pausedBy={designStatuses[item.filename]?.pausedBy}
+                  features={designStatuses[item.filename]?.features ?? []}
+                  onRefetchFeatures={refetchDesignStatuses}
                   statusReason={designStatuses[item.filename]?.statusReason}
                   projectId={projectId}
                   onDetail={handleDetail}
@@ -433,16 +443,8 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
 
 // ── Status Badge ───────────────────────────────────────────────
 
-const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
-  pending: { color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400', icon: <Clock className="w-3 h-3" />, label: 'Pending' },
-  active: { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400', icon: <Loader2 className="w-3 h-3 animate-spin" />, label: 'Active' },
-  paused: { color: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400', icon: <Pause className="w-3 h-3" />, label: 'Paused' },
-  completed: { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400', icon: <CheckCircle2 className="w-3 h-3" />, label: 'Done' },
-  failed: { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
-};
-
 const StatusBadge: React.FC<{ status: string; pausedBy?: string | null }> = ({ status, pausedBy }) => {
-  const config = STATUS_CONFIG[status];
+  const config = DESIGN_FEATURE_STATUS_CONFIG[status];
   if (!config) return null;
   const label = status === 'paused' && pausedBy === 'budget' ? 'Paused: budget limit reached' : config.label;
   return (
@@ -454,27 +456,6 @@ const StatusBadge: React.FC<{ status: string; pausedBy?: string | null }> = ({ s
 };
 
 // ── Task Status Icon ─────────────────────────────────────────
-
-const TASK_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode }> = {
-  pending: { color: 'text-gray-400', icon: <Clock className="w-4 h-4" /> },
-  queued: { color: 'text-blue-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
-  assigned: { color: 'text-blue-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
-  in_progress: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
-  under_review: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
-  validation_in_progress: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
-  needs_work: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
-  done: { color: 'text-blue-500', icon: <CheckCircle2 className="w-4 h-4" /> },
-  failed: { color: 'text-red-500', icon: <XCircle className="w-4 h-4" /> },
-  blocked: { color: 'text-amber-500', icon: <PauseCircle className="w-4 h-4" /> },
-  // A duplicate never ran -- it was superseded by a sibling task that
-  // already owns the phase (see task_similarity_service.py / the
-  // orchestrator's "Superseded by task X" bailout) -- but it isn't
-  // pending or in-flight either, so the fallback Clock below misleadingly
-  // suggested it was still waiting to run. Checkmark (purple, matching
-  // StatusBadge's own "duplicated" color) reads as resolved without
-  // claiming it did the same real work "done" represents.
-  duplicated: { color: 'text-purple-500', icon: <CheckCircle2 className="w-4 h-4" /> },
-};
 
 const TaskStatusIcon: React.FC<{ status: string }> = ({ status }) => {
   const config = TASK_STATUS_CONFIG[status];
@@ -564,9 +545,15 @@ interface SortableDesignItemProps {
   statusReason?: string | null;
   projectId: string | null;
   reviewMode?: boolean;
+  // SOLID review 5.2: features now come from the parent's already-polled
+  // designStatuses query (which called this same endpoint every 10s
+  // regardless) instead of this component running its own duplicate
+  // per-row setInterval against the identical endpoint.
+  features: any[];
+  onRefetchFeatures?: () => void;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, projectId, reviewMode }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, projectId, reviewMode, features, onRefetchFeatures }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -580,7 +567,6 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
     }
     return false;
   });
-  const [features, setFeatures] = useState<any[]>([]);
 
   // Calculate elapsed time from features' tasks
   const designElapsedSeconds = features.reduce((acc: number, f: any) => {
@@ -594,26 +580,6 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
       return taskAcc;
     }, 0);
   }, 0);
-
-  const fetchFeatures = async () => {
-    if (!projectId) return;
-    try {
-      const statusData = await apiService.getAutopilotProjectDesignStatus(projectId, item.filename);
-      setFeatures(statusData.features || []);
-    } catch {
-      // ignore
-    }
-  };
-
-  const refetchFeatures = fetchFeatures;
-
-  // Poll features every 10s when expanded
-  useEffect(() => {
-    if (!expanded || !projectId) return;
-    fetchFeatures(); // immediate fetch
-    const interval = setInterval(fetchFeatures, 10000);
-    return () => clearInterval(interval);
-  }, [expanded, projectId]);
 
   const handleToggleExpand = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -784,7 +750,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                       onSelectFeature={onSelectFeature}
                       onReviewFeature={onReviewFeature}
                       projectId={projectId ?? undefined}
-                      onFeatureUpdate={() => refetchFeatures()}
+                      onFeatureUpdate={() => onRefetchFeatures?.()}
                       reviewMode={reviewMode}
                     />
                   ))}
@@ -807,17 +773,8 @@ const formatBytes = (bytes: number): string => {
 
 // ── Feature Row (expandable, shows tasks under it) ──────────────
 
-const FEATURE_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
-  pending: { color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400', icon: <Clock className="w-3 h-3" />, label: 'Pending' },
-  active: { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400', icon: <Loader2 className="w-3 h-3 animate-spin" />, label: 'Active' },
-  completed: { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400', icon: <CheckCircle2 className="w-3 h-3" />, label: 'Done' },
-  failed: { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
-  paused: { color: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400', icon: <Pause className="w-3 h-3" />, label: 'Paused' },
-  skipped: { color: 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400', icon: <Clock className="w-3 h-3" />, label: 'Skipped' },
-};
-
 export const FeatureStatusBadge: React.FC<{ status: string }> = ({ status }) => {
-  const config = FEATURE_STATUS_CONFIG[status];
+  const config = DESIGN_FEATURE_STATUS_CONFIG[status];
   if (!config) return null;
   return (
     <span className={`px-2 py-0.5 text-xs font-semibold rounded-full flex items-center gap-1 ${config.color}`}>
