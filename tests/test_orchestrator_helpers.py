@@ -6511,7 +6511,8 @@ class TestCreatePhaseTaskReviewCap:
 
         assert result is True
         mock_fire_transition.assert_called_once_with(
-            "wf-cap", "phase-cap", "architectural_review", ANY, force_continue=True
+            "wf-cap", "phase-cap", "architectural_review", ANY, force_continue=True,
+            completion_summary="Capped after 3/3 runs (max_review_runs) -- not re-reviewed",
         )
         mock_create_agent.assert_not_called()
         with orch_db_env.session_scope() as session:
@@ -6565,7 +6566,8 @@ class TestCreatePhaseTaskReviewCap:
 
         assert result is True
         mock_fire_transition.assert_called_once_with(
-            "wf-cap", "phase-cap", "doc_review", ANY, force_continue=True
+            "wf-cap", "phase-cap", "doc_review", ANY, force_continue=True,
+            completion_summary="Capped after 4/4 runs (max_review_runs) -- not re-reviewed",
         )
         mock_create_agent.assert_not_called()
         with orch_db_env.session_scope() as session:
@@ -6739,6 +6741,14 @@ class TestCreatePhaseTaskReviewCap:
 
         assert result is True
         mock_fire.assert_called_once()
+        # Regression: the completion_summary stored on the PhaseExecution
+        # row must say the phase was capped, not the generic "Phase
+        # completed" a real pass gets -- otherwise a capped-out goto is
+        # indistinguishable from a genuinely honored one in the phase
+        # history.
+        assert mock_fire.call_args.kwargs["completion_summary"] == (
+            "Capped after 3/3 runs (max_review_runs) -- not re-reviewed"
+        )
         report = tmp_path / ".hephaestus" / "adversarial_review" / "adversarial.md"
         assert report.exists()
         text = report.read_text()
