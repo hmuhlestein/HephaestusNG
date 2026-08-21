@@ -1,5 +1,6 @@
 """Tests for agent and task cleanup when prompt delivery fails."""
 
+import copy
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, Mock
 
@@ -8,6 +9,30 @@ import pytest
 from src.agents.manager import AgentManager
 from src.core.database import Agent, DatabaseManager, Task
 from src.interfaces import LLMProviderInterface
+
+
+def _disable_cli_fallback(agent_manager):
+    """Make a launch failure final instead of retrying on a second CLI.
+
+    These tests stub _send_initial_prompt_with_retry to fail and assert the
+    agent/task are cleaned up -- and assert `kill_session` was called
+    exactly ONCE, i.e. that a single launch attempt happened. Once a
+    default fallback CLI was configured (`agents.default_fallback_cli_tool`),
+    a failed primary silently re-dispatched the whole thing on the fallback
+    tool, which does not route prompt delivery through the stubbed method at
+    all -- so the fallback *succeeded*, create_agent_for_task returned an
+    AgentInfo, and `pytest.raises` saw no exception. That is what these
+    three tests were failing on.
+
+    Shadow the config on this AgentManager instance only; `self.config` is
+    the process-wide get_config() singleton, so mutating it in place would
+    leak into every later test in the session.
+    """
+    cfg = copy.copy(agent_manager.config)
+    cfg.agents = copy.copy(agent_manager.config.agents)
+    cfg.agents.default_fallback_cli_tool = None
+    cfg.agents.default_fallback_cli_model = None
+    agent_manager.config = cfg
 
 
 def _install_session(db_manager, mock_session):
@@ -26,6 +51,64 @@ def _install_session(db_manager, mock_session):
         yield mock_session
 
     db_manager.session_scope = _session_scope
+
+
+def _make_session(agent_record=None, task_record=None):
+    """Build a session mock that answers by WHAT is being queried.
+
+    These tests used to drive `.first()` off a positional
+    `side_effect=[...]` list tuned to one exact call sequence, so any
+    change to how many lookups create_agent_for_task performs silently
+    handed the wrong row to the wrong caller. That is what broke them:
+    the duplicate-active-agent guard
+    (`query(Agent).filter(...).first()`) received the *Task* record,
+    saw a truthy "existing agent", and returned early -- so the launch
+    never reached the prompt-delivery failure these tests exist to
+    exercise, and `pytest.raises` saw no exception at all.
+
+    Answering by model + filter shape instead is stable under any
+    call-count change:
+      - query(Agent).filter(...)      -> duplicate guard, must be None
+      - query(Agent).filter_by(id=..) -> terminate_agent's lookup
+      - query(Task).filter_by(...)    -> the task being failed
+      - .all()                        -> terminate_agent's stray sweep
+    """
+
+    def _query(model):
+        q = Mock()
+        looked_up_by_id = {"value": False}
+
+        def _filter_by(*_a, **_kw):
+            looked_up_by_id["value"] = True
+            return q
+
+        def _first():
+            if model is Agent:
+                return agent_record if looked_up_by_id["value"] else None
+            if model is Task:
+                return task_record
+            return None
+
+        q.filter_by = Mock(side_effect=_filter_by)
+        q.filter = Mock(return_value=q)
+        q.order_by = Mock(return_value=q)
+        q.limit = Mock(return_value=q)
+        q.all = Mock(return_value=[])
+        q.first = Mock(side_effect=_first)
+        return q
+
+    session = Mock()
+    session.__enter__ = Mock(return_value=session)
+    session.__exit__ = Mock(return_value=False)
+    session.add = Mock()
+    session.commit = Mock()
+    session.rollback = Mock()
+    session.close = Mock()
+    # merge() returns the instance passed in, so the caller's
+    # `agent.id` read after it behaves like the real thing.
+    session.merge = Mock(side_effect=lambda obj: obj)
+    session.query = Mock(side_effect=_query)
+    return session
 
 
 @pytest.fixture
@@ -105,6 +188,7 @@ async def test_agent_and_task_cleanup_on_prompt_delivery_failure(
     # Replace worktree manager and tmux server with mocks
     agent_manager.branch_manager = mock_worktree_manager
     agent_manager.tmux_server = mock_tmux_server
+    _disable_cli_fallback(agent_manager)
 
     # Create a mock task
     task = Task(
@@ -140,28 +224,9 @@ async def test_agent_and_task_cleanup_on_prompt_delivery_failure(
     # before prompt delivery and the failure under test never happened.
     mock_task_record.assigned_agent_id = None
 
-    # Single session that supports `with` and handles all query patterns:
-    #   - Guard: .query(Agent).filter(...).first() → None (no existing agent)
-    #   - Main:  .query(Agent).filter_by(...).first() → mock_agent_record
-    #   - Main:  .query(Task).filter_by(...).first() → mock_task_record
-    mock_query = Mock()
-    mock_query.filter_by = Mock(return_value=mock_query)
-    mock_query.filter = Mock(return_value=mock_query)
-    # terminate_agent's stray-task sweep calls .filter(...).all(); an
-    # unconfigured Mock is not iterable, and the cleanup path swallows
-    # that as "Failed to update database during cleanup" -- leaving the
-    # task at its old status instead of the "failed" this test asserts.
-    mock_query.all = Mock(return_value=[])
-    mock_query.first = Mock(side_effect=[None, mock_agent_record, mock_task_record, mock_agent_record, mock_task_record])
-
-    mock_session = Mock()
-    mock_session.__enter__ = Mock(return_value=mock_session)
-    mock_session.__exit__ = Mock(return_value=False)
-    mock_session.add = Mock()
-    mock_session.commit = Mock()
-    mock_session.rollback = Mock()
-    mock_session.close = Mock()
-    mock_session.query = Mock(return_value=mock_query)
+    mock_session = _make_session(
+        agent_record=mock_agent_record, task_record=mock_task_record
+    )
 
     _install_session(mock_db_manager, mock_session)
 
@@ -212,6 +277,7 @@ async def test_cleanup_handles_database_errors_gracefully(
     # Replace worktree manager and tmux server with mocks
     agent_manager.branch_manager = mock_worktree_manager
     agent_manager.tmux_server = mock_tmux_server
+    _disable_cli_fallback(agent_manager)
 
     # Create a mock task
     task = Task(
@@ -322,6 +388,7 @@ async def test_cleanup_handles_tmux_kill_errors_gracefully(
     # Replace worktree manager and tmux server with mocks
     agent_manager.branch_manager = mock_worktree_manager
     agent_manager.tmux_server = mock_tmux_server
+    _disable_cli_fallback(agent_manager)
 
     # Create a mock task
     task = Task(
