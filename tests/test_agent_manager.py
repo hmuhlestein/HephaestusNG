@@ -1796,6 +1796,86 @@ class TestTerminateAgent:
             assert task.assigned_agent_id is None
 
 
+class TestPendingMessageGracePeriod:
+    """Terminator._terminate_agent_sync's grace-period wait -- gives an
+    agent up to _PENDING_MESSAGE_GRACE_SECONDS from when a message was
+    last sent to it (AgentMessenger.send_message_to_agent stamps
+    Agent.pending_message_sent_at) before killing its tmux session.
+    Confirmed live (agent 335b2a1d, 2026-08-21): a task reaching genuine
+    completion right after a message was sent terminated the agent before
+    it ever had a chance to notice."""
+
+    @pytest.mark.asyncio
+    async def test_waits_out_the_remaining_grace_period(self, mock_agent_manager, db_manager):
+        from datetime import datetime, timedelta
+
+        from src.agents.terminator import _PENDING_MESSAGE_GRACE_SECONDS
+
+        sent_at = datetime.utcnow() - timedelta(seconds=10)
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(
+                    id="agent-pending-msg", system_prompt="Test", status="working",
+                    cli_type="pi", tmux_session_name="test-session-pending-msg",
+                    pending_message_sent_at=sent_at,
+                )
+            )
+
+        with patch("src.agents.terminator.time.sleep") as mock_sleep:
+            await mock_agent_manager.terminate_agent("agent-pending-msg")
+
+        assert mock_sleep.call_count >= 1
+        waited = mock_sleep.call_args_list[0].args[0]
+        # ~50s remaining (60s grace - 10s already elapsed) -- generous
+        # tolerance for wall-clock drift between stamping sent_at and the
+        # terminate_agent call above.
+        assert _PENDING_MESSAGE_GRACE_SECONDS - 15 < waited < _PENDING_MESSAGE_GRACE_SECONDS - 5
+
+        with db_manager.session_scope() as session:
+            agent = session.query(Agent).filter_by(id="agent-pending-msg").first()
+            assert agent.status == "terminated"
+            assert agent.pending_message_sent_at is None
+
+    @pytest.mark.asyncio
+    async def test_no_wait_when_grace_period_already_elapsed(self, mock_agent_manager, db_manager):
+        from datetime import datetime, timedelta
+
+        old_sent_at = datetime.utcnow() - timedelta(seconds=120)
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(
+                    id="agent-stale-msg", system_prompt="Test", status="working",
+                    cli_type="pi", tmux_session_name="test-session-stale-msg",
+                    pending_message_sent_at=old_sent_at,
+                )
+            )
+
+        with patch("src.agents.terminator.time.sleep") as mock_sleep:
+            await mock_agent_manager.terminate_agent("agent-stale-msg")
+
+        mock_sleep.assert_not_called()
+
+        with db_manager.session_scope() as session:
+            agent = session.query(Agent).filter_by(id="agent-stale-msg").first()
+            assert agent.status == "terminated"
+            assert agent.pending_message_sent_at is None
+
+    @pytest.mark.asyncio
+    async def test_no_wait_when_no_message_pending(self, mock_agent_manager, db_manager):
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(
+                    id="agent-no-msg", system_prompt="Test", status="working",
+                    cli_type="pi", tmux_session_name="test-session-no-msg",
+                )
+            )
+
+        with patch("src.agents.terminator.time.sleep") as mock_sleep:
+            await mock_agent_manager.terminate_agent("agent-no-msg")
+
+        mock_sleep.assert_not_called()
+
+
 class TestWaitForPaneIdle:
     """Regression, found live: termination fires the instant
     complete_my_task's HTTP handler returns (spawn_background_task, no

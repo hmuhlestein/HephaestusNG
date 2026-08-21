@@ -177,6 +177,15 @@ class Agent(Base):
     health_check_failures = Column(Integer, default=0)
     restart_count = Column(Integer, default=0)  # Tracks restart attempts
     cli_model = Column(String, nullable=True)  # Per-agent model override
+    # Set by AgentMessenger.send_message_to_agent whenever a message is
+    # delivered, cleared once Terminator's grace-period wait consumes it.
+    # NOT last_activity: that column is also overwritten by ordinary agent
+    # progress unrelated to messaging, so it can't distinguish "a message
+    # is sitting unaddressed" from "the agent just did something." Exists
+    # so terminate_agent can give a genuinely just-messaged agent a short
+    # window to notice before its tmux session is killed out from under
+    # it -- see Terminator._terminate_agent_sync's grace-period check.
+    pending_message_sent_at = Column(DateTime, nullable=True)
 
     # Validation-related fields
     agent_type = Column(

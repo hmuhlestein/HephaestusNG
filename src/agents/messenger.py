@@ -231,8 +231,14 @@ class AgentMessenger:
                         f"failed (message was still sent above): {verify_err}"
                     )
 
-            # Update last activity
-            agent.last_activity = datetime.utcnow()
+            # Update last activity, and flag that a message is now sitting
+            # with this agent -- Terminator.terminate_agent's grace-period
+            # check reads this so a task completing (and terminating this
+            # agent) right after a message was sent doesn't kill it before
+            # it ever had a chance to notice.
+            now = datetime.utcnow()
+            agent.last_activity = now
+            agent.pending_message_sent_at = now
             if owns_session:
                 await loop.run_in_executor(None, session.commit)
 

@@ -671,6 +671,23 @@ def migrate_review_mode_columns(engine):
         logger.warning(f"Review mode columns migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_agent_pending_message_column(engine):
+    """Add agents.pending_message_sent_at for existing databases.
+
+    Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE agents ADD COLUMN pending_message_sent_at DATETIME"))
+            except Exception:
+                pass  # Column already exists
+            conn.commit()
+            logger.info("Migrated agents.pending_message_sent_at column")
+    except Exception as e:
+        logger.warning(f"agents.pending_message_sent_at migration failed (not just 'already exists' -- check this): {e}")
+
+
 # ── Registry ─────────────────────────────────────────────────────────
 # (id, function). Ids match the pre-split method names -- see module
 # docstring for why they must not be renamed.
@@ -693,4 +710,5 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_cost_tracking_columns", migrate_cost_tracking_columns),
     ("_migrate_phase_fallback_columns", migrate_phase_fallback_columns),
     ("_migrate_review_mode_columns", migrate_review_mode_columns),
+    ("_migrate_agent_pending_message_column", migrate_agent_pending_message_column),
 ]
