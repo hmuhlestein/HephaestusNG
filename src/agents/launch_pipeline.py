@@ -339,6 +339,26 @@ class LaunchPipeline:
                     task.assigned_agent_id = _fresh_task.assigned_agent_id
                     task.status = _fresh_task.status
                     task.started_at = _fresh_task.started_at
+                    if _agent_terminated:
+                        # pause_project_workflows stamps this same message on
+                        # every task it catches in its own tasks_to_reset
+                        # pass -- but that pass and this one both key off
+                        # Task.status == "in_progress"/reading the just-
+                        # terminated Agent row, so either can win the race to
+                        # observe/act on a given task first. When THIS path
+                        # wins, _fresh_task.failure_reason (just copied above)
+                        # is still whatever predates the pause, since the
+                        # other pass hasn't committed its own copy of this
+                        # message yet. paused_by is set in the exact same
+                        # commit as the agent termination we just detected,
+                        # so it's a reliable proxy for "was this specific
+                        # termination caused by a user pause" even when the
+                        # task-reset side of that same pause hasn't landed.
+                        from src.core.database import Workflow
+
+                        _wf = _term_check.query(Workflow).filter_by(id=_fresh_task.workflow_id).first()
+                        if _wf and _wf.paused_by == "user":
+                            task.failure_reason = "User terminated: workflow was paused"
 
                 class AgentInfo:
                     def __init__(self, id):
