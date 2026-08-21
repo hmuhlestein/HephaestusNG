@@ -28,6 +28,7 @@ from src.core.database import (
     Workflow,
     WorkflowResult,
 )
+from src.core.phase_lookup import resolve_task_phase
 from src.phases import PhaseManager
 
 logger = logging.getLogger(__name__)
@@ -293,16 +294,7 @@ class FrontendAPI:
                 # Add phase information if available
                 if task.phase_id:
                     # Handle numeric phase_id (order) vs UUID phase_id
-                    if task.phase_id.isdigit():
-                        # Look up by phase order
-                        phase = (
-                            session.query(Phase)
-                            .filter_by(order=int(task.phase_id))
-                            .first()
-                        )
-                    else:
-                        # Look up by phase UUID
-                        phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                    phase = resolve_task_phase(session, task)
 
                     if phase:
                         task_data["phase_name"] = phase.name
@@ -456,16 +448,7 @@ class FrontendAPI:
                 phase_name = None
                 phase_order = None
                 if task.phase_id:
-                    if task.phase_id.isdigit():
-                        # Numeric phase_id - lookup by order
-                        phase = (
-                            session.query(Phase)
-                            .filter_by(order=int(task.phase_id))
-                            .first()
-                        )
-                    else:
-                        # UUID phase_id - lookup by id
-                        phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                    phase = resolve_task_phase(session, task)
 
                     if phase:
                         phase_name = phase.name
@@ -830,12 +813,7 @@ class FrontendAPI:
             # Get phase information
             phase_info = None
             if task.phase_id:
-                if task.phase_id.isdigit():
-                    phase = (
-                        session.query(Phase).filter_by(order=int(task.phase_id)).first()
-                    )
-                else:
-                    phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                phase = resolve_task_phase(session, task)
 
                 if phase:
                     phase_info = {
@@ -2607,12 +2585,7 @@ class FrontendAPI:
 
             phase = None
             if task.phase_id:
-                if task.phase_id.isdigit():
-                    phase = (
-                        session.query(Phase).filter_by(order=int(task.phase_id)).first()
-                    )
-                else:
-                    phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                phase = resolve_task_phase(session, task)
 
             assembler = PromptAssembler(
                 phase_description=phase.description if phase else "",

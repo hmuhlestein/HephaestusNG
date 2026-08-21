@@ -540,13 +540,12 @@ def assemble_task_prompt(
         if not task:
             raise ValueError(f"Task {task_id} not found")
 
-        # Get phase
-        phase = None
-        if task.phase_id:
-            if task.phase_id.isdigit():
-                phase = session.query(Phase).filter_by(order=int(task.phase_id)).first()
-            else:
-                phase = session.query(Phase).filter_by(id=task.phase_id).first()
+        # Get phase. Scoped to the task's workflow -- phase orders repeat
+        # across workflow definitions, so an unscoped order lookup could feed
+        # another definition's description/done_definitions into this prompt.
+        from src.core.phase_lookup import resolve_task_phase
+
+        phase = resolve_task_phase(session, task)
 
         # Get overrides
         override = session.query(TaskPromptOverride).filter_by(task_id=task_id).first()
