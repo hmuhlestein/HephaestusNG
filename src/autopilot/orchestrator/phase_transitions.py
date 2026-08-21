@@ -1926,8 +1926,16 @@ def _fire_phase_transition(
     phase_name: str,
     logger: "OrchestratorLogger",
     force_continue: bool = False,
+    completion_summary: str = "Phase completed",
 ) -> bool:
     """Fire the phase transition: mark complete, evaluate, create next task/agent.
+
+    completion_summary: text stored on the PhaseExecution row. Callers with
+    an unusual reason for completing (e.g. _cap_out_review_phase's "ran out
+    the review-run cap instead of a real pass") should say so here --
+    otherwise the row reads identically to a normal completion and a goto
+    that got capped out looks, to anyone reading the phase history, exactly
+    like one that was genuinely honored.
 
     force_continue: skip the normal orchestrator evaluation entirely and
     force a "continue" (force_action="continue" on mark_phase_complete).
@@ -1978,11 +1986,11 @@ def _fire_phase_transition(
 
         pm = PhaseManager(DatabaseManager(None), workflow_id=workflow_id)
         result = (
-            pm.mark_phase_complete(phase_id, "Phase completed", force_action="continue")
+            pm.mark_phase_complete(phase_id, completion_summary, force_action="continue")
             if force_continue
             else pm.mark_phase_complete(
                 phase_id,
-                "Phase completed",
+                completion_summary,
                 phase_output=phase_output,
             )
         )
@@ -2198,7 +2206,10 @@ def _cap_out_review_phase(
     # by the time this cap engages, sending the phase straight to
     # arbitration/goto instead of past it. See _fire_phase_transition's
     # force_continue docstring for the live incident this closes.
-    return _fire_phase_transition(workflow_id, phase.id, phase.name, logger, force_continue=True)
+    return _fire_phase_transition(
+        workflow_id, phase.id, phase.name, logger, force_continue=True,
+        completion_summary=f"Capped after {run_count}/{max_runs} runs (max_review_runs) -- not re-reviewed",
+    )
 
 
 def _get_phase_max_retries(workflow_id: str, phase_name: str) -> Optional[int]:
