@@ -137,18 +137,53 @@ project path. Each needs `repo_id` threaded through so recovery targets the
 correct child repo's worktree — recovering "the project" is no longer
 well-defined once there's more than one repo.
 
+### Existing cross-feature dependency system (corrects earlier framing in
+### this doc — there IS one, already built and running)
+
+`Feature` (`database.py:1162`) already has `depends_on` (JSON list of
+`feature_key` strings) and `execution` (`parallel`/`sequential`).
+`run_feature_pipelines` (`pipeline.py:2254`) resolves these into execution
+groups via Kahn's-algorithm topological sort (`_resolve_execution_order`,
+`features.py:591`), cycle-checks the graph first (`has_cycle`), and — this
+is the important part — genuinely runs every feature within a group
+**concurrently**, via a real `ThreadPoolExecutor` (`pipeline.py:2280`), not
+just a sequential loop with a "parallel" label. A runtime gate
+(`pipeline.py:1949-1960`) also re-checks each feature's `depends_on` at
+launch time and skips it if a dependency hasn't reached `completed`/`active`
+yet.
+
+This means: two `Feature`s with no `depends_on` edge between them, under the
+**same design**, already execute in parallel today — including, with this
+design's changes, two features bound to different repos. A backend feature
+and a frontend feature that depends on it are expressed exactly as you'd
+expect: the frontend feature's `depends_on: ["backend-feature-key"]`. No new
+dependency/concurrency mechanism needs to be built — `depends_on`/`execution`
+already do this job.
+
+Crucially, `WorktreeManager` instances are already created fresh per
+operation (e.g. `pipeline.py:577`, `:751` — each call does
+`WorktreeManager(db_manager=...)` then `.reload(project_path)`), not held as
+one long-lived singleton shared across concurrently-running features. That
+means parameterizing those call sites' `project_path` by the feature's
+`repo_id` → `ProjectRepo.path` (instead of always `project.base_dir`) is a
+drop-in fit with the existing concurrency model — no restructuring of
+`run_feature_pipelines` itself is needed for multi-repo features to run
+safely in parallel.
+
 ## Gaps found in this pass (open questions / follow-on scope)
 
-1. **No free parallelism.** Multi-repo support as designed here does *not*
-   give you concurrent backend+frontend execution — the pipeline loop is
-   architected one-per-project, serially draining one design queue
-   (`pick_next_design`). A "backend" design and a "frontend" design under
-   the same project would still run one after another, not in parallel,
-   unless the pipeline loop itself becomes repo-aware and is explicitly
-   allowed to run N concurrent sub-loops within one active project. **Recommend
-   scoping v1 to sequential multi-repo (correct repo-scoped commits/worktrees/
-   reads) and treating parallel cross-repo execution as an explicit, separate
-   follow-on** — don't let the feature's name imply parallelism it doesn't have.
+1. **Parallelism is free at the feature level, not at the design level.**
+   Corrected from an earlier pass of this doc, which incorrectly claimed no
+   cross-feature dependency/concurrency mechanism exists — see the section
+   above. What's still genuinely serialized is *designs*, not features:
+   `pick_next_design` picks one active design per project, so two separate,
+   unrelated **design docs** each targeting a different repo would still run
+   one after another. This matters much less now that the feature architect
+   keeps a single design's frontend+backend work as two features (with
+   `depends_on` between them as needed) rather than two designs — the
+   common case (one feature request spanning both repos) already gets real
+   parallelism for free. Cross-*design* parallelism remains future work (see
+   below), scoped narrowly now that the bigger piece isn't needed.
 2. **Frontend has no repo concept anywhere.** `GitDiffModal`/commit views,
    project creation/settings UI, and `LoadDesignModal`'s "stored in `docs/`"
    label all assume one repo. Per your steer: no bespoke new UI surface for
@@ -217,13 +252,14 @@ For a multi-repo project, `get_project_context()` should include:
   same as the write-scoping rule established earlier in this doc (one repo
   per agent/task for writes). The architect infers the right repo per
   feature from the design doc's implied file paths and each `ProjectRepo`'s
-  structure. Per "Future work" below, today those two features run
-  independently/sequentially through the same project queue with no
-  built-in ordering guarantee — the architect should note the dependency
-  (e.g. "frontend feature consumes the backend feature's new endpoint") in
-  each feature's description so a human or the design queue's ordering can
-  account for it, since there's no automatic cross-feature dependency
-  mechanism yet.
+  structure. Ordering between them uses the **existing** `Feature.depends_on`/
+  `execution` mechanism (see "Existing cross-feature dependency system"
+  above) — e.g. the frontend feature declares
+  `depends_on: ["backend-feature-key"]` — not an ad-hoc note in a
+  description. This is not new engineering for the architect's prompt to
+  invoke; it just needs to be told the mechanism exists and used correctly
+  across repo boundaries the same way it's presumably already used within a
+  single repo today.
 
 For a single-repo project (the common case, and every existing project via
 the migration), this section of `get_project_context()` should emit nothing
@@ -251,50 +287,31 @@ Each step should land with its own red→green regression tests before the
 next starts, per the usual discipline — this list is a sequencing proposal,
 not a commitment to build all of it in one pass.
 
-## Future work: parallel cross-repo execution
+## Future work: cross-design parallelism
 
-Explicitly out of scope for v1 (see gap #1 above), noted here so it isn't
-lost. Sequential multi-repo (this doc's main design) gets correct
-repo-scoped commits/worktrees/reads, but a backend design and a frontend
-design under the same project still run one after another through the same
-project-level queue. Making them run concurrently is a materially bigger
-change, isolated to the pipeline/orchestrator layer — the data model above
-(`ProjectRepo`, `repo_id` on `Task`/`TicketCommit`/etc.) should not need to
-change to support it later.
+Narrowed significantly from an earlier pass of this doc, which assumed no
+feature-level parallelism existed and so put the whole "run backend and
+frontend work concurrently" problem here. It doesn't belong here anymore —
+see "Existing cross-feature dependency system" above: within one design,
+independent (or `depends_on`-ordered) features across repos already run
+concurrently via `run_feature_pipelines`'s `ThreadPoolExecutor`, using
+existing machinery, as part of v1.
 
-What it would take:
+What's left as genuinely future/out-of-scope is narrower: `pick_next_design`
+still picks one active design per project, so two separate, unrelated
+**design docs** (not features within one design) each targeting a different
+repo still run one after another. This only matters when someone
+deliberately uploads two independent design docs rather than letting the
+feature architect decompose one design into repo-scoped features — a much
+smaller and less common case than what this section originally described.
+If it turns out to matter in practice: `pick_next_design` would need to
+return the next design *per repo with no in-flight work* instead of one
+next design per project, and `run_continuous_pipeline` would need one loop
+per (project, repo) with in-flight work instead of one per project, bounded
+by a new cap alongside `max_concurrent_projects`. No UI work — same
+"detect and operate normally" principle as the rest of this doc, reusing
+whatever already renders concurrent pipeline state.
 
-- **Queue picking becomes repo-aware.** `pick_next_design` currently returns
-  one next design per project. It would need to return (or be called once
-  per) the next design *per repo that has no in-flight work*, so a backend
-  design and a frontend design can both be "active" simultaneously under one
-  project.
-- **`run_continuous_pipeline` goes from one loop per project to one loop per
-  (project, repo)** with in-flight work — mirroring the existing "one loop
-  per project" pattern (`AutopilotServiceRegistry`) one level down. The
-  project-level `is_active`/`max_concurrent_projects` gate stays as-is; a new
-  gate would be needed to bound concurrent repo-loops within one active
-  project (analogous cap, e.g. `max_concurrent_repos_per_project`).
-- **Phase-level active-agent check stays correct almost for free.** The
-  existing gate is already scoped by `Task.phase_id`, not by project — two
-  phases in two different repo-scoped workflows won't block each other. The
-  part that needs work is upstream of that: getting two workflows to be
-  "active" under one project at the same time in the first place.
-- **Cross-repo coordination points need explicit handling.** If a feature
-  genuinely spans both repos (e.g. an API contract change), something has to
-  decide whether the two repo-scoped workflows run fully independently
-  (simplest, but no ordering guarantee — frontend work could start before
-  the matching backend endpoint exists) or whether one can declare a
-  dependency on the other's completion. Recommend starting independent-only
-  and letting the user manually sequence dependent work via design-queue
-  ordering, rather than building a cross-repo dependency graph up front.
-- **UI**: same "detect and operate normally" principle as v1 — no dedicated
-  new surface. The project view already needs to represent N concurrent
-  *projects*; representing N concurrent repo-loops within one project is the
-  same pattern one level down, reusing whatever component already renders
-  concurrent pipeline state rather than a bespoke multi-pipeline view.
-
-This should be scoped as its own design pass once sequential multi-repo is
-live and in real use — the actual pain points (how often do designs
-genuinely need cross-repo ordering vs. run fine independently) will be much
-clearer from real usage than from speculation now.
+Revisit only if real usage shows people uploading independent per-repo
+design docs often enough to justify it — the feature-level mechanism
+already covers the common case.
