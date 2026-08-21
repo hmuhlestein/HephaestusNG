@@ -31,6 +31,7 @@ from src.mcp.memory_api import (
 )
 from src.mcp.messaging_api import router as messaging_router
 from src.mcp.server.connection_broadcaster import ConnectionBroadcaster
+from src.mcp.server.state_bootstrap import load_active_project, migrate_is_active_column
 
 # Import routers at module level for test compatibility
 from src.mcp.tickets_api import router as tickets_router
@@ -281,10 +282,10 @@ class ServerState:
         self.db_manager.create_tables()
 
         # Migrate: add is_active column to existing autopilot_projects table
-        self._migrate_is_active_column()
+        migrate_is_active_column(self.db_manager)
 
         # Load active project from DB and apply to config BEFORE creating managers
-        self._load_active_project(config)
+        load_active_project(self.db_manager, config)
 
         # Initialize vector store via the backend factory (turbovec python-only by
         # default per VECTOR_STORE_BACKEND / config). Do NOT hardcode the Qdrant
@@ -371,47 +372,6 @@ class ServerState:
         logger.info(f"Queue service initialized with max_concurrent_agents={config.mcp.max_concurrent_agents}")
 
         logger.info("Server state initialized successfully")
-
-    def _migrate_is_active_column(self):
-        """Add is_active column to autopilot_projects if missing."""
-        import sqlalchemy
-
-        try:
-            with self.db_manager.get_session() as session:
-                session.execute(sqlalchemy.text("ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"))
-                session.commit()
-                logger.info("Migrated: added is_active column to autopilot_projects")
-        except Exception:
-            pass  # Column already exists
-
-    def _load_active_project(self, config):
-        """Load active project from DB and apply to config before managers init."""
-        from src.core.database import AutopilotProject
-
-        try:
-            with self.db_manager.get_session() as session:
-                active = session.query(AutopilotProject).filter_by(is_active=True).first()
-                if active:
-                    from pathlib import Path
-
-                    config.git.main_repo_path = Path(active.base_dir)
-                    config.paths.project_root = Path(active.base_dir)
-                    logger.info(f"Active project loaded: {active.name} ({active.base_dir})")
-                else:
-                    # Auto-activate the default or first project
-                    proj = session.query(AutopilotProject).filter_by(is_default=True).first()
-                    if not proj:
-                        proj = session.query(AutopilotProject).first()
-                    if proj:
-                        proj.is_active = True
-                        session.commit()
-                        from pathlib import Path
-
-                        config.git.main_repo_path = Path(proj.base_dir)
-                        config.paths.project_root = Path(proj.base_dir)
-                        logger.info(f"Auto-activated project: {proj.name} ({proj.base_dir})")
-        except Exception as e:
-            logger.warning(f"Could not load active project: {e}")
 
     async def broadcast_update(
         self,
