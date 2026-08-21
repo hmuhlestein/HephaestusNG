@@ -1535,15 +1535,25 @@ class TicketService:
             config = get_config()
             main_repo_path = str(config.git.main_repo_path)
 
-        # REQ-10: check commit exists in the resolved repo
+        # REQ-10: check commit exists in the resolved repo. Soft check --
+        # an inaccessible repo dir (deleted worktree, bad config path)
+        # must not crash the link, same as a missing commit.
         loop = asyncio.get_event_loop()
-        exists = await loop.run_in_executor(
-            None,
-            lambda: subprocess.run(
-                ["git", "cat-file", "-e", commit_sha],
-                cwd=main_repo_path, capture_output=True, timeout=5,
-            ).returncode == 0,
-        )
+        try:
+            exists = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ["git", "cat-file", "-e", commit_sha],
+                    cwd=main_repo_path, capture_output=True, timeout=5,
+                ).returncode == 0,
+            )
+        except OSError as e:
+            logger.warning(
+                f"[TICKET-COMMIT] Could not check commit {commit_sha} against "
+                f"resolved repo {main_repo_path}: {e} -- linking anyway per "
+                f"REQ-10/REQ-11 (soft check, no hard enforcement in v1)"
+            )
+            exists = True
         if not exists:
             logger.warning(
                 f"[TICKET-COMMIT] Commit {commit_sha} not found in resolved repo "

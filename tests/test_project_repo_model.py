@@ -434,6 +434,30 @@ class TestProjectRepoMigration:
             columns = {c["name"] for c in inspector.get_columns(table)}
             assert "repo_id" in columns, f"{table} missing repo_id column"
 
+    def test_migration_reraises_on_backfill_failure(self, monkeypatch):
+        """Adversarial review WARNING: a backfill failure used to be
+        logged and swallowed, letting the migration record as applied
+        with some projects left without a ProjectRepo row. Must re-raise
+        so _run_schema_migration doesn't mark it applied and it retries
+        on next startup."""
+        engine = self._create_engine_without_project_repos()
+
+        with Session(engine) as session:
+            session.add(AutopilotProject(
+                id=f"proj-{uuid.uuid4().hex[:8]}",
+                name="test",
+                base_dir="/tmp/test",
+            ))
+            session.commit()
+
+        def failing_commit(self, *args, **kwargs):
+            raise RuntimeError("simulated backfill commit failure")
+
+        monkeypatch.setattr(Session, "commit", failing_commit)
+
+        with pytest.raises(RuntimeError, match="simulated backfill commit failure"):
+            migrate_project_repos_table(engine)
+
     def test_migration_no_backfill_required(self):
         """REQ-05: Historical rows remain valid with repo_id=NULL."""
         engine = self._create_engine_without_project_repos()

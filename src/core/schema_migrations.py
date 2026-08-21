@@ -643,78 +643,77 @@ def migrate_project_repos_table(engine):
     # this module, so a top-level import back into it would be circular.
     from src.core.database import AutopilotProject, ProjectRepo
 
-    try:
-        inspector = inspect(engine)
-        existing_tables = inspector.get_table_names()
+    inspector = inspect(engine)
+    existing_tables = inspector.get_table_names()
 
-        # Create project_repos table if it doesn't exist
-        if "project_repos" not in existing_tables:
-            try:
-                ProjectRepo.__table__.create(bind=engine)
-                logger.info("Created project_repos table")
-            except Exception as e:
-                logger.warning(f"project_repos table creation failed: {e}")
-
-        # Backfill one ProjectRepo per existing AutopilotProject
+    # Create project_repos table if it doesn't exist
+    if "project_repos" not in existing_tables:
         try:
-            import uuid
-
-            from sqlalchemy.orm import Session
-
-            with Session(engine) as session:
-                projects_without_repo = (
-                    session.query(AutopilotProject)
-                    .filter(~AutopilotProject.repos.any())
-                    .all()
-                )
-                for project in projects_without_repo:
-                    session.add(ProjectRepo(
-                        id=f"repo-{uuid.uuid4().hex[:12]}",
-                        project_id=project.id,
-                        label="main",
-                        path=project.base_dir,
-                        is_primary=True,
-                    ))
-                session.commit()
-                if projects_without_repo:
-                    logger.info(
-                        f"Backfilled {len(projects_without_repo)} ProjectRepo rows"
-                    )
+            ProjectRepo.__table__.create(bind=engine)
+            logger.info("Created project_repos table")
         except Exception as e:
-            logger.error(f"ProjectRepo backfill failed (will retry on next startup): {e}")
-            raise  # Re-raise so migration records as failed and retries
+            logger.warning(f"project_repos table creation failed: {e}")
 
-        # Add nullable repo_id FK to tasks, tickets, ticket_commits,
-        # agent_worktrees, features (REQ-02)
-        for table, column in [
-            ("tasks", "repo_id"),
-            ("tickets", "repo_id"),
-            ("ticket_commits", "repo_id"),
-            ("agent_worktrees", "repo_id"),
-            ("features", "repo_id"),
-        ]:
-            try:
-                existing_cols = {
-                    c["name"] for c in inspector.get_columns(table)
-                }
-                if column not in existing_cols:
-                    with engine.connect() as conn:
-                        conn.execute(text(
-                            f"ALTER TABLE {table} ADD COLUMN {column} TEXT "
-                            f"REFERENCES project_repos(id)"
-                        ))
-                        conn.commit()
-                    logger.info(f"Added {table}.{column} column")
-            except Exception as e:
-                logger.warning(
-                    f"{table}.{column} migration failed: {e}"
+    # Backfill one ProjectRepo per existing AutopilotProject. Deliberately
+    # NOT wrapped in a broad catch-and-continue: a failure here must
+    # propagate to _run_schema_migration so the migration isn't recorded
+    # as applied and retries on next startup, instead of silently leaving
+    # some projects without a ProjectRepo row.
+    try:
+        import uuid
+
+        from sqlalchemy.orm import Session
+
+        with Session(engine) as session:
+            projects_without_repo = (
+                session.query(AutopilotProject)
+                .filter(~AutopilotProject.repos.any())
+                .all()
+            )
+            for project in projects_without_repo:
+                session.add(ProjectRepo(
+                    id=f"repo-{uuid.uuid4().hex[:12]}",
+                    project_id=project.id,
+                    label="main",
+                    path=project.base_dir,
+                    is_primary=True,
+                ))
+            session.commit()
+            if projects_without_repo:
+                logger.info(
+                    f"Backfilled {len(projects_without_repo)} ProjectRepo rows"
                 )
-
-        logger.info("migrate_project_repos_table completed")
     except Exception as e:
-        logger.warning(
-            f"Project repos migration failed (not just 'already exists'): {e}"
-        )
+        logger.error(f"ProjectRepo backfill failed (will retry on next startup): {e}")
+        raise  # Re-raise so migration records as failed and retries
+
+    # Add nullable repo_id FK to tasks, tickets, ticket_commits,
+    # agent_worktrees, features (REQ-02)
+    for table, column in [
+        ("tasks", "repo_id"),
+        ("tickets", "repo_id"),
+        ("ticket_commits", "repo_id"),
+        ("agent_worktrees", "repo_id"),
+        ("features", "repo_id"),
+    ]:
+        try:
+            existing_cols = {
+                c["name"] for c in inspector.get_columns(table)
+            }
+            if column not in existing_cols:
+                with engine.connect() as conn:
+                    conn.execute(text(
+                        f"ALTER TABLE {table} ADD COLUMN {column} TEXT "
+                        f"REFERENCES project_repos(id)"
+                    ))
+                    conn.commit()
+                logger.info(f"Added {table}.{column} column")
+        except Exception as e:
+            logger.warning(
+                f"{table}.{column} migration failed: {e}"
+            )
+
+    logger.info("migrate_project_repos_table completed")
 
 # ── Registry ─────────────────────────────────────────────────────────
 # (id, function). Ids match the pre-split method names -- see module
