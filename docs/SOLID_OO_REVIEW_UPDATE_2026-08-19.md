@@ -328,11 +328,19 @@ every goto aimed at it silently becomes an advance. This repo renamed
 `git_commit_push` → `git_expert` recently, exactly that shape of change.
 
 `tests/test_goto_targets_resolve.py` (`9f0526f`) guards the config so the latent bug
-cannot become live, and is mutation-verified. **The runtime fail-open is deliberately
-left for an owner**: what a goto should do when its target is unresolvable is a policy
-call (escalate? fail the workflow?), and for `_handle_force_goto` it is specifically
-"what happens when the arbiter's own decision cannot be carried out" — escalating back
-to arbitration risks a loop, though `_trigger_arbitration` is capped at 3.
+cannot become live, and is mutation-verified. **The runtime fail-open is fixed**
+(`d9551e4`, policy set by the owner): both handlers now escalate to arbitration via a
+shared `_escalate_unresolvable_goto`, reusing the existing cap rather than inventing a
+second failure mode — `_trigger_arbitration` is capped at `MAX_ARBITRATIONS_PER_PHASE`
+and, once the arbiter has had its retries with neither a pending decision nor
+genuinely-passing output, sets `wf.status = "failed"`. Sequence: arbitrate, retry, then
+fail; never a silent advance. The execution is reopened to `in_progress` first, since
+both handlers close it to `completed` before resolving the target and `_advance_phases`
+would otherwise race past the phase awaiting arbitration. The reason is carried rather
+than only logged — it names the offending target and travels `result["reason"]` →
+`_fire_phase_transition` → `_trigger_arbitration` → `Workflow.status_reason` →
+`/api/workflow-executions` → the dashboard, so an operator sees the misspelled target
+instead of the generic retry-budget message.
 
 ### MCP/API layer
 
