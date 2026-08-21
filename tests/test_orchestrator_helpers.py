@@ -5649,6 +5649,41 @@ class TestWorkflowAppearsAbandoned:
 
         assert _workflow_appears_abandoned("wf-1") is False
 
+    def test_false_when_paused_for_review_despite_no_activity(self, orch_db_env):
+        """Regression: a workflow correctly paused_by="review" after its
+        last task completed has, by design, no active agent and no
+        non-terminal task -- that absence is the correct state while
+        parked waiting on a human, not evidence of lost progress. Observed
+        live: this was previously read as abandoned, and after several
+        backend restarts elapsed with the workflow still awaiting review,
+        _update_resumed_workflow_recovery_attempts force-failed it --
+        orphaning the report it had already written and leaving the review
+        modal with a failed workflow to show nothing for."""
+        from src.autopilot.orchestrator.policy import _workflow_appears_abandoned
+        from src.core.database import Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="review",
+                )
+            )
+            session.add(
+                Task(
+                    id="t1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    workflow_id="wf-1",
+                )
+            )
+
+        assert _workflow_appears_abandoned("wf-1") is False
+
 
 class TestUpdateResumedWorkflowRecoveryAttempts:
     """Regression: run_continuous_pipeline's resume-across-restart path

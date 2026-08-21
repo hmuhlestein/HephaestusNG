@@ -49,8 +49,25 @@ def _workflow_appears_abandoned(workflow_id: str) -> bool:
     resume it) versus still legitimately doing real work. A workflow with
     any active agent or any pending/in_progress/assigned/queued/etc. task
     is never considered abandoned, no matter how long it's been running.
+
+    A workflow with Workflow.paused_by set ("review", "user", "budget",
+    "system", "system-exhausted") is likewise never abandoned, no matter
+    how long it sits with zero agent/task activity -- that absence IS the
+    correct, by-design state while parked waiting on a human (or the
+    system's own separate retry-budget resume path), not evidence of lost
+    progress. Observed live: a design paused_by="review" after Phase 0's
+    feature_review task completed got auto-marked "failed" by the
+    resume-attempt-exhaustion path in pipeline.py purely because several
+    backend restarts elapsed before anyone clicked Resume in the UI --
+    the report it had already written was orphaned, and the review modal
+    read the now-failed workflow as having nothing to show.
     """
     try:
+        with get_db() as db:
+            wf = db.query(Workflow).filter_by(id=workflow_id).first()
+            if wf and wf.paused_by:
+                return False
+
         agents = get_agents(workflow_id=workflow_id)
         if any(a.get("status") in ACTIVE_AGENT_STATUSES for a in agents):
             return False
