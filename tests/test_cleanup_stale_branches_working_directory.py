@@ -46,14 +46,14 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
     import src.core.simple_config
 
     config = src.core.simple_config.Config()
-    config.worktree_base_path = Path(tempfile.mkdtemp())
-    config.main_repo_path = Path(temp_repo.working_dir)
-    config.base_branch = temp_repo.active_branch.name
+    config.paths.worktree_base_path = Path(tempfile.mkdtemp())
+    config.git.main_repo_path = Path(temp_repo.working_dir)
+    config.git.base_branch = temp_repo.active_branch.name
     config.worktree_branch_prefix = "test-agent-"
     config.conflict_resolution_strategy = "newest_file_wins"
     config.prefer_child_on_tie = True
     config.auto_merge_enabled = True
-    config.branch_retention_hours = {
+    config.git.branch_retention_hours = {
         "merged": 1,
         "failed": 24,
         "abandoned": 6,
@@ -65,7 +65,7 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
 
     manager = WorktreeManager(test_db)
     yield manager
-    shutil.rmtree(str(config.worktree_base_path), ignore_errors=True)
+    shutil.rmtree(str(config.paths.worktree_base_path), ignore_errors=True)
 
 
 def _add_worktree(temp_repo, base_path: Path, branch: str) -> Path:
@@ -84,7 +84,7 @@ class TestCleanupClearsWorkingDirectoryOfRemovedWorktree:
     ):
         import src.core.simple_config
 
-        base_path = src.core.simple_config.get_config().worktree_base_path
+        base_path = src.core.simple_config.get_config().paths.worktree_base_path
         wt_path = _add_worktree(temp_repo, base_path, "feature_architect/done-design")
 
         session = test_db.get_session()
@@ -125,7 +125,7 @@ class TestCleanupClearsWorkingDirectoryOfRemovedWorktree:
         loop, which only iterates entries `git worktree list` still reports."""
         import src.core.simple_config
 
-        base_path = src.core.simple_config.get_config().worktree_base_path
+        base_path = src.core.simple_config.get_config().paths.worktree_base_path
         already_gone_path = base_path / "wt_orphaned-design"
         assert not already_gone_path.exists()
 
@@ -165,7 +165,7 @@ class TestCleanupClearsWorkingDirectoryOfRemovedWorktree:
         worktree."""
         import src.core.simple_config
 
-        base_path = src.core.simple_config.get_config().worktree_base_path
+        base_path = src.core.simple_config.get_config().paths.worktree_base_path
         stub_path = base_path / "wt_resurrected-stub"
         (stub_path / ".hephaestus" / "tmux").mkdir(parents=True)
         assert stub_path.exists()
@@ -204,7 +204,7 @@ class TestCleanupClearsWorkingDirectoryOfRemovedWorktree:
         working_directory must also survive untouched."""
         import src.core.simple_config
 
-        base_path = src.core.simple_config.get_config().worktree_base_path
+        base_path = src.core.simple_config.get_config().paths.worktree_base_path
         active_path = _add_worktree(temp_repo, base_path, "feature_architect/live-design")
 
         session = test_db.get_session()

@@ -133,7 +133,7 @@ def _guard_mock_paths(monkeypatch):
             raise TypeError(
                 f"open() called with a Mock repr as path: {file!r}\n"
                 "Set the required attribute on your mock config "
-                "(e.g. config.database_path = ':memory:')."
+                "(e.g. config.paths.database_path = ':memory:')."
             )
         return real_open(file, *args, **kwargs)
 
@@ -148,21 +148,21 @@ def mock_heph_config():
     accessing any config attribute never silently returns another Mock.
     """
     config = MagicMock()
-    config.database_path = Path(":memory:")
-    config.mcp_host = "127.0.0.1"
-    config.mcp_port = 8300
-    config.enable_cors = True
-    config.worktree_base_path = None
-    config.project_root = Path("/tmp/test-project")
-    config.main_repo_path = Path("/tmp/test-project")
-    config.base_branch = "main"
-    config.branch_prefix = "agent-"
-    config.auto_commit = False
+    config.paths.database_path = Path(":memory:")
+    config.server.mcp_host = "127.0.0.1"
+    config.server.mcp_port = 8300
+    config.server.enable_cors = True
+    config.paths.worktree_base_path = None
+    config.paths.project_root = Path("/tmp/test-project")
+    config.git.main_repo_path = Path("/tmp/test-project")
+    config.git.base_branch = "main"
+    config.git.branch_prefix = "agent-"
+    config.git.auto_commit = False
     config.conflict_resolution_strategy = "newest_file_wins"
-    config.llm_provider = "openrouter"
-    config.llm_model = "openai/gpt-4o"
-    config.task_similarity_threshold = 0.7
-    config.task_related_threshold = 0.4
+    config.llm.llm_provider = "openrouter"
+    config.llm.llm_model = "openai/gpt-4o"
+    config.task_dedup.task_similarity_threshold = 0.7
+    config.task_dedup.task_related_threshold = 0.4
     return config
 
 

@@ -1833,9 +1833,9 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                             session_limit_override_model = getattr(_phase, 'fallback_cli_model', None)
                     if not session_limit_override_cli:
                         cfg = get_config()
-                        if cfg.default_fallback_cli_tool:
-                            session_limit_override_cli = cfg.default_fallback_cli_tool
-                            session_limit_override_model = cfg.default_fallback_cli_model
+                        if cfg.agents.default_fallback_cli_tool:
+                            session_limit_override_cli = cfg.agents.default_fallback_cli_tool
+                            session_limit_override_model = cfg.agents.default_fallback_cli_model
                     if session_limit_override_cli:
                         logger.info(
                             f"[PHASE-ADVANCE] Task {task_id[:8]} failed due to session limit -- "

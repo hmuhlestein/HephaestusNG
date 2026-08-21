@@ -991,7 +991,7 @@ async def add_design_by_path(req: DesignAddByPath):
             # an unrelated "upload a design file" action, so a full project
             # cap shouldn't fail the upload -- create it inactive instead.
             active_count = db.query(AutopilotProject).filter_by(is_active=True).count()
-            max_concurrent = get_config().max_concurrent_projects
+            max_concurrent = get_config().autopilot.max_concurrent_projects
             want_active = active_count < max_concurrent
             if not want_active:
                 logger.warning(

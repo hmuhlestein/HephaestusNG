@@ -190,7 +190,7 @@ class TaskBlockingService:
             # QueueService's optional dispatch settings are irrelevant here.
             queue_service = QueueService(
                 db_manager,
-                max_concurrent_agents=get_config().max_concurrent_agents,
+                max_concurrent_agents=get_config().mcp.max_concurrent_agents,
             )
             queue_service._recalculate_queue_positions()
             logger.info(f"Recalculated queue positions after unblocking task {task_id}")

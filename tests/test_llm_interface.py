@@ -34,7 +34,7 @@ def test_openrouter_get_api_key():
         "LLM_PROVIDER": "openrouter",
     }):
         config = Config()
-        config.llm_provider = "openrouter"
+        config.llm.llm_provider = "openrouter"
         assert config.get_api_key() == "sk-or-test-key"
 
 
@@ -42,16 +42,16 @@ def test_openrouter_validate():
     """Config.validate() should pass when openrouter key is set."""
     with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-test-key"}):
         config = Config()
-        config.llm_provider = "openrouter"
-        config.openrouter_api_key = "sk-or-test-key"
+        config.llm.llm_provider = "openrouter"
+        config.llm.openrouter_api_key = "sk-or-test-key"
         assert config.validate() is True
 
 
 def test_openrouter_validate_missing_key():
     """Config.validate() should raise when openrouter key is missing."""
     config = Config()
-    config.llm_provider = "openrouter"
-    config.openrouter_api_key = None
+    config.llm.llm_provider = "openrouter"
+    config.llm.openrouter_api_key = None
     with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
         config.validate()
 
@@ -60,7 +60,7 @@ def _has_openai_key():
     """Check if OpenAI API key is available."""
     try:
         config = Config()
-        return bool(config.openai_api_key and config.openai_api_key.startswith("sk-"))
+        return bool(config.llm.openai_api_key and config.llm.openai_api_key.startswith("sk-"))
     except Exception:
         return False
 
@@ -72,9 +72,9 @@ async def test_embedding_generation():
 
     config = Config()
     llm_provider = OpenAIProvider(
-        api_key=config.openai_api_key,
-        model=config.llm_model,
-        embedding_model=config.embedding_model,
+        api_key=config.llm.openai_api_key,
+        model=config.llm.llm_model,
+        embedding_model=config.llm.embedding_model,
     )
 
     test_texts = [
@@ -130,9 +130,9 @@ async def test_task_enrichment():
 
     config = Config()
     llm_provider = OpenAIProvider(
-        api_key=config.openai_api_key,
-        model=config.llm_model,
-        embedding_model=config.embedding_model,
+        api_key=config.llm.openai_api_key,
+        model=config.llm.llm_model,
+        embedding_model=config.llm.embedding_model,
     )
 
     test_tasks = [
@@ -209,9 +209,9 @@ async def test_agent_prompt_generation():
 
     config = Config()
     llm_provider = OpenAIProvider(
-        api_key=config.openai_api_key,
-        model=config.llm_model,
-        embedding_model=config.embedding_model,
+        api_key=config.llm.openai_api_key,
+        model=config.llm.llm_model,
+        embedding_model=config.llm.embedding_model,
     )
 
     test_task = {
@@ -306,9 +306,9 @@ async def test_error_handling():
     print("\n   Testing empty text handling...")
     config = Config()
     valid_provider = OpenAIProvider(
-        api_key=config.openai_api_key,
-        model=config.llm_model,
-        embedding_model=config.embedding_model,
+        api_key=config.llm.openai_api_key,
+        model=config.llm.llm_model,
+        embedding_model=config.llm.embedding_model,
     )
 
     try:

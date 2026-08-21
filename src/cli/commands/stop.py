@@ -23,7 +23,7 @@ def run(args):
         try:
             from src.core.simple_config import get_config
 
-            port = get_config().mcp_port
+            port = get_config().server.mcp_port
         except Exception:
             port = 8300
 

@@ -1287,7 +1287,7 @@ async def get_commit_diff_endpoint(
         main_repo_path = _resolve_repo_path_for_commit(commit_sha)
         if main_repo_path is None:
             config = get_config()
-            main_repo_path = str(config.main_repo_path)
+            main_repo_path = str(config.git.main_repo_path)
 
         # Helper function to detect language from file extension
         def detect_language(file_path: str) -> str:

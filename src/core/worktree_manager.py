@@ -102,7 +102,7 @@ class WorktreeManager:
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
         self.config = get_config()
-        self._project_root = Path(self.config.main_repo_path)
+        self._project_root = Path(self.config.git.main_repo_path)
 
         try:
             self.main_repo = Repo(self._project_root)
@@ -150,7 +150,7 @@ class WorktreeManager:
     @property
     def worktree_base(self) -> Path:
         """Base directory for agent worktrees (``<repo>/.worktrees``)."""
-        override = getattr(self.config, "worktree_base_path", None)
+        override = getattr(self.config.paths, "worktree_base_path", None)
         if override:
             return Path(override)
         return self._project_root / WORKTREES_SUBDIR
@@ -240,7 +240,7 @@ class WorktreeManager:
                 parent_commit_sha = self.main_repo.head.commit.hexsha
                 logger.info(f"[WORKTREE] Using main HEAD: {parent_commit_sha[:8]}")
 
-            branch_name = f"{self.config.branch_prefix}{agent_id}"
+            branch_name = f"{self.config.git.branch_prefix}{agent_id}"
 
             # Create branch from parent commit
             try:
@@ -423,7 +423,7 @@ class WorktreeManager:
             if not record:
                 raise ValueError(f"No worktree record found for agent {agent_id}")
             branch_name = record.branch_name
-            target_branch = self.config.base_branch
+            target_branch = self.config.git.base_branch
             logger.info(
                 f"[WORKTREE:{agent_id}] Merging branch {branch_name} -> {target_branch}"
             )
@@ -759,7 +759,7 @@ class WorktreeManager:
             if "CONFLICT" in str(e):
                 logger.warning(
                     f"[WORKTREE] Merge conflict on {branch_name} -> "
-                    f"{self.config.base_branch}, aborting -- branch preserved "
+                    f"{self.config.git.base_branch}, aborting -- branch preserved "
                     f"for manual merge/PR"
                 )
                 try:
@@ -781,7 +781,7 @@ class WorktreeManager:
             merged: List[str] = []
             failed: List[str] = []
             worktrees_cleaned = 0
-            target_branch = self.config.base_branch
+            target_branch = self.config.git.base_branch
             # Deliberately unguarded, matching merge_to_main's identical
             # checkout above -- a swallowed failure here previously let
             # execution continue with main_repo still checked out on
@@ -963,7 +963,7 @@ class WorktreeManager:
                 # is "agent-" by default but is configurable, so list both.
                 if b.startswith(
                     (
-                        self.config.branch_prefix,
+                        self.config.git.branch_prefix,
                         "agent-",
                         "autopilot-",
                         "feature_architect/",
@@ -1083,7 +1083,7 @@ class WorktreeManager:
                 if resolved in tracked_paths or resolved == main_repo_path:
                     continue
                 why = self._worktree_remover.orphan_blocker(
-                    self.main_repo, self.config.base_branch, d
+                    self.main_repo, self.config.git.base_branch, d
                 )
                 if why:
                     preserved += 1

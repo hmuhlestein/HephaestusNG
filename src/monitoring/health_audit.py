@@ -74,7 +74,7 @@ class SystemHealthAuditor:
             session = self.db_manager.get_session()
             from src.core.database import Agent, Task
 
-            idle_minutes = timedelta(minutes=self.config.stuck_detection_minutes)
+            idle_minutes = timedelta(minutes=self.config.monitoring.stuck_detection_minutes)
             idle_cutoff = datetime.utcnow() - idle_minutes
             candidate_tasks = (
                 session.query(Task)
@@ -124,7 +124,7 @@ class SystemHealthAuditor:
                         continue  # still within the post-nudge grace period
 
                     try:
-                        max_nudges = int(getattr(self.config, 'max_stuck_nudges', MAX_STUCK_TASK_NUDGES))
+                        max_nudges = int(getattr(self.config.monitoring, 'max_stuck_nudges', MAX_STUCK_TASK_NUDGES))
                     except (TypeError, ValueError):
                         max_nudges = MAX_STUCK_TASK_NUDGES
                     if nudge_count >= max_nudges:
@@ -207,13 +207,13 @@ class SystemHealthAuditor:
                 else:
                     logger.warning(
                         f"[HEALTH] Task {task.id[:8]} stuck in_progress with no "
-                        f"agent activity for >{self.config.stuck_detection_minutes} "
+                        f"agent activity for >{self.config.monitoring.stuck_detection_minutes} "
                         "minutes (including a nudge) — marking failed"
                     )
                     task.status = "failed"
                     task.failure_reason = (
                         f"Task stuck: no agent activity for "
-                        f">{self.config.stuck_detection_minutes} minutes"
+                        f">{self.config.monitoring.stuck_detection_minutes} minutes"
                     )
                 session.commit()
 
