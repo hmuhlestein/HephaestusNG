@@ -21,6 +21,7 @@ import ImprovementsPanel from '@/components/autopilot/ImprovementsPanel';
 import ProjectSettingsModal from '@/components/ProjectSettingsModal';
 import { useProject } from '@/context/ProjectContext';
 import toast from 'react-hot-toast';
+import BaseStatusBadge from '@/components/StatusBadge';
 
 type Tab = 'queue' | 'features' | 'improvements' | 'messages' | 'logs';
 const VALID_TABS: Tab[] = ['queue', 'features', 'improvements', 'messages', 'logs'];
@@ -498,21 +499,33 @@ const LogsPanel: React.FC<{ projectId: string | null }> = ({ projectId }) => {
 
 // ── Shared Helpers ───────────────────────────────────────────
 
-export const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
-  const styles: Record<string, string> = {
-    validated: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800',
-    needs_review: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800',
-    failed: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800',
-    in_progress: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800',
-    pending: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-600',
-  };
-
-  return (
-    <span className={`px-2.5 py-0.5 text-xs font-medium rounded-full border ${styles[status] || styles.pending}`}>
-      {status.replace(/_/g, ' ')}
-    </span>
-  );
+// Feature-review's own status/color mapping -- distinct from
+// components/StatusBadge.tsx's general vocabulary (this one is scoped to
+// the 5 states a feature review can be in, with a border ring the general
+// component doesn't use elsewhere). Delegates rendering to the shared
+// component instead of duplicating the pill markup -- see
+// components/StatusBadge.tsx's docstring for the consolidation this
+// closes (SOLID review: 3 independent StatusBadge definitions existed
+// with real, non-obvious behavioral differences; this preserves this
+// call site's exact existing colors/border/label rather than adopting
+// the general component's own palette, since that's a visual change
+// this pass can't verify in a browser).
+const FEATURE_REVIEW_STATUS_COLORS: Record<string, string> = {
+  validated: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800',
+  needs_review: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800',
+  failed: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800',
+  in_progress: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800',
+  pending: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-600',
 };
+
+export const StatusBadge: React.FC<{ status: string }> = ({ status }) => (
+  <BaseStatusBadge
+    status={status}
+    size="sm"
+    label={status.replace(/_/g, ' ')}
+    colorClassName={FEATURE_REVIEW_STATUS_COLORS[status] ?? FEATURE_REVIEW_STATUS_COLORS.pending}
+  />
+);
 
 export const StatusIcon: React.FC<{ status: string }> = ({ status }) => {
   if (status === 'validated') return <CheckCircle2 className="w-5 h-5 text-emerald-500" />;
