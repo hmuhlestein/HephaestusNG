@@ -1516,6 +1516,15 @@ class DatabaseManager:
             # capture the loop variable and run the last migration 18 times.
             self._run_schema_migration(migration_id, lambda fn=fn: fn(self.engine))
 
+        # Recurring reconciliation, NOT a one-shot migration -- deliberately
+        # outside the loop above so it is never recorded-and-skipped. A
+        # self-review-enabled phase whose row lost the flag silently stops
+        # gating task completion, and that can drift back at any time as new
+        # per-workflow Phase rows are seeded. See the function's docstring.
+        from src.core.schema_migrations import backfill_self_review_defaults
+
+        backfill_self_review_defaults(self.engine)
+
     def _run_schema_migration(self, migration_id: str, fn) -> None:
         """Run one schema migration at most once per database, recorded in
         schema_migrations (SOLID review 4.1).
