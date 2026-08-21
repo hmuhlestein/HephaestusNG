@@ -590,10 +590,11 @@ class TestBudgetEnforcement:
         sample_workflow.status = "active"
         db_session.commit()
 
-        paused = _pause_project_workflows(db_session, sample_workflow.project_id, paused_by="budget")
+        paused, queued_task_ids = _pause_project_workflows(db_session, sample_workflow.project_id, paused_by="budget")
         db_session.commit()  # Caller must commit
 
         assert paused == 1
+        assert queued_task_ids == []
 
         db_session.refresh(sample_workflow)
         assert sample_workflow.status == "paused"
@@ -610,8 +611,9 @@ class TestBudgetEnforcement:
         db_session.commit()  # Caller must commit
 
         # Second pause (should be no-op)
-        paused2 = _pause_project_workflows(db_session, sample_workflow.project_id, paused_by="budget")
+        paused2, queued_task_ids2 = _pause_project_workflows(db_session, sample_workflow.project_id, paused_by="budget")
         assert paused2 == 0
+        assert queued_task_ids2 == []
 
     def test_budget_enforcement_triggers_pause(self, db_session, sample_project, sample_workflow):
         """Test that budget enforcement triggers workflow pause."""
