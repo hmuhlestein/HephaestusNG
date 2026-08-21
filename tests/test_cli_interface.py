@@ -169,6 +169,7 @@ class TestCodexAgent:
         assert result.returncode == 0
         assert "--dangerously-bypass-approvals-and-sandbox" in result.stdout
         assert "--no-alt-screen" in result.stdout
+        assert "--enable" in result.stdout
 
     def test_launches_interactively_with_deferred_instructions(self):
         result = CodexAgent().get_launch_command(
@@ -177,8 +178,16 @@ class TestCodexAgent:
 
         assert "codex --dangerously-bypass-approvals-and-sandbox" in result.command
         assert "--no-alt-screen" in result.command
+        assert "--enable goals" in result.command
         assert "--model gpt-5.6-terra" in result.command
         assert result.prompt_delivery == LaunchResult.DEFERRED
+
+    def test_format_goal_command_uses_native_codex_goal_command(self):
+        """Codex CLI's goals feature (thread-scoped objective tracking,
+        backed by create_goal/update_goal tools) is enabled via --enable
+        goals above; /goal <objective> is its slash-command entry point,
+        the same shape as Claude Code's /goal <condition>."""
+        assert CodexAgent().format_goal_command("all tests pass") == "/goal all tests pass"
 
     def test_uses_codex_default_model_when_no_override_is_given(self):
         result = CodexAgent().get_launch_command(
