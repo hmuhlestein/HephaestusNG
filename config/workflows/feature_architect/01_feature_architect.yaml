@@ -147,7 +147,7 @@ additional_notes: |
   ### Step 8: Mark Done
   Mark your task as done with a summary of the features created.
 
-  Once complete_my_task returns success, stop immediately -- do not run further commands, re-verify already-submitted work, or keep investigating. Your turn ends there.
+  <<COMPLETION_STOP_LINE>>
 
   ## Example
 
