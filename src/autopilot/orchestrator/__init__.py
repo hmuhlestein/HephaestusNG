@@ -2614,7 +2614,7 @@ def _build_and_start_pipeline_sdk(args, project_path: Path, logger: Orchestrator
         qdrant_url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
         working_directory=str(project_path),
         mcp_port=int(os.environ.get("MCP_PORT", "8300")),
-        monitoring_interval=60,
+        monitoring_interval=config.monitoring.monitoring_interval_seconds,
         llm_provider=os.environ.get("LLM_PROVIDER", "openrouter"),
         llm_model=os.environ.get("LLM_MODEL", "xiaomi/mimo-v2.5"),
         default_cli_tool=cli_tool,
@@ -2641,7 +2641,7 @@ def _build_and_start_pipeline_sdk(args, project_path: Path, logger: Orchestrator
         # autopilot.sh), where the backend genuinely may need spawning.
         sdk.start(
             enable_tui=False,
-            timeout=60,
+            timeout=config.autopilot.sdk_start_timeout_seconds,
             assume_backend_running=getattr(args, "in_process", False),
         )
     except Exception as e:

@@ -442,12 +442,17 @@ class AutopilotConfig(_ConfigSection):
         self.paused_workflow_max_retry_cycles = autopilot.get(
             "paused_workflow_max_retry_cycles", 10
         )  # give up permanently after this many auto-retry cycles
+        self.sdk_start_timeout_seconds = autopilot.get(
+            "sdk_start_timeout_seconds", 60
+        )  # how long sdk.start() waits for the backend's /health check
 
     def apply_env_overrides(self):
         if os.getenv("WORKFLOW_TIMEOUT_SECONDS"):
             self.workflow_timeout_seconds = int(os.getenv("WORKFLOW_TIMEOUT_SECONDS"))
         if os.getenv("PHASE0_TIMEOUT_SECONDS"):
             self.phase0_timeout_seconds = int(os.getenv("PHASE0_TIMEOUT_SECONDS"))
+        if os.getenv("SDK_START_TIMEOUT_SECONDS"):
+            self.sdk_start_timeout_seconds = int(os.getenv("SDK_START_TIMEOUT_SECONDS"))
 
 
 class TicketTrackingConfig(_ConfigSection):
