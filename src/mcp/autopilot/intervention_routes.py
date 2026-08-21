@@ -30,6 +30,7 @@ class HumanInputRequest(BaseModel):
     timestamp: str
     options: List[str]
     labels: Dict[str, str]
+    project_id: Optional[str] = None
 
 class HumanInputResponse(BaseModel):
     request_id: str

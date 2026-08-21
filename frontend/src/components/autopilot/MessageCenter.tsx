@@ -50,18 +50,21 @@ interface MessageCenterProps {
 const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
   const queryClient = useQueryClient();
   const [selectedFeature, setSelectedFeature] = useState<string | null>(null);
-  const [showInputModal, setShowInputModal] = useState(false);
-  const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
+  // The message row currently expanded for inline response -- replaces the
+  // old separate showInputModal/currentRequestId pair. Responding now
+  // happens in place in the message list rather than in a popup, so
+  // "which request is open" and "which row is expanded" are the same
+  // question and need only one id.
+  const [expandedMessageId, setExpandedMessageId] = useState<string | null>(null);
   const [messageText, setMessageText] = useState('');
   const [showArchived, setShowArchived] = useState(false);
 
-  // Without this, closing the Respond panel without submitting (backdrop
-  // click or the close button) leaves messageText behind -- the next
-  // human_input_required request's textarea then opens pre-filled with
-  // the previous request's leftover draft.
+  // Without this, collapsing the response row without submitting leaves
+  // messageText behind -- the next human_input_required row expanded
+  // opens pre-filled with the previous one's leftover draft.
   useEffect(() => {
     setMessageText('');
-  }, [currentRequestId]);
+  }, [expandedMessageId]);
   
   // Fetch archived message IDs from DB
   const { data: archivedData, refetch: refetchArchived } = useQuery({
@@ -122,18 +125,38 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
   });
 
   const submitMutation = useMutation({
+    // Targets inputRequest.id, not something derived from expandedMessageId:
+    // the inline response controls only ever render when
+    // inputRequest?.id === data.request_id for the expanded row (see the
+    // render condition below), so the two are guaranteed equal at submit
+    // time -- no separate lookup needed.
     mutationFn: ({ choice, message }: { choice: string; message?: string }) =>
-      apiService.submitAutopilotInput(currentRequestId!, choice, message),
+      apiService.submitAutopilotInput(inputRequest!.id, choice, message),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-input'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-messages'] });
       toast.success('Response sent to pipeline');
-      setShowInputModal(false);
+      setExpandedMessageId(null);
     },
     onError: () => toast.error('Failed to submit response'),
   });
 
+  // Auto-expand the message row for a NEWLY-arrived pending request, once
+  // per distinct request id -- so answering it doesn't require hunting
+  // through the list first. Does not fight a user who deliberately
+  // collapses it afterward: this only fires again when inputRequest.id
+  // itself changes to a different value, not on every 5s poll.
+  useEffect(() => {
+    if (!inputRequest || !messages) return;
+    const match = messages.find(
+      (m: any) => m.type === 'human_input_required' && m.data?.request_id === inputRequest.id
+    );
+    if (match) {
+      setExpandedMessageId(`${match.timestamp}-${match.type}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputRequest?.id]);
 
 
   if (isLoading) {
@@ -217,26 +240,12 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
       });
     }
 
-    // Human input required
-    if (msg.type === 'human_input_required' && data.request_id) {
-      actions.push({
-        label: 'Respond',
-        icon: Reply,
-        onClick: async () => {
-          // Check if input request still exists
-          const currentInput = await apiService.getAutopilotInput();
-          if (currentInput && currentInput.id === data.request_id) {
-            setCurrentRequestId(data.request_id);
-            setShowInputModal(true);
-          } else if (currentInput) {
-            toast.error('Another input request is pending - respond to that one instead');
-          } else {
-            toast.error('This input request has expired or was already answered');
-          }
-        },
-        color: 'violet',
-      });
-    }
+    // human_input_required no longer goes through the generic actions[]
+    // array -- it toggles the row's own inline response panel instead (see
+    // the row's onClick and the expanded-content block below), since
+    // "navigate somewhere else" and "respond in place" are different
+    // interactions and the row needs to know which one it's dealing with
+    // before rendering, not just on click.
 
     // Stuck agent / warning / error actions
     if (msg.type === 'stuck_agent' || msg.type === 'warning' || msg.type === 'error') {
@@ -347,6 +356,15 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
                 const Icon = config.icon;
                 const actions = getMessageActions(msg);
                 const hasActions = actions.length > 0;
+                const msgId = `${msg.timestamp}-${msg.type}`;
+                const isRespondable = msg.type === 'human_input_required';
+                const isExpanded = expandedMessageId === msgId;
+                // Whether THIS specific request is still the one the
+                // pipeline is actually waiting on -- a human_input_required
+                // row stays in the list forever as a record, but only the
+                // current inputRequest (if any) can still be answered.
+                const isLiveRequest = isRespondable && !!inputRequest && inputRequest.id === data.request_id;
+                const clickable = hasActions || isRespondable;
 
                 return (
                   <motion.div
@@ -354,10 +372,18 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: index * 0.02 }}
-                    onClick={() => hasActions && actions[0].onClick()}
-                    className={`flex items-start gap-3 px-4 py-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 transition-all ${
-                      hasActions ? 'hover:shadow-md hover:border-gray-200 dark:hover:border-gray-600 cursor-pointer' : 'hover:shadow-sm'
-                    }`}
+                    onClick={() => {
+                      if (isRespondable) {
+                        setExpandedMessageId(isExpanded ? null : msgId);
+                      } else if (hasActions) {
+                        actions[0].onClick();
+                      }
+                    }}
+                    className={`flex items-start gap-3 px-4 py-3 bg-white dark:bg-gray-800 rounded-xl border transition-all ${
+                      isLiveRequest
+                        ? 'border-amber-300 dark:border-amber-700 ring-1 ring-amber-200 dark:ring-amber-800'
+                        : 'border-gray-100 dark:border-gray-700'
+                    } ${clickable ? 'hover:shadow-md hover:border-gray-200 dark:hover:border-gray-600 cursor-pointer' : 'hover:shadow-sm'}`}
                   >
                     <div className={`p-2 rounded-lg ${config.bg} flex-shrink-0`}>
                       <Icon className={`w-4 h-4 ${config.color}`} />
@@ -369,7 +395,16 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
                           {statusConfig?.label || formatEventType(msg.type)}
                         </span>
                         <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{msg.type}</span>
-                        {hasActions && <ChevronRight className="w-3 h-3 text-gray-300" />}
+                        {isLiveRequest && (
+                          <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 animate-pulse">
+                            Waiting on you
+                          </span>
+                        )}
+                        {clickable && (
+                          <ChevronRight
+                            className={`w-3 h-3 text-gray-300 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                          />
+                        )}
                       </div>
                       
                       {/* Error display - prominent red styling */}
@@ -393,6 +428,81 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
                           <p className="text-xs text-amber-600 dark:text-amber-400">{String(data.reason)}</p>
                         </div>
                       )}
+
+                      {/* Inline respond panel -- replaces the old separate
+                          modal. stopPropagation everywhere inside: this
+                          whole block sits inside the row's own onClick
+                          (which toggles expand/collapse), so a click on the
+                          textarea or a button must not also re-toggle it. */}
+                      <AnimatePresence>
+                        {isRespondable && isExpanded && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.15 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="overflow-hidden"
+                          >
+                            {isLiveRequest ? (
+                              <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 space-y-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <button
+                                    onClick={() => submitMutation.mutate({ choice: 'c' })}
+                                    disabled={submitMutation.isPending}
+                                    className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors"
+                                  >
+                                    <Zap className="w-3.5 h-3.5" />
+                                    Continue
+                                  </button>
+                                  <button
+                                    onClick={() => submitMutation.mutate({ choice: 's' })}
+                                    disabled={submitMutation.isPending}
+                                    className="flex items-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors"
+                                  >
+                                    <SkipForward className="w-3.5 h-3.5" />
+                                    Skip
+                                  </button>
+                                  <button
+                                    onClick={() => submitMutation.mutate({ choice: 'q' })}
+                                    disabled={submitMutation.isPending}
+                                    className="flex items-center gap-1.5 px-3 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors"
+                                  >
+                                    <XCircle className="w-3.5 h-3.5" />
+                                    Stop
+                                  </button>
+                                </div>
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    value={messageText}
+                                    onChange={(e) => setMessageText(e.target.value)}
+                                    placeholder="Or type a message to the pipeline..."
+                                    disabled={submitMutation.isPending}
+                                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' && messageText.trim()) {
+                                        submitMutation.mutate({ choice: 'm', message: messageText.trim() });
+                                      }
+                                    }}
+                                  />
+                                  <button
+                                    onClick={() => messageText.trim() && submitMutation.mutate({ choice: 'm', message: messageText.trim() })}
+                                    disabled={!messageText.trim() || submitMutation.isPending}
+                                    className="px-3 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  >
+                                    <Send className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 text-xs text-gray-400 dark:text-gray-500 italic">
+                                This request has already been answered or expired -- nothing to respond to here anymore.
+                              </div>
+                            )}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                       
                       {/* Other data fields */}
                       {msg.data && Object.keys(msg.data).length > 0 && (() => {
@@ -465,111 +575,6 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
         />
       )}
 
-      {/* Human Input Modal */}
-      <AnimatePresence>
-        {showInputModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-            onClick={(e) => { if (e.target === e.currentTarget) setShowInputModal(false); }}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
-            >
-              <div className="p-6">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-3 bg-amber-100 rounded-xl">
-                    <AlertCircle className="w-6 h-6 text-amber-600" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-bold text-gray-800">Human Input Required</h2>
-                    <p className="text-xs text-gray-500">The pipeline needs your decision</p>
-                  </div>
-                </div>
-
-                {inputRequest && (
-                  <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl">
-                    <p className="text-sm text-amber-800">{inputRequest.reason}</p>
-                  </div>
-                )}
-
-                <div className="space-y-3">
-                  <button
-                    onClick={() => submitMutation.mutate({ choice: 'c' })}
-                    disabled={submitMutation.isPending}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-emerald-600 text-white rounded-xl font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-                  >
-                    <Zap className="w-4 h-4" />
-                    Continue Processing
-                  </button>
-                  <button
-                    onClick={() => submitMutation.mutate({ choice: 's' })}
-                    disabled={submitMutation.isPending}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-amber-600 text-white rounded-xl font-semibold hover:bg-amber-700 disabled:opacity-50 transition-colors"
-                  >
-                    <SkipForward className="w-4 h-4" />
-                    Skip This Design
-                  </button>
-                  <button
-                    onClick={() => submitMutation.mutate({ choice: 'q' })}
-                    disabled={submitMutation.isPending}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 disabled:opacity-50 transition-colors"
-                  >
-                    <XCircle className="w-4 h-4" />
-                    Stop Pipeline
-                  </button>
-                </div>
-
-                {/* Message Input */}
-                <div className="mt-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Or send a message:</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={messageText}
-                      onChange={(e) => setMessageText(e.target.value)}
-                      placeholder="Type a message to the pipeline..."
-                      className="flex-1 px-4 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && messageText.trim()) {
-                          submitMutation.mutate({ choice: 'm', message: messageText.trim() });
-                          setMessageText('');
-                        }
-                      }}
-                    />
-                    <button
-                      onClick={() => {
-                        if (messageText.trim()) {
-                          submitMutation.mutate({ choice: 'm', message: messageText.trim() });
-                          setMessageText('');
-                        }
-                      }}
-                      disabled={!messageText.trim() || submitMutation.isPending}
-                      className="px-4 py-2 bg-violet-600 text-white rounded-xl hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <Send className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-4 flex justify-end">
-                  <button
-                    onClick={() => setShowInputModal(false)}
-                    className="text-sm text-gray-500 hover:text-gray-700"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </>
   );
 };

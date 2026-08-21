@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Rocket, ListOrdered, History, MessageSquare,
   Clock, CheckCircle2, XCircle, AlertTriangle,
-  Terminal, Lightbulb
+  Terminal, Lightbulb, AlertCircle
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import PipelineStatusCard from '@/components/autopilot/PipelineStatusCard';
@@ -15,7 +15,6 @@ import FeatureDetailModal from '@/components/autopilot/FeatureDetailModal';
 import MessageCenter from '@/components/autopilot/MessageCenter';
 import AddDesignModal from '@/components/autopilot/AddDesignModal';
 import LoadDesignModal from '@/components/autopilot/LoadDesignModal';
-import HumanInputBanner from '@/components/autopilot/HumanInputBanner';
 import ReviewModeToggle from '@/components/autopilot/ReviewModeToggle';
 import FeatureReviewModal from '@/components/autopilot/FeatureReviewModal';
 import ImprovementsPanel from '@/components/autopilot/ImprovementsPanel';
@@ -254,6 +253,16 @@ const Autopilot: React.FC = () => {
     enabled: !!projectId,
   });
 
+  // Same queryKey MessageCenter uses for its own copy of this -- shares
+  // the cached subscription rather than polling twice. Drives the
+  // Messages tab's animated "needs a response" indicator below.
+  const { data: pendingInput } = useQuery({
+    queryKey: ['autopilot-input', projectId],
+    queryFn: () => apiService.getAutopilotInput(),
+    refetchInterval: 5000,
+    enabled: !!projectId,
+  });
+
   const { data: projectCosts } = useQuery({
     queryKey: ['project-costs', projectId],
     queryFn: () => apiService.getProjectCosts(projectId!),
@@ -276,11 +285,15 @@ const Autopilot: React.FC = () => {
     refetchInterval: 30000,
   });
 
-  const tabs: { id: Tab; label: string; icon: React.ElementType; badge?: number; reviewBadge?: boolean }[] = [
+  const tabs: { id: Tab; label: string; icon: React.ElementType; badge?: number; reviewBadge?: boolean; urgent?: boolean }[] = [
     { id: 'queue', label: 'Design Queue', icon: ListOrdered, badge: status?.queue_depth, reviewBadge: (status?.features_awaiting_review ?? 0) > 0 },
     { id: 'features', label: 'Completed', icon: History, badge: featuresList?.length },
     { id: 'improvements', label: 'Improvements', icon: Lightbulb, badge: promptProposals?.pending_count },
-    { id: 'messages', label: 'Messages', icon: MessageSquare, badge: messages?.length },
+    // urgent: the pipeline is blocked waiting on a human decision. Replaces
+    // the old full-width yellow HumanInputBanner (illegible, and duplicated
+    // this same data) with an animated indicator on the tab that already
+    // lists it -- see the icon-swap block below.
+    { id: 'messages', label: 'Messages', icon: MessageSquare, badge: messages?.length, urgent: !!pendingInput },
     { id: 'logs', label: 'Logs', icon: Terminal },
   ];
 
@@ -299,9 +312,6 @@ const Autopilot: React.FC = () => {
         </div>
 
       </div>
-
-      {/* Human Input Banner (shows when pipeline needs input) */}
-      <HumanInputBanner onOpenMessages={() => setActiveTab('messages')} projectId={projectId} />
 
       {/* Pipeline Status Hero */}
       <PipelineStatusCard
@@ -344,7 +354,22 @@ const Autopilot: React.FC = () => {
                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600'}
                 `}
               >
-                <tab.icon className="w-4 h-4" />
+                {tab.urgent ? (
+                  // Swaps the tab's own icon to a pulsing alert rather than
+                  // adding a small dot beside it -- this is the ONE thing
+                  // on the page telling you the pipeline is blocked
+                  // waiting on a decision (see the removed HumanInputBanner
+                  // above), so it needs to read as urgent from the icon
+                  // itself, not a detail you'd only notice up close.
+                  <motion.span
+                    animate={{ scale: [1, 1.15, 1] }}
+                    transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                  >
+                    <AlertCircle className="w-4 h-4 text-amber-500" />
+                  </motion.span>
+                ) : (
+                  <tab.icon className="w-4 h-4" />
+                )}
                 {tab.label}
                 {tab.badge !== undefined && tab.badge > 0 && (
                   <span className="ml-1 px-2 py-0.5 text-xs rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400 font-medium">
@@ -353,6 +378,12 @@ const Autopilot: React.FC = () => {
                 )}
                 {tab.reviewBadge && (
                   <span className="ml-1 w-2 h-2 rounded-full bg-amber-500 animate-pulse inline-block" title="Features awaiting review" />
+                )}
+                {tab.urgent && (
+                  <span
+                    className="ml-1 w-2 h-2 rounded-full bg-amber-500 animate-ping inline-block"
+                    title="Waiting on your response"
+                  />
                 )}
               </button>
             ))}

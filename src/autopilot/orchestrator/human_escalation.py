@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
 
 
-def prompt_human(reason: str, logger: "OrchestratorLogger", timeout: int = 600) -> str:
+def prompt_human(reason: str, logger: "OrchestratorLogger", timeout: int = 600, project_id: str = None) -> str:
     """Prompt for human input. Auto-continues after timeout seconds."""
     import sys
     import uuid
@@ -50,6 +50,7 @@ def prompt_human(reason: str, logger: "OrchestratorLogger", timeout: int = 600) 
             "options": ["c", "s", "q"],
             "labels": {"c": "Continue", "s": "Skip design", "q": "Quit pipeline"},
             "timeout_seconds": timeout,
+            "project_id": project_id,
         },
         indent=2,
     )

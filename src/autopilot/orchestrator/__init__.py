@@ -1021,7 +1021,7 @@ def run_single_workflow(
                 credit_stuck_count += 1
                 stuck_count = 0  # reset impasse counter during credit issues
                 if credit_stuck_count >= 1:
-                    choice = prompt_human(credit_reason, logger)
+                    choice = prompt_human(credit_reason, logger, project_id=project_id)
                     if choice == "q":
                         return FeatureRunStatus.INTERRUPTED
                     elif choice == "s":
@@ -1064,7 +1064,7 @@ def run_single_workflow(
             if impasse:
                 stuck_count += 1
                 if stuck_count >= STUCK_THRESHOLD:
-                    choice = prompt_human(impasse_reason, logger)
+                    choice = prompt_human(impasse_reason, logger, project_id=project_id)
                     if choice == "q":
                         return FeatureRunStatus.INTERRUPTED
                     elif choice == "s":

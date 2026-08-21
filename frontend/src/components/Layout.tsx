@@ -1,16 +1,36 @@
 import React, { useState, useEffect } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { Home, FileText, Bot, Database, GitBranch, Activity, Layers, Monitor, Compass, ListChecks, Menu, ChevronLeft, Ticket, Workflow, Rocket, Settings, Wifi, WifiOff, Sun, Moon } from 'lucide-react';
 import { useWebSocket } from '@/context/WebSocketContext';
 import { useTheme } from '@/context/ThemeContext';
+import { apiService } from '@/services/api';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'framer-motion';
 import SidebarProjectSelector from '@/components/SidebarProjectSelector';
 import ProjectSettingsModal from '@/components/ProjectSettingsModal';
+import { useProject } from '@/context/ProjectContext';
 
 const Layout: React.FC = () => {
   const { isConnected, lastUpdate } = useWebSocket();
   const { theme, toggleTheme } = useTheme();
+  const { selectProject } = useProject();
+  const navigate = useNavigate();
+
+  // Global (not per-project) check for a pending human_input_required
+  // request -- the autopilot orchestrator is a single process, so this
+  // mirrors the same /autopilot/input poll Autopilot.tsx uses for its
+  // Messages tab indicator, just visible from every page.
+  const { data: pendingInput } = useQuery({
+    queryKey: ['autopilot-input'],
+    queryFn: () => apiService.getAutopilotInput(),
+    refetchInterval: 5000,
+  });
+
+  const goToPendingInput = () => {
+    if (pendingInput?.project_id) selectProject(pendingInput.project_id);
+    navigate('/autopilot/messages');
+  };
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const saved = localStorage.getItem('sidebarCollapsed');
     return saved === 'true';
@@ -164,6 +184,16 @@ const Layout: React.FC = () => {
                     {isConnected ? 'Connected' : 'Disconnected'}
                   </span>
                 </div>
+                {pendingInput && (
+                  <button
+                    onClick={goToPendingInput}
+                    className="relative flex items-center justify-center w-4 h-4"
+                    title="Human input needed -- click to respond"
+                  >
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
+                  </button>
+                )}
               </div>
             </div>
           </header>
