@@ -215,6 +215,7 @@ class RepairService:
                 Memory,
                 Phase,
                 PhaseExecution,
+                PhasePromptVersion,
                 TaskPromptOverride,
                 Ticket,
                 ValidationReview,
@@ -253,6 +254,14 @@ class RepairService:
                         # case now that cost tracking exists) would otherwise
                         # fail this delete with an IntegrityError.
                         db.query(CostEntry).filter(CostEntry.task_id.in_(task_ids)).delete(synchronize_session=False)
+                        # Agent.current_task_id -> tasks.id is also an
+                        # enforced FK -- an agent that crashed/was killed
+                        # without going through the normal terminate path
+                        # (which clears this) can leave it dangling at one
+                        # of these tasks, failing the Task delete below.
+                        db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).update(
+                            {"current_task_id": None}, synchronize_session=False
+                        )
 
                     # Delete workflow-level dependents
                     db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
@@ -290,12 +299,28 @@ class RepairService:
                     phase_ids = [p.id for p in db.query(Phase.id).filter(Phase.workflow_id.in_(wf_ids)).all()]
                     if phase_ids:
                         db.query(PhaseExecution).filter(PhaseExecution.phase_id.in_(phase_ids)).delete(synchronize_session=False)
+                        db.query(PhasePromptVersion).filter(PhasePromptVersion.phase_id.in_(phase_ids)).delete(synchronize_session=False)
 
                     # Delete phases -- Phase.workflow_id is a NOT NULL FK to
                     # workflows.id, so leaving these behind (as this always
                     # did) made the Workflow delete below fail with a
                     # FOREIGN KEY constraint error every time.
                     db.query(Phase).filter(Phase.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+
+                    # AutopilotDesign.phase0_workflow_id -> workflows.id is
+                    # also an enforced FK. Regression, found live: this was
+                    # never cleared here, so the Workflow delete below
+                    # failed with a FOREIGN KEY constraint violation --
+                    # caught by this function's outer except and logged,
+                    # but silently swallowed, so "start pipeline" proceeded
+                    # anyway on top of an unrolled-back OLD workflow whose
+                    # worktree Step 2's cleanup had already removed. The
+                    # orchestrator then got stuck resuming that now-
+                    # unrecoverable workflow forever (~3s/cycle, 0 designs
+                    # processed), never dispatching anything new -- exactly
+                    # what "the Rerun button does nothing" looked like.
+                    if design and design.phase0_workflow_id in wf_ids:
+                        design.phase0_workflow_id = None
 
                     # Delete workflows
                     db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(synchronize_session=False)
