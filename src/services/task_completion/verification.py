@@ -56,6 +56,22 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
     if not phase:
         return None
 
+    # Arbitration tasks are exempt from the phase's own declared output
+    # files -- an arbiter's job is a decision (done_definition: "Write
+    # arbitration_result.json"), not the phase's normal deliverable, so
+    # holding it to e.g. design_review's challenge.md is checking for a
+    # file the task was never asked to produce. created_by_agent_id (not
+    # Agent.agent_type -- "arbitration" was never a member of Agent's own
+    # CHECK constraint, see arbitration.py's _trigger_arbitration) is the
+    # established way to identify these tasks elsewhere (phase_transitions.
+    # py's own is_orphan/sibling checks use the same field). Confirmed
+    # live: task 18cf5d78 (an arbitration task) was rejected "done" over a
+    # missing challenge.md it was never supposed to write.
+    from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+
+    if task.created_by_agent_id == ARBITRATION_CREATED_BY:
+        return None
+
     required_files = get_phase_required_files(phase, task.workflow_id)
     if not required_files:
         return None
@@ -264,6 +280,14 @@ def verify_gate_result_schema(session, task, phase=None) -> Optional[Dict[str, A
     if not phase or phase.name not in GATED_PHASES:
         return None
 
+    # Same exemption as verify_output_artifact's -- an arbitration task's
+    # done_definition is "Write arbitration_result.json with a decision",
+    # not the gated phase's own structured report.
+    from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+
+    if task.created_by_agent_id == ARBITRATION_CREATED_BY:
+        return None
+
     artifacts = GATE_RESULT_ARTIFACTS.get(phase.name)
     if not artifacts:
         return None
@@ -339,6 +363,14 @@ def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]
     if not phase or phase.name not in ("development", "git_expert"):
         return None
     if not task.workflow_id:
+        return None
+
+    # Same exemption as verify_output_artifact's -- an arbitration task's
+    # job is a goto/fail/continue decision, not fixing bug tickets, even
+    # if it happens to fire for development/git_expert.
+    from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+
+    if task.created_by_agent_id == ARBITRATION_CREATED_BY:
         return None
 
     open_tickets = (
@@ -418,6 +450,12 @@ def verify_output_survived_commit(session, task, phase=None) -> Optional[Dict[st
     if phase is None:
         phase = session.query(Phase).filter_by(id=task.phase_id).first()
     if not phase:
+        return None
+
+    # Same exemption as verify_output_artifact's -- see its comment.
+    from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+
+    if task.created_by_agent_id == ARBITRATION_CREATED_BY:
         return None
 
     required_files = get_phase_required_files(phase, task.workflow_id)

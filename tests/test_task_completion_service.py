@@ -79,6 +79,32 @@ class TestParseForensicsRecommendations:
 class TestVerifyOutputArtifact:
     """Tests for verify_output_artifact method."""
 
+    def test_returns_none_for_arbitration_task(self):
+        """Regression: task 18cf5d78, an arbitration task for design_review,
+        was rejected "done" over a missing challenge.md -- design_review's
+        own declared output, not the arbitration task's. An arbiter's job
+        is a decision (done_definition: "Write arbitration_result.json"),
+        not the phase's normal deliverable. created_by_agent_id (not
+        Agent.agent_type -- "arbitration" was never a member of Agent's own
+        CHECK constraint) is the established way to identify these tasks."""
+        phase = Mock(name="design_review", id="phase-1")
+        phase.name = "design_review"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id="arbitration",
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files",
+            return_value=["challenge.md"],
+        ) as mock_required_files:
+            result = TaskCompletionService.verify_output_artifact(
+                session=Mock(), task=task, phase=phase
+            )
+
+        assert result is None
+        mock_required_files.assert_not_called()
+
     def test_returns_none_when_no_phase(self):
         task = Mock(phase_id=None)
         result = TaskCompletionService.verify_output_artifact(
@@ -559,6 +585,26 @@ class TestVerifyOutputSurvivedCommit:
     showing "done" and zero commit in git history. This is the re-check
     that closes that gap."""
 
+    def test_returns_none_for_arbitration_task(self):
+        """Same exemption as verify_output_artifact's -- see its test."""
+        phase = Mock(name="design_review", id="phase-1")
+        phase.name = "design_review"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id="arbitration",
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files",
+            return_value=["challenge.md"],
+        ) as mock_required_files:
+            result = TaskCompletionService.verify_output_survived_commit(
+                session=Mock(), task=task, phase=phase
+            )
+
+        assert result is None
+        mock_required_files.assert_not_called()
+
     def test_returns_none_when_no_phase(self):
         task = Mock(phase_id=None)
         result = TaskCompletionService.verify_output_survived_commit(
@@ -640,6 +686,26 @@ class TestVerifyGateResultSchema:
     but score_qa's field reads all silently defaulted to "everything
     passed" against that shape, including critical_issues and
     requirements_met, which nothing else independently re-verifies."""
+
+    def test_returns_none_for_arbitration_task(self):
+        """Same exemption as verify_output_artifact's -- an arbitration
+        task's done_definition is "Write arbitration_result.json", not the
+        gated phase's own structured report, even for a gated phase like
+        design_review."""
+        phase = Mock(name="design_review", id="phase-1")
+        phase.name = "design_review"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1", id="task-1",
+            created_by_agent_id="arbitration",
+        )
+
+        with patch("src.autopilot.spec.read_okf_report") as mock_read_okf:
+            result = TaskCompletionService.verify_gate_result_schema(
+                session=Mock(), task=task, phase=phase
+            )
+
+        assert result is None
+        mock_read_okf.assert_not_called()
 
     def test_returns_none_for_non_gated_phase(self, tmp_path):
         phase = Mock(name="development", id="phase-1")
@@ -779,6 +845,25 @@ class TestVerifyGateResultSchema:
 
 class TestVerifyNoOpenTickets:
     """Tests for verify_no_open_tickets method."""
+
+    def test_returns_none_for_arbitration_task(self):
+        """Same exemption as verify_output_artifact's -- an arbitration
+        task's job is a goto/fail/continue decision, not fixing bug
+        tickets, even if it fires for development/git_expert."""
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = Mock(
+            phase_id="phase-1", workflow_id="wf-1",
+            created_by_agent_id="arbitration",
+        )
+        mock_session = Mock()
+
+        result = TaskCompletionService.verify_no_open_tickets(
+            session=mock_session, task=task, phase=phase
+        )
+
+        assert result is None
+        mock_session.query.assert_not_called()
 
     def test_returns_none_for_non_development_phase(self):
         phase = Mock(name="qa_validation", id="phase-1")
