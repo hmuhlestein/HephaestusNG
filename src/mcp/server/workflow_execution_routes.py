@@ -379,6 +379,7 @@ async def stop_workflow(workflow_id: str, request: Request):
         terminated_count, tasks = await _terminate_workflow_agents(session, workflow_id)
         task_ids = [t.id for t in tasks]
 
+        queued_task_ids = []
         if task_ids:
             # Reset the tasks those agents were working on -- without this,
             # a task left "assigned"/"in_progress" pointing at a now-
@@ -392,6 +393,14 @@ async def stop_workflow(workflow_id: str, request: Request):
                 t.status = "pending"
                 t.assigned_agent_id = None
 
+            # "queued" tasks were previously left untouched here -- still
+            # eligible for claim_next_queued_task to dispatch even after
+            # the workflow was stopped. Collected now, applied after the
+            # commit below via the locked reset_queued_task_to_pending
+            # (same race class as cancel_workflow's queued-task handling;
+            # see that method's docstring).
+            queued_task_ids = [t.id for t in tasks if t.status == "queued"]
+
         # Sets status/paused_by/paused_at together (and cascades to any
         # linked Feature) so the background sweep's
         # _try_auto_resume_paused_workflow leaves this alone instead of
@@ -403,6 +412,12 @@ async def stop_workflow(workflow_id: str, request: Request):
         from src.autopilot.orchestrator.engine_client import pause_workflow
         pause_workflow(workflow_id, reason="user", session=session)
         session.commit()
+
+        # Each call opens its own locked session -- done after the commit
+        # above so it isn't racing this session's own open transaction
+        # (same ordering as cancel_workflow).
+        for queued_task_id in queued_task_ids:
+            server_state.queue_service.reset_queued_task_to_pending(queued_task_id)
 
         return {
             "status": "paused",

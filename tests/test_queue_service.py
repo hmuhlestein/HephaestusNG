@@ -1167,6 +1167,81 @@ class TestPauseQueuedTask:
         assert finished.is_set(), "pause_queued_task never completed after the lock was released"
 
 
+class TestResetQueuedTaskToPending:
+    """Tests for reset_queued_task_to_pending -- same shape and same
+    claim-vs-mutate race as cancel_queued_task/pause_queued_task, reached
+    via stop_workflow's "queued" case (stop_workflow resets its
+    assigned/in_progress tasks to "pending" too, for a clean state to
+    resume from)."""
+
+    def test_reset_queued_task(self, queue_service, db_manager):
+        task_id = create_test_task(db_manager, status="queued")
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            task.queued_at = datetime.utcnow()
+            task.queue_position = 1
+            session.commit()
+        finally:
+            session.close()
+
+        reset = queue_service.reset_queued_task_to_pending(task_id)
+
+        assert reset is True
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            assert task.status == "pending"
+            assert task.queue_position is None
+        finally:
+            session.close()
+
+    def test_reset_non_queued_task(self, queue_service, db_manager):
+        task_id = create_test_task(db_manager, status="in_progress")
+
+        reset = queue_service.reset_queued_task_to_pending(task_id)
+
+        assert reset is False
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            assert task.status == "in_progress"
+        finally:
+            session.close()
+
+    def test_reset_nonexistent_task(self, queue_service):
+        assert queue_service.reset_queued_task_to_pending("nonexistent-task-id") is False
+
+    def test_reset_takes_the_dequeue_lock(self, queue_service, db_manager):
+        """Same proof shape as test_cancel_takes_the_dequeue_lock: a
+        concurrent reset must block while the lock is held -- otherwise its
+        status=pending write can land inside claim_next_queued_task's
+        select-then-dequeue window and dispatch a task the stop just reset."""
+        import threading
+
+        task_id = create_test_task(db_manager, status="queued")
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            task.queued_at = datetime.utcnow()
+            session.commit()
+        finally:
+            session.close()
+
+        finished = threading.Event()
+        t = threading.Thread(
+            target=lambda: (queue_service.reset_queued_task_to_pending(task_id), finished.set())
+        )
+
+        with queue_service._dequeue_lock:
+            t.start()
+            t.join(timeout=0.5)
+            assert t.is_alive(), "reset_queued_task_to_pending ran without holding _dequeue_lock"
+
+        t.join(timeout=5)
+        assert finished.is_set(), "reset_queued_task_to_pending never completed after the lock was released"
+
+
 class TestClaimNextQueuedTaskDefenseInDepth:
     """claim_next_queued_task must not hand out a task its own dequeue_task
     call failed to actually claim -- e.g. if the task was deleted between
