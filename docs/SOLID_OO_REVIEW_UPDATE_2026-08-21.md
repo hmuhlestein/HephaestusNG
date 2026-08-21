@@ -363,10 +363,25 @@ byte-for-byte unchanged, not redesigned onto the canonical palette; only
 the ~20 call sites that only ever passed `status`/`size` gain anything
 visually (dark mode, previously absent — a pure addition, nothing removed).
 Verified via `tsc --noEmit` and a full `vite build`, both clean; no
-`StatusBadge` test coverage exists to run. **Not verified in a browser** —
-this project's standing UI-change rule — since neither `chromium-cli` nor
-Playwright is available in this environment without a fresh install; the
-design choice above (preserve every existing call site's exact rendered
-output via explicit overrides, rather than adopt one palette) exists
-specifically to keep this safe without that verification step. The user is
-installing Playwright to check visually.
+`StatusBadge` test coverage exists to run.
+
+**Visually verified in a browser, 2026-08-21 (Python Playwright, installed
+by the user for this check).** Dev server + the real running backend
+(`localhost:8300`, real project data — 350 tasks, live agents, 42 completed
+designs) driven headlessly across `/tasks`, `/agents`, `/autopilot`
+(design queue and feature gallery) in both `color-scheme: light` and
+`color-scheme: dark` contexts: zero console errors in either theme.
+`getComputedStyle` on a real "In Progress" task badge confirmed the
+`dark:` classes actually apply (`html` carries a `dark` class; computed
+background was the dark navy `rgba(30, 58, 138, 0.3)`, not the light
+`bg-blue-100`), not just present as unused Tailwind classes in source.
+The DesignQueuePanel icon+color wrapper rendered correctly with real
+design statuses (`Done` green, `Active` blue-with-spinner) in both themes.
+No feature currently sits in `validated`/`needs_review`/`failed` in this
+project's live data to screenshot the feature-review wrapper's bordered
+style directly, so that path was verified by server-side-rendering the
+actual component (via `react-dom/server` + `esbuild`, not a mock) with
+each of its 5 statuses and diffing the emitted HTML/class strings against
+the original component's output — byte-identical, confirming the
+override-based design works for the one path production data couldn't
+reach live.
