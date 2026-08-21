@@ -778,6 +778,48 @@ class PhaseManager:
             "should_continue": False,
         }
 
+    def _escalate_unresolvable_goto(
+        self, session, phase, execution, target_name, decided_by: str
+    ) -> Dict[str, Any]:
+        """A goto whose target phase does not exist escalates to arbitration.
+
+        Both goto handlers used to log a warning and call
+        _advance_or_complete here -- the opposite of the decision that was
+        just made. A gate saying "go back to development", or an arbiter
+        resolving an escalation with "goto X", would move the pipeline
+        FORWARD instead, with a warning as the only trace.
+
+        Escalating routes it to _trigger_arbitration, which is capped at
+        MAX_ARBITRATIONS_PER_PHASE and, once that cap is exhausted with no
+        pending decision and no genuinely-passing output, fails the workflow.
+        So an unresolvable target gets the arbiter's retries first and then
+        fails, rather than silently advancing.
+
+        The execution is reopened for the same reason
+        _handle_evaluation_arbitrate reopens it: both goto handlers close it
+        to "completed" before resolving the target, and a completed execution
+        is invisible to _advance_phases' "next pending phase after the latest
+        completed one" ordering -- which would race straight past the phase
+        now awaiting arbitration.
+        """
+        _reopen_phase_execution(execution, status="in_progress", started_at="leave")
+        session.commit()
+        logger.error(
+            f"[GOTO] {decided_by} targeted phase {target_name!r}, which does not "
+            f"exist in this workflow -- escalating to arbitration instead of "
+            f"advancing past {phase.name}"
+        )
+        return {
+            "action": "arbitrate",
+            "target_phase": phase.name,
+            "target_phase_id": phase.id,
+            "should_continue": True,
+            "reason": (
+                f"{decided_by} chose goto {target_name!r}, which names no phase in "
+                "this workflow"
+            ),
+        }
+
     def _handle_force_goto(
         self, session, phase, execution, summary, target_phase_name: str, reason: str
     ) -> Dict[str, Any]:
@@ -790,8 +832,9 @@ class PhaseManager:
             session, phase.workflow_id, target_phase_name
         )
         if not target_phase:
-            logger.warning(f"[ARBITRATE] Goto target phase not found: {target_phase_name}")
-            return self._advance_or_complete(session, phase.id)
+            return self._escalate_unresolvable_goto(
+                session, phase, execution, target_phase_name, "arbitration"
+            )
 
         logger.info(f"[ARBITRATE] Goto phase {target_phase.name} from {phase.name}")
         n_reset = _reset_stale_executions_on_goto(
@@ -925,8 +968,9 @@ class PhaseManager:
                 "metadata": evaluation.metadata,
             }
         else:
-            logger.warning(f"Target phase not found: {evaluation.target_phase}")
-            return self._advance_or_complete(session, phase.id)
+            return self._escalate_unresolvable_goto(
+                session, phase, execution, evaluation.target_phase, "gate evaluation"
+            )
 
     def _consume_gate_artifacts_for(self, session, phase) -> None:
         """This goto consumed the gate's findings (they're threaded into
