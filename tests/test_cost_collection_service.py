@@ -760,20 +760,22 @@ class TestCollectTaskCostRealtimeVsFallback:
 
 
 class TestCollectTaskCostPartialFailure:
-    """B-2: one bad entry must not discard the rest of the batch."""
+    """B-2: one bad entry must not discard the rest of the batch, and (fixed
+    regression) must not cause the OTHER, valid entry in the same batch to
+    be permanently, silently lost either.
 
-    def test_bad_entry_does_not_discard_rest_of_batch(self, cost_db_session):
-        """A negative cost_usd (rejected by record_cost's own validation)
-        for one turn must not roll back the other, valid entries in the
-        same collection batch, and the checkpoint must still advance.
-        """
-        task, agent, _ = _make_task_agent_workflow(cost_db_session)
+    The checkpoint used to advance past the whole batch unconditionally,
+    regardless of failures -- since collection is checkpoint-driven and
+    fires once per task-completion event, that permanently skipped the
+    failed entry's transcript line on every future call. Now the checkpoint
+    only advances once every entry in the batch is confirmed recorded, and
+    each entry gets a deterministic id (stable across retries of the same
+    checkpoint window) so retrying an already-recorded entry safely no-ops
+    instead of double-counting it."""
 
-        lines = [_make_assistant_message(0.01), _make_assistant_message(0.02)]
-        session_file = _make_temp_jsonl(lines)
-
-        # Force the second collected entry to be invalid so record_cost()
-        # raises ValueError partway through the batch.
+    def _poison_second_entry(self, session_file):
+        """Force the second collected entry to be invalid so record_cost()
+        raises ValueError partway through the batch."""
         real_collect = PiJsonlCollector.collect
 
         def _poisoned_collect(self, *args, **kwargs):
@@ -782,13 +784,20 @@ class TestCollectTaskCostPartialFailure:
             entries[1]["cost_usd"] = -5.0
             return entries, checkpoint
 
+        return patch.object(PiJsonlCollector, "collect", _poisoned_collect)
+
+    def test_bad_entry_does_not_discard_the_valid_one(self, cost_db_session):
+        task, agent, _ = _make_task_agent_workflow(cost_db_session)
+        lines = [_make_assistant_message(0.01), _make_assistant_message(0.02)]
+        session_file = _make_temp_jsonl(lines)
+
         with (
             patch("src.core.database.get_db") as mock_get_db,
             patch(
                 "src.services.cost_collection_service._discover_session_file",
                 return_value=session_file,
             ),
-            patch.object(PiJsonlCollector, "collect", _poisoned_collect),
+            self._poison_second_entry(session_file),
         ):
             mock_get_db.return_value.__enter__ = lambda self: cost_db_session
             mock_get_db.return_value.__exit__ = lambda self, *a: False
@@ -799,6 +808,59 @@ class TestCollectTaskCostPartialFailure:
         assert len(entries) == 1, "the valid entry was discarded along with the bad one"
         assert entries[0].cost_usd == 0.01
 
+    def test_checkpoint_not_advanced_past_a_failed_entry(self, cost_db_session):
+        task, agent, _ = _make_task_agent_workflow(cost_db_session)
+        lines = [_make_assistant_message(0.01), _make_assistant_message(0.02)]
+        session_file = _make_temp_jsonl(lines)
+
+        with (
+            patch("src.core.database.get_db") as mock_get_db,
+            patch(
+                "src.services.cost_collection_service._discover_session_file",
+                return_value=session_file,
+            ),
+            self._poison_second_entry(session_file),
+        ):
+            mock_get_db.return_value.__enter__ = lambda self: cost_db_session
+            mock_get_db.return_value.__exit__ = lambda self, *a: False
+
+            collect_task_cost(task.id)
+
         checkpoint_row = cost_db_session.query(SessionCostCheckpoint).first()
-        assert checkpoint_row is not None
-        assert checkpoint_row.lines_processed == 2, "checkpoint wasn't advanced past the batch — a permanently bad entry would be retried forever"
+        assert checkpoint_row is None, (
+            "checkpoint must not advance past a failed entry -- doing so "
+            "permanently skips that transcript line on every future "
+            "collection, silently undercounting cost forever"
+        )
+
+    def test_retry_recovers_the_valid_entry_without_duplicating_it(self, cost_db_session):
+        """A second collect_task_cost call for the same still-unadvanced
+        checkpoint must re-attempt the whole batch: the already-recorded
+        valid entry hits its own deterministic id (no duplicate row), the
+        permanently-invalid entry fails again (still no checkpoint
+        advance, still logged) -- this is a deliberate, informed tradeoff:
+        a genuinely permanent failure now retries (and logs) indefinitely
+        instead of ever silently succeeding, which is preferable to the
+        old behavior of one log line followed by permanent silent data
+        loss."""
+        task, agent, _ = _make_task_agent_workflow(cost_db_session)
+        lines = [_make_assistant_message(0.01), _make_assistant_message(0.02)]
+        session_file = _make_temp_jsonl(lines)
+
+        with (
+            patch("src.core.database.get_db") as mock_get_db,
+            patch(
+                "src.services.cost_collection_service._discover_session_file",
+                return_value=session_file,
+            ),
+            self._poison_second_entry(session_file),
+        ):
+            mock_get_db.return_value.__enter__ = lambda self: cost_db_session
+            mock_get_db.return_value.__exit__ = lambda self, *a: False
+
+            collect_task_cost(task.id)
+            collect_task_cost(task.id)  # retry
+
+        entries = cost_db_session.query(CostEntry).filter_by(task_id=task.id).all()
+        assert len(entries) == 1, "retry duplicated the already-recorded valid entry"
+        assert entries[0].cost_usd == 0.01

@@ -23,6 +23,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -904,12 +905,19 @@ def collect_task_cost(task_id: str) -> None:
         # Write entries and trigger derivation. Each entry is committed
         # individually so a single bad entry (e.g. a validation error) can't
         # roll back and silently discard entries already recorded earlier in
-        # this batch, or skip the checkpoint update below.
+        # this batch. Each gets a deterministic id (stable across retries of
+        # this same checkpoint window, since re-reading from an un-advanced
+        # checkpoint reproduces the same entries in the same order) instead
+        # of record_cost's usual fresh-random one, so retrying an
+        # already-recorded entry hits its own PRIMARY KEY constraint --
+        # caught below as "already recorded", not a new failure -- rather
+        # than silently double-counting it under a new random id.
         failed_count = 0
-        for entry_data in entries:
+        for idx, entry_data in enumerate(entries):
             try:
                 record_cost(
                     db=db,
+                    id=f"cost-{session_id}-{idx}",
                     cost_usd=entry_data["cost_usd"],
                     source=entry_data["source"],
                     task_id=entry_data["task_id"],
@@ -924,15 +932,34 @@ def collect_task_cost(task_id: str) -> None:
                     raw_usage=entry_data.get("raw_usage"),
                 )
                 db.commit()
+            except IntegrityError:
+                db.rollback()
             except Exception as e:
                 db.rollback()
                 failed_count += 1
                 logger.error(f"[COST-COLLECT] Failed to record cost entry for task {task_id[:8]}: {e}")
 
         if failed_count:
-            logger.error(f"[COST-COLLECT] {failed_count}/{len(entries)} cost entries failed to record for task {task_id[:8]} — skipped, rest of batch still processed")
+            # Regression: the checkpoint used to advance unconditionally
+            # here regardless of failed_count. Since collection is
+            # checkpoint-driven and this fires once per task-completion
+            # event, that permanently skipped the failed entry's transcript
+            # line on every future call -- the entry (and every derived
+            # rollup: Task/Workflow/Feature/AutopilotDesign/AutopilotProject
+            # cost, plus budget enforcement) silently undercounted forever,
+            # with only a log line as a trace. Leave the checkpoint where it
+            # is so the FULL batch is retried next collection -- the
+            # deterministic ids above make re-recording the entries that
+            # already succeeded this call a safe no-op, not a duplicate.
+            logger.error(
+                f"[COST-COLLECT] {failed_count}/{len(entries)} cost entries failed to record "
+                f"for task {task_id[:8]} — checkpoint not advanced, full batch will be retried "
+                f"on the next collection"
+            )
+            return
 
-        # Update checkpoint
+        # Update checkpoint -- only once every entry in this batch is
+        # confirmed recorded (this call or an earlier retry of it).
         if checkpoint_row:
             checkpoint_row.lines_processed = new_checkpoint
             checkpoint_row.updated_at = datetime.utcnow()
