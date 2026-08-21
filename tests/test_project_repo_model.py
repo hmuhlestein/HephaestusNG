@@ -4,7 +4,6 @@ Covers: REQ-01, REQ-02, REQ-03, REQ-04, REQ-05, REQ-06, NFR-01, NFR-02.
 """
 
 import uuid
-from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
@@ -14,12 +13,8 @@ from sqlalchemy.pool import StaticPool
 from src.core.database import (
     AutopilotProject,
     Base,
-    Feature,
     ProjectRepo,
     Task,
-    Ticket,
-    TicketCommit,
-    AgentWorktree,
 )
 from src.core.repo_resolution import list_repos, resolve_primary_repo, resolve_repo
 from src.core.schema_migrations import migrate_project_repos_table
@@ -41,8 +36,8 @@ def db_engine():
 @pytest.fixture
 def db_session(db_engine):
     """Create a test database session."""
-    SessionLocal = sessionmaker(bind=db_engine)
-    session = SessionLocal()
+    session_local = sessionmaker(bind=db_engine)
+    session = session_local()
     yield session
     session.close()
 

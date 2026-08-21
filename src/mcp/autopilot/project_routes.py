@@ -1733,7 +1733,6 @@ async def add_project_repo(project_id: str, req: AddProjectRepoRequest):
     is_primary is always False -- set only by migration for the first repo.
     """
     import uuid
-    from pathlib import Path
 
     import git
     from sqlalchemy.exc import IntegrityError

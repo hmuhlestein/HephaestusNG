@@ -22,7 +22,8 @@ on the next startup of every deployed instance.
 
 import logging
 
-from sqlalchemy import exc as sqlalchemy_exc, text
+from sqlalchemy import exc as sqlalchemy_exc
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -657,6 +658,7 @@ def migrate_project_repos_table(engine):
         # Backfill one ProjectRepo per existing AutopilotProject
         try:
             import uuid
+
             from sqlalchemy.orm import Session
 
             with Session(engine) as session:

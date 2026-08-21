@@ -1533,6 +1533,7 @@ class TicketService:
             main_repo_path = str(config.git.main_repo_path)
 
         # REQ-10: check commit exists in the resolved repo
+        loop = asyncio.get_event_loop()
         exists = await loop.run_in_executor(
             None,
             lambda: subprocess.run(
