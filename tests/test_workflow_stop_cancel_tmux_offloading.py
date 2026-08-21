@@ -81,22 +81,45 @@ def test_kill_session_is_offloaded_to_executor(endpoint_suffix, test_client, tes
     workflow_id = _seed_active_workflow_with_working_agent(test_db)
 
     fake_loop = MagicMock()
-    fake_loop.run_in_executor = AsyncMock(return_value=None)
+
+    async def run_now(_executor, func, *args):
+        return func(*args)
+
+    fake_loop.run_in_executor = AsyncMock(side_effect=run_now)
 
     with (
         patch("asyncio.get_event_loop", return_value=fake_loop),
         patch(
             "src.autopilot.orchestrator.engine_client.terminate_agent",
             return_value=True,
-        ),
+        ) as mock_terminate,
     ):
         resp = test_client.post(
             f"/api/workflow-executions/{workflow_id}/{endpoint_suffix}", json={}
         )
 
     assert resp.status_code == 200
-    fake_loop.run_in_executor.assert_called_once()
-    executor_arg, func_arg, session_name_arg = fake_loop.run_in_executor.call_args.args
+
+    kill_calls = [
+        c for c in fake_loop.run_in_executor.call_args_list
+        if getattr(c.args[1], "__name__", None) == "_kill_tmux_session"
+    ]
+    assert len(kill_calls) == 1
+    executor_arg, func_arg, session_name_arg = kill_calls[0].args
     assert executor_arg is None
-    assert func_arg.__name__ == "_kill_tmux_session"
     assert session_name_arg == "agent-tmux-1"
+
+    # terminate_agent must be reached THROUGH run_in_executor (wrapped in a
+    # functools.partial), not called directly on the event loop -- it does
+    # blocking DB queries.
+    terminate_calls = [
+        c for c in fake_loop.run_in_executor.call_args_list
+        if getattr(c.args[1], "func", None) is mock_terminate
+    ]
+    assert len(terminate_calls) == 1
+    mock_terminate.assert_called_once()
+
+    # The Task/Agent lookup queries inside _terminate_workflow_agents must
+    # also go through run_in_executor -- at least 4 total calls for this
+    # one-agent workflow (task query, agent query, tmux kill, terminate).
+    assert fake_loop.run_in_executor.call_count >= 4

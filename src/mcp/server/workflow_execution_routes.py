@@ -58,19 +58,31 @@ async def _terminate_workflow_agents(session, workflow_id: str):
     differs between them.
     """
     import asyncio
+    import functools
 
     from src.autopilot.orchestrator.engine_client import terminate_agent
 
-    tasks = session.query(Task).filter_by(workflow_id=workflow_id).all()
+    loop = asyncio.get_event_loop()
+
+    tasks = await loop.run_in_executor(
+        None, lambda: session.query(Task).filter_by(workflow_id=workflow_id).all()
+    )
     task_ids = [t.id for t in tasks]
 
     terminated_count = 0
     if task_ids:
-        agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
-        loop = asyncio.get_event_loop()
+        agents = await loop.run_in_executor(
+            None,
+            lambda: session.query(Agent)
+            .filter(Agent.current_task_id.in_(task_ids))
+            .filter(Agent.status.in_(["working", "starting", "idle"]))
+            .all(),
+        )
         for agent in agents:
             await loop.run_in_executor(None, _kill_tmux_session, agent.tmux_session_name)
-            terminate_agent(agent.id, session=session)
+            await loop.run_in_executor(
+                None, functools.partial(terminate_agent, agent.id, session=session)
+            )
             terminated_count += 1
 
     return terminated_count, tasks
