@@ -267,11 +267,19 @@ class MechanicalRecoveryDetector:
                                     stuck_task.failure_reason = None
                                     session.commit()
 
+                                    # REQ-17..21: repo-aware context (mirrors
+                                    # create_agent_for_task_direct).
+                                    from src.services.agent_dispatch_service import AgentDispatchService
+
+                                    project_context = await AgentDispatchService.resolve_task_project_context(
+                                        stuck_task, session=session
+                                    )
+
                                     new_agent = await self.agent_manager.create_agent_for_task(
                                         task=stuck_task,
                                         enriched_data={},
                                         memories=[],
-                                        project_context="",
+                                        project_context=project_context,
                                         cli_type=fallback_tool,
                                         phase_cli_tool=fallback_tool,
                                         phase_cli_model=fallback_model,
@@ -418,11 +426,19 @@ class MechanicalRecoveryDetector:
                             await self.agent_manager.terminate_agent(agent.id)
                             self._stuck_state.pop(agent.id, None)
 
+                            # REQ-17..21: repo-aware context (mirrors
+                            # create_agent_for_task_direct).
+                            from src.services.agent_dispatch_service import AgentDispatchService
+
+                            project_context = await AgentDispatchService.resolve_task_project_context(
+                                stuck_task, session=session
+                            )
+
                             new_agent = await self.agent_manager.create_agent_for_task(
                                 task=stuck_task,
                                 enriched_data={},
                                 memories=[],
-                                project_context="",
+                                project_context=project_context,
                                 cli_type=fallback_tool,
                                 phase_cli_tool=fallback_tool,
                                 phase_cli_model=fallback_model,
@@ -1520,11 +1536,19 @@ class MechanicalRecoveryDetector:
                     await self.agent_manager.terminate_agent(agent.id)
                     self._stuck_state.pop(agent.id, None)
                     try:
+                        # REQ-17..21: repo-aware context (mirrors
+                        # create_agent_for_task_direct).
+                        from src.services.agent_dispatch_service import AgentDispatchService
+
+                        project_context = await AgentDispatchService.resolve_task_project_context(
+                            stuck_task, session=session
+                        )
+
                         new_agent = await self.agent_manager.create_agent_for_task(
                             task=stuck_task,
                             enriched_data={},
                             memories=[],
-                            project_context="",
+                            project_context=project_context,
                             cli_type=fallback_tool,
                             phase_cli_tool=fallback_tool,
                             phase_cli_model=fallback_model,

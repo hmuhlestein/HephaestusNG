@@ -154,3 +154,63 @@ class TestBuildDispatchContextWorkflowResolution:
         mock_state.agent_manager.get_project_context.assert_awaited_once_with(
             project_id="proj-1", repo_id="repo-1"
         )
+
+
+class TestResolveTaskProjectContext:
+    """REQ-17..21: resolve_task_project_context is the shared helper that
+    replaced 5 independent copies of "resolve project_id from
+    task.workflow_id, call get_project_context(project_id, task.repo_id)"
+    -- each previously hardcoded project_context="" instead
+    (create_agent_for_task_direct, /api/create_agent_for_task,
+    _spawn_agent_for_task, and 3 mechanical_recovery.py fallback paths)."""
+
+    @patch("src.core.app_context.get_app_state")
+    async def test_reuses_caller_session_when_given(self, mock_get_state):
+        from src.services.agent_dispatch_service import AgentDispatchService
+
+        mock_state = MagicMock()
+        mock_state.agent_manager.get_project_context = AsyncMock(
+            return_value="## PROJECT REPOS\n..."
+        )
+        mock_get_state.return_value = mock_state
+
+        task = MagicMock(workflow_id="wf-1", repo_id="repo-1")
+        fake_session = MagicMock()
+
+        with patch(
+            "src.core.database.get_project_info_for_workflow",
+            return_value=("proj-1", "My Project"),
+        ) as mock_lookup, patch(
+            "src.core.database.resolve_project_for_workflow"
+        ) as mock_no_session_lookup:
+            result = await AgentDispatchService.resolve_task_project_context(
+                task, session=fake_session
+            )
+
+        mock_lookup.assert_called_once_with(fake_session, "wf-1")
+        mock_no_session_lookup.assert_not_called()
+        mock_state.agent_manager.get_project_context.assert_awaited_once_with(
+            project_id="proj-1", repo_id="repo-1"
+        )
+        assert result == "## PROJECT REPOS\n..."
+
+    @patch("src.core.app_context.get_app_state")
+    async def test_opens_its_own_lookup_when_no_session_given(self, mock_get_state):
+        from src.services.agent_dispatch_service import AgentDispatchService
+
+        mock_state = MagicMock()
+        mock_state.agent_manager.get_project_context = AsyncMock(return_value="ctx")
+        mock_get_state.return_value = mock_state
+
+        task = MagicMock(workflow_id="wf-2", repo_id=None)
+
+        with patch(
+            "src.core.database.resolve_project_for_workflow",
+            return_value=("proj-2", "Other Project"),
+        ) as mock_no_session_lookup:
+            await AgentDispatchService.resolve_task_project_context(task)
+
+        mock_no_session_lookup.assert_called_once_with("wf-2")
+        mock_state.agent_manager.get_project_context.assert_awaited_once_with(
+            project_id="proj-2", repo_id=None
+        )

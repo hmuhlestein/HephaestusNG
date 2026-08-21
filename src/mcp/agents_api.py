@@ -541,11 +541,18 @@ async def create_agent_for_task_endpoint(
             if hasattr(task, "completion_criteria") and task.completion_criteria:
                 enriched_data["completion_criteria"] = task.completion_criteria
 
+            # REQ-17..21: repo-aware context (mirrors create_agent_for_task_direct).
+            from src.services.agent_dispatch_service import AgentDispatchService
+
+            project_context = await AgentDispatchService.resolve_task_project_context(
+                task, session=session
+            )
+
             agent = await server_state.agent_manager.create_agent_for_task(
                 task=task,
                 enriched_data=enriched_data,
                 memories=[],
-                project_context="",
+                project_context=project_context,
                 agent_type="phase",
                 use_existing_worktree=True,
             )

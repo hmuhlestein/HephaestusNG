@@ -1082,11 +1082,18 @@ async def _spawn_agent_for_task(task_id: str, phase_id: Optional[str]) -> None:
         if task.enriched_description:
             enriched_data["enriched_description"] = task.enriched_description
 
+        # REQ-17..21: repo-aware context (mirrors create_agent_for_task_direct).
+        from src.services.agent_dispatch_service import AgentDispatchService
+
+        project_context = await AgentDispatchService.resolve_task_project_context(
+            task, session=session
+        )
+
         agent = await server_state.agent_manager.create_agent_for_task(
             task=task,
             enriched_data=enriched_data,
             memories=[],
-            project_context="",
+            project_context=project_context,
             agent_type="phase",
             use_existing_worktree=True,
             # Assign the task in the same commit as the Agent row itself,

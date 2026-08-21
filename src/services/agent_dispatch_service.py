@@ -46,6 +46,35 @@ class AgentDispatchService:
         return result
 
     @staticmethod
+    async def resolve_task_project_context(task, session=None) -> str:
+        """Resolve the repo-aware project_context string for a Task, via
+        its workflow's project_id and its own repo_id (REQ-17..21).
+
+        Shared by every create_agent_for_task call site that dispatches by
+        Task and previously hardcoded project_context="" -- the direct
+        orchestrator dispatch path, the HTTP/in-process create_agent_for_task
+        mirrors, and the mechanical-recovery fallback re-dispatch paths.
+        Each was an independent copy of the same three-line resolve, so
+        this consolidates it instead of a sixth divergent copy.
+
+        session: reuse an already-open session if the caller has one
+        (every current caller does) instead of opening a second one just
+        for this lookup.
+        """
+        from src.core.app_context import get_app_state
+        from src.core.database import get_project_info_for_workflow, resolve_project_for_workflow
+
+        server_state = get_app_state()
+        if session is not None:
+            project_id, _project_name = get_project_info_for_workflow(session, task.workflow_id)
+        else:
+            project_id, _project_name = resolve_project_for_workflow(task.workflow_id)
+        project_context: str = await server_state.agent_manager.get_project_context(
+            project_id=project_id, repo_id=task.repo_id
+        )
+        return project_context
+
+    @staticmethod
     async def build_dispatch_context(
         task_description_for_rag: str,
         phase_id: Optional[str],
