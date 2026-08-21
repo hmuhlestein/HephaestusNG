@@ -20,15 +20,30 @@
 
 set -euo pipefail
 
-# Find the real git binary, skipping past this wrapper's own directory.
+# Find the real git binary. Skipping past this wrapper's own directory
+# is not enough: a second copy of this same wrapper can legitimately be
+# on PATH too (e.g. another worktree's scripts/agent-safe-bin, or a
+# leftover PATH entry from a different checkout) -- picking that up as
+# "real_git" would recurse into a wrapper instead of true git, causing
+# either double-enforcement (this wrapper decides pass, but the other
+# copy blocks anyway on its own, possibly stale, logic) or an
+# unintended bypass, depending on directory order. The real git binary
+# is always a compiled executable; every wrapper here is a bash script
+# starting with a shebang line -- checking for that distinguishes them
+# regardless of how many wrapper copies are stacked on PATH.
 real_git=""
 IFS=':' read -ra path_dirs <<< "$PATH"
 for dir in "${path_dirs[@]}"; do
     if [[ "$dir" == "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" ]]; then
         continue
     fi
-    if [[ -x "$dir/git" ]]; then
-        real_git="$dir/git"
+    candidate="$dir/git"
+    if [[ -x "$candidate" ]]; then
+        first_two_bytes="$(head -c 2 "$candidate" 2>/dev/null || echo "")"
+        if [[ "$first_two_bytes" == "#!" ]]; then
+            continue
+        fi
+        real_git="$candidate"
         break
     fi
 done
