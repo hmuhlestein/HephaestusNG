@@ -1746,9 +1746,32 @@ async def add_project_repo(project_id: str, req: AddProjectRepoRequest):
     except (git.InvalidGitRepositoryError, git.NoSuchPathError):
         raise HTTPException(400, f"Not a git repository: {req.path}")
 
+    # Validate label is non-empty (WARNING fix)
+    if not req.label or not req.label.strip():
+        raise HTTPException(400, "label must be non-empty")
+    req.label = req.label.strip()
+
     with get_db() as db:
         if not db.query(AutopilotProject).filter_by(id=project_id).first():
             raise HTTPException(404, "Project not found")
+
+        # Pre-check for specific error messages (WARNING fix)
+        from src.core.database import ProjectRepo as ProjectRepoModel
+        existing_path = db.query(ProjectRepoModel).filter_by(
+            project_id=project_id, path=req.path
+        ).first()
+        if existing_path:
+            raise HTTPException(
+                409, f"A repo with path '{req.path}' already exists for this project"
+            )
+        existing_label = db.query(ProjectRepoModel).filter_by(
+            project_id=project_id, label=req.label
+        ).first()
+        if existing_label:
+            raise HTTPException(
+                409, f"A repo with label '{req.label}' already exists for this project"
+            )
+
         repo = ProjectRepo(
             id=f"repo-{uuid.uuid4().hex[:12]}",
             project_id=project_id,
