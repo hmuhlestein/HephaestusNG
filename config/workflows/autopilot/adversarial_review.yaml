@@ -361,10 +361,7 @@ additional_notes: |
   - Inflate severity to make the report look thorough
   - Skip any of the attack vectors in Step 2
 
-  ## WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
-
-  CRITICAL: You MUST call the complete_my_task tool. The pipeline will stall
-  without it.
+  <<COMPLETION_HEADER>>
 
   complete_my_task(
     status="done",
@@ -372,4 +369,4 @@ additional_notes: |
     key_learnings=["<specific failure modes found>"]
   )
 
-  Once complete_my_task returns success, stop immediately -- do not run further commands, re-verify already-submitted work, or keep investigating. Your turn ends there.
+  <<COMPLETION_FOOTER>>

@@ -308,10 +308,7 @@ additional_notes: |
   - Be vague ("this seems risky") — show the exact scenario
   - Inflate severity to make the report look thorough
 
-  ## WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
-
-  CRITICAL: You MUST call the complete_my_task tool. The pipeline will stall
-  without it.
+  <<COMPLETION_HEADER>>
 
   complete_my_task(
     status="done",
@@ -319,4 +316,4 @@ additional_notes: |
     key_learnings=["<specific design gaps found>"]
   )
 
-  Once complete_my_task returns success, stop immediately -- do not run further commands, re-verify already-submitted work, or keep investigating. Your turn ends there.
+  <<COMPLETION_FOOTER>>
