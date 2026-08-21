@@ -504,6 +504,18 @@ def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids:
         for task in tasks_to_reset:
             task.status = "pending"
             task.assigned_agent_id = None
+            # Without this, a task caught here reads as if its agent just
+            # silently vanished -- if nothing ever resumes the workflow to
+            # redispatch it, health_audit's stuck-detector eventually finds
+            # it and (wrongly) reports "no agent activity for >30 minutes",
+            # which looks like the agent hung when really it was killed by
+            # this exact pause seconds after starting. Scoped to "user"
+            # specifically -- a budget/system pause has its own accurate
+            # story (wf.status_reason above), and mislabeling either of
+            # those as "User terminated" would be wrong, not just
+            # imprecise.
+            if paused_by == "user":
+                task.failure_reason = "User terminated: workflow was paused"
             logger.info(f"[PAUSE] Reset task {task.id[:8]} to pending")
 
         logger.info(f"[PAUSE] Paused {paused_count} workflows for project {project_id[:8]}")

@@ -59,12 +59,15 @@ def launch_pipeline(db_manager):
     return manager._launch
 
 
-def _seed(db_manager, *, agent_status, task_status, assigned_agent_id):
+def _seed(db_manager, *, agent_status, task_status, assigned_agent_id, paused_by=None):
     task_id = str(uuid.uuid4())
     agent_id = str(uuid.uuid4())
     with db_manager.session_scope() as session:
         session.add(
-            Workflow(id="wf-1", name="wf-1", status="paused", phases_folder_path="/tmp")
+            Workflow(
+                id="wf-1", name="wf-1", status="paused", phases_folder_path="/tmp",
+                paused_by=paused_by,
+            )
         )
         session.add(
             Task(
@@ -127,6 +130,62 @@ class TestTerminationRaceRevertsStaleTaskMutation:
             "the task on a corpse agent"
         )
         assert stale_task.assigned_agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_agent_terminated_by_user_pause_stamps_user_terminated_reason(
+        self, db_manager, launch_pipeline
+    ):
+        """pause_project_workflows's own tasks_to_reset pass stamps this
+        same message, but it and this check both key off the just-
+        terminated Agent row -- either can win the race to act on a given
+        task first. When this path wins (task-reset side of the pause
+        hasn't committed yet), _check_termination_race must independently
+        attribute the termination via Workflow.paused_by, which is set in
+        the exact same commit as the agent termination it just detected."""
+        task_id, agent_id = _seed(
+            db_manager, agent_status="terminated", task_status="pending",
+            assigned_agent_id=None, paused_by="user",
+        )
+
+        stale_task = Task(id=task_id)
+        stale_task.assigned_agent_id = agent_id
+        stale_task.status = "in_progress"
+        stale_task.started_at = datetime.utcnow()
+
+        launch_pipeline._agent_manager.tmux_server.has_session.return_value = False
+
+        await launch_pipeline._check_termination_race(
+            agent_id, task_id, "some-session", agent_id_to_return=agent_id,
+            task=stale_task,
+        )
+
+        assert stale_task.failure_reason == "User terminated: workflow was paused"
+
+    @pytest.mark.asyncio
+    async def test_agent_terminated_without_user_pause_leaves_reason_alone(
+        self, db_manager, launch_pipeline
+    ):
+        """Only a "user" pause gets this specific message -- an unrelated
+        termination (e.g. mechanical_recovery killing a frozen session)
+        must not be mislabeled as a pause the user never triggered."""
+        task_id, agent_id = _seed(
+            db_manager, agent_status="terminated", task_status="pending",
+            assigned_agent_id=None, paused_by=None,
+        )
+
+        stale_task = Task(id=task_id)
+        stale_task.assigned_agent_id = agent_id
+        stale_task.status = "in_progress"
+        stale_task.started_at = datetime.utcnow()
+
+        launch_pipeline._agent_manager.tmux_server.has_session.return_value = False
+
+        await launch_pipeline._check_termination_race(
+            agent_id, task_id, "some-session", agent_id_to_return=agent_id,
+            task=stale_task,
+        )
+
+        assert stale_task.failure_reason != "User terminated: workflow was paused"
 
     @pytest.mark.asyncio
     async def test_task_reassigned_mid_launch_reverts_in_memory_task(
