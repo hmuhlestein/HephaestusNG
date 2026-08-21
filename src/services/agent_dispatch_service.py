@@ -51,6 +51,8 @@ class AgentDispatchService:
         phase_id: Optional[str],
         requesting_agent_id: str = "system",
         explicit_working_directory: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Gather everything needed to create an agent for a task.
 
@@ -62,11 +64,22 @@ class AgentDispatchService:
 
         server_state = get_app_state()
 
+        # Resolve project_id from workflow_id for repo-aware context
+        project_id = None
+        if workflow_id:
+            try:
+                from src.core.database import resolve_project_for_workflow
+                project_id = resolve_project_for_workflow(workflow_id)
+            except Exception:
+                pass
+
         # get_project_context() (DB reads) and retrieve_for_task() (embedding
         # + vector search) don't read each other's output -- the phase-context
         # merge below only needs project_context, and is itself synchronous.
         project_context, context_memories = await asyncio.gather(
-            server_state.agent_manager.get_project_context(),
+            server_state.agent_manager.get_project_context(
+                project_id=project_id, repo_id=repo_id
+            ),
             server_state.rag_system.retrieve_for_task(
                 task_description=task_description_for_rag,
                 requesting_agent_id=requesting_agent_id,
