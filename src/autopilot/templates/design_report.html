@@ -5,30 +5,63 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Design Report: {{ design_name }}</title>
     <style>
+        /* Theme tokens: light values on :root, dark overrides under
+           prefers-color-scheme. This file is opened standalone, days or
+           weeks later, in whatever browser/theme the reader has -- it has
+           no viewer-controlled toggle, so it must follow the OS/browser
+           preference automatically rather than assume light. Every element
+           below reads a var(--...) instead of a hardcoded hex so the two
+           blocks are the only place a color is ever named. */
+        :root {
+            --bg: #f8fafc;
+            --text: #1e293b;
+            --text-heading: #0f172a;
+            --text-muted: #64748b;
+            --card-bg: #ffffff;
+            --card-shadow: rgba(0, 0, 0, 0.1);
+            --border: #e2e8f0;
+            --th-bg: #f8fafc;
+            --th-text: #475569;
+            --row-hover: #f8fafc;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0f172a;
+                --text: #e2e8f0;
+                --text-heading: #f1f5f9;
+                --text-muted: #94a3b8;
+                --card-bg: #1e293b;
+                --card-shadow: rgba(0, 0, 0, 0.4);
+                --border: #334155;
+                --th-bg: #1e293b;
+                --th-text: #cbd5e1;
+                --row-hover: #253449;
+            }
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; color: #1e293b; line-height: 1.6; padding: 2rem; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 2rem; }
         .container { max-width: 1200px; margin: 0 auto; }
-        h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #0f172a; }
-        h2 { font-size: 1.5rem; margin: 2rem 0 1rem; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.5rem; }
-        .meta { color: #64748b; font-size: 0.9rem; margin-bottom: 2rem; }
+        h1 { font-size: 2rem; margin-bottom: 0.5rem; color: var(--text-heading); }
+        h2 { font-size: 1.5rem; margin: 2rem 0 1rem; color: var(--text); border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; }
+        .meta { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem; }
         .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
-        .summary-card { background: white; border-radius: 8px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .summary-card h3 { font-size: 0.875rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+        .summary-card { background: var(--card-bg); border-radius: 8px; padding: 1.5rem; box-shadow: 0 1px 3px var(--card-shadow); }
+        .summary-card h3 { font-size: 0.875rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
         .summary-card .value { font-size: 2rem; font-weight: 700; }
         .summary-card .value.completed { color: #22c55e; }
         .summary-card .value.failed { color: #ef4444; }
         .summary-card .value.pending { color: #f59e0b; }
-        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        th, td { padding: 1rem; text-align: left; border-bottom: 1px solid #e2e8f0; }
-        th { background: #f8fafc; font-weight: 600; color: #475569; }
-        tr:hover { background: #f8fafc; }
+        table { width: 100%; border-collapse: collapse; background: var(--card-bg); border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px var(--card-shadow); }
+        th, td { padding: 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+        th { background: var(--th-bg); font-weight: 600; color: var(--th-text); }
+        tr:hover { background: var(--row-hover); }
         .status { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.875rem; font-weight: 500; }
         .status.completed { background: #dcfce7; color: #166534; }
         .status.failed { background: #fee2e2; color: #991b1b; }
         .status.pending { background: #fef3c7; color: #92400e; }
         .status.skipped { background: #e2e8f0; color: #475569; }
         .status.active { background: #dbeafe; color: #1e40af; }
-        footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 0.875rem; text-align: center; }
+        footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 0.875rem; text-align: center; }
     </style>
 </head>
 <body>

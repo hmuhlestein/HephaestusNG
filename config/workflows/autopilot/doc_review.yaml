@@ -93,6 +93,52 @@ additional_notes: |
 
   Self-contained HTML (inline styles, no external deps).
 
+  MUST SUPPORT LIGHT AND DARK MODE. This file is opened standalone --
+  downloaded, archived, opened weeks later -- with no viewer-controlled
+  theme toggle, so it has to follow the reader's OS/browser preference
+  automatically via `prefers-color-scheme`, not assume light. A `body`
+  rule that sets `color` (text) without also setting a theme-aware
+  `background` renders fine in your own preview and goes unreadable --
+  dark-on-dark or light-on-light -- the instant it's opened somewhere with
+  a different default page background. This is not hypothetical: it has
+  happened with exactly this omission.
+
+  Use CSS custom properties, light values on `:root`, dark overrides under
+  `@media (prefers-color-scheme: dark)`, and have every rule read
+  `var(--...)` instead of a hardcoded hex -- copy this block verbatim as
+  your starting `<style>` and extend it, don't hand-roll colors from
+  scratch:
+  ```css
+  :root {
+    --bg: #f8fafc; --text: #1a1a1a; --text-heading: #2c5282;
+    --border: #ddd; --th-bg: #edf2f7; --code-bg: #f1f1f1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --text: #e2e8f0; --text-heading: #7dabf0;
+      --border: #334155; --th-bg: #1e293b; --code-bg: #1e293b;
+    }
+  }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.55; }
+  h1 { border-bottom: 3px solid var(--text-heading); padding-bottom: 0.5rem; }
+  h2 { color: var(--text-heading); margin-top: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--text-heading); margin-top: 1.5rem; }
+  th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+  th { background: var(--th-bg); }
+  code { background: var(--code-bg); padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.9em; }
+  ```
+  `pre` (code blocks) and small pastel badges/status boxes (`.badge.pass`,
+  `.status`) can stay a fixed dark-on-light or light-on-dark PAIR instead
+  of using the theme tokens -- but BOTH the background and the text color
+  in that pair must be hardcoded together, explicitly, on that same rule.
+  Either half missing is the bug, not just the `color`-without-`background`
+  direction: a `.status` box that sets `background` but not `color` reads
+  fine today because it's silently inheriting `body`'s CURRENT text color
+  -- then goes unreadable the moment `body`'s color changes with the theme
+  and this box's own fixed background doesn't. A self-contained pair,
+  written on one rule, is fine in either theme; inheriting either half
+  from an ancestor whose value depends on the theme is the actual bug.
+
   Title tag and top-of-page heading must both start with the actual project
   name, not just the feature/design name -- this report gets read out of
   context (downloaded, archived, opened weeks later), and "Feature Report:
