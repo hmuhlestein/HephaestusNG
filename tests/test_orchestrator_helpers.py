@@ -2181,6 +2181,7 @@ class TestCreateAgentForTaskDirectPhaseSiblingGuard:
     def _server_state(self, db):
         server_state = Mock()
         server_state.db_manager = db
+        server_state.agent_manager.get_project_context = AsyncMock(return_value="")
         server_state.agent_manager.create_agent_for_task = AsyncMock(
             return_value=Mock(id="new-agent")
         )
@@ -2251,6 +2252,84 @@ class TestCreateAgentForTaskDirectPhaseSiblingGuard:
         server_state.agent_manager.create_agent_for_task.assert_called_once()
 
 
+class TestCreateAgentForTaskDirectProjectContext:
+    """REQ-19/20: create_agent_for_task_direct is the orchestrator's own
+    direct dispatch path for phase transitions -- the path that actually
+    launches the feature_architect phase (and every other phase task,
+    e.g. scope_review, development). It used to pass project_context=""
+    unconditionally, so feature_architect_system_prompt's {project_context}
+    interpolation never received get_project_context's "## PROJECT REPOS"
+    section or its hard rule that every Feature must bind to exactly one
+    repo -- the architect had no way to know a project was multi-repo at
+    all. Must resolve project_id from the task's workflow and call
+    get_project_context(project_id=..., repo_id=task.repo_id) instead."""
+
+    def _server_state(self, db, project_context="## PROJECT REPOS\n..."):
+        server_state = Mock()
+        server_state.db_manager = db
+        server_state.agent_manager.get_project_context = AsyncMock(
+            return_value=project_context
+        )
+        server_state.agent_manager.create_agent_for_task = AsyncMock(
+            return_value=Mock(id="new-agent")
+        )
+        server_state.queue_service = None
+        return server_state
+
+    def _seed_project_workflow_phase_task(self, db, repo_id=None):
+        from src.core.database import AutopilotProject, Phase, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="proj-1", base_dir="/tmp/proj-1"))
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", project_id="proj-1")
+            )
+            session.add(
+                Phase(
+                    id="phase-1", workflow_id="wf-1", order=1, name="feature_architect",
+                    description="d", done_definitions=[],
+                )
+            )
+            session.add(
+                Task(
+                    id="task-1", raw_description="r", done_definition="d",
+                    status="pending", phase_id="phase-1", workflow_id="wf-1",
+                    repo_id=repo_id,
+                )
+            )
+
+    def test_resolves_project_id_and_passes_real_project_context(self, orch_db_env):
+        from src.autopilot.orchestrator.engine_client import create_agent_for_task_direct
+
+        self._seed_project_workflow_phase_task(orch_db_env)
+        server_state = self._server_state(orch_db_env, project_context="## PROJECT REPOS\n...")
+
+        with patch("src.core.app_context.get_app_state", return_value=server_state):
+            result = create_agent_for_task_direct("task-1", "wf-1", "phase-1")
+
+        assert result == {"agent_id": "new-agent", "status": "created"}
+        server_state.agent_manager.get_project_context.assert_awaited_once_with(
+            project_id="proj-1", repo_id=None
+        )
+        _, kwargs = server_state.agent_manager.create_agent_for_task.call_args
+        assert kwargs["project_context"] == "## PROJECT REPOS\n..."
+
+    def test_passes_task_repo_id_through(self, orch_db_env):
+        """REQ-18: an ordinary phase task with repo_id set must pass it
+        through so get_project_context can label that repo WRITABLE."""
+        from src.autopilot.orchestrator.engine_client import create_agent_for_task_direct
+
+        self._seed_project_workflow_phase_task(orch_db_env, repo_id="repo-abc")
+        server_state = self._server_state(orch_db_env)
+
+        with patch("src.core.app_context.get_app_state", return_value=server_state):
+            create_agent_for_task_direct("task-1", "wf-1", "phase-1")
+
+        server_state.agent_manager.get_project_context.assert_awaited_once_with(
+            project_id="proj-1", repo_id="repo-abc"
+        )
+
+
 class TestCreateAgentForTaskDirectCliModelConcurrencyLimit:
     """Regression: create_agent_for_task_direct is the orchestrator's OWN
     direct dispatch path for phase transitions -- it's what actually
@@ -2287,6 +2366,7 @@ class TestCreateAgentForTaskDirectCliModelConcurrencyLimit:
 
         server_state = Mock()
         server_state.db_manager = db
+        server_state.agent_manager.get_project_context = AsyncMock(return_value="")
         server_state.agent_manager.create_agent_for_task = AsyncMock(
             return_value=Mock(id="new-agent")
         )

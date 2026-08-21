@@ -723,21 +723,35 @@ def create_agent_for_task_direct(
 
             # _reservation (if any) must be released once this dispatch
             # attempt finishes, success or not.
-            try:
-                agent = asyncio.run(
-                    server_state.agent_manager.create_agent_for_task(
-                        task=task,
-                        enriched_data=enriched_data,
-                        memories=[],
-                        project_context="",
-                        agent_type=agent_type,
-                        use_existing_worktree=True,
-                        phase_cli_tool=phase_cli_tool_override,
-                        phase_cli_model=phase_cli_model_override,
-                        phase_glm_token_env=phase_glm_token_env,
-                        phase_thinking_level=phase_thinking_level,
-                    )
+            async def _dispatch():
+                # REQ-19/20: feature_architect_system_prompt's {project_context}
+                # comes from here -- an empty string (the previous behavior)
+                # meant the feature architect never saw get_project_context's
+                # repo section or its hard rule to bind every Feature to
+                # exactly one repo. _own_project_id was already resolved
+                # above for the phase-sibling check; reused here rather than
+                # re-querying. repo_id=task.repo_id: None for the feature
+                # architect itself (no task-level repo yet -- triggers
+                # get_project_context's REQ-19/20 hard-rule branch), set for
+                # ordinary phase tasks (REQ-18's writable/read-only branch).
+                project_context = await server_state.agent_manager.get_project_context(
+                    project_id=_own_project_id, repo_id=task.repo_id
                 )
+                return await server_state.agent_manager.create_agent_for_task(
+                    task=task,
+                    enriched_data=enriched_data,
+                    memories=[],
+                    project_context=project_context,
+                    agent_type=agent_type,
+                    use_existing_worktree=True,
+                    phase_cli_tool=phase_cli_tool_override,
+                    phase_cli_model=phase_cli_model_override,
+                    phase_glm_token_env=phase_glm_token_env,
+                    phase_thinking_level=phase_thinking_level,
+                )
+
+            try:
+                agent = asyncio.run(_dispatch())
             finally:
                 if _reservation and qs:
                     qs.release_cli_model_slot(*_reservation)
