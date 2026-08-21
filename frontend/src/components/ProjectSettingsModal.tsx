@@ -282,7 +282,6 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                           if (e.key === 'Enter') handleSaveDefaultBudget();
                           if (e.key === 'Escape') setEditingDefaultBudget(false);
                         }}
-                        placeholder="blank = none"
                         className="w-32 pl-5 pr-2 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                       />
                     </div>
