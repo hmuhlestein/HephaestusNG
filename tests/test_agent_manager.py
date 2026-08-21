@@ -11,7 +11,7 @@ import shutil
 import time
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -1582,7 +1582,11 @@ class TestTerminateAgent:
             )
             session.add(agent)
 
-        await mock_agent_manager.terminate_agent("agent-term-1")
+        # Real sleeps (the pre-capture settle delay below, plus the
+        # existing SIGINT/SIGKILL one) would otherwise really pause this
+        # test for several real seconds.
+        with patch("src.agents.terminator.time.sleep"):
+            await mock_agent_manager.terminate_agent("agent-term-1")
 
         # Verify agent was terminated
         with db_manager.session_scope() as session:
@@ -1591,6 +1595,38 @@ class TestTerminateAgent:
 
         # Verify tmux session was killed
         mock_agent_manager.tmux_server.has_session.return_value = False
+
+    @pytest.mark.asyncio
+    async def test_sleeps_the_configured_delay_before_capturing_the_pane(
+        self, mock_agent_manager, db_manager
+    ):
+        """Regression, found live: termination fires the instant
+        complete_my_task's HTTP handler returns (spawn_background_task, no
+        delay) -- the CLI's own terminal rendering of its post-completion
+        state (wrap-up text, a "thinking" status line settling) is still in
+        flight at that exact moment, racing the pane capture below. The
+        captured "final" transcript repeatedly froze mid animation, never
+        showing the agent's true last output. agents.termination_delay
+        (hephaestus_config.yaml, default 5s) already existed for exactly
+        this purpose but nothing read it before this fix."""
+        from src.core.simple_config import get_config
+
+        with db_manager.session_scope() as session:
+            agent = Agent(
+                id="agent-term-settle",
+                system_prompt="Test",
+                status="working",
+                cli_type="pi",
+                tmux_session_name="test-session-settle",
+            )
+            session.add(agent)
+
+        with patch("src.agents.terminator.time.sleep") as mock_sleep:
+            await mock_agent_manager.terminate_agent("agent-term-settle")
+
+        assert (
+            call(get_config().agents.agent_termination_delay) in mock_sleep.call_args_list
+        )
 
     @pytest.mark.asyncio
     async def test_already_terminated_agent_is_a_no_op(self, mock_agent_manager, db_manager):
