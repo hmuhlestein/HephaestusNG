@@ -1693,3 +1693,78 @@ async def get_project_design_status(project_id: str, filename: str):
     design_name = filepath.stem.replace("_", " ").replace("-", " ")
 
     return await get_design_status(project_id, filename, base_dir, design_content, design_name)
+
+
+# ── ProjectRepo CRUD Endpoints (REQ-24) ─────────────────────────────────
+
+
+class ProjectRepoItem(BaseModel):
+    id: str
+    project_id: str
+    label: str
+    path: str
+    is_primary: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AddProjectRepoRequest(BaseModel):
+    label: str
+    path: str
+
+
+@router.get("/projects/{project_id}/repos", response_model=List[ProjectRepoItem])
+async def list_project_repos(project_id: str):
+    from src.core.database import get_db
+    from src.core.repo_resolution import list_repos
+
+    with get_db() as db:
+        repos = list_repos(db, project_id)
+        return [ProjectRepoItem.model_validate(r) for r in repos]
+
+
+@router.post("/projects/{project_id}/repos", response_model=ProjectRepoItem)
+async def add_project_repo(project_id: str, req: AddProjectRepoRequest):
+    """REQ-24: Add a child repo to a project.
+
+    path must be absolute (REQ-03) and an existing git repo.
+    is_primary is always False -- set only by migration for the first repo.
+    """
+    import uuid
+    from pathlib import Path
+
+    import git
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.database import AutopilotProject, ProjectRepo, get_db
+
+    if not os.path.isabs(req.path):
+        raise HTTPException(400, "path must be absolute")
+    try:
+        git.Repo(req.path)
+    except (git.InvalidGitRepositoryError, git.NoSuchPathError):
+        raise HTTPException(400, f"Not a git repository: {req.path}")
+
+    with get_db() as db:
+        if not db.query(AutopilotProject).filter_by(id=project_id).first():
+            raise HTTPException(404, "Project not found")
+        repo = ProjectRepo(
+            id=f"repo-{uuid.uuid4().hex[:12]}",
+            project_id=project_id,
+            label=req.label,
+            path=req.path,
+            is_primary=False,
+        )
+        db.add(repo)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                409,
+                f"A repo with path '{req.path}' or label '{req.label}' "
+                f"already exists for this project",
+            )
+        return ProjectRepoItem.model_validate(repo)
