@@ -168,6 +168,69 @@ async def send_message(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _gather_clarification_context(ticket_id: str):
+    """Sync body of request_ticket_clarification_endpoint's DB-gathering
+    step -- run via asyncio.to_thread. Returns (workflow_id, ticket_details,
+    tickets_context, tasks_context)."""
+    with get_db() as db:
+        # 1. Validate ticket exists
+        ticket = db.query(Ticket).filter_by(id=ticket_id).first()
+        if not ticket:
+            logger.error(f"[CLARIFICATION] Ticket not found: {ticket_id}")
+            raise HTTPException(
+                status_code=404, detail=f"Ticket not found: {ticket_id}"
+            )
+
+        logger.info(f"[CLARIFICATION] Ticket found: {ticket.title}")
+
+        # 2. Gather context - Latest 60 tickets
+        recent_tickets = (
+            db.query(Ticket).order_by(Ticket.created_at.desc()).limit(60).all()
+        )
+        tickets_context = [
+            {
+                "ticket_id": t.id,
+                "title": t.title,
+                "description": t.description,
+                "status": t.status,
+                "priority": t.priority,
+                "ticket_type": t.ticket_type,
+            }
+            for t in recent_tickets
+        ]
+        logger.info(
+            f"[CLARIFICATION] Gathered {len(tickets_context)} recent tickets for context"
+        )
+
+        # 3. Gather context - Latest 60 tasks
+        recent_tasks = (
+            db.query(Task).order_by(Task.created_at.desc()).limit(60).all()
+        )
+        tasks_context = [
+            {
+                "id": t.id,
+                "description": t.description,
+                "status": t.status,
+                "phase_id": t.phase_id,
+            }
+            for t in recent_tasks
+        ]
+
+        # 4. Prepare ticket details
+        ticket_details = {
+            "ticket_id": ticket.id,
+            "title": ticket.title,
+            "description": ticket.description,
+            "status": ticket.status,
+            "priority": ticket.priority,
+            "ticket_type": ticket.ticket_type,
+            "assigned_agent_id": ticket.assigned_agent_id,
+            "tags": ticket.tags or [],
+        }
+
+        return ticket.workflow_id, ticket_details, tickets_context, tasks_context
+
+
 @router.post(
     "/tickets/request-clarification",
     response_model=RequestTicketClarificationResponse,
@@ -193,62 +256,17 @@ async def request_ticket_clarification_endpoint(
     logger.info(f"[CLARIFICATION] Conflict: {request.conflict_description[:100]}...")
 
     try:
-        with get_db() as db:
-            # 1. Validate ticket exists
-            ticket = db.query(Ticket).filter_by(id=request.ticket_id).first()
-            if not ticket:
-                logger.error(f"[CLARIFICATION] Ticket not found: {request.ticket_id}")
-                raise HTTPException(
-                    status_code=404, detail=f"Ticket not found: {request.ticket_id}"
-                )
+        import asyncio
 
-            logger.info(f"[CLARIFICATION] Ticket found: {ticket.title}")
-            ticket_workflow_id = ticket.workflow_id
-
-            # 2. Gather context - Latest 60 tickets
-            recent_tickets = (
-                db.query(Ticket).order_by(Ticket.created_at.desc()).limit(60).all()
+        # Offloaded -- three sequential blocking queries (ticket lookup,
+        # 60 recent tickets, 60 recent tasks) ran directly on the event
+        # loop otherwise, same class of issue fixed elsewhere in this
+        # codebase.
+        ticket_workflow_id, ticket_details, tickets_context, tasks_context = (
+            await asyncio.to_thread(
+                _gather_clarification_context, request.ticket_id
             )
-            tickets_context = [
-                {
-                    "ticket_id": t.id,
-                    "title": t.title,
-                    "description": t.description,
-                    "status": t.status,
-                    "priority": t.priority,
-                    "ticket_type": t.ticket_type,
-                }
-                for t in recent_tickets
-            ]
-            logger.info(
-                f"[CLARIFICATION] Gathered {len(tickets_context)} recent tickets for context"
-            )
-
-            # 3. Gather context - Latest 60 tasks
-            recent_tasks = (
-                db.query(Task).order_by(Task.created_at.desc()).limit(60).all()
-            )
-            tasks_context = [
-                {
-                    "id": t.id,
-                    "description": t.description,
-                    "status": t.status,
-                    "phase_id": t.phase_id,
-                }
-                for t in recent_tasks
-            ]
-
-            # 4. Prepare ticket details
-            ticket_details = {
-                "ticket_id": ticket.id,
-                "title": ticket.title,
-                "description": ticket.description,
-                "status": ticket.status,
-                "priority": ticket.priority,
-                "ticket_type": ticket.ticket_type,
-                "assigned_agent_id": ticket.assigned_agent_id,
-                "tags": ticket.tags or [],
-            }
+        )
 
         # 5. Call LLM for clarification
         logger.info("[CLARIFICATION] Calling LLM arbitrator with full context...")
