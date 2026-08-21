@@ -120,6 +120,26 @@ class TestCLIFallbackChatModelAinvoke:
         assert cwd != os.getcwd()
 
     @pytest.mark.asyncio
+    async def test_no_mcp_tools_available(self):
+        """These calls are pure text/JSON completions -- no tool access
+        needed. --mcp-config alone only ADDS to whatever's auto-discovered
+        (a global ~/.claude.json server list, unrelated to the cwd fix
+        above); --strict-mcp-config is required too or an unrelated
+        globally-configured MCP server could still attach and let the CLI
+        wander into tool calls instead of just answering."""
+        model = CLIFallbackChatModel("claude", "sonnet")
+        proc = self._fake_proc()
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as create:
+            await model.ainvoke([Mock(type="human", content="hi")])
+        args = create.call_args.args
+        assert "--strict-mcp-config" in args
+        mcp_idx = args.index("--mcp-config")
+        config_path = args[mcp_idx + 1]
+        assert os.path.exists(config_path)
+        with open(config_path) as f:
+            assert f.read().strip() == '{"mcpServers": {}}'
+
+    @pytest.mark.asyncio
     async def test_prompt_sent_via_stdin_not_argv(self):
         """Large prompts (accumulated Guardian context, task history) must
         not go through argv -- OS ARG_MAX and shell-escaping risk."""
