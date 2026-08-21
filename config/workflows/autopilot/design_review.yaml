@@ -318,3 +318,5 @@ additional_notes: |
     summary="<brief summary: N BLOCKERs found, M WARNINGs found — see challenge.md>",
     key_learnings=["<specific design gaps found>"]
   )
+
+  Once complete_my_task returns success, stop immediately -- do not run further commands, re-verify already-submitted work, or keep investigating. Your turn ends there.
