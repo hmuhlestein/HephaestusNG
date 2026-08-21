@@ -41,4 +41,17 @@ GOTO_REASON_PREFIX = "WHY YOU'RE HERE: "
 # "autopilot-phase0" is the pre-rename Phase 0 definition_id
 # "feature_architect" is the current Phase 0 definition_id
 PHASE0_DEFINITION_IDS = ("autopilot-phase0", "feature_architect")
-DESIGN_WORKFLOW_DEFINITION_IDS = ("autopilot",) + PHASE0_DEFINITION_IDS
+# "bugfix" is the shorter, per-feature pipeline for AutopilotDesign.workflow_type
+# == "bugfix" (see docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md and
+# WORKFLOW_TYPE_DEFINITION_IDS below) -- included here so every status/repair/
+# scoping check that treats DESIGN_WORKFLOW_DEFINITION_IDS as "any workflow
+# belonging to a design's pipeline" (queue_routes, design_file_routes,
+# control_routes, repair_service, engine_client, design_status_service) also
+# recognizes a bugfix-typed feature's workflow, not just "autopilot" ones.
+DESIGN_WORKFLOW_DEFINITION_IDS = ("autopilot", "bugfix") + PHASE0_DEFINITION_IDS
+
+# AutopilotDesign.workflow_type / Feature.workflow_type -> the workflow
+# definition_id that type actually launches. "feature" keeps mapping to the
+# pre-existing "autopilot" id (not renamed) so every other place matching on
+# definition_id == "autopilot" doesn't need to change.
+WORKFLOW_TYPE_DEFINITION_IDS = {"feature": "autopilot", "bugfix": "bugfix"}

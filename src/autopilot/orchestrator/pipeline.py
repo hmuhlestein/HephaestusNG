@@ -1860,9 +1860,13 @@ def _run_one_feature(
         # `state`.
         thread_state = copy.copy(state) if state else None
 
+        from src.core.constants import WORKFLOW_TYPE_DEFINITION_IDS
+
+        definition_id = WORKFLOW_TYPE_DEFINITION_IDS.get(feat_record.workflow_type, "autopilot")
+
         wf_status = run_single_workflow(
             sdk,
-            "autopilot",
+            definition_id,
             str(worktree),
             description,
             logger,

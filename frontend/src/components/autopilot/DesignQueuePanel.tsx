@@ -80,7 +80,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     queryKey: ['autopilot-design-statuses', projectId, designs?.length],
     queryFn: async () => {
       if (!projectId || !designs || designs.length === 0) return {};
-      const statuses: Record<string, { status: string; workflowId?: string; error?: string | null; costTotal: number; costUnavailable?: boolean; pausedBy?: string | null; statusReason?: string | null; features: any[] }> = {};
+      const statuses: Record<string, { status: string; workflowId?: string; error?: string | null; costTotal: number; costUnavailable?: boolean; pausedBy?: string | null; statusReason?: string | null; workflowType?: string; features: any[] }> = {};
       await Promise.all(
         designs.map(async (d: any) => {
           try {
@@ -92,6 +92,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
               costTotal: status.cost_total_usd ?? 0,
               pausedBy: status.paused_by || null,
               statusReason: status.status_reason || null,
+              workflowType: status.workflow_type || 'feature',
               // SOLID review 5.2: this endpoint was already being called
               // here every 10s for every design, but this field was
               // discarded -- SortableDesignItem then ran its OWN
@@ -371,6 +372,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   costTotal={designStatuses[item.filename]?.costTotal ?? 0}
                   costUnavailable={designStatuses[item.filename]?.costUnavailable ?? false}
                   pausedBy={designStatuses[item.filename]?.pausedBy}
+                  workflowType={designStatuses[item.filename]?.workflowType}
                   features={designStatuses[item.filename]?.features ?? []}
                   onRefetchFeatures={refetchDesignStatuses}
                   statusReason={designStatuses[item.filename]?.statusReason}
@@ -556,6 +558,7 @@ interface SortableDesignItemProps {
   costUnavailable?: boolean;
   pausedBy?: string | null;
   statusReason?: string | null;
+  workflowType?: string;
   projectId: string | null;
   reviewMode?: boolean;
   // SOLID review 5.2: features now come from the parent's already-polled
@@ -566,7 +569,7 @@ interface SortableDesignItemProps {
   onRefetchFeatures?: () => void;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, projectId, reviewMode, features, onRefetchFeatures }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, workflowType, projectId, reviewMode, features, onRefetchFeatures }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -706,6 +709,17 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
             {designElapsedSeconds > 0 && (
               <span className="text-xs text-gray-400 dark:text-gray-500">
                 {formatElapsed(designElapsedSeconds)}
+              </span>
+            )}
+            {workflowType && (
+              <span
+                className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                  workflowType === 'bugfix'
+                    ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                    : 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                }`}
+              >
+                {workflowType === 'bugfix' ? 'Bug Fix' : 'Feature'}
               </span>
             )}
             {status && status !== 'pending' && (

@@ -1,0 +1,256 @@
+id: 13
+name: git_expert
+thinking_level: low
+description: |
+  Autonomous Git hand-off, with the merge step gated by review_mode. The
+  agent commits and pushes on its own; whether it also merges depends on
+  the project's review_mode setting.
+
+  This phase runs inside the shared feature worktree. The worktree is already on
+  the correct feature branch. Steps:
+  1. Stage and commit all remaining changes
+  2. Push the feature branch to remote
+  3. Merge to main (or, in review_mode, create a pull request and stop —
+     a human approves and merges later via the dashboard's review flow)
+  4. Record commit hash and PR URL
+done_definitions:
+  - "Current branch and remote confirmed (or no-remote noted)"
+  - "No open bug tickets blocking the merge"
+  - "All eligible changes staged (git add -A or explicit file list)"
+  - "Descriptive commit message created (or nothing to commit confirmed)"
+  - "Commit created on feature branch (or confirmed already committed)"
+  - "Feature merged into main (via PR if remote available, or local merge) OR PR created in review mode"
+  - "Commit hash recorded in task summary"
+  - "Task marked as done"
+outputs:
+  - "git commit on feature branch"
+  - "pull request created and merged"
+  - "commit hash and PR URL recorded"
+next_steps:
+  - "Feature is now part of main branch"
+  - "Worktree preserved for UI artifact access"
+additional_notes: |
+  OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
+  Technical terms exact. No pleasantries (sure/certainly/happy to). 
+  Not: "I'll now proceed to commit and push." Yes: "Commit with conventional format."
+  
+  ## YOU ARE A GIT OPERATOR - COMMIT AND MERGE VALIDATED CODE
+  
+  YOUR MISSION: Stage remaining changes, push, and merge the feature branch to main.
+  
+  CRITICAL: You are already inside the feature worktree on the feature branch.
+  - Do NOT run `git checkout main` — you cannot check out main from a worktree.
+  - Do NOT create a new branch — you are already on the right feature branch.
+  - Do NOT delete the local worktree or run `git worktree remove` — the UI
+    references files here after the run completes.
+  - The remote feature branch will be cleaned up automatically after the PR merges.
+  - Commit code, tests, and docs/ — they are merged to main.
+  - Do NOT commit .hephaestus/ (git-excluded, never merged to main).
+  
+  ## STEP 1: DISCOVER STATE
+  
+  ```bash
+  git status
+  git branch
+  REMOTE=$(git remote | head -1)
+  DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/$REMOTE/HEAD 2>/dev/null | sed "s@refs/remotes/$REMOTE/@@" || echo "main")
+  FEATURE_BRANCH=$(git branch --show-current)
+  echo "Remote=$REMOTE  Default=$DEFAULT_BRANCH  Feature=$FEATURE_BRANCH"
+  ```
+  
+  ## STEP 2: STAGE AND COMMIT
+  
+  Stage everything (.hephaestus/ is in .git/info/exclude and won't be picked up):
+  ```bash
+  git add -A
+  git status  # verify what will be committed
+  ```
+
+  If `git add -A` shows "no changes added to commit" but `git status` shows
+  untracked or modified files, stage them explicitly:
+  ```bash
+  git add calculator.py tests/ docs/ README.md pyproject.toml  # adapt to actual files
+  # or: git add -f <file>  for files that are in .gitignore but should be committed
+  ```
+
+  If you see `fatal: Unable to create '.git/index.lock'`:
+  ```bash
+  rm -f .git/index.lock  # leftover from a previous crashed process
+  # then retry git add
+  ```
+
+  Commit with a descriptive message:
+  ```bash
+  git commit --no-verify -m "feat: <descriptive feature name>
+
+  - Key change 1
+  - Key change 2
+
+  Autopilot validated: $(date -u +%Y-%m-%d)"
+  ```
+
+  If there is nothing to commit (all changes were already committed per-task),
+  skip to STEP 3.
+  
+  ## STEP 3: PUSH FEATURE BRANCH
+
+  Before pushing, merge main into the feature branch to catch conflicts early:
+  ```bash
+  REMOTE=$(git remote | head -1)
+  DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/$REMOTE/HEAD 2>/dev/null | sed "s@refs/remotes/$REMOTE/@@" || echo "main")
+  FEATURE_BRANCH=$(git branch --show-current)
+
+  # Fetch latest main
+  git fetch $REMOTE $DEFAULT_BRANCH
+
+  # Merge main into feature branch to resolve conflicts here
+  git merge $REMOTE/$DEFAULT_BRANCH -m "Merge $DEFAULT_BRANCH into $FEATURE_BRANCH to stay current"
+  ```
+
+  If merge conflicts occur:
+  ```bash
+  # Resolve conflicts in each file
+  git status  # see conflicted files
+  # Edit files to resolve conflicts, then:
+  git add -A
+  git commit --no-verify -m "Resolve merge conflicts with $DEFAULT_BRANCH"
+  ```
+
+  Now push:
+  ```bash
+  git push $REMOTE $FEATURE_BRANCH
+  ```
+  
+  ## STEP 4: MERGE TO MAIN (or CREATE PR if in review mode)
+
+  Check your task description for "REVIEW_MODE: true". If present, the
+  project is in review mode — create a PR but do NOT merge to main.
+  The pipeline will pause for human review and merge after approval.
+
+  If REVIEW_MODE is set:
+    ```bash
+    PR_URL=$(gh pr create --title "feat: <feature name>" --body "Autopilot-validated feature.\n\nAwaiting review before merge." 2>/dev/null || echo "")
+    if [ -n "$PR_URL" ]; then
+      echo "PR created (review mode): $PR_URL"
+    else
+      PR_URL=$(gh pr view --json url --jq '.url' 2>/dev/null || echo "")
+      echo "PR already exists: $PR_URL"
+    fi
+    ```
+    Skip to STEP 5 — do NOT merge locally.
+
+  If REVIEW_MODE is NOT set:
+    Merge locally into main (the primary path):
+
+  ```bash
+  # Navigate to the main repo root (not the worktree)
+  MAIN_REPO=$(git rev-parse --git-common-dir | sed 's|/\.git.*||')
+  cd "$MAIN_REPO"
+  git status  # confirm clean main branch
+
+  # Merge feature branch into main
+  git merge --no-ff $FEATURE_BRANCH -m "Merge $FEATURE_BRANCH into main
+
+  Autopilot validated: $(date -u +%Y-%m-%d)"
+  ```
+
+  If merge fails with "Merge with strategy ort failed" due to untracked files
+  in main that conflict with files on the feature branch:
+  ```bash
+  git status   # identify the blocking untracked files
+  rm -f <blocking_file>  # remove the untracked file from main
+  git merge --no-ff $FEATURE_BRANCH -m "Merge $FEATURE_BRANCH into main"
+  ```
+
+  Push main after merging:
+  ```bash
+  git push $REMOTE $DEFAULT_BRANCH  # skip if no remote
+  ```
+
+  CREATE A PR (mandatory — the review modal links to it):
+  ```bash
+  PR_URL=$(gh pr create --title "feat: <feature name>" --body "Autopilot-validated feature.
+
+  Merged commit: $(git rev-parse HEAD)" 2>/dev/null || echo "")
+  if [ -n "$PR_URL" ]; then
+    echo "PR created: $PR_URL"
+  else
+    # PR may already exist for this branch — try to get it
+    PR_URL=$(gh pr view --json url --jq '.url' 2>/dev/null || echo "")
+    if [ -n "$PR_URL" ]; then
+      echo "PR already exists: $PR_URL"
+    else
+      echo "gh not available or PR creation failed — no PR URL"
+    fi
+  fi
+  ```
+  
+  ## STEP 5: RECORD AND SAVE TO MEMORY
+  
+  Record the merge commit hash:
+  ```bash
+  git log --oneline -3
+  COMMIT=$(git rev-parse HEAD)
+  echo "Merge commit: $COMMIT"
+  ```
+  
+  ## CRITICAL RULES
+  
+  DO:
+  - Stage and commit all un-committed changes
+  - Push the feature branch before merging
+  - Merge into main locally (gh PR is optional, not a substitute)
+  - Use --no-verify for automated pipeline commits
+  - Record the commit hash
+  
+  DO NOT:
+  - Run `git checkout main` — impossible from a worktree
+  - Run `git worktree remove` — the worktree must stay for the UI
+  - Run `git branch -d feature/...` or any local branch deletion — the branch is
+    checked out by the worktree; deleting it requires removing the worktree first,
+    which breaks the UI. Leave all local branches as-is after merge.
+  - Create a new feature branch — you are already on one
+  - Commit secrets or API keys
+  - Force push without explicit instructions
+  - Attempt to fix bugs or code issues yourself — if there are open bug tickets
+    or QA failures, call update_task_status(status="failed") with the details.
+    The orchestrator will route back to development. NEVER try to fix issues
+    yourself in this phase.
+
+  ## BUG TICKET HANDLING
+
+  Before staging or committing, check for open bug tickets:
+  ```bash
+  # Check via MCP if available
+  search_tickets(status="open", ticket_type="bug")
+  ```
+
+  If open bug tickets exist:
+  1. Do NOT attempt to fix the bugs yourself
+  2. Do NOT stage, commit, or merge anything
+  3. Fail the task — the orchestrator will goto development automatically
+
+  To fail the task, call:
+  ```
+  complete_my_task(
+    status="failed",
+    summary="Open bug tickets must be resolved before merge: <ticket details>",
+    key_learnings=["Blocking bugs found at commit stage"]
+  )
+  ```
+  The orchestrator's evaluation will detect the low score and route
+  back to development via goto. Do NOT proceed to staging or merging.
+
+  If no open bug tickets exist, proceed with the merge normally.
+  
+  <<COMPLETION_HEADER>>
+
+  After all git operations complete, call:
+
+  complete_my_task({
+    "status": "done",
+    "summary": "<brief summary of what was committed and merged>",
+    "key_learnings": ["<commit hash>", "<PR URL if created, or 'no PR'>"]
+  })
+
+  <<COMPLETION_FOOTER>>

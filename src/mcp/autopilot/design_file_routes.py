@@ -48,6 +48,7 @@ class DesignItem(BaseModel):
     size_bytes: int
     extension: str
     modified_at: Optional[str] = None
+    workflow_type: str = "feature"
 
 
 class DesignReorderRequest(BaseModel):
@@ -64,6 +65,10 @@ class DesignAddRequest(BaseModel):
     # new content coming from outside the repo, so it's persisted as a
     # real, git-tracked file under docs/ instead of the hidden staging dir.
     destination: str = "queue"
+    # "feature" / "bugfix" -- which pipeline this design runs through (see
+    # docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md). None (default): auto-detect via
+    # detect_workflow_type() at add-time.
+    workflow_type: Optional[str] = None
 
 
 def _get_design_queue_dir(project_base: str) -> Path:
@@ -141,6 +146,7 @@ async def list_project_designs(project_id: str):
                 size_bytes=d.size_bytes,
                 extension=d.extension,
                 modified_at=d.modified_at.isoformat() if d.modified_at else None,
+                workflow_type=d.workflow_type,
             )
             for d in designs
         ]
@@ -183,6 +189,13 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
 
     design_id = _design_id(project_id, filename)
 
+    if req.workflow_type in ("feature", "bugfix"):
+        workflow_type = req.workflow_type
+    else:
+        from src.services.workflow_type_detection import detect_workflow_type
+
+        workflow_type = detect_workflow_type(req.name, req.content)
+
     with get_db() as db:
         max_ord = db.query(AutopilotDesign).filter_by(project_id=project_id).count()
         d = AutopilotDesign(
@@ -200,6 +213,7 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
             size_bytes=stat.st_size,
             extension=ext,
             modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            workflow_type=workflow_type,
         )
         db.add(d)
 
@@ -212,6 +226,7 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
         size_bytes=stat.st_size,
         extension=ext,
         modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+        workflow_type=workflow_type,
     )
 
 

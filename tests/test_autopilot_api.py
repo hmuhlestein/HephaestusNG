@@ -1599,6 +1599,43 @@ class TestProjectDesigns:
         design_dir = dirs["design_dir"]
         assert (design_dir / "New_Feature.md").exists()
 
+    def test_add_design_explicit_workflow_type_is_stored_verbatim(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={
+                "name": "Add dark mode",
+                "content": "# Add dark mode\nUsers want a dark theme.",
+                "workflow_type": "bugfix",
+            },
+        )
+        assert resp.status_code == 200
+        # Explicit selection overrides the heuristic even though this design
+        # reads like a feature request -- the manual dropdown always wins.
+        assert resp.json()["workflow_type"] == "bugfix"
+
+        from src.core.database import AutopilotDesign, get_db
+
+        with get_db() as db:
+            d = db.query(AutopilotDesign).filter_by(project_id=pid, name="Add dark mode").first()
+            assert d.workflow_type == "bugfix"
+
+    def test_add_design_auto_detects_workflow_type_when_omitted(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={
+                "name": "Fix login crash",
+                "content": "Login throws an error and crashes for some users.",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["workflow_type"] == "bugfix"
+
     def test_add_design_duplicate(self, project_client):
         client, dirs = project_client
         pid = self._create_project(client, dirs)
@@ -1812,6 +1849,26 @@ class TestProjectDesigns:
         assert len(designs) == 4
         filenames = [d["filename"] for d in designs]
         assert "03-api.md" in filenames
+
+    def test_sync_auto_detects_workflow_type_for_filesystem_discovered_designs(self, project_client):
+        """A design that entered the queue by landing in the filesystem
+        directly (e.g. "Load from Remote", or manually dropped in) instead
+        of through POST /designs never got detect_workflow_type() applied
+        -- _sync_project_designs created its AutopilotDesign row with only
+        the column default "feature", silently skipping bugfix detection
+        for every design that didn't go through the add-design API."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        design_dir = dirs["design_dir"]
+        (design_dir / "04-fix-crash.md").write_text(
+            "# Fix Crash\nThe app crashes and returns the wrong error on login."
+        )
+
+        resp = client.post(f"/api/autopilot/projects/{pid}/sync")
+        assert resp.status_code == 200
+        by_filename = {d["filename"]: d for d in resp.json()}
+        assert by_filename["04-fix-crash.md"]["workflow_type"] == "bugfix"
 
     def test_sync_removes_deleted_files(self, project_client):
         client, dirs = project_client

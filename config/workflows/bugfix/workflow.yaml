@@ -1,0 +1,290 @@
+name: Bugfix Pipeline
+description: |
+  Shorter pipeline for design-level workflow_type "bugfix". A bug report
+  already states the expected behavior and works within existing structure
+  by definition, so this drops product_requirements, architecture_design,
+  architectural_review, doc_review, and product_validation from the full
+  autopilot pipeline (see docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md). qa_validation
+  is the sole verification phase and is responsible for confirming the
+  reported bug is actually gone, not just that requirements are met.
+
+default_cli_tool: claude
+default_model: sonnet
+default_thinking_level: low
+fallback_cli_tool: pi
+fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
+
+# Execution order by phase id (each phase file's own top-level `id`, unchanged
+# from autopilot's numbering -- ids are opaque keys here, not a count).
+execution_order: [5, 6, 8, 9, 13, 14]
+
+session_roles:
+  development: developer
+  adversarial_review: adversarial       # reasons backward from failure modes
+  security_review: security-reviewer
+  qa_validation: qa
+  git_expert: git
+  deploy: deployer
+
+# Required output artifacts per phase -- used as completion hard floors.
+# Same set as autopilot for the phases this pipeline keeps (security_review
+# has no entry here in autopilot either -- see its own YAML for why).
+required_output:
+  adversarial_review: .hephaestus/adversarial_review/adversarial.md
+  qa_validation: .hephaestus/qa_validation/qa.md
+
+# Inputs each phase consumes from earlier phases -- see autopilot's
+# workflow.yaml for the full rationale of this block. Trimmed to files that
+# can actually exist in THIS pipeline: architecture.md, requirements.md,
+# challenge.md, and review.md are dropped entirely (their producing phases
+# -- architecture_design, product_requirements, design_review,
+# architectural_review -- don't run here, so those files would show
+# [MISSING] on every single run, not just when a goto rewound something).
+# design.md (the bug report) is always available separately and isn't part
+# of this declarative manifest, same as in autopilot.
+phase_inputs:
+  development:
+    optional: [adversarial.md, security.md]
+  security_review:
+    optional: [adversarial.md]
+  qa_validation:
+    optional: [adversarial.md, security.md]
+
+# Optional phases that can fail without blocking the pipeline.
+# All other phases are required -- if they fail after MAX_PHASE_ATTEMPTS,
+# the workflow enters impasse (paused for human review).
+optional_phases:
+  - git_expert
+  - deploy
+
+orchestrator:
+  type: evaluating
+  # THRESHOLD RATIONALE (read before "fixing" an apparent inconsistency).
+  #
+  # Copied straight from autopilot's matching eval_points (per design doc
+  # decision #3), trimmed to the phases this pipeline actually gates:
+  # adversarial_review, security_review, qa_validation. See
+  # config/workflows/autopilot/workflow.yaml for the full band-rationale
+  # essay this is trimmed from -- the short version: 0.3 is the "this needs
+  # more than a code fix" band, the continue bar sits at 0.6/0.7, and no
+  # scorer for these three phases can land in [0.6, 0.7), so treat that gap
+  # as cosmetic, not a policy decision.
+  #
+  # BUGFIX-SPECIFIC CHANGE: autopilot routes a score < 0.3 to
+  # architecture_design ("this needs a redesign, not a code fix"). This
+  # pipeline has no architecture_design phase -- a bug fix works within
+  # existing structure by definition (see docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md
+  # section 6) -- so every one of those conditions below is remapped to
+  # development instead, marked inline at each remapped condition.
+  max_phase_retries: 2
+  max_task_retries: 5
+  max_total_gotos: 30
+  evaluation_points:
+    - after_phase: development
+      evaluator: heuristic
+      max_retries: 0
+      conditions:
+        - if: "score >= 0.0"
+          action: continue
+          reason: "Development complete, proceeding to review"
+
+    - after_phase: adversarial_review
+      evaluator: heuristic
+      max_retries: 10
+      # After this many runs of adversarial_review itself, stop looping:
+      # mark the phase done with its unresolved findings documented instead
+      # of re-reviewing forever. See _create_phase_task's cap-enforcement
+      # block.
+      max_review_runs: 4
+      conditions:
+        - if: "score < 0.3"
+          action: goto
+          target: development
+          # was: architecture_design (dropped for bugfix) -> development --
+          # a bug fix has no architecture phase to send a redesign back to.
+          reason: "Critical failure modes found that need significant rework — returning to development (no architecture phase in this pipeline)"
+        - if: "score < 0.6"
+          action: goto
+          target: development
+          reason: "Runtime failure modes found, returning to development to fix"
+        - if: "score >= 0.6"
+          action: continue
+          reason: "Adversarial review passed, proceeding to security review"
+
+    - after_phase: security_review
+      evaluator: heuristic
+      max_retries: 2
+      max_review_runs: 4
+      conditions:
+        - if: "score < 0.3"
+          action: goto
+          target: development
+          # was: architecture_design (dropped for bugfix) -> development
+          reason: "Security issues need significant rework — returning to development (no architecture phase in this pipeline)"
+        - if: "score < 0.7"
+          action: goto
+          target: development
+          reason: "Security issues found, returning to development"
+        - if: "score >= 0.7"
+          action: continue
+          reason: "Security review passed"
+
+    - after_phase: qa_validation
+      evaluator: heuristic
+      max_retries: 2
+      max_review_runs: 4
+      conditions:
+        - if: "score < 0.3"
+          action: goto
+          target: development
+          # was: architecture_design (dropped for bugfix) -> development
+          reason: "Test failures indicate significant problems — returning to development (no architecture phase in this pipeline)"
+        - if: "score < 0.7"
+          action: goto
+          target: development
+          reason: "QA failed, or the originally reported bug still reproduces — returning to development"
+        - if: "score >= 0.7"
+          action: continue
+          reason: "QA passed — reported bug confirmed fixed"
+
+    - after_phase: git_expert
+      evaluator: heuristic
+      max_retries: 2
+      conditions:
+        - if: "score < 0.3"
+          action: goto
+          target: development
+          reason: "Blocking issues found at commit stage — returning to development to fix before merge"
+        - if: "score >= 0.0"
+          action: continue
+          reason: "Git commit complete"
+
+workflow:
+  result_criteria: "Bug fix validated and committed to git, ready for human review"
+  on_result_found: do_nothing
+  enable_tickets: true
+  board:
+    columns:
+      - id: backlog
+        name: Backlog
+        order: 1
+        color: "#94a3b8"
+      - id: in-progress
+        name: In Progress
+        order: 2
+        color: "#f59e0b"
+      - id: review
+        name: In Review
+        order: 3
+        color: "#ec4899"
+      - id: security
+        name: Security
+        order: 4
+        color: "#ef4444"
+      - id: qa
+        name: QA
+        order: 5
+        color: "#14b8a6"
+      - id: validated
+        name: Validated
+        order: 6
+        color: "#22c55e"
+      - id: shipped
+        name: Shipped
+        order: 7
+        color: "#3b82f6"
+    ticket_types:
+      - infrastructure
+      - feature
+      - improvement
+      - bug
+      - bug-fix
+      - security
+      - integration
+      - documentation
+      - task
+      - spike
+    default_ticket_type: bug-fix
+    initial_status: backlog
+    auto_assign: true
+    require_comments_on_status_change: true
+    allow_reopen: true
+    track_time: true
+
+launch_template:
+  parameters:
+    - name: design_document
+      label: Design Document Path
+      type: text
+      required: true
+      description: "Path to the bug report document (design.md)"
+    - name: project_path
+      label: Project Working Directory
+      type: text
+      required: true
+      description: "Where to apply the fix"
+    - name: feature_id
+      label: Feature ID (Optional)
+      type: text
+      required: false
+      description: "Optional: Feature ID for feature-specific pipeline"
+    - name: feature_scope
+      label: Feature Scope Document (Optional)
+      type: text
+      required: false
+      description: "Optional: Path to feature scope document (scope.md)"
+    - name: project_context
+      label: Project Context (Optional)
+      type: textarea
+      required: false
+      description: "Optional: Additional context about the larger project vision"
+  phase_1_task_prompt: |
+    Phase 1: Fix the Reported Bug
+
+    **Bug Report:** ./.hephaestus/design.md (copied into your worktree)
+    **Project Path:** . (your current working directory — an isolated git worktree)
+    **Feature Scope:** {feature_scope}
+
+    ---
+
+    ## Additional Context
+    {project_context}
+
+    ---
+
+    ## Your Task
+
+    This is the bugfix pipeline: there is no product_requirements or
+    architecture_design phase ahead of you. The bug report IS the scope
+    authority — implement the fix directly against it, then hand off to
+    adversarial_review.
+
+    ### STEP 1: Gather Project Context
+    Before reading the bug report:
+    1. Check for an existing .hephaestus/ directory from a prior run of this fix
+    2. Read existing source code to understand the current system
+    3. Search memory for related technology decisions and constraints
+
+    ### STEP 2: Read the Bug Report (PRIMARY INPUT)
+    If feature_scope is provided, read it first: {feature_scope}
+    Otherwise, read the bug report: ./.hephaestus/design.md
+    Identify: expected behavior, actual (broken) behavior, and reproduction steps.
+
+    ### STEP 3: Reproduce the Bug
+    Follow the reported reproduction steps against the current code. Confirm
+    you can see the bug before fixing it — you cannot verify a fix without
+    first confirming the failure.
+
+    ### STEP 4: Implement the Fix
+    Fix the root cause, not the symptom. Write a regression test that fails
+    before your fix and passes after (stash-verify it — see development
+    phase instructions for the exact mechanic).
+
+    ### STEP 5: Save to Memory
+    Save key decisions and context about the fix.
+
+    ### STEP 6: Create Adversarial Review Task
+    Create the next task for adversarial_review with full context.
+
+    ### STEP 7: Mark Done
+    Mark your task as done.

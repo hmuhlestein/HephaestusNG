@@ -185,6 +185,7 @@ def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[s
                 size_bytes=stat.st_size,
                 extension=fpath.suffix,
                 modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                workflow_type=_detect_workflow_type_for_file(name, fpath),
             )
             db.add(d)
 
@@ -214,6 +215,7 @@ def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[s
                 size_bytes=stat.st_size,
                 extension=fpath.suffix,
                 modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                workflow_type=_detect_workflow_type_for_file(name, fpath),
             )
             db.add(d)
 
@@ -230,9 +232,25 @@ def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[s
             "size_bytes": d.size_bytes,
             "extension": d.extension,
             "modified_at": d.modified_at.isoformat() if d.modified_at else None,
+            "workflow_type": d.workflow_type,
         }
         for d in designs
     ]
+
+
+def _detect_workflow_type_for_file(name: str, fpath: Path) -> str:
+    """detect_workflow_type() needs the file's content, not just its name --
+    a design discovered by filesystem sync (as opposed to the add-design API,
+    which already has req.content in memory) has to read it back first. Falls
+    back to "feature" if the file can't be read rather than failing the sync
+    over a detection nicety."""
+    from src.services.workflow_type_detection import detect_workflow_type
+
+    try:
+        content = fpath.read_text()
+    except Exception:
+        content = ""
+    return detect_workflow_type(name, content)
 
 def _validate_base_dir(base_dir: str) -> str:
     """Validate and resolve a project base directory. Returns resolved path or raises."""

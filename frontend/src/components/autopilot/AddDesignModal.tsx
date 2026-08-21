@@ -17,19 +17,21 @@ const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, projectId, onClos
   const [name, setName] = useState('');
   const [content, setContent] = useState('');
   const [extension, setExtension] = useState('.md');
+  const [workflowType, setWorkflowType] = useState<'' | 'feature' | 'bugfix'>('');
 
   useEffect(() => {
     if (!open) {
       setName('');
       setContent('');
       setExtension('.md');
+      setWorkflowType('');
     }
   }, [open]);
 
   const addMutation = useMutation({
     mutationFn: () => {
       if (!projectId) throw new Error('No project selected');
-      return apiService.addAutopilotProjectDesign(projectId, name, content, extension);
+      return apiService.addAutopilotProjectDesign(projectId, name, content, extension, 'queue', workflowType || null);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
@@ -114,6 +116,24 @@ const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, projectId, onClos
                     <option value=".txt">Text (.txt)</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Workflow Type</label>
+                <select
+                  value={workflowType}
+                  onChange={(e) => setWorkflowType(e.target.value as '' | 'feature' | 'bugfix')}
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
+                >
+                  <option value="">Auto-detect</option>
+                  <option value="feature">Feature</option>
+                  <option value="bugfix">Bug Fix</option>
+                </select>
+                <p className="text-xs text-gray-400 mt-1">
+                  Feature runs the full pipeline (requirements, architecture, review). Bug Fix
+                  skips straight to a fix + review + validation. Auto-detect guesses from the
+                  name/content — you can always override it here.
+                </p>
               </div>
 
               <div>

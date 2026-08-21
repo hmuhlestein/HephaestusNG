@@ -162,6 +162,7 @@ async def get_design_status(
         # retries, gotos, or partial failures that don't reflect final outcome.
         _design_id = None
         _design_raw_error = None
+        _design_workflow_type = "feature"
         with get_db() as _db:
             _design = _db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
             if _design:
@@ -173,6 +174,7 @@ async def get_design_status(
                 design_status = derive_design_status(_db, _design.id, write_back=True)
                 _design_id = _design.id
                 _design_raw_error = _design.error
+                _design_workflow_type = _design.workflow_type
             else:
                 design_status = None
 
@@ -535,6 +537,7 @@ async def get_design_status(
             "warning": warning,
             "paused_by": design_paused_by,
             "status_reason": design_status_reason,
+            "workflow_type": _design_workflow_type,
             "workflows": [
                 {
                     "id": wf.id,

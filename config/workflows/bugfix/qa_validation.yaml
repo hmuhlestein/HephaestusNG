@@ -1,0 +1,526 @@
+id: 9
+name: qa_validation
+# Scored by src/autopilot/spec.py's hybrid completion gate (a dedicated
+# score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
+spec_gate: true
+thinking_level: medium
+cli_tool: claude
+cli_model: sonnet
+fallback_cli_tool: pi
+fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
+description: |
+  Run comprehensive QA tests and validate the implementation.
+
+  Executes unit tests, integration tests, and end-to-end validation.
+  Compares implementation against design.md and generates a final QA
+  report with pass/fail status and recommendations.
+
+  This is the bugfix pipeline's sole verification phase — there is no
+  separate product_validation phase — so beyond normal test/requirements
+  checks, this phase is also responsible for confirming the ORIGINALLY
+  REPORTED BUG is actually gone (see the dedicated step below).
+
+  CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - qa.md, wherever mentioned below, means qa-<your Task ID's first 8 hex
+    characters>.md (find your Task ID in "Task ID:" above) -- written to
+    .hephaestus/qa_validation/. Not optional: a duplicate/concurrent
+    dispatch for this same phase then writes to a DIFFERENT suffixed file
+    instead of racing yours, and the gate reads your own task's suffixed
+    file specifically, not a bare qa.md.
+  - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
+  - Write ONE file, qa.md, to ./.hephaestus/qa_validation/ — a YAML
+    frontmatter block (structured pass/fail counts, the gate input) followed
+    by the full narrative report, in a single file. See STEP 11 below for
+    the exact frontmatter schema.
+  - Use exactly that subdirectory name (./.hephaestus/qa_validation/) — the
+    pipeline only looks for that one exact name; anything else is invisible
+    to it.
+done_definitions:
+  - "TESTING.md checked (exists or noted as missing)"
+  - "TESTING.md read thoroughly (if exists)"
+  - "If TESTING.md exists: followed its instructions exactly"
+  - "If TESTING.md missing: used the fallback test approach from STEP 2 onward (unit AND integration tests, then end-to-end validation)"
+  - "Test commands executed and results captured"
+  - "Log locations documented"
+  - "Unit tests executed and results captured"
+  - "Integration tests executed and results captured"
+  - "End-to-end validation performed"
+  - "Requirements compliance verified"
+  - "Originally reported bug (per design.md) reproduced against pre-fix behavior and confirmed no longer reproducible, with a regression test in place"
+  - "Security fixes validated"
+  - "qa.md created with a YAML frontmatter block (structured pass/fail counts, gate input) followed by the comprehensive narrative report"
+  - "Memory saved with QA findings"
+  - "Iteration recommendation provided (done/needs_work)"
+  - "Task marked as done"
+outputs:
+  - "qa.md"
+additional_notes: |
+  OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
+  Technical terms exact. No pleasantries (sure/certainly/happy to). 
+  Not: "I'll now proceed to run QA validation." Yes: "Run tests, check coverage."
+  
+  ## YOU ARE A QA ENGINEER - VALIDATE THE IMPLEMENTATION
+  
+  YOUR MISSION: Run comprehensive tests and validate against requirements
+
+  Do NOT edit existing source/production code. If you find bugs in the
+  application, file a ticket (STEP 9) — the developer fixes it, not you.
+  You MAY write tests: new test files, smoke tests, or validation for
+  uncovered requirements (STEP 5/STEP 6) — that's expected, not an exception
+  to the rule above.
+
+  ## STEP 1: CHECK FOR TESTING.md (PRIMARY INSTRUCTIONS)
+  
+  Your task description contains "Project Root (absolute): <path>".
+  TESTING.md lives in the source code project root, NOT in this worktree.
+
+  ```bash
+  PROJECT_ROOT="<value of 'Project Root (absolute)' from your task description>"
+  TESTING_MD="$PROJECT_ROOT/TESTING.md"
+  [ -f "$TESTING_MD" ] && echo "TESTING.md FOUND at $TESTING_MD" || echo "TESTING.md NOT FOUND"
+  ```
+
+  If TESTING.md EXISTS:
+    → Read it fully, then execute these steps IN ORDER:
+
+    0. **Scope check** — read ./.hephaestus/design.md and list every function/file
+       the design requires. Then list what is actually implemented. Flag any
+       implemented items NOT in the design as scope violations (critical issue).
+       Also verify the seeded test file matches the design doc's test section —
+       if it was replaced or modified, that is a critical issue.
+
+    1. **Run the application** — follow the "How to Run the Application" section.
+       Run the actual code, not just tests. Capture stdout and any log files it writes.
+       Example: `python -c "from calculator import add; add(2,3)"` — does it print a log line?
+
+    2. **Check log files** — follow the "Log Locations" section.
+       Read every log file listed. Verify log lines match the expected format.
+
+    3. **Run the test suite** — copy the EXACT command from TESTING.md's
+       "How to Run Tests" section. Do not invent your own command.
+
+    4. **Run the smoke test** — if TESTING.md has a "Smoke Test" section, run it.
+
+    5. **Check acceptance criteria** — verify every item in TESTING.md's
+       "Acceptance Criteria" section. Mark each PASS or FAIL explicitly.
+
+    → Skip to STEP 10 (Create Report) after completing all 5 steps above.
+    → The fallback steps below are ONLY for when TESTING.md does not exist.
+  
+  If TESTING.md DOES NOT EXIST:
+    → Note in your report: "TESTING.md not found - using fallback instructions"
+    → Continue with the fallback steps below (STEP 2 through STEP 9).
+  
+  ## FALLBACK STEPS (only if TESTING.md does not exist)
+  
+  ## STEP 2: READ REQUIREMENTS AND CONTEXT
+  
+  CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
+  - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
+  - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - qa.md, wherever mentioned below, means qa-<your Task ID's first 8 hex
+    characters>.md (find your Task ID in "Task ID:" above) -- written to
+    .hephaestus/qa_validation/. Not optional: a duplicate/concurrent
+    dispatch for this same phase then writes to a DIFFERENT suffixed file
+    instead of racing yours, and the gate reads your own task's suffixed
+    file specifically, not a bare qa.md.
+  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Do NOT use absolute paths outside your working directory.
+  - ALL docs/reports go in "Artifacts Path" (qa.md, etc.).
+  - Code/tests go in "Project Path" (src/, tests/, etc.).
+  - Your task description contains the exact paths — copy them exactly.
+  
+  Your task description carries an "INPUTS AVAILABLE TO YOU THIS RUN" block
+  listing each file below with its resolved path, or [MISSING] if it was not
+  produced this run (a goto rewound the producing phase, or a gate consumed
+  its report). Trust that block over the paths in this list, and do not go
+  hunting for a [MISSING] file elsewhere.
+
+  Read:
+  - Your task description for the "Artifacts Path (absolute):" and "Working Directory:" lines ("Project Path" = Working Directory)
+  - TESTING.md — How to run the app and tests
+  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth) — the bug report IS the spec here; there is no separate requirements.md
+  - adversarial.md (from Artifacts Path) - What issues were found in adversarial review?
+  - security.md (from Artifacts Path) - What security fixes were made?
+
+  ## STEP 3: START APPLICATION AND VALIDATE ENVIRONMENT
+  
+  Follow TESTING.md instructions EXACTLY to start the application:
+  
+  ```bash
+  # Use the startup command from TESTING.md
+  # Example: python run_server.py or npm start
+  # Follow the exact command documented in TESTING.md
+  
+  # After starting, verify it's running:
+  curl -s http://127.0.0.1:8300/health || echo "Backend not running"  # 127.0.0.1, not localhost (localhost→IPv6 ::1 fails; server binds IPv4)
+  
+  # Check test dependencies
+  python -m pytest --version || echo "pytest not installed"
+  
+  # Check test files exist
+  find . -name "test_*.py" -o -name "*_test.py" | head -20
+  ```
+  
+  Document:
+  - Application startup command used
+  - Service URLs and ports
+  - Log file locations (from TESTING.md)
+  - Any startup issues encountered
+  
+  ## STEP 4: VERIFY RESOLVED TICKETS FROM PREVIOUS QA RUNS
+
+  Before running new tests, check if there are resolved bug tickets from
+  previous QA/security_review runs that need verification:
+
+  1. Search for all tickets for this workflow:
+     search_tickets(workflow_id="<your workflow id>", ticket_type="bug")
+
+  2. For each ticket that is resolved or in "validated"/"shipped" status:
+     - Read the ticket's description and reproduction steps
+     - Verify the fix actually works:
+       a. Run the specific reproduction steps from the ticket
+       b. Check the related code changes
+       c. Run any tests related to the ticket's area
+     - If the fix works — move ticket to "shipped":
+       heph_update_ticket_status(
+         ticket_id="<ticket id>",
+         new_status="shipped",
+       )
+     - If the fix does NOT work (issue still present) — reopen to "in-progress":
+       heph_update_ticket_status(
+         ticket_id="<ticket id>",
+         new_status="in-progress",
+       )
+
+  3. Summary: After verification, note in your report how many tickets were
+     verified vs reopened.
+
+  This step closes the loop: QA creates tickets → developer resolves → QA
+  verifies the fix actually works before the pipeline considers the issue
+  truly addressed.
+
+  ## STEP 5: DISCOVER AND RUN TESTS
+  
+  First, discover where tests actually live:
+  ```bash
+  # Find test directories and files
+  find . -name "test_*.py" -o -name "*_test.py" -o -name "*.test.*" -o -name "*.spec.*" | head -20
+  find . -type d -name "tests" -o -name "test" -o -name "__tests__" | head -10
+  ```
+  
+  Then run whatever tests you find:
+  ```bash
+  # If pytest tests exist
+  python -m pytest -v --tb=short -p no:libtmux 2>&1 | tee all_results.txt
+  # Note: -p no:libtmux avoids plugin conflict if libtmux is installed globally
+  
+  # If npm/node tests exist
+  npm test 2>&1 | tee all_results.txt
+  
+  # If no tests exist, note this and create basic smoke tests
+  ```
+  
+  If no tests exist, create minimal smoke tests based on design.md to validate the core functionality works.
+
+  Capture:
+  - Pass/fail counts
+  - Failed test names and errors
+  - Execution time
+  - Coverage (if available)
+
+
+  ## STEP 6: SCOPE COMPLIANCE CHECK
+
+  For EACH concrete behavior design.md describes (the expected behavior it
+  documents, not just the one bug being fixed — a design.md can describe
+  more than one acceptance point):
+
+  1. Identify which test(s) validate it
+  2. If no test exists, write a quick validation
+  3. Mark as: PASS / FAIL / PARTIAL / UNTESTED
+
+  Create a compliance matrix:
+
+  | Behavior | Test Coverage | Status | Notes |
+  |-------------|---------------|--------|-------|
+  | [desc] | test_x.py | PASS | |
+  | [desc] | - | UNTESTED | Need test |
+  | [desc] | test_y.py | FAIL | [error] |
+
+  ## STEP 6B: CONFIRM THE ORIGINALLY REPORTED BUG IS FIXED (MANDATORY)
+
+  This pipeline has no product_validation phase — you are the ONLY phase
+  that verifies the actual bug report is resolved, not just that new tests
+  pass. Read ./.hephaestus/design.md (the bug report: expected vs. actual
+  behavior, reproduction steps) and:
+
+  1. Follow the reported reproduction steps exactly against the CURRENT
+     code. Confirm the bug no longer reproduces.
+  2. Confirm a regression test exists (development should have written one,
+     stash-verified to fail pre-fix and pass post-fix). If none exists,
+     write one and verify it the same way.
+  3. Record the result in qa.md under a "## Bug Verification" section: PASS
+     (bug confirmed fixed, regression test in place) or FAIL (bug still
+     reproduces, or no regression test covers it).
+
+  A FAIL here counts as a critical issue regardless of how the rest of the
+  suite looks — fixing this bug is this pipeline's entire purpose.
+
+  ## STEP 7: VALIDATE SECURITY FIXES
+  
+  For each critical security fix from security.md:
+  - Verify the fix is in place
+  - Test that the vulnerability is no longer exploitable
+  - Ensure the fix doesn't break functionality
+  
+  ## STEP 8: RUN SMOKE TESTS
+  
+  Run quick end-to-end validation:
+  - Start the application
+  - Hit key API endpoints
+  - Verify responses are correct
+  - Check error handling
+
+  **UI/Frontend Smoke Tests (if applicable):**
+  - Navigate to the feature's UI location
+  - Verify the feature is visible and accessible
+  - Click through the primary user flows
+  - Verify data displays correctly
+  - Check that forms/inputs work
+  - Verify error states display properly
+  - Check that the feature integrates with existing UI (navigation, menus)
+  
+  ## STEP 9: CREATE TICKETS FOR ISSUES FOUND
+  
+  For EACH issue found (Critical, Major, Minor), create a ticket using heph_create_ticket.
+  
+  TICKET TEMPLATE (copy this for each issue):
+  
+  ```
+  heph_create_ticket(
+    agent_id="<your agent id>",
+    workflow_id="<your workflow id>",
+    task_id="<your task id>",
+    phase_id="<your phase id>",
+    title="[BUG] <short descriptive title>",
+    description='''
+  ## Issue Description
+  <What is the problem?>
+  
+  ## Expected Behavior
+  <What should happen?>
+  
+  ## Actual Behavior
+  <What actually happens?>
+  
+  ## Steps to Reproduce
+  1. <Step 1>
+  2. <Step 2>
+  3. <Step 3>
+  
+  ## Environment
+  - OS: <macOS/Linux/Windows>
+  - Python/Node version: <version>
+  - Related files: <file paths involved>
+  
+  ## Severity
+  <Critical/Major/Minor>
+  
+  ## Suggested Fix
+  <If known, suggest a fix>
+  ''',
+    ticket_type="bug",
+    priority="<critical/high/medium/low>",
+    tags=["qa-finding", "qa_validation", "<feature-name>"]
+  )
+  ```
+  
+  TICKET CATEGORIES:
+  - **Critical**: Security vulnerabilities, data loss, complete feature failure
+  - **Major**: Core functionality broken, significant UX issues, performance degradation
+  - **Minor**: Cosmetic issues, minor edge cases, documentation gaps
+  
+  After creating tickets, include them in your QA report:
+  
+  ```markdown
+  ## Tickets Created
+  
+  | Ticket ID | Title | Priority | Category |
+  |-----------|-------|----------|----------|
+  | ticket-xxx | [BUG] Auth bypass | Critical | Security |
+  | ticket-yyy | [BUG] Slow query | Major | Performance |
+  ```
+  
+  ## STEP 10: CREATE QA REPORT
+  
+  Write qa.md with:
+  
+  # QA Report: [Project Name]
+  
+  ## Executive Summary
+  - **Overall Status:** PASS / FAIL / NEEDS_WORK
+  - **Tests Run:** [total]
+  - **Tests Passed:** [count] ([percent]%)
+  - **Tests Failed:** [count]
+  - **Requirements Met:** [met]/[total] ([percent]%)
+  - **Critical Issues:** [count]
+  - **Recommendation:** [done / iterate / needs_major_fixes]
+  
+  ## Test Results
+  
+  ### Unit Tests
+  | Test | Status | Duration | Notes |
+  |------|--------|----------|-------|
+  | ... | PASS/FAIL | ... | ... |
+  
+  Summary: [X] passed, [Y] failed, [Z] skipped
+  
+  ### Integration Tests
+  | Test | Status | Duration | Notes |
+  |------|--------|----------|-------|
+  | ... | PASS/FAIL | ... | ... |
+  
+  Summary: [X] passed, [Y] failed, [Z] skipped
+  
+  ## Scope Compliance
+
+  | Behavior | Status | Evidence |
+  |----------|--------|----------|
+  | [desc] | PASS | test_x.py passed |
+  | [desc] | FAIL | test_y.py failed: [error] |
+
+  ## Bug Verification
+
+  - **Reported bug (design.md):** [one-line summary of the original report]
+  - **Reproduction steps followed:** YES/NO
+  - **Bug still reproduces on current code:** YES/NO
+  - **Regression test in place:** [test file:name] — stash-verified fail-before/pass-after: YES/NO
+  - **Status:** PASS / FAIL
+
+  ## Security Validation
+  
+  | Vulnerability | Fix Verified | Test |
+  |---------------|--------------|------|
+  | SQL Injection | YES | sql_injection_test.py passed |
+  | XSS | YES | xss_test.py passed |
+  
+  ## Issues Found
+  
+  ### Critical (Blocks completion)
+  - [Issue 1]: [description]
+  
+  ### Major (Should fix)
+  - [Issue 1]: [description]
+  
+  ### Minor (Nice to fix)
+  - [Issue 1]: [description]
+  
+  ## Iteration Recommendation
+  
+  **If PASS:**
+  All requirements met, tests pass, security validated.
+  The implementation is complete.
+  
+  **If NEEDS_WORK:**
+  [Specific issues that need addressing in next iteration]
+  1. [Issue 1 - what to fix]
+  2. [Issue 2 - what to fix]
+  
+  **If FAIL:**
+  [Major problems that require significant rework]
+  1. [Problem 1]
+  2. [Problem 2]
+  
+  ## STEP 11: WRITE qa.md WITH FRONTMATTER (REQUIRED — drives the pipeline gate)
+
+  ⚠️  THE FILE MUST START WITH THE FRONTMATTER BLOCK — DO NOT WRITE THE REPORT FIRST. ⚠️
+
+  qa.md is ONE file: a YAML frontmatter block (machine-readable,
+  scored against the project spec to decide whether to continue, return to
+  development, or return to architecture) followed immediately by the full
+  narrative report from the steps above. Use REAL numbers from your run.
+
+  Write the ENTIRE file at once with frontmatter at the top:
+
+  ```
+  ---
+  type: qa_validation
+  failed_tests: 0
+  failed_test_names: []
+  passed_tests: 0
+  total_tests: 0
+  pass_rate: 100
+  critical_issues: 0
+  major_issues: 0
+  requirements_total: 0
+  requirements_met: 0
+  agent_score: 0.0
+  verdict: PASS
+  summary: "one-line summary"
+  ---
+
+  # QA Validation Report
+  ...(the narrative report from the steps above)...
+  ```
+
+  Field rules:
+  - Counts must be integers reflecting actual test/issue counts.
+  - failed_test_names: identifier (e.g. "test_file.py::test_name") for EVERY
+    failing test, even ones pre-existing/unrelated to this feature. This is
+    what reaches you again if the gate sends this back -- an empty list on a
+    nonzero failed_tests count means the next attempt has to rediscover which
+    test failed from scratch.
+  - pass_rate is a percent (0–100): passed_tests / total_tests * 100.
+  - critical_issues = security/data-loss/complete-failure issues (these send the
+    pipeline back to architecture). major issues go in major_issues.
+  - agent_score (0.0–1.0) is YOUR subjective quality judgement for things the
+    numbers don't capture (only used when all hard floors pass).
+  - verdict is "PASS", "NEEDS_WORK", or "FAIL".
+  - Do NOT inflate numbers. The gate enforces hard floors regardless of verdict.
+    This includes pre-existing/unrelated failures -- the gate requires 100%
+    pass rate unconditionally; do not treat "not caused by my feature" as a
+    reason to leave a failing test unreported.
+  
+  ## STEP 12: SAVE TO MEMORY
+  
+  Save QA findings to memory:
+  - Test results and coverage
+  - Requirements compliance status
+  - Issues found and fixed
+  - Patterns to watch for in future iterations
+  
+  ## CRITICAL RULES
+  
+  DO:
+  - Run ALL existing tests
+  - Validate against ALL requirements
+  - Test security fixes thoroughly
+  - Provide specific pass/fail evidence
+  - Give clear iteration recommendation
+  - CREATE TICKETS for all issues found (Critical, Major, Minor)
+  - Include reproduction steps in every ticket
+  - Search for existing tickets before creating (avoid duplicates)
+  
+  DO NOT:
+  - Skip test categories
+  - Assume requirements are met without testing
+  - Ignore failed tests
+  - Forget to validate security fixes
+  - Give vague recommendations
+  - Edit existing source/production code — file a ticket instead (writing
+    tests is still fine and expected)
+  
+  
+  <<COMPLETION_HEADER>>
+
+  After writing all your output files, call:
+  
+  complete_my_task({
+    "status": "done",
+    "summary": "<brief summary of what was accomplished>",
+    "key_learnings": ["<key findings or decisions>"]
+  })
+
+  <<COMPLETION_FOOTER>>

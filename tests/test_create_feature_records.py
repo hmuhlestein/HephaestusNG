@@ -173,3 +173,55 @@ class TestCreateFeatureRecords:
         )
 
         assert len(records) == 0
+
+    def test_copies_parent_design_workflow_type_onto_feature_row(self, designs_folder, mock_logger):
+        """Regression: _run_one_feature picks its workflow definition_id
+        (autopilot vs bugfix) off Feature.workflow_type, so a decomposed
+        feature must inherit its parent AutopilotDesign's workflow_type --
+        not the column default -- or every bugfix-typed design would
+        silently launch the full feature pipeline anyway."""
+        from src.core.database import AutopilotDesign, Feature, get_db
+
+        design_id = "des-bugfix123"
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id=design_id,
+                    project_id="proj-1",
+                    filename="fix_login.md",
+                    name="Fix login crash",
+                    workflow_type="bugfix",
+                )
+            )
+
+        features_json = {
+            "design_name": "Fix login crash",
+            "features": [
+                {"id": "login-fix", "name": "Login Fix", "scope": "Fix it", "files": [], "depends_on": [], "execution": "parallel"}
+            ],
+        }
+
+        records = _create_feature_records(design_id, features_json, designs_folder, mock_logger)
+
+        with get_db() as db:
+            feat = db.query(Feature).filter_by(id=records[0]["id"]).first()
+            assert feat.workflow_type == "bugfix"
+
+    def test_defaults_to_feature_when_parent_design_missing(self, designs_folder, mock_logger):
+        """No AutopilotDesign row for design_id (e.g. tests above that pass
+        a bare string) must fall back to "feature", not raise."""
+        from src.core.database import Feature, get_db
+
+        design_id = "des-does-not-exist"
+        features_json = {
+            "design_name": "Test Design",
+            "features": [
+                {"id": "auth", "name": "Auth", "scope": "s", "files": [], "depends_on": [], "execution": "parallel"}
+            ],
+        }
+
+        records = _create_feature_records(design_id, features_json, designs_folder, mock_logger)
+
+        with get_db() as db:
+            feat = db.query(Feature).filter_by(id=records[0]["id"]).first()
+            assert feat.workflow_type == "feature"
