@@ -466,6 +466,57 @@ class TestHistoricalPauseSiteConsistency:
             assert task.assigned_agent_id is None
             assert task.failure_reason == "User terminated: workflow was paused"
 
+    @pytest.mark.parametrize("task_status", ["assigned", "under_review", "needs_work"])
+    def test_pause_resets_and_labels_tasks_beyond_in_progress(self, orch_db_env, task_status):
+        """agents_to_terminate above kills any live (working/starting/idle)
+        agent regardless of its task's own status -- a
+        bump_task_priority_endpoint dispatch commits status="assigned"
+        directly (not "in_progress"), and a task kept alive for validation
+        sits "under_review"/"needs_work" with a still-live agent. Missing
+        any of these here would leave that task pointing at a corpse agent,
+        uncaught until _clean_stale_assigned_tasks's unrelated, generic-
+        reason sweep eventually notices."""
+        from src.autopilot.orchestrator.engine_client import pause_project_workflows
+        from src.core.database import Agent, AutopilotProject, Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp"))
+            session.add(
+                Workflow(
+                    id="wf-1", name="t", phases_folder_path="/tmp",
+                    status="active", project_id="proj-1",
+                    definition_id="autopilot",
+                )
+            )
+            session.add(
+                Agent(
+                    id="agent-1", system_prompt="p", status="working",
+                    cli_type="claude", current_task_id="task-1",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-1", workflow_id="wf-1", raw_description="r",
+                    done_definition="d", status=task_status,
+                    assigned_agent_id="agent-1",
+                )
+            )
+
+        with orch_db_env.session_scope() as session:
+            pause_project_workflows(
+                session, "proj-1", paused_by="user", definition_ids=("autopilot",),
+            )
+
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "pending", (
+                f"task left {task_status!r} with a live agent that was just "
+                "terminated -- uncaught by this reset, only findable later "
+                "via a different sweep's generic reason"
+            )
+            assert task.assigned_agent_id is None
+            assert task.failure_reason == "User terminated: workflow was paused"
+
     @pytest.mark.parametrize("paused_by", ["budget", "system"])
     def test_non_user_pause_does_not_claim_user_terminated(self, orch_db_env, paused_by):
         """A budget/system pause has its own accurate story

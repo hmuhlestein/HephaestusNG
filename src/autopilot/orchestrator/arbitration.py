@@ -429,8 +429,7 @@ def _trigger_arbitration(
                 task.status = "failed"
                 task.failure_reason = "Failed to dispatch arbitration agent"
 
-        pm = PhaseManager(DatabaseManager(None))
-        pm.workflow_id = workflow_id
+        pm = PhaseManager(DatabaseManager(None), workflow_id=workflow_id)
         pm.mark_phase_complete(
             phase_id,
             "Arbitration dispatch failed",
@@ -589,8 +588,7 @@ def _resolve_arbitration_outcome(
 
     logger.warning(f"[ARBITRATE] {phase_name}: decision={decision} -- {reason}")
 
-    pm = PhaseManager(DatabaseManager(None))
-    pm.workflow_id = workflow_id
+    pm = PhaseManager(DatabaseManager(None), workflow_id=workflow_id)
     result: Dict[str, Any] = {}
     try:
         if decision == "continue":
