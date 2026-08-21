@@ -16,9 +16,9 @@ from fastapi import HTTPException
 
 from src.core.database import (
     Agent,
-    Phase,
     Task,
 )
+from src.core.phase_lookup import resolve_task_phase
 from src.mcp.memory_api import (
     GiveValidationReviewRequest,
     SaveMemoryRequest,
@@ -105,7 +105,12 @@ async def _tool_get_task_status(arguments: Dict[str, Any]):
         for t in tasks:
             phase_name = None
             if t.phase_id:
-                phase = session.query(Phase).filter_by(id=t.phase_id).first()
+                # SOLID review 1.10: a raw Phase.filter_by(id=...) doesn't
+                # handle phase_id given as a numeric order vs. a real UUID,
+                # or scope to the task's own workflow, unlike
+                # resolve_task_phase (used everywhere else this lookup
+                # happens) -- could silently resolve the wrong phase.
+                phase = resolve_task_phase(session, t)
                 phase_name = phase.name if phase else None
             results.append(
                 {
@@ -115,8 +120,10 @@ async def _tool_get_task_status(arguments: Dict[str, Any]):
                     "phase_name": phase_name,
                     "workflow_id": t.workflow_id,
                     "assigned_agent_id": t.assigned_agent_id,
-                    "created_at": t.created_at.isoformat() if t.created_at else None,
-                    "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                    # SOLID review 1.10: missing the "Z" UTC suffix every
+                    # other timestamp in this codebase's API responses uses.
+                    "created_at": t.created_at.isoformat() + "Z" if t.created_at else None,
+                    "completed_at": t.completed_at.isoformat() + "Z" if t.completed_at else None,
                 }
             )
         return {"tasks": results, "count": len(results)}

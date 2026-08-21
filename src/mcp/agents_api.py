@@ -710,8 +710,14 @@ async def get_task_progress(
                 "workflow_id": task.workflow_id,
             }
             if task.phase_id:
-                from src.core.database import Phase
-                phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                # SOLID review 1.10: this branch bypassed resolve_task_phase,
+                # unlike the multi-task branch just below it in this same
+                # function -- a raw Phase.filter_by(id=...) doesn't handle
+                # phase_id given as a numeric order vs. a real UUID, or scope
+                # to the task's own workflow, so this could silently resolve
+                # the wrong phase (or none) depending on which form task_id
+                # was passed as, inconsistent with every other endpoint.
+                phase = resolve_task_phase(session, task)
                 if phase:
                     result["phase_name"] = phase.name
                     result["phase_order"] = phase.order
