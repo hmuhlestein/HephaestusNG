@@ -23,7 +23,7 @@ def test_uses_config_values_not_hardcoded_literals(tmp_path):
     logger = MagicMock()
 
     with patch(
-        "src.autopilot.orchestrator.get_config", return_value=fake_config
+        "src.autopilot.orchestrator.pipeline.get_config", return_value=fake_config
     ), patch("src.sdk.HephaestusSDK", fake_sdk_cls), patch(
         "src.autopilot.phases.AUTOPILOT_PHASES", []
     ), patch(

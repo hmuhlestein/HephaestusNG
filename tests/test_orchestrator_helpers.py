@@ -2618,7 +2618,7 @@ class TestWaitForTaskTerminal:
                 Task(id="t-1", raw_description="r", done_definition="d", status="in_progress")
             )
 
-        with patch("src.autopilot.orchestrator.pipeline._should_stop", return_value=True):
+        with patch("src.autopilot.orchestrator._should_stop", return_value=True):
             result = _wait_for_task_terminal("t-1", timeout_seconds=5, logger=OrchestratorLogger(tmp_path))
         assert result == "interrupted"
 
@@ -3378,10 +3378,10 @@ class TestRunOneFeatureStateIsolation:
             return FeatureRunStatus.COMPLETED
 
         with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
-            "src.autopilot.orchestrator.run_single_workflow",
+            "src.autopilot.orchestrator.pipeline.run_single_workflow",
             side_effect=fake_run_single_workflow,
         ):
             status = _run_one_feature(
@@ -3462,7 +3462,7 @@ class TestRunOneFeatureDoesNotOverrideGotoBudget:
             "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
-            "src.autopilot.orchestrator.run_single_workflow",
+            "src.autopilot.orchestrator.pipeline.run_single_workflow",
             side_effect=fake_run_single_workflow,
         ):
             _run_one_feature(
@@ -3540,13 +3540,13 @@ class TestRunOneFeatureWorktreeCleanupTiming:
             orch_db_env, tmp_path, feature_key
         )
         with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
-            "src.autopilot.orchestrator.run_single_workflow",
+            "src.autopilot.orchestrator.pipeline.run_single_workflow",
             return_value=wf_status,
         ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
+            "src.autopilot.orchestrator.pipeline._cleanup_worktree"
         ) as mock_cleanup:
             status = _run_one_feature(
                 sdk=MagicMock(),
@@ -3620,13 +3620,13 @@ class TestRunOneFeatureWorktreeCleanupTiming:
             orch_db_env, tmp_path
         )
         with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
-            "src.autopilot.orchestrator.run_single_workflow",
+            "src.autopilot.orchestrator.pipeline.run_single_workflow",
             side_effect=RuntimeError("boom"),
         ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
+            "src.autopilot.orchestrator.pipeline._cleanup_worktree"
         ) as mock_cleanup:
             status = _run_one_feature(
                 sdk=MagicMock(),
@@ -3785,13 +3785,13 @@ class TestRunOneFeatureWithDependencies:
         worktree_dir.mkdir()
 
         with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
-            "src.autopilot.orchestrator.run_single_workflow",
+            "src.autopilot.orchestrator.pipeline.run_single_workflow",
             return_value=FeatureRunStatus.COMPLETED,
         ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
+            "src.autopilot.orchestrator.pipeline._cleanup_worktree"
         ):
             status = _run_one_feature(
                 sdk=MagicMock(),
@@ -3902,13 +3902,13 @@ class TestRunOneFeatureThreadsProjectId:
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
-            "src.autopilot.orchestrator.run_single_workflow",
+            "src.autopilot.orchestrator.pipeline.run_single_workflow",
             side_effect=fake_run_single_workflow,
         ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
+            "src.autopilot.orchestrator.pipeline._cleanup_worktree"
         ):
             _run_one_feature(
                 sdk=MagicMock(),
@@ -3992,7 +3992,7 @@ class TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn:
         project_path.mkdir()
 
         with patch(
-            "src.autopilot.orchestrator.run_single_workflow"
+            "src.autopilot.orchestrator.pipeline.run_single_workflow"
         ) as mock_run, patch("src.autopilot.orchestrator.worktree_integration._cleanup_worktree"):
             status = _run_one_feature(
                 sdk=MagicMock(),
