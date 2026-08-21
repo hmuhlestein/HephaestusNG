@@ -326,6 +326,16 @@ class GuardianDispatcher:
                     "steering_type": analysis.steering_type,
                     "trajectory_summary": analysis.trajectory_summary,
                     "accumulated_goal": analysis.accumulated_goal,
+                    # SOLID review 3.7: guardian.py's own analysis result now
+                    # writes both of these to the GuardianAnalysis row, but
+                    # this reconstruction never read them back out -- the
+                    # marker-based "avoid re-analyzing the same content"
+                    # mechanism (guardian.py's past_summaries[-1].get(
+                    # "last_claude_message_marker")) silently stayed a no-op
+                    # even after that write-side fix, since this is the only
+                    # place past_summaries actually gets built.
+                    "last_claude_message_marker": analysis.last_claude_message_marker,
+                    "current_focus": analysis.current_focus,
                     "timestamp": analysis.timestamp.isoformat()
                     if analysis.timestamp
                     else None,

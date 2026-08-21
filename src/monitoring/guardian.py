@@ -35,12 +35,17 @@ class GuardianTrajectoryAnalysis(TypedDict):
     corresponding DB columns get None in that case, which is the correct
     degraded value, not a bug.
 
-    current_focus is a known separate gap, not a naming mismatch: it has a
-    DB column, a prompt-template placeholder, and a frontend consumer, but
-    no producer anywhere ever computes a real value for it -- always
-    "Unknown"/None end-to-end. Left unimplemented here rather than
-    invented; a real fix means deciding what "current focus" should
-    actually derive from, which is its own scoping decision.
+    current_focus was a distinct gap from the naming mismatches above: it
+    had a DB column, a prompt-template placeholder, and a frontend
+    consumer (TaskDetailModal.tsx, labeled "Current Focus" next to
+    "Accumulated Goal"), but no producer ever computed a value for it --
+    always "Unknown"/None end-to-end, silently, for every agent ever
+    monitored. Added to the LLM's required JSON output
+    (guardian_trajectory_analysis.md) as a short noun phrase for what the
+    agent is doing at this exact moment, narrower than trajectory_summary's
+    full-sentence narrative. Still NotRequired here: the two fallback
+    paths below have no LLM response to draw it from, same as
+    last_claude_message_marker/conversation_length/session_duration.
     """
 
     # Any, not str: these come straight from a SQLAlchemy Column(String)
@@ -327,6 +332,10 @@ class Guardian:
                 ),
                 "conversation_length": accumulated_context["conversation_length"],
                 "session_duration": accumulated_context["session_duration"],
+                # SOLID review 3.7: newly added to the LLM's required output --
+                # previously had a DB column/prompt slot/frontend consumer but
+                # no producer anywhere, so this was always None.
+                "current_focus": analysis.get("current_focus"),
             }
 
             # Cache for Conductor
@@ -405,6 +414,11 @@ class Guardian:
                 # showed the LLM "Session Duration: Unknown" -- session_start
                 # was already computed and unused for this.
                 "session_duration": str(datetime.utcnow() - session_start).split(".")[0],
+                # SOLID review 3.7: current_focus is carried forward from the
+                # most recent prior cycle's own analysis below, same as
+                # overall_goal's evolved_goal update -- defaults to "Unknown"
+                # on the agent's first cycle, when there is no prior summary.
+                "current_focus": "Unknown",
             }
 
             # Extract constraints and goals from summaries
@@ -424,6 +438,10 @@ class Guardian:
                 # Update goal if it evolved
                 if "evolved_goal" in summary:
                     context["overall_goal"] = summary["evolved_goal"]
+
+                # Carry forward the most recent cycle's current_focus.
+                if summary.get("current_focus"):
+                    context["current_focus"] = summary["current_focus"]
 
             return context
 

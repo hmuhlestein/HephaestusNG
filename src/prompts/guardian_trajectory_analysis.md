@@ -458,6 +458,7 @@ You MUST return valid JSON with this EXACT structure:
     "steering_type": "stuck|drifting|violating_constraints|over_engineering|confused|idle|null",
     "steering_recommendation": "Specific helpful message to send to agent OR null",
     "trajectory_summary": "One sentence summary showing understanding of full context and current progress",
+    "current_focus": "A short, specific phrase naming exactly what the agent is doing RIGHT NOW",
     "last_claude_message_marker": "A brief excerpt (10-30 chars) from the LAST message Claude sent, to mark where the conversation ended"
 }}
 ```
@@ -472,6 +473,7 @@ You MUST return valid JSON with this EXACT structure:
 - **steering_type**: Type of issue requiring steering - `stuck` (error loops), `drifting` (unrelated work), `violating_constraints` (breaking rules), `over_engineering` (excessive complexity), `confused` (circular exploration), `idle` (finished but hasn't continued), or `null` if no steering needed
 - **steering_recommendation**: The EXACT message to send to the agent (null if no steering)
 - **trajectory_summary**: Intelligent summary with context (NOT just "working on X file")
+- **current_focus**: A short, specific noun phrase for what the agent is doing at this exact moment (e.g. "Implementing JWT token refresh endpoint") -- narrower than trajectory_summary's full-sentence progress narrative and distinct from the whole-session Accumulated Goal
 - **last_claude_message_marker**: A brief 10-30 character excerpt from Claude's last message (not Guardian messages, not errors) to mark conversation position for next cycle
 
 ## Examples of Good Analysis
@@ -486,7 +488,8 @@ You MUST return valid JSON with this EXACT structure:
     "needs_steering": false,
     "steering_type": null,
     "steering_recommendation": null,
-    "trajectory_summary": "Successfully implementing REST API endpoints for user authentication, following constraint to use built-in Node.js crypto instead of external packages"
+    "trajectory_summary": "Successfully implementing REST API endpoints for user authentication, following constraint to use built-in Node.js crypto instead of external packages",
+    "current_focus": "Implementing the POST /login endpoint"
 }}
 ```
 
@@ -503,7 +506,8 @@ You MUST return valid JSON with this EXACT structure:
     "needs_steering": true,
     "steering_type": "violating_constraints",
     "steering_recommendation": "Remember: we need to use only built-in libraries for this task. Instead of bcrypt, use Node.js's built-in 'crypto' module with crypto.pbkdf2() for password hashing.",
-    "trajectory_summary": "Implementing authentication but violating the no-external-packages constraint by trying to install bcrypt"
+    "trajectory_summary": "Implementing authentication but violating the no-external-packages constraint by trying to install bcrypt",
+    "current_focus": "Installing bcrypt for password hashing"
 }}
 ```
 
@@ -517,7 +521,8 @@ You MUST return valid JSON with this EXACT structure:
     "needs_steering": true,
     "steering_type": "idle",
     "steering_recommendation": "You've completed the JWT authentication implementation and testing. The done definition has been met - you've implemented token generation, validation, and refresh logic, and verified it works correctly. Please mark your task done using the heph_complete_my_task tool (status='done') with a summary of what was implemented.",
-    "trajectory_summary": "Successfully implemented and tested JWT authentication system, but agent is idle and hasn't updated task status despite work being complete"
+    "trajectory_summary": "Successfully implemented and tested JWT authentication system, but agent is idle and hasn't updated task status despite work being complete",
+    "current_focus": "Idle after finishing JWT auth testing"
 }}
 ```
 
@@ -531,7 +536,8 @@ You MUST return valid JSON with this EXACT structure:
     "needs_steering": true,
     "steering_type": "idle",
     "steering_recommendation": "You've finished planning the authentication system and set up your todos. The next step is to begin implementation - please start implementing the JWT token generation logic as outlined in your plan.",
-    "trajectory_summary": "Completed planning phase for JWT authentication but is idle and hasn't started implementation yet"
+    "trajectory_summary": "Completed planning phase for JWT authentication but is idle and hasn't started implementation yet",
+    "current_focus": "Idle after completing the auth implementation plan"
 }}
 ```
 
