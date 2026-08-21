@@ -1798,7 +1798,7 @@ class TestTerminateAgent:
 
 class TestPendingMessageGracePeriod:
     """Terminator._terminate_agent_sync's grace-period wait -- gives an
-    agent up to _PENDING_MESSAGE_GRACE_SECONDS from when a message was
+    agent up to PENDING_MESSAGE_GRACE_SECONDS from when a message was
     last sent to it (AgentMessenger.send_message_to_agent stamps
     Agent.pending_message_sent_at) before killing its tmux session.
     Confirmed live (agent 335b2a1d, 2026-08-21): a task reaching genuine
@@ -1809,7 +1809,7 @@ class TestPendingMessageGracePeriod:
     async def test_waits_out_the_remaining_grace_period(self, mock_agent_manager, db_manager):
         from datetime import datetime, timedelta
 
-        from src.agents.terminator import _PENDING_MESSAGE_GRACE_SECONDS
+        from src.agents.terminator import PENDING_MESSAGE_GRACE_SECONDS
 
         sent_at = datetime.utcnow() - timedelta(seconds=10)
         with db_manager.session_scope() as session:
@@ -1829,7 +1829,7 @@ class TestPendingMessageGracePeriod:
         # ~50s remaining (60s grace - 10s already elapsed) -- generous
         # tolerance for wall-clock drift between stamping sent_at and the
         # terminate_agent call above.
-        assert _PENDING_MESSAGE_GRACE_SECONDS - 15 < waited < _PENDING_MESSAGE_GRACE_SECONDS - 5
+        assert PENDING_MESSAGE_GRACE_SECONDS - 15 < waited < PENDING_MESSAGE_GRACE_SECONDS - 5
 
         with db_manager.session_scope() as session:
             agent = session.query(Agent).filter_by(id="agent-pending-msg").first()

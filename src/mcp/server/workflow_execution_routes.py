@@ -60,6 +60,7 @@ async def _terminate_workflow_agents(session, workflow_id: str):
     import asyncio
     import functools
 
+    from src.agents.terminator import PENDING_MESSAGE_GRACE_SECONDS
     from src.autopilot.orchestrator.engine_client import terminate_agent
 
     loop = asyncio.get_event_loop()
@@ -79,6 +80,32 @@ async def _terminate_workflow_agents(session, workflow_id: str):
             .all(),
         )
         for agent in agents:
+            # Same grace period as Terminator._terminate_agent_sync (see
+            # its docstring for the live incident this closes): a message
+            # sent to this agent moments before Stop/Cancel was clicked
+            # hasn't had a chance to be noticed yet. Read from the already-
+            # loaded `agent` object above (no extra query needed) and
+            # awaited directly rather than offloaded -- this function is
+            # already async, so a plain asyncio.sleep here doesn't block
+            # the event loop the way Terminator's synchronous time.sleep
+            # would if used outside its own executor-offloaded method.
+            # Kept sequential across agents (see the loop's own note
+            # below) rather than parallelized: simpler, and a workflow
+            # where every agent happens to have a message pending seconds
+            # before Stop is rare enough not to warrant the added
+            # complexity of a fan-out wait here.
+            if agent.pending_message_sent_at:
+                elapsed = (datetime.utcnow() - agent.pending_message_sent_at).total_seconds()
+                remaining = PENDING_MESSAGE_GRACE_SECONDS - elapsed
+                agent.pending_message_sent_at = None
+                if remaining > 0:
+                    logger.info(
+                        f"[TERMINATE] Agent {agent.id[:8]} has a message sent "
+                        f"{elapsed:.0f}s ago -- waiting {remaining:.0f}s more "
+                        "before terminating"
+                    )
+                    await asyncio.sleep(remaining)
+
             # tmux teardown and the DB-invariant termination are independent
             # (terminate_agent's docstring: "Scope is the DB invariant only")
             # -- safe to run concurrently since _kill_tmux_session never
