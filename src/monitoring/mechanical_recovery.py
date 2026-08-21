@@ -1657,7 +1657,11 @@ class MechanicalRecoveryDetector:
         whatever completed it; only the agent's own zombie "working" state
         needs correcting.
         """
-        if agent.status not in ("working", "starting", "idle"):
+        # AgentStatus.STUCK included even though nothing in this codebase
+        # currently sets it -- "regardless of cause" means the check
+        # shouldn't silently exclude a real, defined status just because
+        # today's known causes don't happen to produce it.
+        if agent.status not in ("working", "starting", "idle", "stuck"):
             return False
         if not agent.current_task_id:
             return False

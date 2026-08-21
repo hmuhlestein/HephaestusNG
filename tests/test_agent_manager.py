@@ -1566,6 +1566,37 @@ class TestTerminateAgent:
         mock_agent_manager.tmux_server.has_session.return_value = False
 
     @pytest.mark.asyncio
+    async def test_already_terminated_agent_is_a_no_op(self, mock_agent_manager, db_manager):
+        """A second terminate_agent call for an already-terminated agent
+        must not redundantly re-run WIP commit / tmux kill / cost
+        collection -- narrows (does not fully close -- see terminator.py's
+        own comment on the residual check-then-act race) the window where
+        monitor.py's detect_zombie_agent can legitimately fire concurrently
+        with a task's own completion handler terminating the same agent
+        (the completion handler committing task.status="done" and its own
+        termination call finishing are two separate steps, not atomic)."""
+        with db_manager.session_scope() as session:
+            agent = Agent(
+                id="agent-term-2",
+                system_prompt="Test",
+                status="terminated",
+                cli_type="pi",
+                tmux_session_name="test-session-term-2",
+            )
+            session.add(agent)
+
+        await mock_agent_manager.terminate_agent("agent-term-2")
+
+        with db_manager.session_scope() as session:
+            logs = session.query(AgentLog).filter_by(agent_id="agent-term-2").all()
+            assert logs == [], (
+                "a second termination call for an already-terminated agent "
+                "must be a pure no-op, not re-run the full termination "
+                "sequence (WIP commit, tmux/subprocess kills, a duplicate "
+                "'terminated' log entry, cost collection)"
+            )
+
+    @pytest.mark.asyncio
     async def test_falls_back_to_shared_worktree_commit_when_no_agent_branch_record(
         self, mock_agent_manager, db_manager, tmp_path
     ):
