@@ -26,6 +26,7 @@ from src.mcp.server._create_task_steps import (
     _finalize_task_dispatch,
     _guard_phase_ownership,
     _handle_task_processing_failure,
+    _has_unmet_dependencies,
     _maybe_queue_task_at_capacity,
     _persist_new_task,
     _resolve_dedup_phase_id,
@@ -110,14 +111,28 @@ async def create_task(
                 if await _check_for_duplicate_task(task_id, ctx["phase_id"], enriched_task):
                     return  # Don't create agent for duplicates
 
-                if await _maybe_queue_task_at_capacity(task_id, request, enriched_task):
+                if _has_unmet_dependencies(request.depends_on):
+                    # Leaves status="pending" (its default) with no agent
+                    # created. Promoted later by _dispatch_ready_dependents,
+                    # fired from update_task_status when a dependency
+                    # reaches "done" -- see that function's docstring for
+                    # the bug this closes (depends_on was written but never
+                    # read again after task creation).
+                    logger.info(
+                        f"[CREATE_TASK] Task {task_id} depends on "
+                        f"{request.depends_on}, not all done yet -- leaving "
+                        "pending until they complete"
+                    )
+                    return
+
+                if await _maybe_queue_task_at_capacity(task_id, request.workflow_id, enriched_task):
                     return  # Don't create agent yet
 
                 agent = await _dispatch_agent_for_task(
                     task_id,
                     task_data,
                     agent_id,
-                    request,
+                    request.workflow_id,
                     enriched_task,
                     ctx["context_memories"],
                     ctx["project_context"],

@@ -497,6 +497,17 @@ async def complete_task_as_user(
         project_id=project_id,
         project_name=project_name,
     )
+    # A dependent task's whole point is not requiring a human to notice and
+    # manually promote it -- a human-completed task must unblock its
+    # dependents exactly like an agent-completed one does (see
+    # _complete_task_normally's identical call in
+    # _update_task_status_steps.py). Reached only when the task genuinely
+    # ended up "done": the output_lost_rejection branch above raises and
+    # exits before this point.
+    from src.mcp.server._create_task_steps import _dispatch_ready_dependents
+
+    asyncio.create_task(_dispatch_ready_dependents(task_id, workflow_id))
+
     return {"success": True, "task_id": task_id, "message": "Task marked done"}
 
 @router.post("/api/cancel_queued_task")

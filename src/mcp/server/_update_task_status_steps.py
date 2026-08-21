@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from git import Repo
 
 from src.core.database import Agent, AgentLog, Phase, Task
+from src.mcp.server._create_task_steps import _dispatch_ready_dependents
 from src.mcp.server._shared import (
     SELF_REVIEW_CHECKLIST_PROMPT,
     UpdateTaskStatusRequest,
@@ -320,6 +321,20 @@ async def _complete_task_normally(
         output_lost_rejection = await loop.run_in_executor(
             None, functools.partial(TaskCompletionService.verify_output_survived_commit, session, task, phase=phase)
         )
+
+    if task.status == "done":
+        # Checks task.status, NOT request.status -- verify_output_survived_commit
+        # just above can flip task.status to "failed" in place (same ORM
+        # object, same session) when the declared output vanished after
+        # commit. request.status still reads "done" (it's the caller's
+        # ORIGINAL request, never mutated) even when that happened, so
+        # keying off it here would promote dependents of a task that was
+        # just rejected. Fires the dependency-promotion sweep alongside the
+        # existing capacity-queue drain below -- a task that finished can
+        # unblock BOTH a capacity-queued task (already handled) and a
+        # dependency-gated one (this), independent reasons a pending task
+        # might not have dispatched yet.
+        asyncio.create_task(_dispatch_ready_dependents(task.id, task.workflow_id))
 
     asyncio.create_task(
         terminate_agents_and_process_queue(server_state.agent_manager, [agent_id])

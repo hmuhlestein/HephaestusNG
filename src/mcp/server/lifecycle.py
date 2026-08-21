@@ -220,6 +220,14 @@ async def _resume_interrupted_workflows(
                     session.flush()
                     terminate_agent(agent.id, session=session)
                     session.commit()
+                    # Same as every other "done" transition (see
+                    # _complete_task_normally / the human-completion
+                    # endpoint) -- a task recovered this way must still
+                    # unblock any dependent waiting on it, not just the
+                    # normal completion paths.
+                    from src.mcp.server._create_task_steps import _dispatch_ready_dependents
+
+                    asyncio.create_task(_dispatch_ready_dependents(task.id, task.workflow_id))
                     resumed += 1
                     continue
 
