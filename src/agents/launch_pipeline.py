@@ -2219,14 +2219,9 @@ class LaunchPipeline:
                     logger.debug(f"[STABLE-TRANSCRIPT] Final flush before restart failed: {e}")
 
                 try:
-                    if self.tmux_server.has_session(agent.tmux_session_name):
-                        tmux_session = None
-                        for tmux_sess in self.tmux_server.sessions:
-                            if tmux_sess.name == agent.tmux_session_name:
-                                tmux_session = tmux_sess
-                                break
-                        if tmux_session:
-                            tmux_session.kill_session()
+                    tmux_session = self._output_capture._find_tmux_session(agent.tmux_session_name)
+                    if tmux_session:
+                        tmux_session.kill_session()
                 except Exception:
                     pass
 
