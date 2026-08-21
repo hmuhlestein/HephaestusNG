@@ -79,6 +79,28 @@ def _should_stop(project_id: Optional[str]) -> bool:
     return False
 
 
+# project_id -> the Agent.id of that project's self-registered orchestrator
+# agent (run_continuous_pipeline's _register_orchestrator_agent). Was a
+# single bare module global (_orchestrator_agent_id, SOLID review 2.4) --
+# the same shape of bug _stop_events above was fixed for: a second project's
+# pipeline registering its own orchestrator agent silently overwrote the
+# first project's id, so task creation (created_by_agent_id=) and status
+# updates for one project's tasks/agent could attribute to the OTHER
+# project's orchestrator once both were running concurrently
+# (max_concurrent_projects >= 2, and run_continuous_pipeline executes in a
+# real OS thread via run_in_executor -- true concurrent mutation, not just
+# interleaved coroutines).
+_orchestrator_agent_ids: Dict[str, str] = {}
+
+
+def _get_orchestrator_agent_id(project_id: Optional[str]) -> Optional[str]:
+    """This project's self-registered orchestrator Agent.id, or None if
+    unresolved/not yet registered -- never guesses at another project's."""
+    if not project_id:
+        return None
+    return _orchestrator_agent_ids.get(project_id)
+
+
 def _interruptible_sleep(seconds: int, project_id: Optional[str]) -> None:
     """Sleep up to `seconds`, but return early if _should_stop(project_id)
     flips during it. A plain time.sleep(seconds) here means a stop request

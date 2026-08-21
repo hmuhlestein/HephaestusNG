@@ -573,9 +573,10 @@ def check_phase_sibling_active(
     if created_by_filter:
         from sqlalchemy import or_
 
-        if orchestrator_agent_id is None:
-            from src.autopilot.orchestrator import _orchestrator_agent_id
-            orchestrator_agent_id = _orchestrator_agent_id
+        # No project-scoped fallback here (SOLID review 2.4) -- a caller
+        # that wants the orchestrator-scoped guard must resolve and pass
+        # its own project's orchestrator_agent_id explicitly; guessing at
+        # some other project's id would be worse than not filtering by it.
         query = query.filter(
             or_
             (
@@ -609,9 +610,9 @@ def create_agent_for_task_direct(
     AgentPromptBuilder.format_initial_message returns verbatim for these
     agent types instead of building the normal phase-task message.
     """
-    from src.autopilot.orchestrator import _orchestrator_agent_id
+    from src.autopilot.orchestrator.runtime_registries import _get_orchestrator_agent_id
     from src.core.app_context import get_app_state
-    from src.core.database import Task
+    from src.core.database import Task, get_project_info_for_workflow
 
     try:
         # get_app_state() itself can raise (RuntimeError: "App state not
@@ -655,10 +656,11 @@ def create_agent_for_task_direct(
             # would block dispatch of a second such subtask just because
             # the first is still active, which isn't the race this guard
             # exists for.
+            _own_project_id, _ = get_project_info_for_workflow(session, workflow_id)
             phase_sibling = check_phase_sibling_active(
                 session, task_id, task.phase_id,
                 created_by_filter=True,
-                orchestrator_agent_id=_orchestrator_agent_id,
+                orchestrator_agent_id=_get_orchestrator_agent_id(_own_project_id),
             )
             if phase_sibling is not None:
                 logger.warning(
@@ -765,18 +767,24 @@ def create_agent_for_task_direct(
         return None
 
 
-def _update_orchestrator_status(status: str) -> None:
+def _update_orchestrator_status(status: str, project_id: Optional[str] = None) -> None:
     """Update the orchestrator agent's status in the database.
 
     Args:
         status: New status ("working", "idle", or "terminated")
+        project_id: Which project's self-registered orchestrator agent to
+            update (SOLID review 2.4) -- omitting it updates nothing rather
+            than guessing at some other project's, since orchestrator agent
+            ids are now tracked per-project.
     """
-    from src.autopilot.orchestrator import _orchestrator_agent_id
-    if not _orchestrator_agent_id:
+    from src.autopilot.orchestrator.runtime_registries import _get_orchestrator_agent_id
+
+    orchestrator_agent_id = _get_orchestrator_agent_id(project_id)
+    if not orchestrator_agent_id:
         return
     try:
         with get_db() as session:
-            agent = session.query(Agent).filter_by(id=_orchestrator_agent_id).first()
+            agent = session.query(Agent).filter_by(id=orchestrator_agent_id).first()
             if agent:
                 agent.status = status
                 agent.last_activity = datetime.utcnow()

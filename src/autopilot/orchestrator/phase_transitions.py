@@ -2226,7 +2226,6 @@ def _create_phase_task(
     same phase. Observed live: two goto tasks landed on architecture_design
     85s apart this way.
     """
-    from src.autopilot.orchestrator import _orchestrator_agent_id
     own_claim = False
     if not target_already_claimed:
         with get_db() as _claim_db:
@@ -2474,6 +2473,10 @@ def _create_phase_task(
                 if feedback
                 else base_description
             ) + input_manifest + prior_findings_block
+            from src.autopilot.orchestrator.runtime_registries import _get_orchestrator_agent_id
+            from src.core.database import get_project_info_for_workflow
+
+            _own_project_id, _ = get_project_info_for_workflow(db, workflow_id)
             task = Task(
                 id=task_id,
                 raw_description=description,
@@ -2489,7 +2492,7 @@ def _create_phase_task(
                 # unconditionally violated Task.created_by_agent_id's FK.
                 # created_by_agent_id is nullable; fall back to None if the
                 # orchestrator agent hasn't been registered in this process.
-                created_by_agent_id=_orchestrator_agent_id,
+                created_by_agent_id=_get_orchestrator_agent_id(_own_project_id),
                 action=action,
                 action_target_phase=(source_phase_name if action in ("goto", "retry") else None),
             )
@@ -2631,7 +2634,7 @@ def _create_corrective_task_body(
     """The actual task+agent creation _create_corrective_task wraps with a
     claim -- split out only so that wrapper's try/finally doesn't have to
     re-indent this whole body."""
-    from src.autopilot.orchestrator import _orchestrator_agent_id
+    from src.autopilot.orchestrator.runtime_registries import _get_orchestrator_agent_id
     from src.core.database import Phase, PhaseExecution, Task, Workflow, get_db
 
     with get_db() as db:
@@ -2683,7 +2686,7 @@ def _create_corrective_task_body(
             priority="high",
             phase_id=phase_id,
             workflow_id=workflow_id,
-            created_by_agent_id=_orchestrator_agent_id,  # see _create_phase_task
+            created_by_agent_id=_get_orchestrator_agent_id(wf.project_id),  # see _create_phase_task
             action="retry",
             action_target_phase=phase_name,
         )
