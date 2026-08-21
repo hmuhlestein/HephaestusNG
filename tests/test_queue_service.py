@@ -724,6 +724,81 @@ class TestDequeueTask:
             session.close()
 
 
+class TestClaimNextQueuedTaskAtomicity:
+    """The actual race this method closes: process_queue's dequeue sequence
+    moved off the single-threaded event loop into run_in_executor (perf:
+    stop process_queue's dispatch chain from blocking the event loop) --
+    losing the implicit atomicity a no-await sequence used to get for free
+    on that single thread. should_queue_task -> get_next_queued_task ->
+    dequeue_task, called separately, is a plain SELECT-then-check-then-write
+    with no DB-level locking, so two real concurrent threads racing it could
+    both select and dequeue the SAME task. claim_next_queued_task serializes
+    the three under _dequeue_lock instead."""
+
+    def test_concurrent_claims_for_one_queued_task_only_let_one_through(self, queue_service, db_manager):
+        """Many threads all racing to claim the single queued task -- with
+        the lock, exactly one must get it; the rest see an empty queue."""
+        import threading
+
+        task_id = create_test_task(db_manager, status="queued")
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            task.queued_at = datetime.utcnow()
+            session.commit()
+        finally:
+            session.close()
+
+        results = []
+        results_lock = threading.Lock()
+
+        def attempt():
+            claimed = queue_service.claim_next_queued_task()
+            with results_lock:
+                results.append(claimed)
+
+        threads = [threading.Thread(target=attempt) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        claimed_ids = [r.id for r in results if r is not None]
+        assert claimed_ids == [task_id]  # exactly one thread claimed it
+        assert results.count(None) == 19
+
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            assert task.status == "assigned"  # dequeue_task actually ran, once
+        finally:
+            session.close()
+
+    def test_returns_none_when_queue_is_empty(self, queue_service):
+        assert queue_service.claim_next_queued_task() is None
+
+    def test_returns_none_when_at_capacity(self, db_manager):
+        qs = QueueService(db_manager, max_concurrent_agents=1)
+        create_test_agent(db_manager, status="working")
+        create_test_task(db_manager, status="queued")
+
+        assert qs.claim_next_queued_task() is None
+
+    def test_claims_and_dequeues_the_next_task(self, queue_service, db_manager):
+        task_id = create_test_task(db_manager, status="queued")
+
+        claimed = queue_service.claim_next_queued_task()
+
+        assert claimed is not None
+        assert claimed.id == task_id
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            assert task.status == "assigned"
+        finally:
+            session.close()
+
+
 class TestGetQueueStatus:
     """Tests for get_queue_status method."""
 
