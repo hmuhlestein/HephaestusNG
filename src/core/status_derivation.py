@@ -33,6 +33,26 @@ from src.core.database import (
 logger = logging.getLogger(__name__)
 
 
+def _apply_derived_status(
+    db: Session, entity, derived: str, entity_label: str, entity_id: str,
+    write_back: bool, on_change=None,
+) -> None:
+    """Shared self-heal write-back for derive_feature_status/derive_design_
+    status/derive_workflow_status: log + write entity.status + commit when
+    write_back is True and derived disagrees with the current DB value.
+    on_change(entity, derived), if given, runs before commit (e.g.
+    derive_design_status's extra design.error set/clear)."""
+    if write_back and derived != entity.status:
+        logger.info(
+            f"[STATUS-HEAL] {entity_label} {entity_id[:8]} status: "
+            f"{entity.status} -> {derived}"
+        )
+        entity.status = derived
+        if on_change:
+            on_change(entity, derived)
+        db.commit()
+
+
 def derive_feature_status(db: Session, feature_id: str, write_back: bool = True) -> str:
     """Derive feature status from its tasks.
     
@@ -198,13 +218,7 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
         derived = feature.status
 
     # Self-heal: write back to DB if status disagrees
-    if write_back and derived != feature.status:
-        logger.info(
-            f"[STATUS-HEAL] Feature {feature_id[:8]} status: "
-            f"{feature.status} -> {derived}"
-        )
-        feature.status = derived
-        db.commit()
+    _apply_derived_status(db, feature, derived, "Feature", feature_id, write_back)
 
     return derived
 
@@ -327,13 +341,8 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
         derived = design.status
 
     # Self-heal: write back to DB if status disagrees
-    if write_back and derived != design.status:
-        logger.info(
-            f"[STATUS-HEAL] Design {design_id[:8]} status: "
-            f"{design.status} -> {derived}"
-        )
-        design.status = derived
-        if derived == FeatureStatus.FAILED:
+    def _set_design_error(d, d_derived):
+        if d_derived == FeatureStatus.FAILED:
             # Surfaced on the design row in the UI -- without this, a design
             # that rolls up to "failed" purely because every task on one of
             # its features failed (no retryable workflow involved, so
@@ -342,7 +351,7 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
             failed_names = [
                 f.name for f, s in feature_status_map.items() if s == FeatureStatus.FAILED
             ]
-            design.error = (
+            d.error = (
                 f"Feature(s) failed: {', '.join(failed_names)}"
                 if failed_names
                 else "One or more features failed"
@@ -350,8 +359,11 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
         else:
             # Clear a stale message from a previous failure now that the
             # design has healed to a non-failed status.
-            design.error = None
-        db.commit()
+            d.error = None
+
+    _apply_derived_status(
+        db, design, derived, "Design", design_id, write_back, on_change=_set_design_error
+    )
 
     return derived
 
@@ -418,13 +430,7 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
         )
         if not incomplete_phase:
             derived = WorkflowStatus.COMPLETED
-            if write_back and derived != workflow.status:
-                logger.info(
-                    f"[STATUS-HEAL] Workflow {workflow_id[:8]} status: "
-                    f"{workflow.status} -> {derived}"
-                )
-                workflow.status = derived
-                db.commit()
+            _apply_derived_status(db, workflow, derived, "Workflow", workflow_id, write_back)
             return derived
 
         # A genuinely incomplete phase AND the workflow is already marked
@@ -485,12 +491,6 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
         derived = workflow.status
 
     # Self-heal
-    if write_back and derived != workflow.status:
-        logger.info(
-            f"[STATUS-HEAL] Workflow {workflow_id[:8]} status: "
-            f"{workflow.status} -> {derived}"
-        )
-        workflow.status = derived
-        db.commit()
+    _apply_derived_status(db, workflow, derived, "Workflow", workflow_id, write_back)
 
     return derived
