@@ -129,10 +129,13 @@ Tests API endpoints with real database:
 ### 3. Frontend Tests
 
 **Location:** `frontend/`  
+No automated test suite exists yet (no `vitest.config.ts`, no
+`@testing-library/*`, no `test` script) — see §5 for what's actually
+available today.
 **Command:**
 ```bash
-cd frontend && npm run test
-cd frontend && npx tsc --noEmit  # Type checking
+cd frontend && npx tsc --noEmit  # Type checking -- the only automated frontend check that exists
+cd frontend && npm run build     # tsc && vite build -- also catches build-time errors tsc alone won't
 ```
 
 ---
@@ -163,9 +166,7 @@ python -m pytest tests/ -p no:libtmux -q
 test_<module>.py
 test_<feature>.py
 
-# Frontend (vitest)
-<Component>.test.tsx
-<service>.test.ts
+# Frontend: no test suite exists yet (see §5) -- no naming convention to follow
 ```
 
 ### Common Commands
@@ -296,6 +297,11 @@ def mock_tmux():
 
 ## 5. Frontend Tests
 
+**No automated frontend test suite exists in this repo.** There's no
+`vitest.config.ts`, no `frontend/tests/`, no `@testing-library/*` in
+`package.json`, and no `test`/`lint` npm scripts — `npm run lint` and
+`npm test` both fail with "missing script." What actually exists today:
+
 ### Project Structure
 
 ```
@@ -305,27 +311,31 @@ frontend/
 │   ├── hooks/
 │   ├── services/
 │   └── types/
-├── tests/
-│   ├── setup.ts
-│   └── unit/
-└── vitest.config.ts
+├── package.json      # scripts: dev, build, preview, type-check
+└── vite.config.ts
 ```
 
-### Running Frontend Tests
+### Running Frontend Checks
 
 ```bash
-# Run all tests
-cd frontend && npm test
-
-# Run with coverage
-cd frontend && npm run test:coverage
-
-# Type checking
+# Type checking -- the only automated frontend verification that exists
 cd frontend && npx tsc --noEmit
 
-# Linting
-cd frontend && npm run lint
+# Production build -- also catches build-time errors tsc alone won't
+cd frontend && npm run build
 ```
+
+If you want an actual test suite (component tests, not just type/build
+checks), it needs to be built from scratch: install `vitest` +
+`@testing-library/react` + `jsdom`, add `vitest.config.ts`, wire up
+`test`/`test:coverage` scripts, and write the first tests — this is new
+infrastructure, not a config fix. Same story for linting: no eslint
+config exists, so adding one is a from-scratch setup (ESLint v9+ needs a
+flat `eslint.config.*`, not the legacy `.eslintrc.*`).
+
+Until that exists, the practical verification path for a frontend change
+is: `tsc --noEmit` + `npm run build` for correctness, and the
+Playwright-driven browser check below for anything visual.
 
 ### Visual/Browser Verification (Playwright)
 
@@ -593,11 +603,8 @@ python -m pytest tests/test_<module>.py -p no:libtmux -q
 # Backend (with libtmux disabled)
 python -m pytest tests/ -p no:libtmux -q
 
-# Frontend type check
-cd frontend && npx tsc --noEmit
-
-# Frontend lint
-cd frontend && npm run lint
+# Frontend type check + build (no automated test suite or linter exists -- see §5)
+cd frontend && npx tsc --noEmit && npm run build
 ```
 
 ### Test File Naming
@@ -607,9 +614,7 @@ cd frontend && npm run lint
 test_<module>.py
 test_<feature>.py
 
-# Frontend (vitest)
-<Component>.test.tsx
-<service>.test.ts
+# Frontend: no test suite exists yet (see §5) -- no naming convention to follow
 ```
 
 ### Common Commands
@@ -630,4 +635,4 @@ python -m pytest tests/ -p no:libtmux -k "phase_manager and not integration"
 
 ---
 
-*Last Updated: July 2026*
+*Last Updated: August 2026*
