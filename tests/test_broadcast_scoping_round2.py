@@ -178,7 +178,7 @@ class TestApproveTicketBroadcast:
 class TestTicketClarificationBroadcast:
     @pytest.mark.asyncio
     async def test_clarification_broadcasts_project_context(self, db_manager, fake_state, monkeypatch):
-        from src.mcp.messaging_api import (
+        from src.mcp.tickets_api import (
             RequestTicketClarificationRequest,
             request_ticket_clarification_endpoint,
         )
