@@ -48,6 +48,32 @@ logger = logging.getLogger(__name__)
 
 SELF_REVIEW_CHECKLIST_PROMPT = "\n" + get_prompt("self_review_checklist")
 
+# asyncio.create_task() only holds a WEAK reference to the Task it returns
+# (see https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task,
+# "Important: Save a reference to the result") -- a bare, unreferenced
+# create_task() call can be garbage-collected mid-execution, silently, with
+# no error, before the coroutine finishes. Confirmed live: update_task_status's
+# fire-and-forget terminate_agents_and_process_queue call intermittently
+# never ran, leaving a task's agent alive and idle after the task itself
+# completed "done" -- the orchestrator correctly moved on to the phase's
+# next task, but the old agent was never told to stop. It sat idle until
+# mechanical_recovery's frozen-agent detector misread the idle silence as
+# "frozen" and tried an in-session model-switch rescue on an agent whose
+# work was already finished minutes earlier -- a zombie, not a hang.
+_background_tasks: set = set()
+
+
+def spawn_background_task(coro) -> asyncio.Task:
+    """asyncio.create_task() wrapper that keeps a strong reference until the
+    task completes, then discards it. Every genuinely fire-and-forget
+    coroutine in this package must go through this instead of a bare
+    asyncio.create_task() call -- see the module comment above."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 def _resolve_worktree_path(session, task) -> Optional[str]:
     """The workflow's shared worktree, for self-review telemetry.
 
