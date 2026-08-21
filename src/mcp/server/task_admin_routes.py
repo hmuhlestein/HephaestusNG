@@ -521,31 +521,21 @@ async def cancel_queued_task_endpoint(
     logger.info(f"Cancel request for queued task {task_id}")
 
     try:
-        session = server_state.db_manager.get_session()
-        try:
-            # Verify task exists and is queued
-            task = session.query(Task).filter_by(id=task_id).first()
-            if not task:
-                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-
-            if task.status != "queued":
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Task {task_id} is not queued (status: {task.status})",
-                )
-
-            # Mark task as failed
-            task.status = "failed"
-            task.failure_reason = "Cancelled by user from queue"
-            task.completed_at = datetime.utcnow()
-            queued_task_workflow_id = task.workflow_id
-            session.commit()
-
-        finally:
-            session.close()
-
-        # Remove from queue
-        server_state.queue_service.dequeue_task(task_id)
+        # Locked check-and-fail -- see QueueService.cancel_queued_task's
+        # docstring for why this write must serialize against
+        # claim_next_queued_task's executor-thread claim (the same race
+        # class dequeue_task's own lock closes; this is the write that
+        # happens before that dequeue call).
+        outcome, queued_task_workflow_id = (
+            server_state.queue_service.cancel_queued_task(task_id)
+        )
+        if outcome == "not_found":
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        if outcome == "not_queued":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Task {task_id} is not queued",
+            )
 
         # Broadcast update
         from src.core.database import resolve_project_for_workflow

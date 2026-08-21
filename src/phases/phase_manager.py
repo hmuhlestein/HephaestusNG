@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -22,6 +23,21 @@ from src.workflow_engine.orchestrator import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Bounded retry for SQLite write-lock contention inside mark_phase_complete
+# -- same rationale and shape as agent_task_routes.py's _LOCK_RETRY_* pair.
+# mark_phase_complete runs on executor threads alongside the event loop's
+# own writers (task-status updates, terminator, Guardian cost recording),
+# and a transient "database is locked" here used to fall into the blanket
+# except below, which ESCALATED TO ARBITRATION -- converting contention
+# into a phase-flow decision. Observed live (workflow ca539a75, 2026-08-21):
+# an arbiter's "continue" decision reached _resolve_arbitration_outcome,
+# mark_phase_complete raised database-is-locked on its first write, the
+# handler returned action="arbitrate", and the decision was silently
+# discarded -- the workflow sat "active" awaiting an arbiter forever
+# while the agent's own termination ALSO failed on the same lock.
+_MARK_COMPLETE_LOCK_RETRIES = 5
+_MARK_COMPLETE_LOCK_RETRY_DELAY_SECONDS = 0.3
 
 
 def _reset_stale_executions_on_goto(*args, **kwargs):
@@ -1158,6 +1174,7 @@ class PhaseManager:
         force_action: str = None,
         force_target_phase: str = None,
         force_reason: str = None,
+        _lock_attempt: int = 0,
     ) -> Dict[str, Any]:
         """Mark a phase as complete and evaluate with orchestrator.
 
@@ -1311,6 +1328,36 @@ class PhaseManager:
             }
 
         except Exception as e:
+            # A transient SQLite lock is contention, not a phase failure --
+            # retry the whole call from a fresh session (mirroring
+            # agent_task_routes.py's update_task_status wrapper) instead of
+            # escalating to arbitration and discarding whatever decision
+            # this completion was carrying. See _MARK_COMPLETE_LOCK_RETRIES'
+            # comment for the live incident. Safe to re-enter: the
+            # execution.status == "completed" idempotency guard above makes
+            # a second pass a no-op past whatever the first pass committed,
+            # and the rollback below undoes the uncommitted remainder.
+            if (
+                _lock_attempt < _MARK_COMPLETE_LOCK_RETRIES
+                and "database is locked" in str(e).lower()
+            ):
+                delay = _MARK_COMPLETE_LOCK_RETRY_DELAY_SECONDS * (2**_lock_attempt)
+                logger.warning(
+                    f"Phase {phase_name_for_error}: mark_phase_complete hit a locked database "
+                    f"(attempt {_lock_attempt + 1}/{_MARK_COMPLETE_LOCK_RETRIES}) -- retrying in {delay:.1f}s"
+                )
+                session.rollback()
+                session.close()
+                time.sleep(delay)
+                return self.mark_phase_complete(
+                    phase_id,
+                    summary,
+                    phase_output=phase_output,
+                    force_action=force_action,
+                    force_target_phase=force_target_phase,
+                    force_reason=force_reason,
+                    _lock_attempt=_lock_attempt + 1,
+                )
             # Escalate to arbitration, never "continue". This handler used to
             # return should_continue=True on ANY failure, so a phase whose
             # completion blew up was advanced exactly as if its gates had
