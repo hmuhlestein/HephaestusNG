@@ -1213,6 +1213,13 @@ class Feature(Base):
     # Pull request URL — populated by git_expert phase after creating PR
     pr_url = Column(Text, nullable=True)
 
+    # Denormalized copy of the parent AutopilotDesign.workflow_type at
+    # decomposition time -- not a join, since this feature's pipeline can be
+    # resumed long after the parent design row's own lifecycle is otherwise
+    # irrelevant. Selects which workflow definition_id _run_one_feature
+    # launches (see docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md).
+    workflow_type = Column(String(20), nullable=False, default="feature")
+
     # Relationships
     design = relationship("AutopilotDesign", back_populates="features")
     workflow = relationship("Workflow", foreign_keys=[workflow_id])
@@ -1251,6 +1258,12 @@ class AutopilotDesign(Base):
 
     # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
     cost_total_usd = Column(Float, default=0.0, nullable=False)
+
+    # Which pipeline this design runs through -- "feature" (full pipeline,
+    # definition_id "autopilot") or "bugfix" (shorter pipeline, definition_id
+    # "bugfix"). Set at add-time, either from the user's explicit choice or
+    # detect_workflow_type()'s heuristic. See docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md.
+    workflow_type = Column(String(20), nullable=False, default="feature")
 
     # Relationships
     project = relationship("AutopilotProject", back_populates="designs")

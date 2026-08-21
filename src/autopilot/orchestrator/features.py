@@ -42,11 +42,16 @@ def _create_feature_records(
     """
     import uuid
 
-    from src.core.database import Feature
+    from src.core.database import AutopilotDesign, Feature
 
     feature_records = []
 
     with get_db() as db:
+        # Denormalized copy of the parent design's workflow_type onto every
+        # feature it decomposes into -- see Feature.workflow_type's comment
+        # in database.py and docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md.
+        parent_design = db.query(AutopilotDesign).filter_by(id=design_id).first()
+        design_workflow_type = parent_design.workflow_type if parent_design else "feature"
         # Idempotency guard: finalize_phase0_workflow can now call this from
         # two independent sites for the same design (run_phase0's own
         # synchronous tail, and the generic phase0-completion hook in
@@ -99,6 +104,7 @@ def _create_feature_records(
                 status="pending",
                 scope_doc_path=scope_doc_path_str,
                 feature_record_path=str(feature_record_path),
+                workflow_type=design_workflow_type,
             )
             db.add(feature)
 

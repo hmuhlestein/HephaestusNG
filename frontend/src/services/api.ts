@@ -842,8 +842,8 @@ export const apiService = {
     return data;
   },
 
-  addAutopilotProjectDesign: async (projectId: string, name: string, content: string, extension: string = '.md', destination: 'queue' | 'docs' = 'queue'): Promise<any> => {
-    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/designs`, { name, content, extension, destination });
+  addAutopilotProjectDesign: async (projectId: string, name: string, content: string, extension: string = '.md', destination: 'queue' | 'docs' = 'queue', workflowType: 'feature' | 'bugfix' | null = null): Promise<any> => {
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/designs`, { name, content, extension, destination, workflow_type: workflowType });
     return data;
   },
 

@@ -688,6 +688,28 @@ def migrate_agent_pending_message_column(engine):
         logger.warning(f"agents.pending_message_sent_at migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_workflow_type_columns(engine):
+    """Add autopilot_designs.workflow_type and features.workflow_type for
+    existing databases. Both default "feature" (today's only behavior).
+
+    Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN workflow_type VARCHAR(20) NOT NULL DEFAULT 'feature'"))
+            except Exception:
+                pass  # Column already exists
+            try:
+                conn.execute(text("ALTER TABLE features ADD COLUMN workflow_type VARCHAR(20) NOT NULL DEFAULT 'feature'"))
+            except Exception:
+                pass  # Column already exists
+            conn.commit()
+            logger.info("Migrated workflow_type columns")
+    except Exception as e:
+        logger.warning(f"workflow_type columns migration failed (not just 'already exists' -- check this): {e}")
+
+
 # ── Registry ─────────────────────────────────────────────────────────
 # (id, function). Ids match the pre-split method names -- see module
 # docstring for why they must not be renamed.
@@ -711,4 +733,5 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_phase_fallback_columns", migrate_phase_fallback_columns),
     ("_migrate_review_mode_columns", migrate_review_mode_columns),
     ("_migrate_agent_pending_message_column", migrate_agent_pending_message_column),
+    ("_migrate_workflow_type_columns", migrate_workflow_type_columns),
 ]
