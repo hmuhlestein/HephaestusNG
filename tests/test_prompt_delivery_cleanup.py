@@ -1,5 +1,6 @@
 """Tests for agent and task cleanup when prompt delivery fails."""
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -7,6 +8,24 @@ import pytest
 from src.agents.manager import AgentManager
 from src.core.database import Agent, DatabaseManager, Task
 from src.interfaces import LLMProviderInterface
+
+
+def _install_session(db_manager, mock_session):
+    """Point both session accessors at the same mock session.
+
+    A bare Mock's session_scope() returns another Mock, which doesn't
+    support `with ... as` -- launch_pipeline's agent-registration block
+    uses the real session_scope() (SOLID review 3.10), so this has to
+    actually behave like one. Same underlying session as get_session()
+    returns, so assertions against either see the same calls.
+    """
+    db_manager.get_session = Mock(return_value=mock_session)
+
+    @contextmanager
+    def _session_scope():
+        yield mock_session
+
+    db_manager.session_scope = _session_scope
 
 
 @pytest.fixture
@@ -24,7 +43,7 @@ def mock_db_manager():
     mock_session.close = Mock()
     mock_session.query = Mock()
 
-    db_manager.get_session = Mock(return_value=mock_session)
+    _install_session(db_manager, mock_session)
 
     return db_manager
 
@@ -144,7 +163,7 @@ async def test_agent_and_task_cleanup_on_prompt_delivery_failure(
     mock_session.close = Mock()
     mock_session.query = Mock(return_value=mock_query)
 
-    mock_db_manager.get_session = Mock(return_value=mock_session)
+    _install_session(mock_db_manager, mock_session)
 
     # Try to create agent - should fail and clean up
     with pytest.raises(Exception) as exc_info:
@@ -396,6 +415,15 @@ async def test_cleanup_handles_tmux_kill_errors_gracefully(
         return mock_session
 
     mock_db_manager.get_session = Mock(side_effect=_get_session_side_effect)
+
+    # The agent-registration block uses session_scope() (SOLID review 3.10),
+    # not get_session(), so it needs its own stand-in -- it's the "main"
+    # session in the comment above, i.e. mock_session.
+    @contextmanager
+    def _scope():
+        yield mock_session
+
+    mock_db_manager.session_scope = _scope
 
     # Try to create agent - should fail and attempt cleanup
     with pytest.raises(Exception) as exc_info:
