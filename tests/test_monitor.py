@@ -3374,3 +3374,107 @@ class TestAutoRestartResetsTask:
         await make_monitoring_loop._auto_restart_agent(agent)
 
         mock_agent_manager.tmux_server.kill_session.assert_called_once_with("agent_agent-1")
+
+
+class TestDetectZombieAgent:
+    """A safety net against the whole class of bug behind c1cc687/f5a10fa
+    (fire-and-forget agent-termination calls silently never running),
+    not just that one specific asyncio.create_task GC race. Catches it by
+    observable SYMPTOM -- agent still working/starting/idle while its own
+    current task has already reached a terminal status -- regardless of
+    what caused the mismatch, so it also covers causes not yet found.
+
+    Confirmed live: three agents each sat "working" for 3-7+ minutes after
+    their tasks completed "done", with no agent_logs entries in between,
+    until an unrelated frozen-agent detector misread the idle silence and
+    wasted an in-session model-switch rescue on work already finished."""
+
+    def _session_with(self, task):
+        from contextlib import contextmanager
+
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = task
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        return mock_session_scope
+
+    @pytest.mark.asyncio
+    async def test_terminated_agent_not_checked(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        agent = Agent(id="a1", status="terminated", current_task_id="t1")
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        result = await make_monitoring_loop._detect_zombie_agent(agent)
+
+        assert result is False
+        mock_agent_manager.terminate_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_current_task_not_checked(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
+        agent = Agent(id="a1", status="working", current_task_id=None)
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        result = await make_monitoring_loop._detect_zombie_agent(agent)
+
+        assert result is False
+        mock_agent_manager.terminate_agent.assert_not_called()
+
+    @pytest.mark.parametrize("status", ["pending", "assigned", "in_progress", "under_review"])
+    @pytest.mark.asyncio
+    async def test_active_task_not_flagged(
+        self, make_monitoring_loop, mock_agent_manager, mock_db, status
+    ):
+        """The whole point: a genuinely-working agent (its task is still
+        active) must never be reaped."""
+        agent = Agent(id="a1", status="working", current_task_id="t1")
+        task = Mock(id="t1", status=status)
+        mock_db.session_scope = self._session_with(task)
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        result = await make_monitoring_loop._detect_zombie_agent(agent)
+
+        assert result is False
+        mock_agent_manager.terminate_agent.assert_not_called()
+
+    @pytest.mark.parametrize("agent_status", ["working", "starting", "idle"])
+    @pytest.mark.parametrize("task_status", ["done", "failed", "duplicated"])
+    @pytest.mark.asyncio
+    async def test_terminal_task_reaps_the_agent(
+        self, make_monitoring_loop, mock_agent_manager, mock_db, agent_status, task_status
+    ):
+        """Mirrors task 6633d361: completed "done" with real, substantive
+        completion_notes -- the agent genuinely finished its work -- while
+        its own agent row was still "working" with no explanation.
+        TaskStatus.TERMINAL, not just "done": the same zombie risk applies
+        to a completion handler that flips status to "failed"/"duplicated"
+        and then never reaches its own termination call either."""
+        agent = Agent(id="a1", status=agent_status, current_task_id="t1")
+        task = Mock(id="t1", status=task_status)
+        mock_db.session_scope = self._session_with(task)
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        result = await make_monitoring_loop._detect_zombie_agent(agent)
+
+        assert result is True
+        mock_agent_manager.terminate_agent.assert_called_once_with("a1")
+
+    @pytest.mark.asyncio
+    async def test_missing_task_row_not_flagged(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """current_task_id pointing at a since-deleted row is a different,
+        unrelated problem -- must not crash or misfire here."""
+        agent = Agent(id="a1", status="working", current_task_id="t1")
+        mock_db.session_scope = self._session_with(None)
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        result = await make_monitoring_loop._detect_zombie_agent(agent)
+
+        assert result is False
+        mock_agent_manager.terminate_agent.assert_not_called()

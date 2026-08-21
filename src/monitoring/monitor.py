@@ -48,10 +48,15 @@ class MonitoringLoop:
     # a shape every method already satisfies structurally.
     #
     # Early-exit checks: the first one to fire skips every later check for
-    # this agent this cycle -- these three conditions mean the agent isn't
-    # in a normal working state at all, so none of the CLI-interaction
-    # checks below make sense to run against it this cycle.
+    # this agent this cycle -- these conditions mean the agent isn't in a
+    # normal working state at all, so none of the CLI-interaction checks
+    # below make sense to run against it this cycle.
+    # "_detect_zombie_agent" listed first -- cheapest (one DB query, no
+    # tmux/output introspection) and most foundational: if the agent's own
+    # task is already terminal, nothing else about the agent is worth
+    # checking this cycle.
     _EARLY_EXIT_CHECKS = (
+        "_detect_zombie_agent",
         "_detect_orphaned_idle_agent",
         "_detect_credit_exhausted",
         "_detect_agent_never_started",
@@ -304,6 +309,11 @@ class MonitoringLoop:
     async def _detect_bad_model_error(self, *args, **kwargs):
         """Delegator to _mechanical_recovery.detect_bad_model_error()."""
         return await self._mechanical_recovery.detect_bad_model_error(*args, **kwargs)
+
+
+    async def _detect_zombie_agent(self, *args, **kwargs):
+        """Delegator to _mechanical_recovery.detect_zombie_agent()."""
+        return await self._mechanical_recovery.detect_zombie_agent(*args, **kwargs)
 
 
     async def _detect_orphaned_idle_agent(self, *args, **kwargs):
