@@ -67,23 +67,18 @@ async def process_queue(project_id: Optional[str] = None):
 
     try:
         def _dequeue_and_resolve_phase_sync():
-            # Check if we should queue (i.e., at capacity)
-            if server_state.queue_service.should_queue_task(project_id):
-                logger.debug(f"At capacity - not processing queue (project_id={project_id})")
-                return None
-
-            # Get next task from queue
-            task = server_state.queue_service.get_next_queued_task(project_id)
+            # claim_next_queued_task does the capacity check, selection, and
+            # dequeue atomically under one lock -- see its docstring (and
+            # QueueService._dequeue_lock's) for why this can no longer be
+            # three separate calls now that this closure runs on a real
+            # executor thread instead of the single-threaded event loop.
+            task = server_state.queue_service.claim_next_queued_task(project_id)
             if not task:
-                logger.debug("No queued tasks to process")
                 return None
 
             logger.info(f"Processing queued task {task.id} (priority={task.priority}, boosted={task.priority_boosted})")
 
             reservation = getattr(task, "_reserved_cli_model", None)
-
-            # Dequeue the task
-            server_state.queue_service.dequeue_task(task.id)
 
             # Resolve phase_id once up front — reused for both enrichment (if
             # needed) and agent dispatch below. Previously this exact

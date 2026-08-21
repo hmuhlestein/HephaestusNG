@@ -90,6 +90,20 @@ class QueueService:
         # other call sites share.
         self._reservation_lock = threading.Lock()
         self._pending_reservations: Dict[str, int] = {}
+        # Guards claim_next_queued_task's should_queue_task -> get_next_queued_task
+        # -> dequeue_task sequence. Before process_queue's DB work moved off the
+        # event loop (run_in_executor, perf: stop process_queue's dispatch chain
+        # from blocking the event loop), running these three calls with no
+        # `await` between them on the single-threaded event loop gave the
+        # sequence atomicity for free -- no two concurrent process_queue()
+        # coroutines could interleave mid-sequence, since nothing here ever
+        # yielded control. Once that sequence started running via
+        # run_in_executor on a real thread pool, two overlapping process_queue()
+        # calls could genuinely execute it concurrently on different OS
+        # threads -- neither get_next_queued_task's SELECT nor dequeue_task's
+        # status check-then-write is an atomic DB operation on its own, so both
+        # could select and dequeue the SAME task, double-dispatching it.
+        self._dequeue_lock = threading.Lock()
         logger.info(
             f"QueueService initialized with max_concurrent_agents={max_concurrent_agents}, "
             f"cli_model_concurrency_limits={self.cli_model_concurrency_limits}"
@@ -540,6 +554,25 @@ class QueueService:
             self._recalculate_queue_positions()
 
             logger.info(f"Task {task_id} dequeued and marked as assigned")
+
+    def claim_next_queued_task(self, project_id: Optional[str] = None) -> Optional[Task]:
+        """Atomically check capacity, select, and dequeue the next queued
+        task -- see _dequeue_lock's docstring for why this needs a lock
+        rather than calling should_queue_task/get_next_queued_task/
+        dequeue_task separately.
+        """
+        with self._dequeue_lock:
+            if self.should_queue_task(project_id):
+                logger.debug(f"At capacity - not processing queue (project_id={project_id})")
+                return None
+
+            task = self.get_next_queued_task(project_id)
+            if not task:
+                logger.debug("No queued tasks to process")
+                return None
+
+            self.dequeue_task(task.id)
+            return task
 
     def _recalculate_queue_positions(self) -> None:
         """Recalculate queue positions for all queued tasks."""
