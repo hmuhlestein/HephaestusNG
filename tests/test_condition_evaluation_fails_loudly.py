@@ -19,7 +19,7 @@ escalates to arbitration instead, so the decision is made by an arbiter
 rather than guessed at on a session that just rolled back.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -232,3 +232,195 @@ class TestOrchestratorLoadFailureDoesNotGoSequential:
 
         assert result["action"] == "arbitrate"
         assert result["action"] != "continue"
+
+
+class TestUnresolvableGotoEscalates:
+    """A goto whose target does not exist must not advance the phase.
+
+    Both handlers used to log a warning and call _advance_or_complete -- the
+    opposite of the decision just made. They now escalate to arbitration,
+    which is capped; once the arbiter has had its retries and neither has a
+    pending decision nor genuinely passes, _trigger_arbitration fails the
+    workflow. So the sequence is arbitrate, retry, then fail -- never a
+    silent advance.
+    """
+
+    def _fixture(self):
+        from src.phases.phase_manager import PhaseManager
+
+        phase = MagicMock()
+        phase.name = "adversarial_review"
+        phase.id = "phase-1"
+        phase.workflow_id = "wf-1"
+
+        session = MagicMock()
+        manager = PhaseManager.__new__(PhaseManager)
+        manager.db_manager = MagicMock()
+        manager._orchestrators = {}
+        return manager, session, phase, MagicMock()
+
+    def test_gate_decided_goto_with_a_bad_target_escalates(self):
+        manager, session, phase, execution = self._fixture()
+        evaluation = MagicMock()
+        evaluation.target_phase = "no_such_phase"
+
+        with (
+            patch.object(type(manager), "_close_execution", create=True),
+            patch("src.phases.phase_manager._reopen_phase_execution") as reopen,
+            patch.object(
+                type(manager), "_find_phase_by_name_or_order", return_value=None, create=True
+            ),
+            patch.object(type(manager), "_advance_or_complete", create=True) as advance,
+        ):
+            result = manager._handle_evaluation_goto(
+                session, phase, execution, "done", evaluation
+            )
+
+        assert result["action"] == "arbitrate"
+        advance.assert_not_called(), "must not advance past the phase it was told to leave"
+        reopen.assert_called_once()
+        assert "no_such_phase" in result["reason"]
+
+    def test_arbiter_decided_goto_with_a_bad_target_escalates(self):
+        """The arbiter's own resolution being unexecutable is the case that
+        matters most: this is where escalations land."""
+        manager, session, phase, execution = self._fixture()
+
+        with (
+            patch.object(type(manager), "_close_execution", create=True),
+            patch("src.phases.phase_manager._reopen_phase_execution") as reopen,
+            patch.object(
+                type(manager), "_find_phase_by_name_or_order", return_value=None, create=True
+            ),
+            patch.object(type(manager), "_advance_or_complete", create=True) as advance,
+        ):
+            result = manager._handle_force_goto(
+                session, phase, execution, "done", "renamed_away", "arbiter said so"
+            )
+
+        assert result["action"] == "arbitrate"
+        advance.assert_not_called()
+        reopen.assert_called_once()
+
+    def test_the_execution_is_reopened_in_progress_not_pending(self):
+        """_advance_phases picks the next pending phase after the latest
+        COMPLETED one, so a phase left completed (or reopened as pending)
+        while awaiting arbitration gets raced past."""
+        manager, session, phase, execution = self._fixture()
+
+        with (
+            patch.object(type(manager), "_close_execution", create=True),
+            patch("src.phases.phase_manager._reopen_phase_execution") as reopen,
+            patch.object(
+                type(manager), "_find_phase_by_name_or_order", return_value=None, create=True
+            ),
+            patch.object(type(manager), "_advance_or_complete", create=True),
+        ):
+            manager._handle_force_goto(
+                session, phase, execution, "done", "gone", "arbiter"
+            )
+
+        assert reopen.call_args.kwargs["status"] == "in_progress"
+
+    def test_a_resolvable_goto_is_untouched(self):
+        """The escalation must only fire when the target genuinely does not
+        resolve -- normal gotos keep working."""
+        manager, session, phase, execution = self._fixture()
+        target = MagicMock()
+        target.name = "development"
+        target.order = 3
+
+        with (
+            patch.object(type(manager), "_close_execution", create=True),
+            patch("src.phases.phase_manager._reopen_phase_execution") as reopen,
+            patch.object(
+                type(manager), "_find_phase_by_name_or_order", return_value=target, create=True
+            ),
+            patch("src.phases.phase_manager._reset_stale_executions_on_goto", return_value=0),
+            patch.object(type(manager), "_consume_gate_artifacts_for", create=True),
+            patch.object(type(manager), "_start_phase", create=True),
+        ):
+            result = manager._handle_force_goto(
+                session, phase, execution, "done", "development", "arbiter"
+            )
+
+        assert result["action"] != "arbitrate"
+        reopen.assert_not_called()
+
+
+class TestEscalationReasonIsCarriedThrough:
+    """The reason must survive to somewhere a human reads it.
+
+    _escalate_unresolvable_goto's reason travels:
+        result["reason"]
+          -> _fire_phase_transition's `reason = result.get("reason") or ...`
+          -> _trigger_arbitration(reason=...)
+          -> on cap exhaustion, Workflow.status_reason
+          -> /api/workflow-executions (status_reason) -> the dashboard.
+
+    Without the first hop the chain silently falls back to the generic
+    "exhausted its retry budget", and the operator never learns a goto
+    target was misspelled.
+    """
+
+    def test_fire_phase_transition_forwards_the_reason_to_arbitration(self):
+        # "development" deliberately: _fire_phase_transition runs a gate
+        # pre-check (real DB + filesystem) for anything in GATED_PHASES
+        # before reaching the action dispatch under test, so a gated phase
+        # name here never gets far enough to call _trigger_arbitration.
+        import src.autopilot.orchestrator.phase_transitions as pt
+
+        captured = {}
+
+        def fake_trigger(workflow_id, phase_id, phase_name, reason, logger):
+            captured["reason"] = reason
+            return True
+
+        result = {
+            "action": "arbitrate",
+            "target_phase": "development",
+            "target_phase_id": "phase-1",
+            "should_continue": True,
+            "reason": "gate evaluation chose goto 'no_such_phase', which names no phase",
+        }
+
+        pm = MagicMock()
+        pm.mark_phase_complete.return_value = result
+
+        with (
+            patch.object(pt, "_trigger_arbitration", side_effect=fake_trigger),
+            patch.object(pt, "PhaseManager", return_value=pm),
+            patch.object(pt, "DatabaseManager", MagicMock()),
+        ):
+            pt._fire_phase_transition("wf-1", "phase-1", "development", MagicMock())
+
+        assert "no_such_phase" in captured.get("reason", ""), (
+            "the specific reason must reach arbitration, not be replaced by the "
+            "generic retry-budget message"
+        )
+
+    def test_the_generic_fallback_still_applies_when_no_reason_is_given(self):
+        import src.autopilot.orchestrator.phase_transitions as pt
+
+        captured = {}
+
+        def fake_trigger(workflow_id, phase_id, phase_name, reason, logger):
+            captured["reason"] = reason
+            return True
+
+        pm = MagicMock()
+        pm.mark_phase_complete.return_value = {
+            "action": "arbitrate",
+            "target_phase": "development",
+            "target_phase_id": "phase-1",
+            "should_continue": True,
+        }
+
+        with (
+            patch.object(pt, "_trigger_arbitration", side_effect=fake_trigger),
+            patch.object(pt, "PhaseManager", return_value=pm),
+            patch.object(pt, "DatabaseManager", MagicMock()),
+        ):
+            pt._fire_phase_transition("wf-1", "phase-1", "development", MagicMock())
+
+        assert captured.get("reason")
