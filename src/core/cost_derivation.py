@@ -48,6 +48,7 @@ def record_cost(
     cache_write_tokens: int = 0,
     reasoning_tokens: int = 0,
     raw_usage: Optional[dict] = None,
+    id: Optional[str] = None,
 ) -> CostEntry:
     """Record a new cost entry and trigger rollup.
 
@@ -69,6 +70,14 @@ def record_cost(
         cache_write_tokens: Cache write token count
         reasoning_tokens: Reasoning token count
         raw_usage: Raw usage data for debugging
+        id: Optional deterministic id (default: a fresh random "cost-<uuid8>").
+            Pass a stable, reproducible id (e.g. "cost-{session_id}-{idx}") when
+            the caller may legitimately retry the same logical entry more than
+            once -- collect_task_cost does this so a partially-failed batch can
+            be safely retried in full: re-recording an already-committed entry
+            hits this row's PRIMARY KEY constraint (caught by the caller as
+            "already recorded", not a new failure) instead of silently
+            double-counting it under a fresh random id.
 
     Returns:
         The created CostEntry
@@ -87,7 +96,7 @@ def record_cost(
             workflow_id = task.workflow_id
 
     entry = CostEntry(
-        id=f"cost-{uuid.uuid4().hex[:8]}",
+        id=id or f"cost-{uuid.uuid4().hex[:8]}",
         task_id=task_id,
         agent_id=agent_id,
         workflow_id=workflow_id,
