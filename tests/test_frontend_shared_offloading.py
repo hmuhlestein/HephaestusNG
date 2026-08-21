@@ -1,17 +1,19 @@
-"""Regression tests for src/mcp/frontend/_shared.py's FrontendAPI: blocking
-calls made directly inside async def routes must be offloaded."""
+"""Regression tests for src/mcp/frontend's TaskService/PhaseService (formerly
+FrontendAPI): blocking calls made directly inside async def routes must be
+offloaded."""
 
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
 from src.core.database import DatabaseManager, Phase, Workflow
-from src.mcp.frontend._shared import FrontendAPI
+from src.mcp.frontend.phase_service import PhaseService
+from src.mcp.frontend.task_service import TaskService
 
 
 @pytest.fixture
 def frontend_api():
-    return FrontendAPI(db_manager=Mock(), agent_manager=Mock())
+    return TaskService(db_manager=Mock(), agent_manager=Mock())
 
 
 @pytest.fixture
@@ -70,7 +72,7 @@ async def test_create_phase_prompt_version_retry_uses_asyncio_sleep(
     retry/backoff path in this file which already uses asyncio.sleep."""
     from sqlalchemy.exc import IntegrityError
 
-    api = FrontendAPI(db_manager=phase_db_manager, agent_manager=Mock())
+    api = PhaseService(db_manager=phase_db_manager, agent_manager=Mock())
 
     real_commit = __import__("sqlalchemy").orm.Session.commit
     calls = {"n": 0}

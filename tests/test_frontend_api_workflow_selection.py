@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from src.core.database import DatabaseManager, Phase, Workflow
-from src.mcp.frontend._shared import FrontendAPI
+from src.mcp.frontend.dashboard_service import DashboardService
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def db(tmp_path):
 
 @pytest.fixture
 def frontend_api(db):
-    return FrontendAPI(db_manager=db, agent_manager=None)
+    return DashboardService(db_manager=db, agent_manager=None)
 
 
 def _make_workflow(db, workflow_id, status, created_at, phase_name="Some Phase"):

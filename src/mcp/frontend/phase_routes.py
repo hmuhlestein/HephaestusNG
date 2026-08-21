@@ -1,6 +1,6 @@
 """Routes extracted from src/mcp/api.py (phase_1b_decomposition.md §4.1).
 
-Each route is a top-level function that delegates to _shared.frontend_api.
+Each route is a top-level function that delegates to _shared.phase_service.
 """
 
 import logging
@@ -17,13 +17,13 @@ router = APIRouter()
 @router.get("/phases/{phase_id}/yaml")
 async def get_phase_yaml(phase_id: str):
     """Get detailed phase configuration."""
-    return await _shared.frontend_api.get_phase_details(phase_id)
+    return await _shared.phase_service.get_phase_details(phase_id)
 
 
 @router.patch("/phases/{phase_id}")
 async def update_phase(phase_id: str, updates: Dict[str, Any]):
     """Partial update of phase definition fields."""
-    return await _shared.frontend_api.update_phase(phase_id, updates)
+    return await _shared.phase_service.update_phase(phase_id, updates)
 
 
 @router.post("/phases/{phase_id}/reset")
@@ -33,37 +33,37 @@ async def reset_phase(phase_id: str, body: Dict[str, Any]):
     force = body.get("force", False)
     if not target_status:
         raise HTTPException(status_code=400, detail="target_status is required")
-    return await _shared.frontend_api.reset_phase(phase_id, target_status, force)
+    return await _shared.phase_service.reset_phase(phase_id, target_status, force)
 
 
 @router.get("/phases/{phase_id}/prompt/versions")
 async def get_phase_prompt_versions(phase_id: str):
     """List prompt versions for a phase."""
-    return await _shared.frontend_api.get_phase_prompt_versions(phase_id)
+    return await _shared.phase_service.get_phase_prompt_versions(phase_id)
 
 
 @router.get("/phases/{phase_id}/prompt/versions/{version}")
 async def get_phase_prompt_version(phase_id: str, version: int):
     """Get a specific prompt version's content."""
-    return await _shared.frontend_api.get_phase_prompt_version(phase_id, version)
+    return await _shared.phase_service.get_phase_prompt_version(phase_id, version)
 
 
 @router.post("/phases/{phase_id}/prompt/versions")
 async def create_phase_prompt_version(phase_id: str, body: Dict[str, Any]):
     """Create a new prompt version."""
-    return await _shared.frontend_api.create_phase_prompt_version(phase_id, body)
+    return await _shared.phase_service.create_phase_prompt_version(phase_id, body)
 
 
 @router.post("/phases/{phase_id}/prompt/versions/{version}/publish")
 async def publish_phase_prompt_version(phase_id: str, version: int):
     """Publish a draft version as active."""
-    return await _shared.frontend_api.publish_phase_prompt_version(phase_id, version)
+    return await _shared.phase_service.publish_phase_prompt_version(phase_id, version)
 
 
 @router.post("/phases/{phase_id}/prompt/versions/{version}/restore")
 async def restore_phase_prompt_version(phase_id: str, version: int):
     """Restore an older version as a new active version."""
-    return await _shared.frontend_api.restore_phase_prompt_version(phase_id, version)
+    return await _shared.phase_service.restore_phase_prompt_version(phase_id, version)
 
 
 @router.get("/phases/{phase_id}/prompt/preview")
@@ -79,7 +79,7 @@ async def get_phase_prompt_preview(
         raise HTTPException(
             status_code=400, detail="Invalid JSON in variables parameter"
         )
-    return await _shared.frontend_api.get_phase_prompt_preview(phase_id, var_dict)
+    return await _shared.phase_service.get_phase_prompt_preview(phase_id, var_dict)
 
 
 @router.post("/phases/{phase_id}/prompt/preview")
@@ -147,7 +147,7 @@ async def get_phase_prompt_diff(
     phase_id: str, v1: int = Query(...), v2: int = Query(...)
 ):
     """Get diff between two prompt versions."""
-    return await _shared.frontend_api.get_phase_prompt_diff(phase_id, v1, v2)
+    return await _shared.phase_service.get_phase_prompt_diff(phase_id, v1, v2)
 
 
 @router.get("/tasks/{task_id}/prompt")
@@ -165,18 +165,18 @@ async def get_task_prompt(task_id: str):
 @router.get("/tasks/{task_id}/prompt/overrides")
 async def get_task_prompt_overrides(task_id: str):
     """Get prompt overrides for a task."""
-    return await _shared.frontend_api.get_task_prompt_overrides(task_id)
+    return await _shared.phase_service.get_task_prompt_overrides(task_id)
 
 
 @router.put("/tasks/{task_id}/prompt/overrides")
 async def set_task_prompt_overrides(task_id: str, body: Dict[str, Any]):
     """Set prompt overrides for a task."""
-    return await _shared.frontend_api.set_task_prompt_overrides(task_id, body)
+    return await _shared.phase_service.set_task_prompt_overrides(task_id, body)
 
 
 @router.delete("/tasks/{task_id}/prompt/overrides")
 async def clear_task_prompt_overrides(task_id: str):
     """Clear prompt overrides for a task."""
-    return await _shared.frontend_api.clear_task_prompt_overrides(task_id)
+    return await _shared.phase_service.clear_task_prompt_overrides(task_id)
 
 
