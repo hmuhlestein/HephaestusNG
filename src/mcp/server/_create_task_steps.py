@@ -472,7 +472,7 @@ async def _check_for_duplicate_task(task_id: str, phase_id: Optional[str], enric
     return False
 
 
-async def _maybe_queue_task_at_capacity(task_id: str, request: CreateTaskRequest, enriched_task: dict) -> bool:
+async def _maybe_queue_task_at_capacity(task_id: str, workflow_id: Optional[str], enriched_task: dict) -> bool:
     """If the server is at global capacity, enqueue the task and broadcast.
     Returns True if queued (caller should stop, don't dispatch an agent)."""
     if not server_state.queue_service.should_queue_task():
@@ -483,7 +483,7 @@ async def _maybe_queue_task_at_capacity(task_id: str, request: CreateTaskRequest
 
     from src.core.database import resolve_project_for_workflow
 
-    bcast_project_id, bcast_project_name = resolve_project_for_workflow(request.workflow_id)
+    bcast_project_id, bcast_project_name = resolve_project_for_workflow(workflow_id)
     await server_state.broadcast_update(
         {
             "type": "task_queued",
@@ -500,11 +500,171 @@ async def _maybe_queue_task_at_capacity(task_id: str, request: CreateTaskRequest
     return True
 
 
+def _has_unmet_dependencies(depends_on) -> bool:
+    """True if `depends_on` names at least one task that is not yet "done".
+
+    depends_on entries referencing an unknown task id (deleted, typo,
+    cross-workflow id that never existed) count as unmet -- fail closed. A
+    vanished dependency is not the same as a satisfied one, and dispatching
+    anyway would silently defeat the ordering the caller asked for.
+    """
+    if not depends_on:
+        return False
+    session = server_state.db_manager.get_session()
+    try:
+        for dep_id in depends_on:
+            dep_status = (
+                session.query(Task.status).filter_by(id=dep_id).first()
+            )
+            if dep_status is None or dep_status[0] != "done":
+                return True
+        return False
+    finally:
+        session.close()
+
+
+async def _dispatch_ready_dependents(completed_task_id: str, workflow_id: Optional[str]) -> None:
+    """When a task finishes, dispatch any sibling task whose `depends_on`
+    named it -- the promotion half of the gate _has_unmet_dependencies
+    enforces at creation.
+
+    Regression this closes: create_task wrote depends_on/parallel_group to
+    the row and then dispatched (or capacity-queued) the new task almost
+    immediately regardless of what they said -- nothing ever read
+    depends_on again after the write. architecture_design.yaml's prompt
+    teaches agents to build dependency chains with these fields
+    (`parallel_group: "types"` finishing before `parallel_group:
+    "handlers"` starts), but the chain was purely advisory: a "handlers"
+    task dispatched the instant it was created, whether or not "types" had
+    finished.
+
+    Scoped to same-workflow siblings still in "pending" -- a task that
+    already dispatched, failed, or belongs to a different workflow is not a
+    candidate. A FAILED dependency is deliberately never treated as
+    satisfying anything downstream: its dependents stay pending rather than
+    proceeding on top of a known-broken prerequisite. That is a real
+    limitation (a permanently stuck chain needs a human or a retry to
+    unstick), not an oversight -- proceeding anyway is the less safe
+    default.
+
+    Fired as a background asyncio task from update_task_status on
+    status=="done", the same fire-and-forget shape
+    terminate_agents_and_process_queue already uses there.
+    """
+    if not workflow_id:
+        return
+
+    session = server_state.db_manager.get_session()
+    try:
+        candidates = (
+            session.query(Task)
+            .filter(Task.workflow_id == workflow_id, Task.status == "pending")
+            .all()
+        )
+        # Snapshot the fields each candidate needs before the session that
+        # produced them closes -- dispatch below does its own session work
+        # per candidate and must not hold this one open across it.
+        ready = []
+        for t in candidates:
+            depends_on = t.depends_on or []
+            if completed_task_id not in depends_on:
+                continue
+            if _has_unmet_dependencies(depends_on):
+                continue  # this dependency cleared, but another sibling hasn't
+            ready.append(
+                {
+                    "id": t.id,
+                    "raw_description": t.raw_description,
+                    "enriched_description": t.enriched_description,
+                    "done_definition": t.done_definition,
+                    "phase_id": t.phase_id,
+                    "workflow_id": t.workflow_id,
+                    "created_by_agent_id": t.created_by_agent_id,
+                }
+            )
+    finally:
+        session.close()
+
+    for task_data in ready:
+        try:
+            await _dispatch_or_queue_promoted_task(task_data)
+        except Exception as e:
+            # One sibling failing to dispatch must not stop the others --
+            # each is an independent task that will surface its own error
+            # (or sit pending for the next promotion event / manual retry)
+            # rather than silently blocking unrelated dependents.
+            logger.error(
+                f"[DEPENDENCY-PROMOTE] Failed to dispatch {task_data['id']} "
+                f"after its dependencies cleared: {e}"
+            )
+
+
+async def _dispatch_or_queue_promoted_task(task_data: dict) -> None:
+    """Dispatch one dependency-cleared task, or capacity-queue it if the
+    server has no free slot right now -- the same decision
+    process_task_async makes for a freshly-created, already-ready task,
+    reused here so a promoted task is subject to the identical capacity
+    rules rather than a bespoke path that could disagree with them.
+
+    Does NOT re-run TaskEnrichmentService.enrich(): task_data's
+    enriched_description was already produced (and is already persisted)
+    at creation time. Re-enriching here would rewrite an already-good
+    description a second time for no benefit and a real LLM-call cost.
+    Only the dispatch-time context (RAG memories, project context) is
+    gathered fresh, via TaskEnrichmentService.gather_dispatch_context.
+    """
+    from src.services.task_enrichment_service import TaskEnrichmentService
+
+    task_id = task_data["id"]
+    phase_id = task_data["phase_id"]
+    agent_id = task_data["created_by_agent_id"]
+
+    working_directory = None
+    if phase_id:
+        session = server_state.db_manager.get_session()
+        try:
+            phase = session.query(Phase).filter_by(id=phase_id).first()
+            if phase and phase.working_directory:
+                working_directory = phase.working_directory
+        finally:
+            session.close()
+    if not working_directory:
+        working_directory = os.getcwd()
+
+    dispatch_context = await TaskEnrichmentService.gather_dispatch_context(
+        raw_description=task_data["raw_description"],
+        requesting_agent_id=agent_id,
+    )
+
+    enriched_task = {"enriched_description": task_data["enriched_description"]}
+
+    if await _maybe_queue_task_at_capacity(task_id, task_data["workflow_id"], enriched_task):
+        return
+
+    agent = await _dispatch_agent_for_task(
+        task_id,
+        task_data,
+        agent_id,
+        task_data["workflow_id"],
+        enriched_task,
+        dispatch_context["context_memories"],
+        dispatch_context["project_context"],
+        working_directory,
+    )
+    if agent is None:
+        return  # queued by the per-cli/model concurrency gate instead
+
+    await _finalize_task_dispatch(task_id, task_data, agent, enriched_task)
+    logger.info(
+        f"[DEPENDENCY-PROMOTE] Dispatched {task_id} -- its dependencies just cleared"
+    )
+
+
 async def _dispatch_agent_for_task(
     task_id: str,
     task_data: dict,
     agent_id: str,
-    request: CreateTaskRequest,
+    workflow_id: Optional[str],
     enriched_task: dict,
     context_memories,
     project_context,
@@ -562,7 +722,7 @@ async def _dispatch_agent_for_task(
             queue_status = qs.get_queue_status()
             from src.core.database import resolve_project_for_workflow
 
-            bcast_project_id, bcast_project_name = resolve_project_for_workflow(request.workflow_id)
+            bcast_project_id, bcast_project_name = resolve_project_for_workflow(workflow_id)
             await server_state.broadcast_update(
                 {
                     "type": "task_queued",

@@ -124,6 +124,39 @@ class TaskEnrichmentService:
         enriched_task["enriched_description"] = str(raw_desc)
 
     @staticmethod
+    async def gather_dispatch_context(
+        raw_description: str,
+        requesting_agent_id: str,
+        phase_context_str: str = "",
+    ) -> Dict[str, Any]:
+        """The RAG-memory + project-context half of enrich(), split out so a
+        task that was already enriched once (its enriched_description is
+        already persisted) can get fresh dispatch context WITHOUT re-running
+        the LLM description rewrite below -- used when a dependency-gated
+        task is promoted and dispatched later than its original creation
+        (see _create_task_steps._dispatch_ready_dependents). Re-running
+        enrich_task there would rewrite an already-good description a second
+        time for no benefit and a real LLM-call cost.
+
+        Returns a dict with `context_memories` (list of RAG memory dicts)
+        and `project_context` (str, with phase context appended).
+        """
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
+
+        context_memories = await server_state.rag_system.retrieve_for_task(
+            task_description=raw_description,
+            requesting_agent_id=requesting_agent_id,
+        )
+
+        project_context = await server_state.agent_manager.get_project_context()
+        if phase_context_str:
+            project_context = f"{project_context}\n\n{phase_context_str}"
+
+        return {"context_memories": context_memories, "project_context": project_context}
+
+    @staticmethod
     async def enrich(
         raw_description: str,
         done_definition: Optional[str],
@@ -141,14 +174,11 @@ class TaskEnrichmentService:
 
         server_state = get_app_state()
 
-        context_memories = await server_state.rag_system.retrieve_for_task(
-            task_description=raw_description,
-            requesting_agent_id=requesting_agent_id,
+        dispatch_context = await TaskEnrichmentService.gather_dispatch_context(
+            raw_description, requesting_agent_id, phase_context_str
         )
-
-        project_context = await server_state.agent_manager.get_project_context()
-        if phase_context_str:
-            project_context = f"{project_context}\n\n{phase_context_str}"
+        context_memories = dispatch_context["context_memories"]
+        project_context = dispatch_context["project_context"]
 
         context_strings = [mem.get("content", "") for mem in context_memories]
         enriched_task = await server_state.llm_provider.enrich_task(
