@@ -328,12 +328,19 @@ every goto aimed at it silently becomes an advance. This repo renamed
 
 `tests/test_goto_targets_resolve.py` (`9f0526f`) guards the config so the latent bug
 cannot become live, and is mutation-verified. **The runtime fail-open is fixed**
-(`d9551e4`, policy set by the owner): both handlers now escalate to arbitration via a
-shared `_escalate_unresolvable_goto`, reusing the existing cap rather than inventing a
-second failure mode — `_trigger_arbitration` is capped at `MAX_ARBITRATIONS_PER_PHASE`
+(`d9551e4` + `93150e2`, policy set by the owner): both handlers route through a shared
+`_escalate_unresolvable_goto`, reusing existing machinery rather than inventing a
+second failure mode. The behaviour splits by *who decided*: a **gate's** goto escalates
+to arbitration — `_trigger_arbitration` is capped at `MAX_ARBITRATIONS_PER_PHASE`
 and, once the arbiter has had its retries with neither a pending decision nor
 genuinely-passing output, sets `wf.status = "failed"`. Sequence: arbitrate, retry, then
-fail; never a silent advance. The execution is reopened to `in_progress` first, since
+fail; never a silent advance. An **arbiter's** own goto fails terminally instead — it is
+already past the arbitrator, and `_resolve_arbitration_outcome` (its caller) dispatches
+only continue/goto/retry, so returning `"arbitrate"` there would leave the phase
+reopened with no task and no arbitration in flight, stalled; re-entering
+`_trigger_arbitration` from inside a resolution is unsafe too, since its cap branch can
+call `_resolve_arbitration_outcome` back. That path follows `_handle_force_fail`:
+close the execution `"failed"` and call `_fail_workflow`. The execution is reopened to `in_progress` first, since
 both handlers close it to `completed` before resolving the target and `_advance_phases`
 would otherwise race past the phase awaiting arbitration. The reason is carried rather
 than only logged — it names the offending target and travels `result["reason"]` →
