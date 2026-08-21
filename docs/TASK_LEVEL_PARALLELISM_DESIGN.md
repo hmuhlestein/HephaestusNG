@@ -9,14 +9,20 @@ being built.
 
 ## Goal
 
-Within a single feature's pipeline, a phase agent (most concretely, Phase 5
-development) can already decompose its work into subtasks via `create_task`,
-declaring `depends_on` and `parallel_group` on each one —
-`architecture_design.yaml`'s prompt teaches this explicitly, with worked
-examples like a `"handlers"` group that must wait for a `"types"` group to
-finish. This document designs how to make `parallel_group` siblings actually
-run **at the same time**, safely, rather than one at a time in declaration
-order.
+This document covers two distinct axes of parallelism within one feature,
+evaluated separately because they have different safety profiles and
+different implementation costs:
+
+1. **Subtasks within one phase** — a phase agent (most concretely, Phase 5
+   development) decomposing its own work via `create_task`, declaring
+   `depends_on` and `parallel_group` on each subtask. This is the deep dive
+   the rest of this document is about.
+2. **The 14 main pipeline phases themselves** — could any of
+   `product_requirements` through `deploy` run concurrently with each other,
+   instead of the strictly sequential `execution_order` they run in today?
+   Analyzed in its own section immediately below, since the answer turns out
+   to be phase-specific and the reasoning is worth having in one place before
+   anyone reaches for it.
 
 ## What's already fixed
 
@@ -43,6 +49,139 @@ dispatched independently before this fix, and still do after it, one
 free at that moment. That's not true parallelism; it's uncoordinated
 sequential dispatch that happens to interleave. The gap this document
 addresses is making it *actually* concurrent, safely.
+
+## Which of the 14 main pipeline phases could run concurrently?
+
+None do today — `workflow.yaml`'s `execution_order` and the orchestrator's
+`_advance_phases` model one active phase per workflow at a time, full stop
+("find the next pending phase by order"). Making any two phases run
+concurrently is a real orchestrator-engine change (tracking and advancing
+multiple concurrently-active phases per workflow), not a config toggle —
+worth saying plainly, since it's a materially bigger change than the
+subtask design below, which reuses `create_task`'s existing dispatch
+machinery unchanged.
+
+Whether it's *worth* that change is phase-specific. Three criteria decide
+it, using the phase-input graph and mutation contracts confirmed against
+the actual phase YAMLs (`workflow.yaml`'s `phase_inputs:`, and each phase's
+own "ONLY output" / "do NOT edit source" / "FIXES ... in the code"
+language):
+
+- **Real data dependency** — does the candidate phase's own declared
+  `required` input include an artifact the other phase produces? If yes,
+  they cannot run concurrently; this isn't a policy choice, the input
+  doesn't exist yet.
+- **Mutates the shared worktree** — a phase that writes source/doc fixes
+  (not just its own report file) cannot run concurrently with anything
+  else reading or writing that same worktree, the identical shared-mutable
+  -state hazard the subtask design below exists to solve.
+- **Gate cost** — even with no data dependency, a phase upstream may be an
+  approval gate whose entire purpose is to stop wasted downstream work
+  before it happens. Running past it concurrently trades "maybe save
+  wall-clock" for "definitely risk redoing the downstream work if the gate
+  fails" — a real tradeoff, stated per case below rather than resolved
+  once for the whole pipeline.
+
+### Pre-development (1–4): genuinely sequential
+
+| Pair | Data dependency? | Verdict |
+|---|---|---|
+| 1 `product_requirements` → 2 `scope_review` | Yes — `scope_review` requires `requirements.md` (1's output) | Sequential, hard requirement |
+| 2 `scope_review` → 3 `architecture_design` | **No** — `architecture_design` requires only `requirements.md` (1's output); `scope.md` isn't in its declared inputs at all | Data-independent, but `scope_review` is exactly the gate checking requirements against the design doc (`score < 0.5 → goto product_requirements`). Running 3 concurrently risks a full architecture pass on requirements the gate is about to reject. |
+| 3 `architecture_design` → 4 `design_review` | Yes — `design_review` requires `architecture.md` (3's output); its entire job is challenging what 3 just produced | Sequential, hard requirement |
+
+### 4 → 5: no data dependency, deliberately gated anyway
+
+`development.yaml` doesn't declare `challenge.md` as an input at all — by
+data alone, development could start the moment architecture_design
+finishes. `workflow.yaml`'s own comment on the `design_review` evaluation
+point states the reason it doesn't: *"development hasn't run yet, so
+there's no code to send a fix to... looping architecture_design once more
+is cheap; discovering the same gap after development has already built on
+top of it is not."* This is the clearest case in the whole pipeline of a
+gate that exists purely to bound the cost of being wrong — concurrency
+here would be optimizing away the exact protection that comment describes
+choosing on purpose.
+
+### The post-development review cascade (6–11): where real opportunity is
+
+All six of `adversarial_review`, `architectural_review`, `security_review`,
+`qa_validation`, `product_validation`, `doc_review` examine the **same**
+code `development` (5) just finished. Classified by what each actually
+does to the worktree, not by pipeline position:
+
+| Phase | Mutates the worktree? | Hard-requires (from `phase_inputs`) |
+|---|---|---|
+| 6 `adversarial_review` | No — "Write ONE file... do NOT edit source" | `requirements.md` only |
+| 7 `architectural_review` | No — "the developer will fix based on your report" | `architecture.md`, `requirements.md` |
+| 8 `security_review` | **Yes** — "Critical and high vulnerabilities FIXED in the code" | `requirements.md`, `architecture.md` |
+| 9 `qa_validation` | No (files tickets — "the developer fixes it, not you"), but **runs the live application** (`STEP 3: START APPLICATION`) | `requirements.md` only |
+| 10 `product_validation` | No — "Do NOT edit any source code or tests" | `design.md`, `requirements.md` |
+| 11 `doc_review` | **Yes** — "FIX it in place", stray-file cleanup | none required (all optional) |
+
+Every hard-required input in this table is a **pre-development** artifact
+(`requirements.md`, `architecture.md`, `design.md` — all from phases 1–3).
+None of the six requires another phase *in this cascade's* output. That
+means, by data dependency alone, all six are candidates to start the
+instant `development` finishes — the strict 6→7→8→9→10→11 ordering today
+is pipeline-authoring convention, not a stated data dependency.
+
+**The real constraint is a different kind: two of the six mutate the
+worktree**, the same shared-mutable-state hazard this whole document is
+about at the subtask level:
+
+- **`security_review` (8) cannot run concurrently with any of the other
+  five.** It rewrites source files in place. A reviewer reading the same
+  files at that moment — or `qa_validation` running tests against them —
+  would see a mid-edit, inconsistent codebase. It needs to run either
+  fully before or fully after the read-only siblings, not alongside them.
+- **`doc_review` (11) cannot run concurrently either**, for two
+  independent reasons: it also mutates (docs + stray-file cleanup), and
+  its own prompt states its purpose — *"You are the last phase that
+  touches docs before the feature ships"* — meaning it's meant to document
+  the **final** state, including security fixes and QA results. Running
+  it early wouldn't corrupt anything by itself, but it would produce
+  documentation of an incomplete picture, defeating the phase's actual
+  job even though nothing would crash.
+
+**What's actually left as genuinely concurrent-safe: `adversarial_review`
+(6), `architectural_review` (7), `qa_validation` (9), and
+`product_validation` (10).** All four are pure readers of a stable
+worktree (three static-analysis/report phases plus `qa_validation`, which
+additionally needs the app to hold still while its tests run against it —
+compatible with the other three, which never touch a running process). All
+four's hard-required inputs already existed before `development` started.
+This is the single clearest concurrency opportunity in the 14-phase
+pipeline: four phases, all read-only, with no data dependency on each
+other, whose only real coupling is that `qa_validation`'s *optional*
+inputs (`adversarial.md`, `security.md`) mean running fully concurrently
+means it forgoes context those siblings would otherwise have already
+produced — a thoroughness tradeoff, not a safety one, since those inputs
+are declared optional precisely because the phase already has to tolerate
+their absence.
+
+### 12–14: genuinely sequential, by definition
+
+`forensics_analysis` reads the whole run's artifacts including every
+review above; `git_expert` commits the code those reviews approved;
+`deploy` needs what `git_expert` committed. Each requires its predecessor's
+actual output, not just a prior pipeline slot. No case for concurrency
+here.
+
+### If this were ever built
+
+The mutation split above (two mutators, four pure readers) suggests the
+natural shape: dispatch the four read-only reviewers concurrently once
+`development` completes, hold `security_review` until they've all
+finished (or run it first — either ordering is safe, just not
+*interleaved*), then run `doc_review` last once every other review's
+output exists for it to document. That's a genuine wall-clock win on the
+part of the pipeline with the most phases (six of fourteen), without
+touching the parts where the sequencing is either a real data dependency
+or a deliberate, already-justified gate. It is, however, exactly the
+"materially bigger orchestrator-engine change" flagged at the top of this
+section, not a small follow-on to the subtask design below — a decision
+for a separate pass, not assumed here.
 
 ## Why "just let them run at the same time" isn't safe today
 
