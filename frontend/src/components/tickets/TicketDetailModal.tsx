@@ -23,6 +23,7 @@ import rehypeHighlight from 'rehype-highlight';
 import { toast } from 'react-hot-toast';
 import { apiService } from '@/services/api';
 import { cn } from '@/lib/utils';
+import { useDisclosure } from '@/hooks/useDisclosure';
 import GitDiffModal from './GitDiffModal';
 import AgentDetailModal from '../AgentDetailModal';
 import { PhaseBadge } from '../PhaseBadge';
@@ -229,7 +230,7 @@ const TicketDetailModal: React.FC<TicketDetailModalProps> = ({ ticketId, onClose
   const [commentText, setCommentText] = useState('');
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [editedDescription, setEditedDescription] = useState('');
-  const [expandedSections, setExpandedSections] = useState({
+  const { expanded: expandedSections, toggle: toggleSection } = useDisclosure({
     description: true,
     relatedTasks: true,
     activity: true,
@@ -281,10 +282,6 @@ const TicketDetailModal: React.FC<TicketDetailModalProps> = ({ ticketId, onClose
       toast.error('Failed to update description');
     },
   });
-
-  const toggleSection = (section: keyof typeof expandedSections) => {
-    setExpandedSections((prev) => ({ ...prev, [section]: !prev[section] }));
-  };
 
   const handleSubmitComment = () => {
     if (!commentText.trim()) return;

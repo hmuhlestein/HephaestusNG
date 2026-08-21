@@ -18,6 +18,7 @@ import toast from 'react-hot-toast';
 import { formatDistanceToNow } from 'date-fns';
 import { apiService } from '@/services/api';
 import { Agent } from '@/types';
+import { useDisclosure } from '@/hooks/useDisclosure';
 import ClickableTaskCard from './ClickableTaskCard';
 import TaskDetailModal from './TaskDetailModal';
 
@@ -39,7 +40,7 @@ const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [messageText, setMessageText] = useState('');
   const queryClient = useQueryClient();
-  const [expandedSections, setExpandedSections] = useState({
+  const { expanded: expandedSections, toggle: toggleSection } = useDisclosure({
     task: true,
     details: false,
     message: false,
@@ -71,13 +72,6 @@ const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
     enabled: !!agentId,
     refetchInterval: 3000,
   });
-
-  const toggleSection = (section: keyof typeof expandedSections) => {
-    setExpandedSections(prev => ({
-      ...prev,
-      [section]: !prev[section]
-    }));
-  };
 
   const handleSendMessage = async () => {
     if (!agent || !messageText.trim()) return;
