@@ -15,7 +15,7 @@ handler, a distinct code path with the identical bug.
 import os
 import tempfile
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -123,3 +123,85 @@ def test_kill_session_is_offloaded_to_executor(endpoint_suffix, test_client, tes
     # also go through run_in_executor -- at least 4 total calls for this
     # one-agent workflow (task query, agent query, tmux kill, terminate).
     assert fake_loop.run_in_executor.call_count >= 4
+
+
+@pytest.mark.parametrize("endpoint_suffix", ["stop", "cancel"])
+def test_waits_out_pending_message_grace_period_before_killing(
+    endpoint_suffix, test_client, test_db
+):
+    """Regression: stop/cancel used to kill an agent's tmux session
+    immediately, with no regard for a message sent to it moments earlier
+    -- the same gap Terminator._terminate_agent_sync's grace-period check
+    closes for the task-completion termination path (see its docstring
+    for the live incident), just reached through a different trigger
+    (an explicit Stop/Cancel click instead of normal task completion)."""
+    from src.agents.terminator import PENDING_MESSAGE_GRACE_SECONDS
+
+    workflow_id = _seed_active_workflow_with_working_agent(test_db)
+    session = test_db.get_session()
+    try:
+        agent = session.query(Agent).filter_by(tmux_session_name="agent-tmux-1").first()
+        agent.pending_message_sent_at = datetime.utcnow() - timedelta(seconds=10)
+        session.commit()
+    finally:
+        session.close()
+
+    fake_loop = MagicMock()
+
+    async def run_now(_executor, func, *args):
+        return func(*args)
+
+    fake_loop.run_in_executor = AsyncMock(side_effect=run_now)
+
+    with (
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+        patch("asyncio.sleep", new=AsyncMock()) as mock_sleep,
+        patch(
+            "src.autopilot.orchestrator.engine_client.terminate_agent",
+            return_value=True,
+        ),
+    ):
+        resp = test_client.post(
+            f"/api/workflow-executions/{workflow_id}/{endpoint_suffix}", json={}
+        )
+
+    assert resp.status_code == 200
+    mock_sleep.assert_awaited_once()
+    waited = mock_sleep.await_args.args[0]
+    # ~50s remaining (60s grace - 10s already elapsed) -- generous
+    # tolerance for wall-clock drift in this test.
+    assert PENDING_MESSAGE_GRACE_SECONDS - 15 < waited < PENDING_MESSAGE_GRACE_SECONDS - 5
+
+    session = test_db.get_session()
+    try:
+        agent = session.query(Agent).filter_by(tmux_session_name="agent-tmux-1").first()
+        assert agent.pending_message_sent_at is None
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("endpoint_suffix", ["stop", "cancel"])
+def test_no_wait_when_no_message_pending(endpoint_suffix, test_client, test_db):
+    workflow_id = _seed_active_workflow_with_working_agent(test_db)
+
+    fake_loop = MagicMock()
+
+    async def run_now(_executor, func, *args):
+        return func(*args)
+
+    fake_loop.run_in_executor = AsyncMock(side_effect=run_now)
+
+    with (
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+        patch("asyncio.sleep", new=AsyncMock()) as mock_sleep,
+        patch(
+            "src.autopilot.orchestrator.engine_client.terminate_agent",
+            return_value=True,
+        ),
+    ):
+        resp = test_client.post(
+            f"/api/workflow-executions/{workflow_id}/{endpoint_suffix}", json={}
+        )
+
+    assert resp.status_code == 200
+    mock_sleep.assert_not_awaited()

@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # 335b2a1d, 2026-08-21): a task can reach genuine completion and trigger
 # termination moments after a message was sent, with the agent never
 # getting a chance to even notice it.
-_PENDING_MESSAGE_GRACE_SECONDS = 60
+PENDING_MESSAGE_GRACE_SECONDS = 60
 
 
 class Terminator:
@@ -162,14 +162,14 @@ class Terminator:
 
             # Grace period: a message sent to this agent shortly before
             # termination was requested hasn't had a chance to be noticed
-            # yet -- give it up to _PENDING_MESSAGE_GRACE_SECONDS from when
+            # yet -- give it up to PENDING_MESSAGE_GRACE_SECONDS from when
             # it was sent (not a flat extra wait every time) before killing
             # its tmux session out from under it. Cleared and committed
             # before the wait so a crash/restart mid-sleep, or a second
             # concurrent termination attempt, doesn't re-trigger it.
             if agent.pending_message_sent_at:
                 elapsed = (datetime.utcnow() - agent.pending_message_sent_at).total_seconds()
-                remaining = _PENDING_MESSAGE_GRACE_SECONDS - elapsed
+                remaining = PENDING_MESSAGE_GRACE_SECONDS - elapsed
                 agent.pending_message_sent_at = None
                 session.commit()
                 if remaining > 0:
