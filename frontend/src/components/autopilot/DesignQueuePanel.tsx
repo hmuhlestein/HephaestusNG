@@ -35,6 +35,7 @@ import { Agent } from '@/types';
 import { CostDisplay, FeatureCostBadge } from '@/components/cost';
 import { DESIGN_FEATURE_STATUS_CONFIG, TASK_STATUS_CONFIG } from './statusConfig';
 import { useProject } from '@/context/ProjectContext';
+import BaseStatusBadge from '../StatusBadge';
 
 interface DesignQueuePanelProps {
   projectId: string | null;
@@ -463,10 +464,7 @@ const StatusBadge: React.FC<{ status: string; pausedBy?: string | null }> = ({ s
   if (!config) return null;
   const label = status === 'paused' && pausedBy === 'budget' ? 'Paused: budget limit reached' : config.label;
   return (
-    <span className={`px-2 py-0.5 text-xs font-semibold rounded-full flex items-center gap-1 ${config.color}`}>
-      {config.icon}
-      {label}
-    </span>
+    <BaseStatusBadge status={status} size="sm" icon={config.icon} label={label} colorClassName={config.color} />
   );
 };
 
@@ -792,10 +790,7 @@ export const FeatureStatusBadge: React.FC<{ status: string }> = ({ status }) => 
   const config = DESIGN_FEATURE_STATUS_CONFIG[status];
   if (!config) return null;
   return (
-    <span className={`px-2 py-0.5 text-xs font-semibold rounded-full flex items-center gap-1 ${config.color}`}>
-      {config.icon}
-      {config.label}
-    </span>
+    <BaseStatusBadge status={status} size="sm" icon={config.icon} label={config.label} colorClassName={config.color} />
   );
 };
 
