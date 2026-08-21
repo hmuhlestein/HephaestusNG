@@ -811,7 +811,23 @@ class LaunchPipeline:
         if working_directory and cli_agent:
             cli_agent.prepare_working_directory(working_directory)
             if prewarm_codegraph:
-                self._ensure_codegraph_initialized(working_directory)
+                # Fire-and-forget: this pre-warm only benefits OTHER agents
+                # that might connect to the same codegraph daemon later
+                # ("so agents don't race to launch it" -- see
+                # _ensure_codegraph_initialized's own docstring), not THIS
+                # agent's own launch, which never waits on codegraph at
+                # all. Blocking this thread on it anyway added 3.6s+
+                # measured cold-start latency to every single agent
+                # launch, on the critical path, for zero benefit to that
+                # specific launch. A daemon thread, not a plain one: must
+                # never block process shutdown if it's still mid-subprocess.
+                import threading
+
+                threading.Thread(
+                    target=self._ensure_codegraph_initialized,
+                    args=(working_directory,),
+                    daemon=True,
+                ).start()
 
         if task.phase_id and working_directory:
             from pathlib import Path as _Path
@@ -1752,47 +1768,130 @@ class LaunchPipeline:
 
         try:
             context_files = self._gather_worktree_context(task)
-            # _resolve_worktree does real git work (create_agent_worktree
-            # -> git branch + git worktree add, a full checkout) directly
-            # on the event loop -- confirmed live 2026-08-19 investigating
-            # intermittent multi-second /health stalls under concurrent
-            # dispatch, one of three blocking call sites found in this
-            # function via a systematic audit.
             loop = asyncio.get_event_loop()
-            wt_resolution = await loop.run_in_executor(
-                None,
-                functools.partial(
-                    self._resolve_worktree,
-                    task, wt_mgr, create_if_missing=True, agent_id=agent_id,
-                    context_files=context_files,
+
+            # Resolve phase name/order/thinking BEFORE the parallel block
+            # below -- moved up from its old position (after
+            # _prepare_launch_environment, near the bottom of this
+            # try-block) since it has no actual dependency on the
+            # worktree/tmux work that used to sit between here and there;
+            # a plain DB lookup + config fallback. Doing it early makes
+            # thinking_level available in time for the complexity check to
+            # join the same parallel group, and replaces the separate,
+            # narrower phase_name-only lookup that used to run right
+            # before generate_agent_prompt (same DB info, one query
+            # instead of two).
+            phase_name, phase_order, thinking_level = self._resolve_phase_name_and_thinking(
+                task, phase_config.thinking_level
+            )
+
+            async def _resolve_worktree_async():
+                # _resolve_worktree does real git work (create_agent_worktree
+                # -> git branch + git worktree add, a full checkout) --
+                # offloaded to a thread since it's several seconds of
+                # blocking subprocess/filesystem work, confirmed live
+                # 2026-08-19 investigating intermittent multi-second
+                # /health stalls under concurrent dispatch.
+                return await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        self._resolve_worktree,
+                        task, wt_mgr, create_if_missing=True, agent_id=agent_id,
+                        context_files=context_files,
+                    ),
+                )
+
+            async def _resolve_complexity_and_thinking():
+                """Adaptive reasoning: downgrade thinking_level for a
+                workflow whose design turns out simpler than its phase's
+                configured budget. Verbatim logic from the original
+                sequential block (including the try/except boundaries and
+                the log firing on a cache hit too, not just a fresh
+                classification) -- only converted to return the resolved
+                level instead of mutating thinking_level via closure,
+                since it now runs concurrently with the other two below
+                rather than after them. Any failure here (LLM error, file
+                read error, anything) must never break the launch --
+                silently keeps the phase's own thinking_level unchanged,
+                exactly like the original.
+                """
+                local_thinking_level = thinking_level
+                try:
+                    if local_thinking_level in ("high", "medium") and getattr(task, "workflow_id", None):
+                        if not hasattr(self, "_complexity_cache"):
+                            self._complexity_cache = {}
+                        complexity = self._complexity_cache.get(task.workflow_id)
+                        if complexity is None:
+                            design_text = ""
+                            try:
+                                if working_directory:
+                                    wd = Path(working_directory)
+                                    cands = []
+                                    dq = wd / DESIGN_CONTEXT_SUBDIR
+                                    if dq.is_dir():
+                                        cands += sorted(dq.glob("*.md"))
+                                    cands += [
+                                        wd / CONTEXT_DIR_NAME / "design.md",
+                                        wd / CONTEXT_DIR_NAME / "design_document.md",
+                                        wd / CONTEXT_DIR_NAME / "requirements.md",
+                                    ]
+                                    for _p in cands:
+                                        if _p.is_file():
+                                            design_text = _p.read_text()[:6000]
+                                            break
+                            except Exception:
+                                pass
+                            if not design_text:
+                                design_text = (
+                                    (enriched_data or {}).get("enriched_description")
+                                    or task.enriched_description
+                                    or task.raw_description
+                                    or ""
+                                )
+                            complexity = await self.llm_provider.classify_complexity(
+                                design_text, workflow_id=task.workflow_id
+                            )
+                            self._complexity_cache[task.workflow_id] = complexity
+                        if complexity == "low":
+                            local_thinking_level = "low"
+                        elif complexity == "medium" and local_thinking_level == "high":
+                            local_thinking_level = "medium"
+                        logger.info(
+                            f"[COMPLEXITY] phase budget {phase_config.thinking_level} → {local_thinking_level} "
+                            f"(design complexity={complexity}) for agent {agent_id[:8]}"
+                        )
+                except Exception as e:
+                    logger.debug(f"[COMPLEXITY] adaptive thinking skipped: {e}")
+                return local_thinking_level
+
+            # Three independent operations that used to run sequentially:
+            # worktree resolution (git work), system-prompt generation (an
+            # LLM round-trip), and complexity classification (a second,
+            # conditional LLM round-trip) -- none reads anything the
+            # others produce, they only feed steps further below (branch_
+            # path, system_prompt, thinking_level respectively). Running
+            # them concurrently costs max() of the three instead of their
+            # sum. Confirmed live: a feature_architect launch (thinking_
+            # level "high", so this DOES run classify_complexity) spent
+            # ~42s between the stub Agent row committing and the CLI
+            # launch command actually sending.
+            wt_resolution, system_prompt, thinking_level = await asyncio.gather(
+                _resolve_worktree_async(),
+                self.llm_provider.generate_agent_prompt(
+                    task={
+                        "id": task.id,
+                        "description": task.raw_description,
+                        "enriched_description": task.enriched_description,
+                        "done_definition": task.done_definition,
+                        "agent_id": agent_id,
+                    },
+                    memories=memories,
+                    project_context=project_context,
+                    phase_name=phase_name,
                 ),
+                _resolve_complexity_and_thinking(),
             )
             branch_path = wt_resolution.branch_path
-
-            # Generate system prompt
-            phase_name = None
-            if task.phase_id:
-                try:
-                    from src.core.database import Phase
-                    with self.db_manager.get_session() as _ps:
-                        _ph = _ps.query(Phase).filter_by(id=task.phase_id).first()
-                        if _ph:
-                            phase_name = _ph.name
-                except Exception:
-                    pass
-
-            system_prompt = await self.llm_provider.generate_agent_prompt(
-                task={
-                    "id": task.id,
-                    "description": task.raw_description,
-                    "enriched_description": task.enriched_description,
-                    "done_definition": task.done_definition,
-                    "agent_id": agent_id,
-                },
-                memories=memories,
-                project_context=project_context,
-                phase_name=phase_name,
-            )
 
             env_vars, model, cli_agent = self._resolve_env_and_model(
                 cli_type, task, agent_id, label="agent",
@@ -1802,12 +1901,10 @@ class LaunchPipeline:
             )
 
             session_name = f"{self.config.agents.tmux_session_prefix}_{agent_id[:8]}"
-            # _prepare_launch_environment calls _ensure_codegraph_initialized
-            # (a `codegraph status .` subprocess with a 30s timeout -- 3.6s
-            # measured live during this same investigation) and
-            # _create_tmux_session (several tmux subprocess calls), both
-            # directly on the event loop. The other blocking call site in
-            # this function is at _resolve_worktree, above.
+            # _prepare_launch_environment's own codegraph pre-warm no longer
+            # blocks it (see that method) -- what's left here is
+            # _create_tmux_session (several tmux subprocess calls), offloaded
+            # to a thread same as _resolve_worktree above.
             tmux_session = await loop.run_in_executor(
                 None,
                 functools.partial(
@@ -1816,60 +1913,6 @@ class LaunchPipeline:
                     cli_agent=cli_agent,
                 ),
             )
-
-            phase_name_resolved, phase_order, thinking_level = self._resolve_phase_name_and_thinking(
-                task, phase_config.thinking_level
-            )
-            if phase_name_resolved:
-                phase_name = phase_name_resolved
-
-            # Complexity-adaptive reasoning
-            try:
-                if thinking_level in ("high", "medium") and getattr(task, "workflow_id", None):
-                    if not hasattr(self, "_complexity_cache"):
-                        self._complexity_cache = {}
-                    complexity = self._complexity_cache.get(task.workflow_id)
-                    if complexity is None:
-                        design_text = ""
-                        try:
-                            if working_directory:
-                                wd = Path(working_directory)
-                                cands = []
-                                dq = wd / DESIGN_CONTEXT_SUBDIR
-                                if dq.is_dir():
-                                    cands += sorted(dq.glob("*.md"))
-                                cands += [
-                                    wd / CONTEXT_DIR_NAME / "design.md",
-                                    wd / CONTEXT_DIR_NAME / "design_document.md",
-                                    wd / CONTEXT_DIR_NAME / "requirements.md",
-                                ]
-                                for _p in cands:
-                                    if _p.is_file():
-                                        design_text = _p.read_text()[:6000]
-                                        break
-                        except Exception:
-                            pass
-                        if not design_text:
-                            design_text = (
-                                (enriched_data or {}).get("enriched_description")
-                                or task.enriched_description
-                                or task.raw_description
-                                or ""
-                            )
-                        complexity = await self.llm_provider.classify_complexity(
-                            design_text, workflow_id=task.workflow_id
-                        )
-                        self._complexity_cache[task.workflow_id] = complexity
-                    if complexity == "low":
-                        thinking_level = "low"
-                    elif complexity == "medium" and thinking_level == "high":
-                        thinking_level = "medium"
-                    logger.info(
-                        f"[COMPLEXITY] phase budget {phase_config.thinking_level} \u2192 {thinking_level} "
-                        f"(design complexity={complexity}) for agent {agent_id[:8]}"
-                    )
-            except Exception as e:
-                logger.debug(f"[COMPLEXITY] adaptive thinking skipped: {e}")
 
             session_id = self._resolve_session_id(
                 task, agent_type, phase_name, model,
