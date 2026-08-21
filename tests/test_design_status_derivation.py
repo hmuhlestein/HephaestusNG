@@ -128,7 +128,7 @@ class TestFeatureStatusDerivation:
     def test_all_done_plus_stray_diagnostic_task_shows_completed(self, status_env):
         """The exact bug: 9 real tasks done + 1 stray DIAGNOSTIC task pending
         used to leave the feature stuck showing its stale 'active' DB value."""
-        from src.mcp.autopilot.project_routes import get_project_design_status
+        from src.mcp.autopilot.design_file_routes import get_project_design_status
 
         manager = status_env["manager"]
         session = manager.get_session()
@@ -155,7 +155,7 @@ class TestFeatureStatusDerivation:
     def test_self_heals_db_column(self, status_env):
         """Once derived as completed, the Feature row itself should be
         updated too — other code paths read Feature.status directly."""
-        from src.mcp.autopilot.project_routes import get_project_design_status
+        from src.mcp.autopilot.design_file_routes import get_project_design_status
 
         manager = status_env["manager"]
         session = manager.get_session()
@@ -178,7 +178,7 @@ class TestFeatureStatusDerivation:
     def test_paused_db_status_wins_even_with_pending_tasks(self, status_env):
         """A deliberately paused feature must keep showing 'paused' even
         though its blocked tasks look like unfinished 'pending' work."""
-        from src.mcp.autopilot.project_routes import get_project_design_status
+        from src.mcp.autopilot.design_file_routes import get_project_design_status
 
         manager = status_env["manager"]
         session = manager.get_session()
@@ -200,7 +200,7 @@ class TestFeatureStatusDerivation:
     def test_no_real_tasks_yet_trusts_db_status(self, status_env):
         """Only a stray diagnostic task exists (no real work started) — should
         trust the DB status rather than reporting something misleading."""
-        from src.mcp.autopilot.project_routes import get_project_design_status
+        from src.mcp.autopilot.design_file_routes import get_project_design_status
 
         manager = status_env["manager"]
         session = manager.get_session()
@@ -228,7 +228,7 @@ class TestDesignOverallStatusDerivation:
         """design_status ('active', set once at pipeline start and only ever
         updated by run_design_aggregate at the very end) must not hide a
         workflow that's actually paused right now."""
-        from src.mcp.autopilot.project_routes import get_project_design_status
+        from src.mcp.autopilot.design_file_routes import get_project_design_status
 
         manager = status_env["manager"]
         session = manager.get_session()
@@ -268,7 +268,7 @@ class TestDesignOverallStatusDerivation:
         finally:
             session.close()
 
-        from src.mcp.autopilot.project_routes import get_project_design_status
+        from src.mcp.autopilot.design_file_routes import get_project_design_status
 
         result = _run(
             get_project_design_status(status_env["project_id"], status_env["filename"])
@@ -285,7 +285,7 @@ class TestPhase0FeatureArchitectVisibility:
     decomposed features, with no way to watch Phase 0 itself."""
 
     def test_running_phase0_appears_as_pseudo_feature(self, status_env):
-        from src.mcp.autopilot.project_routes import get_project_design_status
+        from src.mcp.autopilot.design_file_routes import get_project_design_status
 
         manager = status_env["manager"]
         session = manager.get_session()
@@ -314,7 +314,7 @@ class TestPhase0FeatureArchitectVisibility:
     def test_phase0_entry_appears_before_real_features(self, status_env):
         """Feature Architect ran first chronologically -- it should list
         first, not get buried after the features it produced."""
-        from src.mcp.autopilot.project_routes import get_project_design_status
+        from src.mcp.autopilot.design_file_routes import get_project_design_status
 
         manager = status_env["manager"]
         session = manager.get_session()
@@ -342,7 +342,7 @@ class TestPhase0FeatureArchitectVisibility:
         assert result["features"][0]["name"] == "Feature Architect"
 
     def test_completed_phase0_shows_completed_status(self, status_env):
-        from src.mcp.autopilot.project_routes import get_project_design_status
+        from src.mcp.autopilot.design_file_routes import get_project_design_status
 
         manager = status_env["manager"]
         session = manager.get_session()
@@ -368,7 +368,7 @@ class TestPhase0FeatureArchitectVisibility:
     def test_no_phase0_workflow_no_pseudo_feature_added(self, status_env):
         """Regression: must not fabricate a Feature Architect entry for
         designs that never had a Phase 0 workflow at all."""
-        from src.mcp.autopilot.project_routes import get_project_design_status
+        from src.mcp.autopilot.design_file_routes import get_project_design_status
 
         manager = status_env["manager"]
         session = manager.get_session()
@@ -387,7 +387,7 @@ class TestPhase0FeatureArchitectVisibility:
     def test_no_phase0_task_yet_no_pseudo_feature_added(self, status_env):
         """A Phase 0 Workflow row exists but no task has been created for it
         yet -- don't show an empty, misleading entry."""
-        from src.mcp.autopilot.project_routes import get_project_design_status
+        from src.mcp.autopilot.design_file_routes import get_project_design_status
 
         manager = status_env["manager"]
         session = manager.get_session()

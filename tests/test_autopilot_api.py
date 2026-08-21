@@ -3146,7 +3146,7 @@ class TestCostEntryAgentBinding:
         return recorded
 
     def test_real_agent_cannot_claim_a_different_agent_id(self, client, monkeypatch):
-        from src.mcp.autopilot import project_routes as api_mod
+        from src.mcp.autopilot import cost_routes as api_mod
 
         monkeypatch.setattr(
             api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
@@ -3166,7 +3166,7 @@ class TestCostEntryAgentBinding:
         assert resp.status_code == 403
 
     def test_real_agent_id_matching_header_is_allowed(self, client, monkeypatch):
-        from src.mcp.autopilot import project_routes as api_mod
+        from src.mcp.autopilot import cost_routes as api_mod
 
         monkeypatch.setattr(
             api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
@@ -3188,7 +3188,7 @@ class TestCostEntryAgentBinding:
         assert recorded["agent_id"] == own_id
 
     def test_system_identity_may_post_on_behalf_of_any_agent(self, client, monkeypatch):
-        from src.mcp.autopilot import project_routes as api_mod
+        from src.mcp.autopilot import cost_routes as api_mod
 
         monkeypatch.setattr(
             api_mod, "verify_agent_authentication", AsyncMock(return_value=True)

@@ -4,6 +4,8 @@ from fastapi import APIRouter
 
 from src.mcp.autopilot import (
     control_routes,
+    cost_routes,
+    design_file_routes,
     feature_routes,
     intervention_routes,
     message_routes,
@@ -17,6 +19,8 @@ router = APIRouter(prefix="/api/autopilot", tags=["Autopilot"])
 router.include_router(control_routes.router)
 router.include_router(queue_routes.router)
 router.include_router(project_routes.router)
+router.include_router(cost_routes.router)
+router.include_router(design_file_routes.router)
 router.include_router(feature_routes.router)
 router.include_router(message_routes.router)
 router.include_router(intervention_routes.router)
