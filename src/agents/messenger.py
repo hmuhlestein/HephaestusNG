@@ -174,6 +174,63 @@ class AgentMessenger:
                 None, functools.partial(pane.send_keys, "", enter=True)
             )
 
+            # Verify delivery actually registered, retrying with a bare
+            # Enter (not retyping -- the text is presumably still correctly
+            # sitting in the input box, only the submit didn't take) if it
+            # didn't. See CLIAgentInterface.message_queued_confirmation_
+            # pattern's docstring for the live incident this closes: a
+            # message sent while the CLI was deep in a long tool-call wait
+            # left the raw text sitting inert, byte-for-byte identical
+            # across dozens of screen redraws, with no visible error and
+            # the caller blindly reporting success. Best-effort and fully
+            # isolated in its own try/except -- this is a hardening layer
+            # on top of the send above, not a new failure mode: any error
+            # here (including a misbehaving/mocked cli_agent) must never
+            # stop the last-activity update below from running.
+            try:
+                confirmation_pattern = cli_agent.message_queued_confirmation_pattern()
+            except Exception:
+                confirmation_pattern = None
+            if isinstance(confirmation_pattern, str) and confirmation_pattern:
+                try:
+                    delivered = False
+                    for attempt in range(3):
+                        await asyncio.sleep(1)
+                        captured = await loop.run_in_executor(
+                            None,
+                            functools.partial(pane.cmd, "capture-pane", "-p", "-S", "-20"),
+                        )
+                        pane_text = "\n".join(captured.stdout or [])
+                        if re.search(confirmation_pattern, pane_text):
+                            delivered = True
+                            break
+                        if formatted_message[:40] not in pane_text:
+                            # Our own text is no longer visible sitting as
+                            # raw unsubmitted input -- most likely the CLI
+                            # was idle and processed it immediately rather
+                            # than showing a "queued behind an active turn"
+                            # hint. Nothing left to retry against.
+                            delivered = True
+                            break
+                        if attempt < 2:
+                            logger.warning(
+                                f"Message to agent {agent_id} doesn't look queued yet "
+                                f"(attempt {attempt + 1}/3) -- retrying submit"
+                            )
+                            await loop.run_in_executor(
+                                None, functools.partial(pane.send_keys, "", enter=True)
+                            )
+                    if not delivered:
+                        logger.error(
+                            f"Message to agent {agent_id} still doesn't look queued "
+                            "after 3 submit attempts -- it may not have been delivered"
+                        )
+                except Exception as verify_err:
+                    logger.debug(
+                        f"Delivery verification for agent {agent_id} itself "
+                        f"failed (message was still sent above): {verify_err}"
+                    )
+
             # Update last activity
             agent.last_activity = datetime.utcnow()
             if owns_session:
