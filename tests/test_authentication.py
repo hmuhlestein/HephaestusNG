@@ -173,6 +173,12 @@ class TestJWTTokens:
 @pytest.fixture
 def test_db():
     """Create a test database."""
+    # src.core.user_models (User, etc.) only registers its tables on
+    # Base.metadata once imported; auth_api pulls it in, but not until the
+    # test_client fixture runs, which is too late for create_all() below
+    # when this file is collected on its own. Import it here first.
+    from src.auth import auth_api  # noqa: F401
+
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
