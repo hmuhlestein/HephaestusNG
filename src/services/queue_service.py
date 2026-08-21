@@ -540,7 +540,7 @@ class QueueService:
             logger.debug("No queued tasks found")
             return None
 
-    def dequeue_task(self, task_id: str) -> None:
+    def dequeue_task(self, task_id: str) -> bool:
         """Remove a task from the queue (mark as assigned).
 
         Takes _dequeue_lock so that direct callers (task_admin_routes.py's
@@ -550,6 +550,14 @@ class QueueService:
         safe to call from inside claim_next_queued_task, which already holds
         the lock.
 
+        Returns:
+            True if the task was queued and is now assigned. False if it
+            wasn't found or wasn't queued -- callers that treat a dequeue
+            as unconditionally successful without checking this (the
+            original shape of this method, and of claim_next_queued_task)
+            can hand out a task that was deleted or transitioned out of
+            "queued" by something else holding the lock first.
+
         Args:
             task_id: ID of the task to dequeue
         """
@@ -558,11 +566,11 @@ class QueueService:
                 task = session.query(Task).filter_by(id=task_id).first()
                 if not task:
                     logger.error(f"Task {task_id} not found for dequeueing")
-                    return
+                    return False
 
                 if task.status != "queued":
                     logger.warning(f"Task {task_id} is not queued (status={task.status})")
-                    return
+                    return False
 
                 task.status = "assigned"
                 task.queue_position = None  # Clear queue position
@@ -575,12 +583,24 @@ class QueueService:
                 self._recalculate_queue_positions()
 
                 logger.info(f"Task {task_id} dequeued and marked as assigned")
+                return True
 
     def claim_next_queued_task(self, project_id: Optional[str] = None) -> Optional[Task]:
         """Atomically check capacity, select, and dequeue the next queued
         task -- see _dequeue_lock's docstring for why this needs a lock
         rather than calling should_queue_task/get_next_queued_task/
         dequeue_task separately.
+
+        Every caller that mutates or deletes a Task row now takes this
+        same lock (dequeue_task, boost_task_priority, cancel_queued_task),
+        so in practice dequeue_task below always succeeds for the task
+        get_next_queued_task just selected -- but checking its return
+        value instead of assuming success is what makes that an
+        invariant this method enforces, not a fact every future caller
+        has to remember to preserve. Returning a task dequeue_task
+        actually failed to claim (e.g. deleted between the select and
+        the dequeue by some caller this lock doesn't yet cover) would
+        hand process_queue a task to dispatch that isn't really claimed.
         """
         with self._dequeue_lock:
             if self.should_queue_task(project_id):
@@ -592,7 +612,14 @@ class QueueService:
                 logger.debug("No queued tasks to process")
                 return None
 
-            self.dequeue_task(task.id)
+            if not self.dequeue_task(task.id):
+                logger.warning(
+                    f"Task {task.id} was selected as the next queued task but "
+                    "could not be dequeued (deleted or changed state concurrently) "
+                    "-- skipping this cycle"
+                )
+                return None
+
             return task
 
     def _recalculate_queue_positions(self) -> None:
@@ -760,6 +787,43 @@ class QueueService:
 
                 logger.info(f"Task {task_id} cancelled: {reason}")
                 return "cancelled", workflow_id
+
+    def pause_queued_task(self, task_id: str) -> bool:
+        """Pause a queued task (-> "blocked"), under _dequeue_lock.
+
+        Same race class as cancel_queued_task (see its docstring): reached
+        via task_admin_routes.py's pause_task_endpoint's "queued" case
+        instead of the cancel endpoint. An unlocked status="blocked" write
+        here could land inside claim_next_queued_task's select-then-dequeue
+        window, letting a task the user just paused get dispatched anyway.
+
+        Returns:
+            True if the task was queued and is now blocked, False if it
+            wasn't found or wasn't queued.
+        """
+        with self._dequeue_lock:
+            with self.db_manager.session_scope() as session:
+                task = session.query(Task).filter_by(id=task_id).first()
+                if not task:
+                    logger.error(f"Task {task_id} not found for pause")
+                    return False
+
+                if task.status != "queued":
+                    logger.warning(
+                        f"Cannot pause task {task_id} as queued - not queued (status={task.status})"
+                    )
+                    return False
+
+                task.status = "blocked"
+                task.queue_position = None
+                # Explicit commit before _recalculate_queue_positions, which
+                # opens its own session against this same shared connection.
+                session.commit()
+
+                self._recalculate_queue_positions()
+
+                logger.info(f"Task {task_id} paused from queue")
+                return True
 
     def get_queued_tasks(self) -> List[Task]:
         """Get all queued tasks ordered by priority.

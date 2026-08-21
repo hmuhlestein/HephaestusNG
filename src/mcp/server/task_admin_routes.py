@@ -89,13 +89,33 @@ async def pause_task_endpoint(task_id: str):
                     detail=f"Cannot pause task in '{task.status}' status",
                 )
 
+            resolved_task_id = task.id
             agent_id = task.assigned_agent_id
             task_workflow_id = task.workflow_id
-            task.status = "blocked"
-            task.assigned_agent_id = None
-            session.commit()
+
+            if task.status == "queued":
+                # Deferred to the locked path below instead of writing here
+                # -- see there for the claim-vs-mutate race this avoids.
+                is_queued = True
+            else:
+                is_queued = False
+                task.status = "blocked"
+                task.assigned_agent_id = None
+                session.commit()
         finally:
             session.close()
+
+        if is_queued:
+            # Locked: same claim-vs-mutate race QueueService.cancel_queued_task's
+            # docstring covers -- a "queued" task never has an agent, so
+            # agent_id above is already None here and nothing else this
+            # write needs to touch.
+            paused = server_state.queue_service.pause_queued_task(resolved_task_id)
+            if not paused:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Task {resolved_task_id} changed state concurrently -- not paused",
+                )
 
         if agent_id:
             await server_state.agent_manager.terminate_agent(agent_id)
@@ -159,11 +179,20 @@ async def bump_task_priority_endpoint(
         session = server_state.db_manager.get_session()
         try:
             task = session.query(Task).filter_by(id=task_id).first()
-            # Dequeue the task
-            server_state.queue_service.dequeue_task(task_id)
-            dequeued = True
         finally:
             session.close()
+
+        # Checked, not assumed: dequeue_task returns False if the task
+        # changed state (or was deleted) between boost_task_priority above
+        # releasing the lock and this call re-acquiring it -- a narrow but
+        # real window, and proceeding to dispatch anyway would launch an
+        # agent for a task no longer actually claimed.
+        dequeued = server_state.queue_service.dequeue_task(task_id)
+        if not dequeued:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Task {task_id} changed state concurrently -- not dequeued",
+            )
 
         from src.services.agent_dispatch_service import AgentDispatchService
 
@@ -272,7 +301,6 @@ async def cancel_task_endpoint(task_id: str):
 
     try:
         session = server_state.db_manager.get_session()
-        cancelled_task_id = None
         try:
             task = session.query(Task).filter_by(id=task_id).first()
             if not task:
@@ -289,15 +317,41 @@ async def cancel_task_endpoint(task_id: str):
                     detail=f"Cannot cancel task in '{task.status}' status. Terminate the assigned agent first.",
                 )
 
-            task.status = "failed"
-            task.failure_reason = "Cancelled by user"
-            task.completed_at = datetime.utcnow()
-            cancelled_task_id = task.id
-            cancelled_task_workflow_id = task.workflow_id
-            session.commit()
-
+            resolved_task_id = task.id
+            current_status = task.status
         finally:
             session.close()
+
+        cancelled_task_id = None
+        if current_status == "queued":
+            # Locked: this is the same claim-vs-cancel race
+            # QueueService.cancel_queued_task's docstring covers -- reached
+            # here via this more general cancel-by-id route instead of the
+            # dedicated queue-cancel endpoint, but the hazard is identical
+            # (an unlocked status="failed" write landing inside
+            # claim_next_queued_task's select-then-dequeue window would let
+            # a cancelled task get dispatched anyway).
+            outcome, cancelled_task_workflow_id = server_state.queue_service.cancel_queued_task(
+                resolved_task_id, reason="Cancelled by user"
+            )
+            if outcome == "cancelled":
+                cancelled_task_id = resolved_task_id
+        else:
+            # "pending" tasks are never selected by claim_next_queued_task
+            # (it only reads status="queued"), so there's no race here --
+            # a direct write is safe.
+            session = server_state.db_manager.get_session()
+            try:
+                task = session.query(Task).filter_by(id=resolved_task_id).first()
+                if task and task.status == "pending":
+                    task.status = "failed"
+                    task.failure_reason = "Cancelled by user"
+                    task.completed_at = datetime.utcnow()
+                    cancelled_task_id = task.id
+                    cancelled_task_workflow_id = task.workflow_id
+                    session.commit()
+            finally:
+                session.close()
 
         if cancelled_task_id:
             from src.core.database import resolve_project_for_workflow
@@ -315,7 +369,14 @@ async def cancel_task_endpoint(task_id: str):
             logger.info(f"Task {cancelled_task_id} cancelled")
             return {"success": True, "task_id": cancelled_task_id}
         else:
-            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+            # Existence was already confirmed above -- reaching here means
+            # the task's status changed concurrently (e.g. claimed for
+            # dispatch, or moved out of "pending") between that check and
+            # the locked/direct write attempt.
+            raise HTTPException(
+                status_code=409,
+                detail=f"Task {resolved_task_id} changed state concurrently -- not cancelled",
+            )
 
     except HTTPException:
         raise

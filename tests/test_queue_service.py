@@ -1094,6 +1094,112 @@ class TestCancelQueuedTask:
         assert finished.is_set(), "cancel_queued_task never completed after the lock was released"
 
 
+class TestPauseQueuedTask:
+    """Tests for pause_queued_task -- same shape and same claim-vs-mutate
+    race as cancel_queued_task, reached via pause_task_endpoint's "queued"
+    case instead of the cancel endpoint."""
+
+    def test_pause_queued_task(self, queue_service, db_manager):
+        task_id = create_test_task(db_manager, status="queued")
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            task.queued_at = datetime.utcnow()
+            task.queue_position = 1
+            session.commit()
+        finally:
+            session.close()
+
+        paused = queue_service.pause_queued_task(task_id)
+
+        assert paused is True
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            assert task.status == "blocked"
+            assert task.queue_position is None
+        finally:
+            session.close()
+
+    def test_pause_non_queued_task(self, queue_service, db_manager):
+        task_id = create_test_task(db_manager, status="assigned")
+
+        paused = queue_service.pause_queued_task(task_id)
+
+        assert paused is False
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            assert task.status == "assigned"
+        finally:
+            session.close()
+
+    def test_pause_nonexistent_task(self, queue_service):
+        assert queue_service.pause_queued_task("nonexistent-task-id") is False
+
+    def test_pause_takes_the_dequeue_lock(self, queue_service, db_manager):
+        """Same proof shape as test_cancel_takes_the_dequeue_lock: a
+        concurrent pause must block while the lock is held -- otherwise its
+        status=blocked write can land inside claim_next_queued_task's
+        select-then-dequeue window and dispatch a task the user just paused."""
+        import threading
+
+        task_id = create_test_task(db_manager, status="queued")
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            task.queued_at = datetime.utcnow()
+            session.commit()
+        finally:
+            session.close()
+
+        finished = threading.Event()
+        t = threading.Thread(
+            target=lambda: (queue_service.pause_queued_task(task_id), finished.set())
+        )
+
+        with queue_service._dequeue_lock:
+            t.start()
+            t.join(timeout=0.5)
+            assert t.is_alive(), "pause_queued_task ran without holding _dequeue_lock"
+
+        t.join(timeout=5)
+        assert finished.is_set(), "pause_queued_task never completed after the lock was released"
+
+
+class TestClaimNextQueuedTaskDefenseInDepth:
+    """claim_next_queued_task must not hand out a task its own dequeue_task
+    call failed to actually claim -- e.g. if the task was deleted between
+    get_next_queued_task's select and dequeue_task's write. Simulated here
+    by deleting the task from inside a monkeypatched should_queue_task-less
+    window: patch dequeue_task itself to simulate the failure, since the
+    real race requires two threads and is already covered by the
+    lock-blocking tests above -- this test is about claim_next_queued_task's
+    OWN handling of a False return, independent of why dequeue_task failed."""
+
+    def test_returns_none_when_dequeue_fails(self, queue_service, db_manager, monkeypatch):
+        task_id = create_test_task(db_manager, status="queued")
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            task.queued_at = datetime.utcnow()
+            session.commit()
+        finally:
+            session.close()
+
+        monkeypatch.setattr(queue_service, "dequeue_task", lambda tid: False)
+
+        assert queue_service.claim_next_queued_task() is None
+
+        # Not left half-claimed: the task's status is untouched since the
+        # (mocked) dequeue_task never actually wrote anything.
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            assert task.status == "queued"
+        finally:
+            session.close()
+
 
 class TestBoostTaskPriority:
     """Tests for boost_task_priority method."""
