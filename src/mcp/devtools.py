@@ -329,9 +329,6 @@ class CDPBrowser:
     async def get_page_url(self) -> str:
         return await self.evaluate("window.location.href") or ""
 
-    async def get_page_html(self) -> str:
-        return await self.evaluate("document.documentElement.outerHTML") or ""
-
     async def click(self, selector: str) -> None:
         js_selector = _safe_js_string(selector)
         await self.evaluate(f"document.querySelector({js_selector}).click()")
@@ -420,9 +417,6 @@ class CDPBrowser:
     async def check_console_errors(self) -> List[Dict[str, Any]]:
         return await self.get_console_logs(level="error")
 
-    async def check_failed_requests(self) -> List[Dict[str, Any]]:
-        return await self.get_network_logs(failed_only=True)
-
     async def get_performance_metrics(self) -> Dict[str, Any]:
         raw = await self.evaluate("""
             (() => {
@@ -443,35 +437,9 @@ class CDPBrowser:
         """)
         return raw or {}
 
-    async def get_accessibility_snapshot(self) -> Dict[str, Any]:
-        return await self.send("Accessibility.getFullAXTree")
-
     async def get_cookies(self) -> List[Dict[str, Any]]:
         result = await self.send("Network.getCookies")
         return result.get("cookies", [])
-
-    async def set_cookie(
-        self, name: str, value: str, domain: str = "", path: str = "/"
-    ) -> None:
-        params: Dict[str, Any] = {"name": name, "value": value, "path": path}
-        if domain:
-            params["domain"] = domain
-        await self.send("Network.setCookie", params)
-
-    async def clear_cookies(self) -> None:
-        await self.send("Network.clearBrowserCookies")
-
-    async def execute_script(self, script: str) -> Any:
-        return await self.evaluate(script)
-
-    async def get_dom_content(self, selector: str = "body") -> str:
-        js_selector = _safe_js_string(selector)
-        return (
-            await self.evaluate(
-                f"document.querySelector({js_selector})?.innerHTML || ''"
-            )
-            or ""
-        )
 
     async def check_broken_images(self) -> List[Dict[str, Any]]:
         raw = await self.evaluate("""

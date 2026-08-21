@@ -1280,11 +1280,16 @@ class MechanicalRecoveryDetector:
         <server>` as tools the agent itself can invoke to reconnect without
         losing session state -- no restart needed.
 
-        Uses get_agent_output, which returns raw output without stripping.
-        strips the "MCP: N/M servers" line as TUI chrome for every other
-        caller (both via _read_transcript_log's mcp_status_re filter and
-        strip_tui_chrome on its capture-pane fallback), so this detector
-        would never see it through the normal path.
+        Uses get_agent_output, which for a live agent with no clean
+        transcript yet falls through to a raw, unfiltered capture-pane
+        snapshot -- the MCP status line is intact there, which is what
+        this detector actually relies on. That's not true of every path
+        through get_agent_output: its raw-pipe-pane fallback
+        (_read_transcript_log, reached for a terminated agent or when
+        capture-pane itself comes up empty) DOES strip the
+        "MCP: N/M servers" line as TUI chrome (its chrome_re
+        classification pass, see output_capture.py), so this detector
+        would see nothing through that path.
 
         The trigger regex only matches pi's own status-line text -- it will
         never fire for another CLI's differently-shaped output. The nudge

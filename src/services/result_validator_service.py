@@ -5,10 +5,6 @@ from typing import Any, Dict, Optional
 
 from src.core.database import DatabaseManager, WorkflowResult
 from src.phases.phase_manager import PhaseManager
-from src.services.result_validation_helpers import (
-    ValidationResult,
-    validate_result_criteria,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -25,21 +21,6 @@ class ResultValidatorService:
         """
         self.db_manager = db_manager
         self.phase_manager = phase_manager
-
-    def validate_result_against_criteria(
-        self, result_content: str, criteria: str
-    ) -> ValidationResult:
-        """
-        Validate result content against criteria.
-
-        Args:
-            result_content: Markdown content of the result
-            criteria: Validation criteria from workflow configuration
-
-        Returns:
-            ValidationResult with validation outcome
-        """
-        return validate_result_criteria(result_content, criteria)
 
     def should_spawn_validator(self, workflow_id: str) -> tuple[bool, Optional[str]]:
         """
