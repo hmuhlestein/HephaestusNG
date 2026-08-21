@@ -72,12 +72,12 @@ def _exit_if_port_in_use(port: int) -> None:
 def main():
     """Run the MCP server."""
     config = get_config()
-    _exit_if_port_in_use(config.mcp_port)
+    _exit_if_port_in_use(config.server.mcp_port)
 
     logger.info("Starting Hephaestus MCP Server")
-    logger.info(f"Server will run on {config.mcp_host}:{config.mcp_port}")
-    logger.info(f"Using LLM provider: {config.llm_provider}")
-    logger.info(f"Using model: {config.llm_model}")
+    logger.info(f"Server will run on {config.server.mcp_host}:{config.server.mcp_port}")
+    logger.info(f"Using LLM provider: {config.llm.llm_provider}")
+    logger.info(f"Using model: {config.llm.llm_model}")
 
     # Validate configuration
     try:
@@ -90,11 +90,11 @@ def main():
     try:
         uvicorn.run(
             "src.mcp.server:app",
-            host=config.mcp_host,
-            port=config.mcp_port,
+            host=config.server.mcp_host,
+            port=config.server.mcp_port,
             reload=False,
             workers=1,
-            log_level="info" if not config.debug else "debug",
+            log_level="info" if not config.server.debug else "debug",
         )
     except KeyboardInterrupt:
         logger.info("Server stopped by user")

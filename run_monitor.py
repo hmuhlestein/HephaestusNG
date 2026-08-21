@@ -50,7 +50,7 @@ async def setup_monitoring_system():
         # Get configuration
         config = get_config()
         logger.info(
-            f"Using monitoring interval: {config.monitoring_interval_seconds} seconds"
+            f"Using monitoring interval: {config.monitoring.monitoring_interval_seconds} seconds"
         )
 
         # Initialize database manager
