@@ -849,7 +849,11 @@ class CodexAgent(CLIAgentInterface):
         codex_session_id = self._saved_session_id(
             kwargs.get("session_id", ""), kwargs.get("working_directory", "")
         )
-        flags = f"--dangerously-bypass-approvals-and-sandbox --no-alt-screen{model_flag}"
+        # --enable goals: the goals feature is stable and on by default in
+        # current codex-cli, but explicitly enabling it here makes /goal
+        # (format_goal_command below) work regardless of a given install's
+        # ambient config.toml state, rather than silently depending on it.
+        flags = f"--dangerously-bypass-approvals-and-sandbox --no-alt-screen --enable goals{model_flag}"
         # A recovered task can retain a session mapping while another Codex
         # process still owns that thread.  Resume then exits immediately with
         # "already has an active writer"; fall back to a new session so the
@@ -867,6 +871,9 @@ class CodexAgent(CLIAgentInterface):
 
     def get_health_check_pattern(self) -> str:
         return r"(›|To get started|context left)"
+
+    def format_goal_command(self, condition: str) -> str:
+        return f"/goal {condition}"
 
     def format_message(self, message: str) -> str:
         return message
