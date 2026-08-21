@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from src.mcp.messaging_api import (
+from src.mcp.tickets_api import (
     RequestTicketClarificationRequest,
     _gather_clarification_context,
     request_ticket_clarification_endpoint,
@@ -21,7 +21,7 @@ async def test_request_clarification_offloads_context_gathering(monkeypatch):
     )
     fake_state.broadcast_update = AsyncMock()
     monkeypatch.setattr(
-        "src.mcp.messaging_api._get_server_state", lambda: fake_state
+        "src.core.app_context.get_app_state", lambda: fake_state
     )
     monkeypatch.setattr(
         "src.core.database.resolve_project_for_workflow",
