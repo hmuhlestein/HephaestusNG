@@ -68,7 +68,7 @@ class TestRunFeaturePipelinesHaltsOnNonTerminalStatus:
                 return FeatureRunStatus.TIMEOUT
             return FeatureRunStatus.COMPLETED  # ai-generation -- should never actually be called
 
-        with patch("src.autopilot.orchestrator._run_one_feature", side_effect=fake_run_one_feature):
+        with patch("src.autopilot.orchestrator.pipeline._run_one_feature", side_effect=fake_run_one_feature):
             run_feature_pipelines(
                 sdk=MagicMock(),
                 design_entry=design_entry,
@@ -93,7 +93,7 @@ class TestRunFeaturePipelinesHaltsOnNonTerminalStatus:
                 return FeatureRunStatus.INTERRUPTED
             return FeatureRunStatus.COMPLETED
 
-        with patch("src.autopilot.orchestrator._run_one_feature", side_effect=fake_run_one_feature):
+        with patch("src.autopilot.orchestrator.pipeline._run_one_feature", side_effect=fake_run_one_feature):
             run_feature_pipelines(
                 sdk=MagicMock(),
                 design_entry=design_entry,
@@ -122,7 +122,7 @@ class TestRunFeaturePipelinesHaltsOnNonTerminalStatus:
                 return FeatureRunStatus.FAILED
             return FeatureRunStatus.COMPLETED
 
-        with patch("src.autopilot.orchestrator._run_one_feature", side_effect=fake_run_one_feature):
+        with patch("src.autopilot.orchestrator.pipeline._run_one_feature", side_effect=fake_run_one_feature):
             run_feature_pipelines(
                 sdk=MagicMock(),
                 design_entry=design_entry,
@@ -156,7 +156,7 @@ class TestRunFeaturePipelinesHaltsOnNonTerminalStatus:
                 return FeatureRunStatus.TIMEOUT
             return FeatureRunStatus.COMPLETED
 
-        with patch("src.autopilot.orchestrator._run_one_feature", side_effect=fake_run_one_feature):
+        with patch("src.autopilot.orchestrator.pipeline._run_one_feature", side_effect=fake_run_one_feature):
             run_feature_pipelines(
                 sdk=MagicMock(),
                 design_entry=design_entry,

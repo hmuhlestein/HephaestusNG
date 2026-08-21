@@ -159,7 +159,7 @@ class TestRunContinuousPipelinePassesInProcessFlag:
         fake_sdk.start.side_effect = RuntimeError("stop here — test boundary")
 
         with patch("src.sdk.HephaestusSDK", return_value=fake_sdk), patch(
-            "src.autopilot.orchestrator.get_config"
+            "src.autopilot.orchestrator.pipeline.get_config"
         ) as mock_cfg, patch(
             "src.autopilot.orchestrator.state.PersistentPipelineState"
         ) as MockState, patch(

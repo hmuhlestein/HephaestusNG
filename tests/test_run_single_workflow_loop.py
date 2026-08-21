@@ -65,23 +65,23 @@ class _LoopHarness:
     def __enter__(self):
         self._stack = [
             # POLL_INTERVAL 0 keeps the loop's time.sleep calls instant.
-            patch("src.autopilot.orchestrator.POLL_INTERVAL", 0),
-            patch("src.autopilot.orchestrator._get_workflow_timeout", return_value=3600),
-            patch("src.autopilot.orchestrator._should_stop", side_effect=lambda pid: self.should_stop),
-            patch("src.autopilot.orchestrator.get_active_workflows", return_value=[]),
-            patch("src.autopilot.orchestrator.get_workflow_status", side_effect=lambda wid: dict(self.workflow_status)),
-            patch("src.autopilot.orchestrator.get_agents", side_effect=self.get_agents),
-            patch("src.autopilot.orchestrator.get_tasks", side_effect=self.get_tasks),
-            patch("src.autopilot.orchestrator._try_advance_phases", return_value=False),
-            patch("src.autopilot.orchestrator.check_api_credits", side_effect=lambda: self.credits),
-            patch("src.autopilot.orchestrator.detect_hard_error", side_effect=lambda *a, **k: self.hard_error),
-            patch("src.autopilot.orchestrator.detect_impasse", side_effect=lambda *a, **k: self.impasse),
-            patch("src.autopilot.orchestrator.prompt_human", side_effect=lambda *a, **k: self.prompt_response),
-            patch("src.autopilot.orchestrator.peek_agent_output", return_value=""),
-            patch("src.autopilot.orchestrator._register_monitored_workflow"),
-            patch("src.autopilot.orchestrator._unregister_monitored_workflow"),
-            patch("src.autopilot.orchestrator.terminate_agent_direct"),
-            patch("src.autopilot.orchestrator.pause_workflow_direct"),
+            patch("src.autopilot.orchestrator.pipeline.POLL_INTERVAL", 0),
+            patch("src.autopilot.orchestrator.pipeline._get_workflow_timeout", return_value=3600),
+            patch("src.autopilot.orchestrator.pipeline._should_stop", side_effect=lambda pid: self.should_stop),
+            patch("src.autopilot.orchestrator.pipeline.get_active_workflows", return_value=[]),
+            patch("src.autopilot.orchestrator.pipeline.get_workflow_status", side_effect=lambda wid: dict(self.workflow_status)),
+            patch("src.autopilot.orchestrator.pipeline.get_agents", side_effect=self.get_agents),
+            patch("src.autopilot.orchestrator.pipeline.get_tasks", side_effect=self.get_tasks),
+            patch("src.autopilot.orchestrator.pipeline._try_advance_phases", return_value=False),
+            patch("src.autopilot.orchestrator.pipeline.check_api_credits", side_effect=lambda: self.credits),
+            patch("src.autopilot.orchestrator.pipeline.detect_hard_error", side_effect=lambda *a, **k: self.hard_error),
+            patch("src.autopilot.orchestrator.pipeline.detect_impasse", side_effect=lambda *a, **k: self.impasse),
+            patch("src.autopilot.orchestrator.pipeline.prompt_human", side_effect=lambda *a, **k: self.prompt_response),
+            patch("src.autopilot.orchestrator.pipeline.peek_agent_output", return_value=""),
+            patch("src.autopilot.orchestrator.pipeline._register_monitored_workflow"),
+            patch("src.autopilot.orchestrator.pipeline._unregister_monitored_workflow"),
+            patch("src.autopilot.orchestrator.pipeline.terminate_agent_direct"),
+            patch("src.autopilot.orchestrator.pipeline.pause_workflow_direct"),
         ]
         for p in self._stack:
             p.start()
@@ -174,7 +174,7 @@ class TestNoTasksStreakRequiresTwoConsecutivePolls:
             h.get_tasks = tasks
 
         # Elapsed must exceed 300s for the streak logic to engage at all.
-        with patch("src.autopilot.orchestrator.time") as mock_time:
+        with patch("src.autopilot.orchestrator.pipeline.time") as mock_time:
             mock_time.time.side_effect = [0] + [400] * 200
             mock_time.sleep.return_value = None
             result = _run(setup)
@@ -182,7 +182,7 @@ class TestNoTasksStreakRequiresTwoConsecutivePolls:
         assert result is FeatureRunStatus.INTERRUPTED
 
     def test_two_consecutive_empty_polls_hard_errors(self):
-        with patch("src.autopilot.orchestrator.time") as mock_time:
+        with patch("src.autopilot.orchestrator.pipeline.time") as mock_time:
             mock_time.time.side_effect = [0] + [400] * 200
             mock_time.sleep.return_value = None
             result = _run()
@@ -227,10 +227,10 @@ class TestNoTasksStreakRequiresTwoConsecutivePolls:
 
         with harness:
             with (
-                patch("src.autopilot.orchestrator.get_workflow_status", side_effect=workflow_status),
-                patch("src.autopilot.orchestrator.get_tasks", side_effect=tasks),
-                patch("src.autopilot.orchestrator._try_advance_phases", side_effect=advance),
-                patch("src.autopilot.orchestrator.time") as mock_time,
+                patch("src.autopilot.orchestrator.pipeline.get_workflow_status", side_effect=workflow_status),
+                patch("src.autopilot.orchestrator.pipeline.get_tasks", side_effect=tasks),
+                patch("src.autopilot.orchestrator.pipeline._try_advance_phases", side_effect=advance),
+                patch("src.autopilot.orchestrator.pipeline.time") as mock_time,
             ):
                 mock_time.time.side_effect = [0] + [400] * 200
                 mock_time.sleep.return_value = None
@@ -296,8 +296,8 @@ class TestImpasseEscalation:
 
         with harness:
             with (
-                patch("src.autopilot.orchestrator.detect_impasse", side_effect=harness._impasse_fn),
-                patch("src.autopilot.orchestrator.prompt_human", side_effect=counting_prompt),
+                patch("src.autopilot.orchestrator.pipeline.detect_impasse", side_effect=harness._impasse_fn),
+                patch("src.autopilot.orchestrator.pipeline.prompt_human", side_effect=counting_prompt),
             ):
                 result = run_single_workflow(
                     sdk=sdk,
@@ -354,8 +354,8 @@ class TestCredits:
 
         with harness:
             with (
-                patch("src.autopilot.orchestrator.detect_impasse", side_effect=counting_impasse),
-                patch("src.autopilot.orchestrator.get_workflow_status", side_effect=workflow_status),
+                patch("src.autopilot.orchestrator.pipeline.detect_impasse", side_effect=counting_impasse),
+                patch("src.autopilot.orchestrator.pipeline.get_workflow_status", side_effect=workflow_status),
             ):
                 result = run_single_workflow(
                     sdk=sdk,
@@ -381,9 +381,9 @@ class TestCleanupAlwaysRuns:
 
         with harness:
             with (
-                patch("src.autopilot.orchestrator.terminate_agent_direct") as term,
-                patch("src.autopilot.orchestrator.pause_workflow_direct") as pause,
-                patch("src.autopilot.orchestrator._unregister_monitored_workflow") as unreg,
+                patch("src.autopilot.orchestrator.pipeline.terminate_agent_direct") as term,
+                patch("src.autopilot.orchestrator.pipeline.pause_workflow_direct") as pause,
+                patch("src.autopilot.orchestrator.pipeline._unregister_monitored_workflow") as unreg,
             ):
                 result = run_single_workflow(
                     sdk=sdk,
@@ -406,7 +406,7 @@ class TestCleanupAlwaysRuns:
 
         harness = _LoopHarness()
         with harness:
-            with patch("src.autopilot.orchestrator._register_monitored_workflow") as reg:
+            with patch("src.autopilot.orchestrator.pipeline._register_monitored_workflow") as reg:
                 result = run_single_workflow(
                     sdk=sdk,
                     workflow_id="autopilot",
