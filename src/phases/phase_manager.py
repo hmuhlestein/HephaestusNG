@@ -779,45 +779,72 @@ class PhaseManager:
         }
 
     def _escalate_unresolvable_goto(
-        self, session, phase, execution, target_name, decided_by: str
+        self, session, phase, execution, target_name, decided_by: str, action: str
     ) -> Dict[str, Any]:
-        """A goto whose target phase does not exist escalates to arbitration.
+        """A goto whose target phase does not exist must not advance the phase.
 
         Both goto handlers used to log a warning and call
-        _advance_or_complete here -- the opposite of the decision that was
-        just made. A gate saying "go back to development", or an arbiter
-        resolving an escalation with "goto X", would move the pipeline
-        FORWARD instead, with a warning as the only trace.
+        _advance_or_complete here -- the opposite of the decision just made.
+        A gate saying "go back to development", or an arbiter resolving an
+        escalation with "goto X", would move the pipeline FORWARD instead,
+        with a warning as the only trace.
 
-        Escalating routes it to _trigger_arbitration, which is capped at
-        MAX_ARBITRATIONS_PER_PHASE and, once that cap is exhausted with no
-        pending decision and no genuinely-passing output, fails the workflow.
-        So an unresolvable target gets the arbiter's retries first and then
-        fails, rather than silently advancing.
+        A gate's goto escalates (action="arbitrate"): _trigger_arbitration is
+        capped at MAX_ARBITRATIONS_PER_PHASE and, once that cap is exhausted
+        with no pending decision and no genuinely-passing output, fails the
+        workflow. The target gets the arbiter's retries first, then fails.
 
-        The execution is reopened for the same reason
-        _handle_evaluation_arbitrate reopens it: both goto handlers close it
-        to "completed" before resolving the target, and a completed execution
-        is invisible to _advance_phases' "next pending phase after the latest
-        completed one" ordering -- which would race straight past the phase
-        now awaiting arbitration.
+        An arbiter's own goto fails terminally (action="fail"). It is already
+        past the arbitrator, so there is nothing left to escalate to -- and
+        _resolve_arbitration_outcome, which is what called it, dispatches only
+        continue/goto/retry: returning "arbitrate" there would leave the phase
+        reopened with no task and no arbitration in flight, stalled.
+        Re-entering _trigger_arbitration from inside a resolution is also
+        unsafe, since its own cap branch can call _resolve_arbitration_outcome
+        back.
+
+        Either way the reason names the offending target, and travels to
+        Workflow.status_reason (via _fire_phase_transition ->
+        _trigger_arbitration, or via _fail_workflow) so an operator sees which
+        phase name did not resolve.
         """
-        _reopen_phase_execution(execution, status="in_progress", started_at="leave")
-        session.commit()
+        reason = (
+            f"{decided_by} chose goto {target_name!r}, which names no phase in "
+            "this workflow"
+        )
         logger.error(
             f"[GOTO] {decided_by} targeted phase {target_name!r}, which does not "
-            f"exist in this workflow -- escalating to arbitration instead of "
-            f"advancing past {phase.name}"
+            f"exist in this workflow -- {action} instead of advancing past "
+            f"{phase.name}"
         )
+
+        if action == "fail":
+            # Matches _handle_force_fail: close the execution as failed and
+            # fail the workflow, rather than leaving it open for a retry that
+            # is never coming.
+            self._close_execution(session, execution, "failed", reason)
+            self._fail_workflow(session, reason)
+            return {
+                "action": "fail",
+                "target_phase": None,
+                "target_phase_id": None,
+                "should_continue": False,
+                "reason": reason,
+            }
+
+        # Reopened for the same reason _handle_evaluation_arbitrate reopens:
+        # both goto handlers close the execution to "completed" before
+        # resolving the target, and _advance_phases picks the next pending
+        # phase after the latest COMPLETED one -- a phase left completed while
+        # awaiting arbitration gets raced straight past.
+        _reopen_phase_execution(execution, status="in_progress", started_at="leave")
+        session.commit()
         return {
             "action": "arbitrate",
             "target_phase": phase.name,
             "target_phase_id": phase.id,
             "should_continue": True,
-            "reason": (
-                f"{decided_by} chose goto {target_name!r}, which names no phase in "
-                "this workflow"
-            ),
+            "reason": reason,
         }
 
     def _handle_force_goto(
@@ -833,7 +860,7 @@ class PhaseManager:
         )
         if not target_phase:
             return self._escalate_unresolvable_goto(
-                session, phase, execution, target_phase_name, "arbitration"
+                session, phase, execution, target_phase_name, "arbitration", "fail"
             )
 
         logger.info(f"[ARBITRATE] Goto phase {target_phase.name} from {phase.name}")
@@ -969,7 +996,8 @@ class PhaseManager:
             }
         else:
             return self._escalate_unresolvable_goto(
-                session, phase, execution, evaluation.target_phase, "gate evaluation"
+                session, phase, execution, evaluation.target_phase, "gate evaluation",
+                "arbitrate",
             )
 
     def _consume_gate_artifacts_for(self, session, phase) -> None:

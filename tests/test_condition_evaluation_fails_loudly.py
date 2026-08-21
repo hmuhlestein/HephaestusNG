@@ -281,13 +281,17 @@ class TestUnresolvableGotoEscalates:
         reopen.assert_called_once()
         assert "no_such_phase" in result["reason"]
 
-    def test_arbiter_decided_goto_with_a_bad_target_escalates(self):
-        """The arbiter's own resolution being unexecutable is the case that
-        matters most: this is where escalations land."""
+    def test_arbiter_decided_goto_with_a_bad_target_fails_terminally(self):
+        """The arbiter's own resolution being unexecutable fails rather than
+        escalating: it is already past the arbitrator, and
+        _resolve_arbitration_outcome (its caller) dispatches only
+        continue/goto/retry -- returning "arbitrate" there would strand the
+        phase with no task and no arbitration in flight."""
         manager, session, phase, execution = self._fixture()
 
         with (
-            patch.object(type(manager), "_close_execution", create=True),
+            patch.object(type(manager), "_close_execution", create=True) as close,
+            patch.object(type(manager), "_fail_workflow", create=True) as fail_wf,
             patch("src.phases.phase_manager._reopen_phase_execution") as reopen,
             patch.object(
                 type(manager), "_find_phase_by_name_or_order", return_value=None, create=True
@@ -298,15 +302,21 @@ class TestUnresolvableGotoEscalates:
                 session, phase, execution, "done", "renamed_away", "arbiter said so"
             )
 
-        assert result["action"] == "arbitrate"
+        assert result["action"] == "fail"
+        assert result["should_continue"] is False
         advance.assert_not_called()
-        reopen.assert_called_once()
+        reopen.assert_not_called(), "a terminal failure must not reopen the phase"
+        fail_wf.assert_called_once()
+        assert close.call_args.args[2] == "failed"
+        assert "renamed_away" in result["reason"]
 
-    def test_the_execution_is_reopened_in_progress_not_pending(self):
+    def test_the_escalated_execution_is_reopened_in_progress_not_pending(self):
         """_advance_phases picks the next pending phase after the latest
         COMPLETED one, so a phase left completed (or reopened as pending)
         while awaiting arbitration gets raced past."""
         manager, session, phase, execution = self._fixture()
+        evaluation = MagicMock()
+        evaluation.target_phase = "gone"
 
         with (
             patch.object(type(manager), "_close_execution", create=True),
@@ -316,8 +326,8 @@ class TestUnresolvableGotoEscalates:
             ),
             patch.object(type(manager), "_advance_or_complete", create=True),
         ):
-            manager._handle_force_goto(
-                session, phase, execution, "done", "gone", "arbiter"
+            manager._handle_evaluation_goto(
+                session, phase, execution, "done", evaluation
             )
 
         assert reopen.call_args.kwargs["status"] == "in_progress"
@@ -332,6 +342,7 @@ class TestUnresolvableGotoEscalates:
 
         with (
             patch.object(type(manager), "_close_execution", create=True),
+            patch.object(type(manager), "_fail_workflow", create=True) as fail_wf,
             patch("src.phases.phase_manager._reopen_phase_execution") as reopen,
             patch.object(
                 type(manager), "_find_phase_by_name_or_order", return_value=target, create=True
@@ -344,8 +355,9 @@ class TestUnresolvableGotoEscalates:
                 session, phase, execution, "done", "development", "arbiter"
             )
 
-        assert result["action"] != "arbitrate"
+        assert result["action"] not in ("arbitrate", "fail")
         reopen.assert_not_called()
+        fail_wf.assert_not_called()
 
 
 class TestEscalationReasonIsCarriedThrough:

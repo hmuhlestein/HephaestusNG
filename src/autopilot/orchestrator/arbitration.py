@@ -621,10 +621,11 @@ def _resolve_arbitration_outcome(
             if wf:
                 # A "goto" whose target_phase didn't resolve to a real phase
                 # (_find_phase_by_name_or_order does an exact-string match --
-                # an LLM-hallucinated or mis-cased name won't match) falls
-                # back to _advance_or_complete internally and returns
-                # action != "goto" -- check the ACTUAL returned action, not
-                # the raw decision, or a failed goto gets treated as a
+                # an LLM-hallucinated or mis-cased name won't match) now
+                # returns action "fail" from _escalate_unresolvable_goto,
+                # which used to be a silent _advance_or_complete. Either way
+                # it is action != "goto" -- check the ACTUAL returned action,
+                # not the raw decision, or a failed goto gets treated as a
                 # silent success and status_reason is wrongly cleared.
                 goto_target_missing = decision == "goto" and result.get("action") != "goto"
                 if decision == "fail" or (decision == "goto" and not target_phase) or goto_target_missing:
