@@ -50,7 +50,16 @@ done
 blocked_reason=""
 
 if [[ "$subcommand" == "merge" ]]; then
-    blocked_reason="git merge"
+    # `git merge` merges INTO the current branch -- only block when that
+    # target is main/master itself. Merging one throwaway branch into
+    # another (worktree agent branches, test scratch repos) is unrelated
+    # to "landing on main before review" and must pass through.
+    current_branch="$("$real_git" symbolic-ref --short HEAD 2>/dev/null || echo "")"
+    for b in $protected_branches; do
+        if [[ "$current_branch" == "$b" ]]; then
+            blocked_reason="git merge into $b"
+        fi
+    done
 elif [[ "$subcommand" == "push" ]]; then
     # --all/--mirror can push a local main/master along with everything
     # else even with no refspec naming it explicitly -- block outright.
@@ -106,18 +115,24 @@ elif [[ "$subcommand" == "push" ]]; then
 fi
 
 if [[ -n "$blocked_reason" ]]; then
-    # Walk up to find the worktree root (contains .hephaestus/)
-    marker=""
+    # Walk up to find the worktree root (contains .hephaestus/). This
+    # guardrail only protects THIS project's main/master -- a repo with
+    # no .hephaestus/ anywhere above cwd isn't a Hephaestus-managed
+    # project at all (e.g. a scratch git repo a test creates under
+    # /tmp via tempfile.mkdtemp(), which commonly also defaults to a
+    # branch named "main"); pass those through unconditionally instead
+    # of matching on branch name alone.
+    hephaestus_dir=""
     check_dir="$PWD"
     while [[ "$check_dir" != "/" ]]; do
-        if [[ -f "$check_dir/.hephaestus/review_approved" ]]; then
-            marker="$check_dir/.hephaestus/review_approved"
+        if [[ -d "$check_dir/.hephaestus" ]]; then
+            hephaestus_dir="$check_dir/.hephaestus"
             break
         fi
         check_dir="$(dirname "$check_dir")"
     done
 
-    if [[ -z "$marker" ]]; then
+    if [[ -n "$hephaestus_dir" && ! -f "$hephaestus_dir/review_approved" ]]; then
         echo "BLOCKED: $blocked_reason is not allowed until the feature has been reviewed and approved." >&2
         echo "In review mode, create a PR instead. The merge/push will happen after" >&2
         echo "human approval creates the .hephaestus/review_approved marker." >&2
