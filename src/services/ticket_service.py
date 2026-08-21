@@ -1482,8 +1482,6 @@ class TicketService:
         commit_message: str,
         link_method: str,
     ) -> Dict[str, Any]:
-        import subprocess
-
         from src.core.simple_config import get_config
 
         ticket = db.query(Ticket).filter_by(id=ticket_id).first()
@@ -1506,61 +1504,20 @@ class TicketService:
 
         # Get real commit stats from git -- resolve the ticket's own
         # project repo rather than assuming it's whichever project the
-        # process-wide singleton currently points at.
-        # REQ-10/14: resolve via repo_id, stamp on TicketCommit.
-        # Resolve once and reuse for both path and stamping (BLOCKER #3 fix).
+        # process-wide singleton currently points at (only one project
+        # could ever be active before multi-project concurrency).
         main_repo_path = None
-        resolved_repo_id = None
-        task_repo_id = None
         if ticket.workflow_id:
             wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
             if wf and wf.project_id:
-                if ticket.task_id:
-                    task = db.query(Task).filter_by(id=ticket.task_id).first()
-                    task_repo_id = task.repo_id if task else None
-                from src.core.repo_resolution import resolve_repo
+                from src.core.database import AutopilotProject
 
-                repo = resolve_repo(db, wf.project_id, task_repo_id)
-                if repo:
-                    main_repo_path = repo.path
-                    resolved_repo_id = repo.id
-                    if task_repo_id and repo.id != task_repo_id:
-                        # REQ-10: repo_id was set but didn't resolve to
-                        # itself -- log, don't block.
-                        logger.warning(
-                            f"[TICKET-COMMIT] Ticket {ticket_id}'s task repo_id "
-                            f"{task_repo_id} did not resolve; used project primary instead"
-                        )
+                proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
+                if proj and proj.base_dir:
+                    main_repo_path = proj.base_dir
         if main_repo_path is None:
             config = get_config()
             main_repo_path = str(config.git.main_repo_path)
-
-        # REQ-10: check commit exists in the resolved repo. Soft check --
-        # an inaccessible repo dir (deleted worktree, bad config path)
-        # must not crash the link, same as a missing commit.
-        loop = asyncio.get_event_loop()
-        try:
-            exists = await loop.run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    ["git", "cat-file", "-e", commit_sha],
-                    cwd=main_repo_path, capture_output=True, timeout=5,
-                ).returncode == 0,
-            )
-        except (OSError, subprocess.SubprocessError) as e:
-            logger.warning(
-                f"[TICKET-COMMIT] Could not check commit {commit_sha} against "
-                f"resolved repo {main_repo_path}: {e} -- linking anyway per "
-                f"REQ-10/REQ-11 (soft check, no hard enforcement in v1)"
-            )
-            exists = True
-        if not exists:
-            logger.warning(
-                f"[TICKET-COMMIT] Commit {commit_sha} not found in resolved repo "
-                f"{main_repo_path} (task_repo_id={task_repo_id}) -- linking anyway "
-                f"per REQ-10/REQ-11 (soft check, no hard enforcement in v1)"
-            )
-
         # _get_commit_stats shells out to `git show --numstat` --
         # blocking, offloaded so it doesn't stall the event loop.
         loop = asyncio.get_event_loop()
@@ -1569,7 +1526,6 @@ class TicketService:
         )
 
         # Create commit link with real stats
-        # REQ-10/14: stamp repo_id from the already-resolved repo
         commit_id = f"tc-{uuid.uuid4()}"
         ticket_commit = TicketCommit(
             id=commit_id,
@@ -1579,7 +1535,6 @@ class TicketService:
             commit_message=commit_message,
             commit_timestamp=datetime.utcnow(),
             link_method=link_method,
-            repo_id=resolved_repo_id,
             files_changed=commit_stats["files_changed"],
             insertions=commit_stats["insertions"],
             deletions=commit_stats["deletions"],

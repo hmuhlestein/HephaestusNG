@@ -303,10 +303,21 @@ def _pause_project_workflows(db: Session, project_id: str, paused_by: str, defin
     module too). Exists as a module-level name here -- rather than an
     inline import inside _check_budget_enforcement -- so callers that only
     need the pause behavior (e.g. budget-enforcement tests) don't have to
-    reach into src.autopilot.orchestrator directly."""
+    reach into src.autopilot.orchestrator directly.
+
+    pause_project_workflows also returns the IDs of any "queued" tasks it
+    found, deliberately unused here -- see its docstring: applying the
+    locked reset requires committing `db` first, and this function's `db`
+    is committed by a caller several frames further up (derive_project_
+    cost's "caller will commit"), too indirect to safely thread through.
+    A budget-triggered pause's queued tasks are a narrower gap than the
+    user-facing stop/cancel/pause endpoints, which do apply this reset."""
     from src.autopilot.orchestrator.engine_client import pause_project_workflows
 
-    return pause_project_workflows(db, project_id, paused_by=paused_by, definition_ids=definition_ids)
+    paused_count, _queued_task_ids = pause_project_workflows(
+        db, project_id, paused_by=paused_by, definition_ids=definition_ids
+    )
+    return paused_count
 
 
 def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:

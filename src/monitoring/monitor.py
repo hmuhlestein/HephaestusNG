@@ -240,9 +240,13 @@ class MonitoringLoop:
 
         while self.running:
             try:
-                # Write heartbeat file so external watchdogs can verify we're alive
+                # Write heartbeat file so external watchdogs can verify we're alive.
+                # Offloaded: a blocking file write directly in this coroutine stalls
+                # the event loop for every other request this process is serving.
                 heartbeat = Path(HEPHAESTUS_LOGS_DIR) / "monitor_heartbeat"
-                heartbeat.write_text(str(time.time()))
+                await asyncio.get_event_loop().run_in_executor(
+                    None, heartbeat.write_text, str(time.time())
+                )
 
                 await self._monitoring_cycle()
             except Exception as e:

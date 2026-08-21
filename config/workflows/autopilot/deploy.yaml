@@ -165,7 +165,7 @@ additional_notes: |
   - Deploy without reading DEPLOY.md first
   - Proceed if critical prerequisites are missing
 
-  ## WHEN YOU ARE DONE — MARK YOUR TASK AS COMPLETE
+  <<COMPLETION_HEADER>>
 
   After writing deploy.md, call:
 
@@ -174,3 +174,5 @@ additional_notes: |
     "summary": "<brief summary of deployment outcome>",
     "key_learnings": ["<key findings>"]
   })
+
+  <<COMPLETION_FOOTER>>

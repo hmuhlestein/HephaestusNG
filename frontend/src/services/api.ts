@@ -870,17 +870,6 @@ export const apiService = {
     await api.delete(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}`);
   },
 
-  // ProjectRepo endpoints (REQ-24)
-  getProjectRepos: async (projectId: string): Promise<any[]> => {
-    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/repos`);
-    return data;
-  },
-
-  addProjectRepo: async (projectId: string, label: string, path: string): Promise<any> => {
-    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/repos`, { label, path });
-    return data;
-  },
-
   getAutopilotProjectDesignContent: async (projectId: string, filename: string): Promise<{ filename: string; content: string }> => {
     const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}/content`);
     return data;

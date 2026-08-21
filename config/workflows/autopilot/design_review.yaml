@@ -308,13 +308,12 @@ additional_notes: |
   - Be vague ("this seems risky") — show the exact scenario
   - Inflate severity to make the report look thorough
 
-  ## WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
-
-  CRITICAL: You MUST call the complete_my_task tool. The pipeline will stall
-  without it.
+  <<COMPLETION_HEADER>>
 
   complete_my_task(
     status="done",
     summary="<brief summary: N BLOCKERs found, M WARNINGs found — see challenge.md>",
     key_learnings=["<specific design gaps found>"]
   )
+
+  <<COMPLETION_FOOTER>>

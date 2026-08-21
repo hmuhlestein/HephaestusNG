@@ -12,12 +12,9 @@ import {
   DollarSign,
   AlertTriangle,
   Edit3,
-  GitBranch,
-  Star,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { apiService } from '@/services/api';
-import type { ProjectRepo } from '@/types';
 
 interface ProjectSettingsModalProps {
   isOpen: boolean;
@@ -32,23 +29,10 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
   const [newProjectPath, setNewProjectPath] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
 
-  // Repo management state (REQ-24)
-  const [selectedProjectForRepos, setSelectedProjectForRepos] = useState<string | null>(null);
-  const [showAddRepoForm, setShowAddRepoForm] = useState(false);
-  const [newRepoLabel, setNewRepoLabel] = useState('');
-  const [newRepoPath, setNewRepoPath] = useState('');
-
   // System-wide default spend cap, seeded onto projects created afterwards.
   const { data: defaultBudget } = useQuery({
     queryKey: ['default-budget'],
     queryFn: () => apiService.getDefaultBudget(),
-  });
-
-  // Fetch repos for selected project (REQ-24)
-  const { data: projectRepos } = useQuery({
-    queryKey: ['project-repos', selectedProjectForRepos],
-    queryFn: () => apiService.getProjectRepos(selectedProjectForRepos!),
-    enabled: !!selectedProjectForRepos,
   });
 
   const updateDefaultBudgetMutation = useMutation({
@@ -87,23 +71,6 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
     queryKey: ['projects'],
     queryFn: () => apiService.getProjects(),
     enabled: isOpen,
-  });
-
-  // Add repo mutation (REQ-24)
-  const addRepoMutation = useMutation({
-    mutationFn: async ({ projectId, label, path }: { projectId: string; label: string; path: string }) => {
-      return apiService.addProjectRepo(projectId, label, path);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['project-repos', selectedProjectForRepos] });
-      toast.success('Repo added');
-      setShowAddRepoForm(false);
-      setNewRepoLabel('');
-      setNewRepoPath('');
-    },
-    onError: (error: any) => {
-      toast.error(error?.response?.data?.detail || 'Failed to add repo');
-    },
   });
 
   const updateBudgetMutation = useMutation({
@@ -180,19 +147,6 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
 
   const handleDelete = (projectId: string) => {
     deleteMutation.mutate(projectId);
-  };
-
-  const handleAddRepo = () => {
-    if (!selectedProjectForRepos) return;
-    if (!newRepoLabel.trim() || !newRepoPath.trim()) {
-      toast.error('Label and path are required');
-      return;
-    }
-    addRepoMutation.mutate({
-      projectId: selectedProjectForRepos,
-      label: newRepoLabel.trim(),
-      path: newRepoPath.trim(),
-    });
   };
 
   const inputClass = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500";
@@ -371,267 +325,150 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
               ) : projects && projects.length > 0 ? (
                 <div className="space-y-2">
                   {projects.map((project: any) => (
-                    <div key={project.id}>
-                      <div
-                        className={`flex items-center justify-between p-4 rounded-lg border transition-colors ${
-                          project.is_active
-                            ? 'bg-violet-50 dark:bg-violet-900/30 border-violet-200 dark:border-violet-700'
-                            : 'bg-white dark:bg-gray-700/50 border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
-                        }`}
-                      >
-                        <div className="flex items-center space-x-3 min-w-0">
-                          <FolderOpen className={`w-5 h-5 flex-shrink-0 ${project.is_active ? 'text-violet-600 dark:text-violet-400' : 'text-gray-400 dark:text-gray-500'}`} />
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{project.name}</p>
-                              {project.is_active && (
-                                <span className="px-2 py-0.5 text-xs font-semibold bg-violet-100 dark:bg-violet-800 text-violet-700 dark:text-violet-300 rounded-full">
-                                  Active
-                                </span>
-                              )}
-                              {project.is_default && (
-                                <span className="px-2 py-0.5 text-xs font-semibold bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-full">
-                                  Default
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">{project.base_dir}</p>
-                            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{project.design_count || 0} designs</p>
+                    <div
+                      key={project.id}
+                      className={`flex items-center justify-between p-4 rounded-lg border transition-colors ${
+                        project.is_active
+                          ? 'bg-violet-50 dark:bg-violet-900/30 border-violet-200 dark:border-violet-700'
+                          : 'bg-white dark:bg-gray-700/50 border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3 min-w-0">
+                        <FolderOpen className={`w-5 h-5 flex-shrink-0 ${project.is_active ? 'text-violet-600 dark:text-violet-400' : 'text-gray-400 dark:text-gray-500'}`} />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{project.name}</p>
+                            {project.is_active && (
+                              <span className="px-2 py-0.5 text-xs font-semibold bg-violet-100 dark:bg-violet-800 text-violet-700 dark:text-violet-300 rounded-full">
+                                Active
+                              </span>
+                            )}
+                            {project.is_default && (
+                              <span className="px-2 py-0.5 text-xs font-semibold bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-full">
+                                Default
+                              </span>
+                            )}
                           </div>
-                        </div>
-
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          {/* Repos button (REQ-24) */}
-                          <button
-                            onClick={() => {
-                              if (selectedProjectForRepos === project.id) {
-                                setSelectedProjectForRepos(null);
-                              } else {
-                                setSelectedProjectForRepos(project.id);
-                                setShowAddRepoForm(false);
-                              }
-                            }}
-                            className={`p-2 rounded-lg transition-colors ${
-                              selectedProjectForRepos === project.id
-                                ? 'text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-900/20'
-                                : 'text-gray-400 dark:text-gray-500 hover:text-violet-600 dark:hover:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20'
-                            }`}
-                            title="Manage repos"
-                          >
-                            <GitBranch className="w-4 h-4" />
-                          </button>
-
-                          {/* Spend is a plain label -- never a button, never editable. */}
-                          {project.cost_total_usd > 0 && editingBudget !== project.id && (
-                            <div className="text-right mr-2">
-                              <div className="flex items-center gap-1">
-                                <DollarSign className="w-3 h-3 text-gray-500 dark:text-gray-400" />
-                                <span className="text-sm font-mono text-gray-800 dark:text-gray-200">
-                                  {project.cost_total_usd >= 1000
-                                    ? `$${(project.cost_total_usd / 1000).toFixed(1)}k`
-                                    : `$${project.cost_total_usd.toFixed(2)}`}
-                                </span>
-                                {project.cost_limit_usd != null && (
-                                  <span className="text-xs text-gray-400 dark:text-gray-500">
-                                    / ${project.cost_limit_usd.toFixed(0)}
-                                  </span>
-                                )}
-                              </div>
-                              {project.cost_limit_usd != null && project.cost_total_usd >= project.cost_limit_usd && (
-                                <div className="flex items-center gap-1 mt-0.5">
-                                  <AlertTriangle className="w-3 h-3 text-red-500" />
-                                  <span className="text-xs text-red-600 dark:text-red-400">Over budget</span>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {editingBudget === project.id ? (
-                            <div className="flex items-center gap-1 mr-2">
-                              <span className="text-xs text-gray-500 dark:text-gray-400">$</span>
-                              <input
-                                type="number"
-                                value={budgetValue}
-                                onChange={(e) => setBudgetValue(e.target.value)}
-                                placeholder="blank = no limit"
-                                min="0"
-                                max="100000"
-                                step="0.01"
-                                className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
-                                autoFocus
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') handleUpdateBudget(project.id);
-                                  if (e.key === 'Escape') { setEditingBudget(null); setBudgetValue(''); }
-                                }}
-                              />
-                              <button
-                                onClick={() => handleUpdateBudget(project.id)}
-                                disabled={updateBudgetMutation.isPending}
-                                className="px-2 py-1 text-xs bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-50"
-                              >
-                                Save
-                              </button>
-                              <button
-                                onClick={() => { setEditingBudget(null); setBudgetValue(''); }}
-                                className="px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : project.cost_limit_usd != null ? (
-                            <button
-                              onClick={() => {
-                                setEditingBudget(project.id);
-                                setBudgetValue(project.cost_limit_usd?.toString() || '');
-                              }}
-                              className="p-1 text-gray-400 dark:text-gray-500 hover:text-violet-600 dark:hover:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 rounded-lg transition-colors"
-                              title="Edit budget"
-                            >
-                              <Edit3 className="w-4 h-4" />
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => {
-                                setEditingBudget(project.id);
-                                setBudgetValue('');
-                              }}
-                              className="px-2 py-1 text-xs font-medium text-violet-600 dark:text-violet-400 hover:text-violet-700 dark:hover:text-violet-300 underline underline-offset-2"
-                            >
-                              Set Budget
-                            </button>
-                          )}
-                          {deleteConfirm === project.id ? (
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-red-600 dark:text-red-400">Delete?</span>
-                              <button
-                                onClick={() => handleDelete(project.id)}
-                                disabled={deleteMutation.isPending}
-                                className="px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors text-xs font-medium"
-                              >
-                                {deleteMutation.isPending ? (
-                                  <Loader2 className="w-3 h-3 animate-spin" />
-                                ) : (
-                                  'Yes, delete'
-                                )}
-                              </button>
-                              <button
-                                onClick={() => setDeleteConfirm(null)}
-                                className="px-3 py-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg transition-colors text-xs"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => setDeleteConfirm(project.id)}
-                              className="p-2 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-                              title="Delete project"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
+                          <p className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">{project.base_dir}</p>
+                          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{project.design_count || 0} designs</p>
                         </div>
                       </div>
 
-                      {/* Repo management panel (REQ-24) */}
-                      {selectedProjectForRepos === project.id && (
-                        <div className="mt-2 ml-8 p-3 bg-gray-50 dark:bg-gray-700/30 rounded-lg border border-gray-200 dark:border-gray-600">
-                          <div className="flex items-center justify-between mb-2">
-                            <h5 className="text-xs font-semibold text-gray-600 dark:text-gray-400 flex items-center gap-1">
-                              <GitBranch className="w-3 h-3" />
-                              Repositories
-                            </h5>
-                            {!showAddRepoForm && (
-                              <button
-                                onClick={() => setShowAddRepoForm(true)}
-                                className="flex items-center gap-1 px-2 py-1 text-xs text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 rounded transition-colors"
-                              >
-                                <Plus className="w-3 h-3" />
-                                Add Repo
-                              </button>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {/* Spend is a plain label -- never a button, never editable.
+                            Only the limit is editable, via the single control below. */}
+                        {project.cost_total_usd > 0 && editingBudget !== project.id && (
+                          <div className="text-right mr-2">
+                            <div className="flex items-center gap-1">
+                              <DollarSign className="w-3 h-3 text-gray-500 dark:text-gray-400" />
+                              <span className="text-sm font-mono text-gray-800 dark:text-gray-200">
+                                {project.cost_total_usd >= 1000
+                                  ? `$${(project.cost_total_usd / 1000).toFixed(1)}k`
+                                  : `$${project.cost_total_usd.toFixed(2)}`}
+                              </span>
+                              {project.cost_limit_usd != null && (
+                                <span className="text-xs text-gray-400 dark:text-gray-500">
+                                  / ${project.cost_limit_usd.toFixed(0)}
+                                </span>
+                              )}
+                            </div>
+                            {project.cost_limit_usd != null && project.cost_total_usd >= project.cost_limit_usd && (
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <AlertTriangle className="w-3 h-3 text-red-500" />
+                                <span className="text-xs text-red-600 dark:text-red-400">Over budget</span>
+                              </div>
                             )}
                           </div>
+                        )}
 
-                          {/* Repo list */}
-                          {projectRepos && projectRepos.length > 0 ? (
-                            <div className="space-y-1 mb-2">
-                              {projectRepos.map((repo: ProjectRepo) => (
-                                <div
-                                  key={repo.id}
-                                  className="flex items-center gap-2 px-2 py-1.5 bg-white dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600"
-                                >
-                                  {repo.is_primary ? (
-                                    <Star className="w-3 h-3 text-yellow-500 fill-yellow-500" />
-                                  ) : (
-                                    <GitBranch className="w-3 h-3 text-gray-400" />
-                                  )}
-                                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{repo.label}</span>
-                                  <span className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">{repo.path}</span>
-                                  {repo.is_primary && (
-                                    <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded">
-                                      Primary
-                                    </span>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">No repos configured</p>
-                          )}
-
-                          {/* Add repo form */}
-                          {showAddRepoForm && (
-                            <div className="mt-2 p-2 bg-white dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600">
-                              <div className="space-y-2">
-                                <div>
-                                  <label className="block text-[10px] text-gray-500 dark:text-gray-400 mb-0.5">Label</label>
-                                  <input
-                                    type="text"
-                                    value={newRepoLabel}
-                                    onChange={(e) => setNewRepoLabel(e.target.value)}
-                                    placeholder="backend"
-                                    className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="block text-[10px] text-gray-500 dark:text-gray-400 mb-0.5">Path (absolute)</label>
-                                  <input
-                                    type="text"
-                                    value={newRepoPath}
-                                    onChange={(e) => setNewRepoPath(e.target.value)}
-                                    placeholder="/Users/you/code/backend"
-                                    className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-mono"
-                                  />
-                                </div>
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    onClick={handleAddRepo}
-                                    disabled={addRepoMutation.isPending}
-                                    className="flex items-center px-2 py-1 text-xs bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-50 transition-colors"
-                                  >
-                                    {addRepoMutation.isPending ? (
-                                      <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                                    ) : (
-                                      <CheckCircle2 className="w-3 h-3 mr-1" />
-                                    )}
-                                    Add
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setShowAddRepoForm(false);
-                                      setNewRepoLabel('');
-                                      setNewRepoPath('');
-                                    }}
-                                    className="px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded transition-colors"
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                        {/* The ONE limit editor for this project -- previously duplicated
+                            as two independent inputs sharing the same editingBudget state,
+                            which meant editing put both on screen at once. */}
+                        {editingBudget === project.id ? (
+                          <div className="flex items-center gap-1 mr-2">
+                            <span className="text-xs text-gray-500 dark:text-gray-400">$</span>
+                            <input
+                              type="number"
+                              value={budgetValue}
+                              onChange={(e) => setBudgetValue(e.target.value)}
+                              placeholder="blank = no limit"
+                              min="0"
+                              max="100000"
+                              step="0.01"
+                              className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleUpdateBudget(project.id);
+                                if (e.key === 'Escape') { setEditingBudget(null); setBudgetValue(''); }
+                              }}
+                            />
+                            <button
+                              onClick={() => handleUpdateBudget(project.id)}
+                              disabled={updateBudgetMutation.isPending}
+                              className="px-2 py-1 text-xs bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-50"
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => { setEditingBudget(null); setBudgetValue(''); }}
+                              className="px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : project.cost_limit_usd != null ? (
+                          <button
+                            onClick={() => {
+                              setEditingBudget(project.id);
+                              setBudgetValue(project.cost_limit_usd?.toString() || '');
+                            }}
+                            className="p-1 text-gray-400 dark:text-gray-500 hover:text-violet-600 dark:hover:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 rounded-lg transition-colors"
+                            title="Edit budget"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setEditingBudget(project.id);
+                              setBudgetValue('');
+                            }}
+                            className="px-2 py-1 text-xs font-medium text-violet-600 dark:text-violet-400 hover:text-violet-700 dark:hover:text-violet-300 underline underline-offset-2"
+                          >
+                            Set Budget
+                          </button>
+                        )}
+                        {deleteConfirm === project.id ? (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-red-600 dark:text-red-400">Delete?</span>
+                            <button
+                              onClick={() => handleDelete(project.id)}
+                              disabled={deleteMutation.isPending}
+                              className="px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors text-xs font-medium"
+                            >
+                              {deleteMutation.isPending ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                'Yes, delete'
+                              )}
+                            </button>
+                            <button
+                              onClick={() => setDeleteConfirm(null)}
+                              className="px-3 py-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg transition-colors text-xs"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setDeleteConfirm(project.id)}
+                            className="p-2 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                            title="Delete project"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

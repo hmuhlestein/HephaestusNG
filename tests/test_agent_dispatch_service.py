@@ -2,7 +2,7 @@
 builder extracted from server.py (SOLID review finding 1.2/1.3).
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -116,41 +116,3 @@ class TestMarkAssigned:
         mock_state.db_manager.get_session.assert_not_called()
         # Should NOT have closed the external session
         external_session.close.assert_not_called()
-
-
-class TestBuildDispatchContextWorkflowResolution:
-    """REQ-17..REQ-21: build_dispatch_context must resolve workflow_id to a
-    plain project_id string via resolve_project_for_workflow, not pass its
-    (project_id, project_name) tuple straight through (adversarial review
-    BLOCKER #1)."""
-
-    @patch("src.core.app_context.get_app_state")
-    @patch("src.core.database.resolve_project_for_workflow")
-    async def test_unpacks_project_id_from_workflow_resolution_tuple(
-        self, mock_resolve, mock_get_state
-    ):
-        from src.services.agent_dispatch_service import AgentDispatchService
-
-        mock_resolve.return_value = ("proj-1", "My Project")
-
-        mock_state = MagicMock()
-        mock_state.phase_manager = None
-        mock_state.agent_manager.get_project_context = AsyncMock(
-            return_value="project context"
-        )
-        mock_state.rag_system.retrieve_for_task = AsyncMock(return_value=[])
-        session_cm = mock_state.db_manager.session_scope.return_value
-        session_cm.__enter__.return_value = MagicMock()
-        session_cm.__exit__.return_value = False
-        mock_get_state.return_value = mock_state
-
-        await AgentDispatchService.build_dispatch_context(
-            task_description_for_rag="do the thing",
-            phase_id=None,
-            workflow_id="wf-1",
-            repo_id="repo-1",
-        )
-
-        mock_state.agent_manager.get_project_context.assert_awaited_once_with(
-            project_id="proj-1", repo_id="repo-1"
-        )

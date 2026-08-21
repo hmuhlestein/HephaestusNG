@@ -288,9 +288,6 @@ class Task(Base):
     ticket_id = Column(String, ForeignKey("tickets.id"))  # Associated ticket (required when ticket tracking enabled)
     related_ticket_ids = Column(JSON)  # List of related ticket IDs for context
 
-    # Repo tracking (REQ-02) -- nullable, no backfill of historical rows (REQ-05)
-    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
-
     # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
     cost_total_usd = Column(Float, default=0.0, nullable=False)
 
@@ -590,9 +587,6 @@ class AgentWorktree(Base):
     )
     merge_commit_sha = Column(String)
     disk_usage_mb = Column(Integer)
-
-    # Repo tracking (REQ-02)
-    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
 
     # Relationships
     agent = relationship("Agent", foreign_keys=[agent_id], backref="worktree")
@@ -916,8 +910,6 @@ class Ticket(Base):
     parent_ticket_id = Column(String, ForeignKey("tickets.id"))
     task_id = Column(String, ForeignKey("tasks.id"))  # Primary task this ticket relates to
     phase_id = Column(String, ForeignKey("phases.id"))  # Phase where this ticket was created
-    # Repo tracking (REQ-02)
-    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
     related_task_ids = Column(JSON)  # List of related task IDs
     related_ticket_ids = Column(JSON)  # List of related ticket IDs for context
     tags = Column(JSON)  # List of tags
@@ -1028,9 +1020,6 @@ class TicketCommit(Base):
     commit_message = Column(Text, nullable=False)
     commit_timestamp = Column(DateTime, nullable=False)
 
-    # Repo tracking (REQ-02)
-    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
-
     # Change Stats
     files_changed = Column(Integer)
     insertions = Column(Integer)
@@ -1107,35 +1096,6 @@ class AutopilotProject(Base):
     review_mode = Column(Boolean, default=False, nullable=False)
 
     designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
-    repos = relationship("ProjectRepo", back_populates="project", cascade="all, delete-orphan")
-
-
-class ProjectRepo(Base):
-    """A single git repo belonging to an AutopilotProject.
-
-    Every AutopilotProject has >=1 ProjectRepo after migration -- exactly
-    one is_primary=True. Single-repo projects (the common case) have
-    exactly one row; get_project_context() and the feature architect treat
-    count==1 as "no multi-repo awareness needed" (REQ-21).
-    """
-
-    __tablename__ = "project_repos"
-
-    id = Column(String, primary_key=True)  # Format: repo-{uuid}
-    project_id = Column(
-        String, ForeignKey("autopilot_projects.id", ondelete="CASCADE"), nullable=False
-    )
-    label = Column(String(100), nullable=False)  # "backend", "frontend"
-    path = Column(Text, nullable=False)  # absolute; need not be under base_dir
-    is_primary = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    project = relationship("AutopilotProject", back_populates="repos")
-
-    __table_args__ = (
-        UniqueConstraint("project_id", "path", name="uq_project_repo_path"),
-        UniqueConstraint("project_id", "label", name="uq_project_repo_label"),
-    )
 
 
 class PromptProposal(Base):
@@ -1219,8 +1179,6 @@ class Feature(Base):
         default="pending",
     )
     workflow_id = Column(String, ForeignKey("workflows.id"), nullable=True)
-    # Repo tracking (REQ-02/REQ-19): every Feature bound to exactly one repo
-    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
     scope_doc_path = Column(Text, nullable=True)  # abs path to scope.md in permanent record
     feature_record_path = Column(Text, nullable=True)  # abs path to designs/.../features/<key>/
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -1557,6 +1515,15 @@ class DatabaseManager:
             # Bind fn per-iteration: a bare `lambda: fn(self.engine)` would
             # capture the loop variable and run the last migration 18 times.
             self._run_schema_migration(migration_id, lambda fn=fn: fn(self.engine))
+
+        # Recurring reconciliation, NOT a one-shot migration -- deliberately
+        # outside the loop above so it is never recorded-and-skipped. A
+        # self-review-enabled phase whose row lost the flag silently stops
+        # gating task completion, and that can drift back at any time as new
+        # per-workflow Phase rows are seeded. See the function's docstring.
+        from src.core.schema_migrations import backfill_self_review_defaults
+
+        backfill_self_review_defaults(self.engine)
 
     def _run_schema_migration(self, migration_id: str, fn) -> None:
         """Run one schema migration at most once per database, recorded in

@@ -388,7 +388,7 @@ def heal_orphaned_agent_branches(logger: "OrchestratorLogger") -> int:
 
     Returns the number of branches auto-merged.
     """
-    from src.core.database import ProjectRepo
+    from src.core.database import AutopilotProject
     from src.core.database import DatabaseManager as DbManager
 
     cfg = get_config()
@@ -396,21 +396,19 @@ def heal_orphaned_agent_branches(logger: "OrchestratorLogger") -> int:
     healed = 0
     try:
         with db.session_scope() as session:
-            # REQ-16: enumerate ProjectRepo.path instead of base_dir
-            # to support multi-repo projects
-            repo_dirs = {
-                repo.path
-                for repo in session.query(ProjectRepo).all()
-                if repo.path and Path(repo.path).is_dir()
+            project_dirs = {
+                proj.base_dir
+                for proj in session.query(AutopilotProject).all()
+                if proj.base_dir and Path(proj.base_dir).is_dir()
             }
 
-        for repo_dir in repo_dirs:
+        for project_dir in project_dirs:
             try:
-                healed += _heal_orphaned_branches_for_project(Path(repo_dir), cfg, logger)
+                healed += _heal_orphaned_branches_for_project(Path(project_dir), cfg, logger)
             except Exception as e:
-                logger.warning(f"[BRANCH-HEAL] Failed to scan {repo_dir}: {e}")
+                logger.warning(f"[BRANCH-HEAL] Failed to scan {project_dir}: {e}")
     except Exception as e:
-        logger.warning(f"[BRANCH-HEAL] Failed to enumerate repos: {e}")
+        logger.warning(f"[BRANCH-HEAL] Failed to enumerate projects: {e}")
     return healed
 
 

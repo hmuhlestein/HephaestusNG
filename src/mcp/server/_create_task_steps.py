@@ -352,7 +352,6 @@ async def _resolve_phase_and_enrich(request: CreateTaskRequest, agent_id: str) -
         done_definition=request.done_definition,
         phase_context_str=phase_context_str,
         requesting_agent_id=agent_id,
-        workflow_id=workflow_id or target_workflow_id,
     )
 
     return {
@@ -580,7 +579,6 @@ async def _dispatch_ready_dependents(completed_task_id: str, workflow_id: Option
                     "done_definition": t.done_definition,
                     "phase_id": t.phase_id,
                     "workflow_id": t.workflow_id,
-                    "repo_id": t.repo_id,
                     "created_by_agent_id": t.created_by_agent_id,
                 }
             )
@@ -636,8 +634,6 @@ async def _dispatch_or_queue_promoted_task(task_data: dict) -> None:
     dispatch_context = await TaskEnrichmentService.gather_dispatch_context(
         raw_description=task_data["raw_description"],
         requesting_agent_id=agent_id,
-        workflow_id=task_data["workflow_id"],
-        repo_id=task_data.get("repo_id"),
     )
 
     enriched_task = {"enriched_description": task_data["enriched_description"]}

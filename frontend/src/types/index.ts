@@ -390,17 +390,6 @@ export interface TicketCommit {
   files_list: string[] | null;
   linked_at: string;
   link_method: 'manual' | 'auto_detected' | 'worktree';
-  repo_id?: string | null;
-  repo_label?: string | null;
-}
-
-export interface ProjectRepo {
-  id: string;
-  project_id: string;
-  label: string;
-  path: string;
-  is_primary: boolean;
-  created_at: string;
 }
 
 export interface TicketDetail extends Ticket {
@@ -439,7 +428,6 @@ export interface CommitDiff {
   total_insertions: number;
   total_deletions: number;
   total_files: number;
-  repo_label?: string | null;  // REQ-23: repo attribution for multi-repo projects
 }
 
 export interface TicketSearchResult {

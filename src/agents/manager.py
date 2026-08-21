@@ -707,18 +707,8 @@ class AgentManager:
         finally:
             session.close()
 
-    async def get_project_context(
-        self,
-        project_id: Optional[str] = None,
-        repo_id: Optional[str] = None,
-    ) -> str:
+    async def get_project_context(self) -> str:
         """Get current project context for task enrichment.
-
-        Args:
-            project_id: AutopilotProject.id. None preserves today's behavior
-                exactly (global summary, no repo section).
-            repo_id: the calling task's Task.repo_id, if any. Used only to
-                label which listed repo is "writable" vs "read-only reference."
 
         Returns:
             Formatted project context string
@@ -762,34 +752,6 @@ class AgentManager:
                 context += "\n## RECENT COMPLETIONS\n"
                 for task in recent_tasks:
                     context += f"- {(task.enriched_description or task.raw_description)[:100]}...\n"
-
-            # REQ-17/18/21: Append repo section for multi-repo projects
-            if project_id:
-                from src.core.repo_resolution import list_repos
-
-                repos = list_repos(session, project_id)
-                if len(repos) > 1:
-                    context += "\n## PROJECT REPOS\n"
-                    if repo_id:
-                        # REQ-18: implementation agent — writable vs read-only
-                        for r in repos:
-                            if r.id == repo_id:
-                                context += f"- {r.label} (WRITABLE): {r.path}\n"
-                            else:
-                                context += f"- {r.label} (read-only reference): {r.path}\n"
-                    else:
-                        # REQ-19/20: feature architect — hard rule
-                        for r in repos:
-                            context += f"- {r.label}: {r.path}\n"
-                        context += (
-                            "\nEvery Feature you create MUST be bound to exactly "
-                            "one of these repos.\nAn API change and its UI consumer "
-                            "are TWO features (one per repo), never one feature "
-                            "spanning both. Use Feature.depends_on to order them "
-                            "(e.g. the frontend feature depends_on the backend "
-                            "feature's key) -- do not describe cross-repo ordering "
-                            "in free text.\n"
-                        )
 
             return context
 

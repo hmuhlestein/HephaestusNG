@@ -3,7 +3,7 @@
 import logging
 import threading
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import and_, case
 
@@ -90,6 +90,33 @@ class QueueService:
         # other call sites share.
         self._reservation_lock = threading.Lock()
         self._pending_reservations: Dict[str, int] = {}
+        # Guards claim_next_queued_task's should_queue_task -> get_next_queued_task
+        # -> dequeue_task sequence. Before process_queue's DB work moved off the
+        # event loop (run_in_executor, perf: stop process_queue's dispatch chain
+        # from blocking the event loop), running these three calls with no
+        # `await` between them on the single-threaded event loop gave the
+        # sequence atomicity for free -- no two concurrent process_queue()
+        # coroutines could interleave mid-sequence, since nothing here ever
+        # yielded control. Once that sequence started running via
+        # run_in_executor on a real thread pool, two overlapping process_queue()
+        # calls could genuinely execute it concurrently on different OS
+        # threads -- neither get_next_queued_task's SELECT nor dequeue_task's
+        # status check-then-write is an atomic DB operation on its own, so both
+        # could select and dequeue the SAME task, double-dispatching it.
+        # RLock, not Lock: claim_next_queued_task holds this lock across its
+        # own dequeue_task call, and dequeue_task itself also acquires it --
+        # because dequeue_task has DIRECT callers outside claim_next_queued_task
+        # (task_admin_routes.py's bump_task_priority_endpoint and
+        # cancel_queued_task_endpoint, both async FastAPI handlers). Those
+        # endpoints used to run unlocked on the event-loop thread, which was
+        # harmless before process_queue's DB work moved to run_in_executor
+        # (same history as above) but is a genuine race against an
+        # executor-thread claim ever since: both sides check-then-write
+        # task.status ("queued" -> "assigned") with no serialization, so an
+        # admin cancel/bump landing mid-claim can dequeue a task the claim
+        # is simultaneously dequeuing, or clobber its queue_position reset.
+        # Both entry points now funnel through the same lock.
+        self._dequeue_lock = threading.RLock()
         logger.info(
             f"QueueService initialized with max_concurrent_agents={max_concurrent_agents}, "
             f"cli_model_concurrency_limits={self.cli_model_concurrency_limits}"
@@ -513,33 +540,87 @@ class QueueService:
             logger.debug("No queued tasks found")
             return None
 
-    def dequeue_task(self, task_id: str) -> None:
+    def dequeue_task(self, task_id: str) -> bool:
         """Remove a task from the queue (mark as assigned).
+
+        Takes _dequeue_lock so that direct callers (task_admin_routes.py's
+        bump/cancel endpoints) are serialized against claim_next_queued_task's
+        check-select-dequeue sequence running on an executor thread -- see
+        _dequeue_lock's docstring for the race this closes. RLock makes this
+        safe to call from inside claim_next_queued_task, which already holds
+        the lock.
+
+        Returns:
+            True if the task was queued and is now assigned. False if it
+            wasn't found or wasn't queued -- callers that treat a dequeue
+            as unconditionally successful without checking this (the
+            original shape of this method, and of claim_next_queued_task)
+            can hand out a task that was deleted or transitioned out of
+            "queued" by something else holding the lock first.
 
         Args:
             task_id: ID of the task to dequeue
         """
-        with self.db_manager.session_scope() as session:
-            task = session.query(Task).filter_by(id=task_id).first()
+        with self._dequeue_lock:
+            with self.db_manager.session_scope() as session:
+                task = session.query(Task).filter_by(id=task_id).first()
+                if not task:
+                    logger.error(f"Task {task_id} not found for dequeueing")
+                    return False
+
+                if task.status != "queued":
+                    logger.warning(f"Task {task_id} is not queued (status={task.status})")
+                    return False
+
+                task.status = "assigned"
+                task.queue_position = None  # Clear queue position
+
+                # Explicit commit before _recalculate_queue_positions, which
+                # opens its own session against this same shared connection.
+                session.commit()
+
+                # Update queue positions for remaining tasks
+                self._recalculate_queue_positions()
+
+                logger.info(f"Task {task_id} dequeued and marked as assigned")
+                return True
+
+    def claim_next_queued_task(self, project_id: Optional[str] = None) -> Optional[Task]:
+        """Atomically check capacity, select, and dequeue the next queued
+        task -- see _dequeue_lock's docstring for why this needs a lock
+        rather than calling should_queue_task/get_next_queued_task/
+        dequeue_task separately.
+
+        Every caller that mutates or deletes a Task row now takes this
+        same lock (dequeue_task, boost_task_priority, cancel_queued_task),
+        so in practice dequeue_task below always succeeds for the task
+        get_next_queued_task just selected -- but checking its return
+        value instead of assuming success is what makes that an
+        invariant this method enforces, not a fact every future caller
+        has to remember to preserve. Returning a task dequeue_task
+        actually failed to claim (e.g. deleted between the select and
+        the dequeue by some caller this lock doesn't yet cover) would
+        hand process_queue a task to dispatch that isn't really claimed.
+        """
+        with self._dequeue_lock:
+            if self.should_queue_task(project_id):
+                logger.debug(f"At capacity - not processing queue (project_id={project_id})")
+                return None
+
+            task = self.get_next_queued_task(project_id)
             if not task:
-                logger.error(f"Task {task_id} not found for dequeueing")
-                return
+                logger.debug("No queued tasks to process")
+                return None
 
-            if task.status != "queued":
-                logger.warning(f"Task {task_id} is not queued (status={task.status})")
-                return
+            if not self.dequeue_task(task.id):
+                logger.warning(
+                    f"Task {task.id} was selected as the next queued task but "
+                    "could not be dequeued (deleted or changed state concurrently) "
+                    "-- skipping this cycle"
+                )
+                return None
 
-            task.status = "assigned"
-            task.queue_position = None  # Clear queue position
-
-            # Explicit commit before _recalculate_queue_positions, which
-            # opens its own session against this same shared connection.
-            session.commit()
-
-            # Update queue positions for remaining tasks
-            self._recalculate_queue_positions()
-
-            logger.info(f"Task {task_id} dequeued and marked as assigned")
+            return task
 
     def _recalculate_queue_positions(self) -> None:
         """Recalculate queue positions for all queued tasks."""
@@ -613,6 +694,14 @@ class QueueService:
     def boost_task_priority(self, task_id: str) -> bool:
         """Boost a task's priority to bypass the queue.
 
+        Takes _dequeue_lock: called from task_admin_routes.py's
+        bump_task_priority_endpoint on the event-loop thread, and its
+        check-then-write on priority_boosted/queue_position (plus the
+        position recalculation) races claim_next_queued_task's locked
+        select-dequeue sequence on an executor thread over the same rows
+        -- the same race dequeue_task's own lock closes, one call earlier
+        in the bump endpoint's sequence.
+
         Args:
             task_id: ID of the task to boost
 
@@ -620,33 +709,162 @@ class QueueService:
             True if successful, False otherwise
         """
         try:
+            with self._dequeue_lock:
+                with self.db_manager.session_scope() as session:
+                    task = session.query(Task).filter_by(id=task_id).first()
+                    if not task:
+                        logger.error(f"Task {task_id} not found for priority boost")
+                        return False
+
+                    if task.status != "queued":
+                        logger.warning(
+                            f"Cannot boost task {task_id} - not queued (status={task.status})"
+                        )
+                        return False
+
+                    task.priority_boosted = True
+                    task.queue_position = 1  # Move to front
+
+                    # Explicit commit before _recalculate_queue_positions, which
+                    # opens its own session against this same shared connection.
+                    session.commit()
+
+                    # Recalculate other queue positions
+                    self._recalculate_queue_positions()
+
+                    logger.info(f"Task {task_id} priority boosted")
+                    return True
+        except Exception as e:
+            logger.error(f"Failed to boost task {task_id} priority: {e}")
+            return False
+
+    def cancel_queued_task(
+        self, task_id: str, reason: str = "Cancelled by user from queue"
+    ) -> Tuple[str, Optional[str]]:
+        """Cancel a queued task: check it's queued, mark it failed, and
+        renumber the remaining queue -- all under _dequeue_lock.
+
+        The lock is the point: task_admin_routes.py's
+        cancel_queued_task_endpoint runs on the event-loop thread while
+        claim_next_queued_task holds the same lock across its
+        select-then-dequeue sequence on an executor thread. An UNLOCKED
+        status="failed" write from here could land inside that window,
+        after the claim already selected the task but before its
+        dequeue_task ran -- the claim then warns "not queued", still
+        returns the task, and process_queue dispatches an agent for a task
+        the user just cancelled. Serialized instead: either the cancel
+        wins the lock first (the claim's selection never sees the task) or
+        the claim finishes first (cancel reports not-queued, matching the
+        endpoint's existing 400 semantics).
+
+        Returns:
+            ("cancelled", workflow_id) on success,
+            ("not_found", None) if the task doesn't exist,
+            ("not_queued", None) if it's no longer queued.
+        """
+        with self._dequeue_lock:
             with self.db_manager.session_scope() as session:
                 task = session.query(Task).filter_by(id=task_id).first()
                 if not task:
-                    logger.error(f"Task {task_id} not found for priority boost")
-                    return False
+                    logger.error(f"Task {task_id} not found for cancel")
+                    return "not_found", None
 
                 if task.status != "queued":
                     logger.warning(
-                        f"Cannot boost task {task_id} - not queued (status={task.status})"
+                        f"Cannot cancel task {task_id} - not queued (status={task.status})"
                     )
-                    return False
+                    return "not_queued", None
 
-                task.priority_boosted = True
-                task.queue_position = 1  # Move to front
-
+                workflow_id = task.workflow_id
+                task.status = "failed"
+                task.failure_reason = reason
+                task.completed_at = datetime.utcnow()
                 # Explicit commit before _recalculate_queue_positions, which
                 # opens its own session against this same shared connection.
                 session.commit()
 
-                # Recalculate other queue positions
                 self._recalculate_queue_positions()
 
-                logger.info(f"Task {task_id} priority boosted")
+                logger.info(f"Task {task_id} cancelled: {reason}")
+                return "cancelled", workflow_id
+
+    def pause_queued_task(self, task_id: str) -> bool:
+        """Pause a queued task (-> "blocked"), under _dequeue_lock.
+
+        Same race class as cancel_queued_task (see its docstring): reached
+        via task_admin_routes.py's pause_task_endpoint's "queued" case
+        instead of the cancel endpoint. An unlocked status="blocked" write
+        here could land inside claim_next_queued_task's select-then-dequeue
+        window, letting a task the user just paused get dispatched anyway.
+
+        Returns:
+            True if the task was queued and is now blocked, False if it
+            wasn't found or wasn't queued.
+        """
+        with self._dequeue_lock:
+            with self.db_manager.session_scope() as session:
+                task = session.query(Task).filter_by(id=task_id).first()
+                if not task:
+                    logger.error(f"Task {task_id} not found for pause")
+                    return False
+
+                if task.status != "queued":
+                    logger.warning(
+                        f"Cannot pause task {task_id} as queued - not queued (status={task.status})"
+                    )
+                    return False
+
+                task.status = "blocked"
+                task.queue_position = None
+                # Explicit commit before _recalculate_queue_positions, which
+                # opens its own session against this same shared connection.
+                session.commit()
+
+                self._recalculate_queue_positions()
+
+                logger.info(f"Task {task_id} paused from queue")
                 return True
-        except Exception as e:
-            logger.error(f"Failed to boost task {task_id} priority: {e}")
-            return False
+
+    def reset_queued_task_to_pending(self, task_id: str) -> bool:
+        """Pull a queued task out of the queue and reset it to "pending",
+        under _dequeue_lock -- for stop_workflow, which resets its
+        workflow's "assigned"/"in_progress" tasks to "pending" too (a
+        clean, undispatched state for the next resume) but previously left
+        "queued" tasks untouched: still eligible for claim_next_queued_task
+        to dispatch even after the workflow was stopped.
+
+        Same race class as cancel_queued_task/pause_queued_task: an
+        unlocked write here could land inside claim_next_queued_task's
+        select-then-dequeue window and let a task this stop just reset
+        get dispatched anyway.
+
+        Returns:
+            True if the task was queued and is now pending, False if it
+            wasn't found or wasn't queued.
+        """
+        with self._dequeue_lock:
+            with self.db_manager.session_scope() as session:
+                task = session.query(Task).filter_by(id=task_id).first()
+                if not task:
+                    logger.error(f"Task {task_id} not found for stop-reset")
+                    return False
+
+                if task.status != "queued":
+                    logger.warning(
+                        f"Cannot reset task {task_id} as queued - not queued (status={task.status})"
+                    )
+                    return False
+
+                task.status = "pending"
+                task.queue_position = None
+                # Explicit commit before _recalculate_queue_positions, which
+                # opens its own session against this same shared connection.
+                session.commit()
+
+                self._recalculate_queue_positions()
+
+                logger.info(f"Task {task_id} reset to pending from queue (workflow stop)")
+                return True
 
     def get_queued_tasks(self) -> List[Task]:
         """Get all queued tasks ordered by priority.

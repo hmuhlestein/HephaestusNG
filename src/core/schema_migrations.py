@@ -22,8 +22,7 @@ on the next startup of every deployed instance.
 
 import logging
 
-from sqlalchemy import exc as sqlalchemy_exc
-from sqlalchemy import text
+from sqlalchemy import exc as sqlalchemy_exc, text
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +327,50 @@ def migrate_self_review_columns(engine):
     except Exception as e:
         logger.warning(f"self_review columns migration failed (not just 'already exists' -- check this): {e}")
 
+def backfill_self_review_defaults(engine):
+    """Re-enable self_review on any development Phase row still missing it.
+
+    Deliberately NOT in SCHEMA_MIGRATIONS: that registry records each
+    migration id in schema_migrations and skips it forever afterwards, so
+    a one-shot backfill cannot heal drift that appears LATER. It did not.
+    `migrate_self_review_columns` backfilled once, then
+    `sdk/client.py`'s phase loader -- which never read the YAML's
+    `self_review:` key -- kept creating fresh development rows with
+    self_review = NULL. Every Phase row is per-workflow, so each new
+    workflow seeded through that path reintroduced the gap.
+
+    The failure was silent and asymmetric: `_maybe_fire_self_review_gate`
+    requires `phase.self_review.get("enabled")`, so a NULL row means the
+    gate never fires and the task completes on its FIRST "done" -- which
+    looks exactly like a phase deliberately configured with self-review
+    off. Observed: 2 of 35 development rows had drifted, and a task on one
+    of them silently skipped its self-review.
+
+    The loader is fixed, so new rows carry the value from YAML. This runs
+    every startup so any row that still drifts is repaired rather than
+    quietly disabling a quality gate. One small idempotent UPDATE.
+    """
+    try:
+        with engine.connect() as conn:
+            # Both spellings of "no value": a true SQL NULL and the JSON
+            # null literal. A column written as the four-byte string
+            # 'null' is not SQL NULL, so an IS NULL predicate skips it.
+            result = conn.execute(text(
+                "UPDATE phases SET self_review = :value "
+                "WHERE name = 'development' "
+                "AND (self_review IS NULL OR self_review = 'null')"
+            ), {"value": '{"enabled": true}'})
+            conn.commit()
+            if result.rowcount:
+                logger.warning(
+                    f"[SELF-REVIEW] Repaired {result.rowcount} development phase row(s) "
+                    "that had self_review unset -- the self-review gate would not have "
+                    "fired for tasks on them"
+                )
+    except Exception as e:
+        logger.warning(f"self_review backfill failed: {e}")
+
+
 def migrate_phase_execution_task_claim_column(engine):
     """Add phase_executions.task_creation_claimed_at for existing databases.
 
@@ -628,93 +671,6 @@ def migrate_review_mode_columns(engine):
         logger.warning(f"Review mode columns migration failed (not just 'already exists' -- check this): {e}")
 
 
-
-
-def migrate_project_repos_table(engine):
-    """REQ-01/03/04/05: create project_repos, backfill from base_dir.
-
-    REQ-02: add nullable repo_id FK to tasks, tickets, ticket_commits,
-    agent_worktrees, features. NULLable -- no backfill of historical rows
-    (REQ-05); resolve_primary_repo() is the runtime fallback (REQ-06).
-    """
-    from sqlalchemy import inspect
-
-    # Imported here, not at module scope: src.core.database imports
-    # this module, so a top-level import back into it would be circular.
-    from src.core.database import AutopilotProject, ProjectRepo
-
-    inspector = inspect(engine)
-    existing_tables = inspector.get_table_names()
-
-    # Create project_repos table if it doesn't exist
-    if "project_repos" not in existing_tables:
-        try:
-            ProjectRepo.__table__.create(bind=engine)
-            logger.info("Created project_repos table")
-        except Exception as e:
-            logger.warning(f"project_repos table creation failed: {e}")
-
-    # Backfill one ProjectRepo per existing AutopilotProject. Deliberately
-    # NOT wrapped in a broad catch-and-continue: a failure here must
-    # propagate to _run_schema_migration so the migration isn't recorded
-    # as applied and retries on next startup, instead of silently leaving
-    # some projects without a ProjectRepo row.
-    try:
-        import uuid
-
-        from sqlalchemy.orm import Session
-
-        with Session(engine) as session:
-            projects_without_repo = (
-                session.query(AutopilotProject)
-                .filter(~AutopilotProject.repos.any())
-                .all()
-            )
-            for project in projects_without_repo:
-                session.add(ProjectRepo(
-                    id=f"repo-{uuid.uuid4().hex[:12]}",
-                    project_id=project.id,
-                    label="main",
-                    path=project.base_dir,
-                    is_primary=True,
-                ))
-            session.commit()
-            if projects_without_repo:
-                logger.info(
-                    f"Backfilled {len(projects_without_repo)} ProjectRepo rows"
-                )
-    except Exception as e:
-        logger.error(f"ProjectRepo backfill failed (will retry on next startup): {e}")
-        raise  # Re-raise so migration records as failed and retries
-
-    # Add nullable repo_id FK to tasks, tickets, ticket_commits,
-    # agent_worktrees, features (REQ-02)
-    for table, column in [
-        ("tasks", "repo_id"),
-        ("tickets", "repo_id"),
-        ("ticket_commits", "repo_id"),
-        ("agent_worktrees", "repo_id"),
-        ("features", "repo_id"),
-    ]:
-        try:
-            existing_cols = {
-                c["name"] for c in inspector.get_columns(table)
-            }
-            if column not in existing_cols:
-                with engine.connect() as conn:
-                    conn.execute(text(
-                        f"ALTER TABLE {table} ADD COLUMN {column} TEXT "
-                        f"REFERENCES project_repos(id)"
-                    ))
-                    conn.commit()
-                logger.info(f"Added {table}.{column} column")
-        except Exception as e:
-            logger.warning(
-                f"{table}.{column} migration failed: {e}"
-            )
-
-    logger.info("migrate_project_repos_table completed")
-
 # ── Registry ─────────────────────────────────────────────────────────
 # (id, function). Ids match the pre-split method names -- see module
 # docstring for why they must not be renamed.
@@ -737,5 +693,4 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_cost_tracking_columns", migrate_cost_tracking_columns),
     ("_migrate_phase_fallback_columns", migrate_phase_fallback_columns),
     ("_migrate_review_mode_columns", migrate_review_mode_columns),
-    ("_migrate_project_repos_table", migrate_project_repos_table),
 ]

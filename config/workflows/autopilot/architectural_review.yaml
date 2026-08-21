@@ -461,12 +461,8 @@ additional_notes: |
   - Treat a missing concurrency contract as "not your problem" — if the design is silent and the code has a race condition, BOTH are failures
   
   
-  ## WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
-  
-  CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
-  You MUST call the complete_my_task tool. The system CANNOT detect you finished
-  without this call. The pipeline WILL get stuck.
-  
+  <<COMPLETION_HEADER>>
+
   After writing all your output files, call:
   
   complete_my_task({
@@ -474,5 +470,5 @@ additional_notes: |
     "summary": "<brief summary of what was accomplished>",
     "key_learnings": ["<key findings or decisions>"]
   })
-  
-  Then wait for confirmation. Do NOT exit until you see the task marked as done.
+
+  <<COMPLETION_FOOTER>>
