@@ -327,3 +327,25 @@ pattern at all — they iterate `.sessions` directly without a `has_session`
 precheck, a different (arguably better) shape. See
 `docs/AUTOPILOT_REFACTOR_PLAN.md`'s commit history (`2c41a37`) for the fix and
 full reasoning.
+
+**Item 5's frontend half (`StatusBadge`) reviewed, not merged — same
+"correct the framing before acting" outcome, this time landing on don't-touch
+rather than a partial fix.** Reading all three definitions found they are not
+interchangeable copies the way the finding's "three independent definitions"
+framing implies: `components/StatusBadge.tsx` is the broadest (full status
+vocabulary, a `size` prop) but has **no dark-mode classes at all**;
+`pages/Autopilot.tsx`'s (a narrower 5-state vocabulary) is fully
+dark-mode-aware (`dark:bg-...`/`dark:text-...` on every variant) but has no
+`size` prop; `components/autopilot/DesignQueuePanel.tsx`'s is config-driven
+off the already-consolidated `DESIGN_FEATURE_STATUS_CONFIG` map, renders an
+icon alongside the label (neither of the other two do), and has a
+`pausedBy`-driven special-case label the other two don't need. A safe merge
+requires designing one component whose API covers all three shapes (optional
+icon, optional dark-mode variants, optional size, optional `pausedBy`) and
+then visually verifying every call site in a browser before/after — this
+project's own standing rule for UI changes (see `CLAUDE.md`'s "For UI or
+frontend changes, start the dev server and use the feature in a browser
+before reporting the task as complete"), not something to do blind in one
+pass. Left unmerged rather than force a mechanical rename that would silently
+drop dark-mode support from the `Autopilot.tsx` call sites — flagged for a
+session that can verify visually.
