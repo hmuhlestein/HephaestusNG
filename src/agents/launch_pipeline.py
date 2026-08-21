@@ -1956,44 +1956,55 @@ class LaunchPipeline:
             pane.send_keys(launch_result.command, enter=True)
 
             # Update agent record
-            session = self.db_manager.get_session()
-            agent = session.merge(Agent(
-                id=agent_id,
-                system_prompt=system_prompt,
-                status="working",
-                cli_type=cli_type,
-                cli_model=model,
-                tmux_session_name=session_name,
-                current_task_id=task.id,
-                last_activity=datetime.utcnow(),
-                launched_at=datetime.utcnow(),
-                health_check_failures=0,
-                agent_type=agent_type,
-            ))
-            task.assigned_agent_id = agent_id
-            task.status = "in_progress"
-            task.started_at = datetime.utcnow()
-            log_entry = AgentLog(
-                agent_id=agent_id, log_type="created",
-                # enriched_description is nullable (e.g. a task created
-                # directly by review_feature's request_changes path never
-                # sets it, only raw_description) -- an unguarded slice here
-                # crashed with "'NoneType' object is not subscriptable"
-                # AFTER the tmux session was already launched and the CLI
-                # command already sent (see pane.send_keys above), so the
-                # exception unwound through this function's caller, which
-                # then killed the just-launched tmux session and marked the
-                # task "failed" -- a perfectly good agent launch destroyed
-                # by a crash in what's only ever a log message. Confirmed
-                # live: task 146d191d burned 3 real launch attempts (pi,
-                # pi fallback, claude fallback) this way, one after another.
-                message=f"Agent created for task: {(task.enriched_description or task.raw_description or '')[:100]}",
-                details={"cli_type": cli_type, "task_id": task.id},
-            )
-            session.add(log_entry)
-            session.commit()
-            agent_id_to_return = agent.id
-            session.close()
+            # session_scope(), not a manual get_session(): this block had the
+            # same three-sequential-statements shape (get_session / commit /
+            # close, with no try/finally) that d5fb7f7's audit found and fixed
+            # in memory_api.py, but this site was missed by that sweep.
+            # Anything raising in between -- session.merge(), the AgentLog
+            # construction documented below, session.add(), or a failing
+            # commit() itself -- skipped close() entirely, and the enclosing
+            # `except Exception` opens its OWN cleanup session rather than
+            # closing this one, so the connection leaked outright. Not
+            # hypothetical: the comment below records this exact block
+            # raising in production.
+            with self.db_manager.session_scope() as session:
+                agent = session.merge(Agent(
+                    id=agent_id,
+                    system_prompt=system_prompt,
+                    status="working",
+                    cli_type=cli_type,
+                    cli_model=model,
+                    tmux_session_name=session_name,
+                    current_task_id=task.id,
+                    last_activity=datetime.utcnow(),
+                    launched_at=datetime.utcnow(),
+                    health_check_failures=0,
+                    agent_type=agent_type,
+                ))
+                task.assigned_agent_id = agent_id
+                task.status = "in_progress"
+                task.started_at = datetime.utcnow()
+                log_entry = AgentLog(
+                    agent_id=agent_id, log_type="created",
+                    # enriched_description is nullable (e.g. a task created
+                    # directly by review_feature's request_changes path never
+                    # sets it, only raw_description) -- an unguarded slice here
+                    # crashed with "'NoneType' object is not subscriptable"
+                    # AFTER the tmux session was already launched and the CLI
+                    # command already sent (see pane.send_keys above), so the
+                    # exception unwound through this function's caller, which
+                    # then killed the just-launched tmux session and marked the
+                    # task "failed" -- a perfectly good agent launch destroyed
+                    # by a crash in what's only ever a log message. Confirmed
+                    # live: task 146d191d burned 3 real launch attempts (pi,
+                    # pi fallback, claude fallback) this way, one after another.
+                    message=f"Agent created for task: {(task.enriched_description or task.raw_description or '')[:100]}",
+                    details={"cli_type": cli_type, "task_id": task.id},
+                )
+                session.add(log_entry)
+                # Read inside the scope: commit/close now happen on __exit__,
+                # preserving the old commit(); agent.id; close() ordering.
+                agent_id_to_return = agent.id
 
             # Wait for CLI to initialize
             logger.info(f"=== INITIAL PROMPT DELIVERY for agent {agent_id} ===")
