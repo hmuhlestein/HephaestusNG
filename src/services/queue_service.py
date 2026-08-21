@@ -825,6 +825,47 @@ class QueueService:
                 logger.info(f"Task {task_id} paused from queue")
                 return True
 
+    def reset_queued_task_to_pending(self, task_id: str) -> bool:
+        """Pull a queued task out of the queue and reset it to "pending",
+        under _dequeue_lock -- for stop_workflow, which resets its
+        workflow's "assigned"/"in_progress" tasks to "pending" too (a
+        clean, undispatched state for the next resume) but previously left
+        "queued" tasks untouched: still eligible for claim_next_queued_task
+        to dispatch even after the workflow was stopped.
+
+        Same race class as cancel_queued_task/pause_queued_task: an
+        unlocked write here could land inside claim_next_queued_task's
+        select-then-dequeue window and let a task this stop just reset
+        get dispatched anyway.
+
+        Returns:
+            True if the task was queued and is now pending, False if it
+            wasn't found or wasn't queued.
+        """
+        with self._dequeue_lock:
+            with self.db_manager.session_scope() as session:
+                task = session.query(Task).filter_by(id=task_id).first()
+                if not task:
+                    logger.error(f"Task {task_id} not found for stop-reset")
+                    return False
+
+                if task.status != "queued":
+                    logger.warning(
+                        f"Cannot reset task {task_id} as queued - not queued (status={task.status})"
+                    )
+                    return False
+
+                task.status = "pending"
+                task.queue_position = None
+                # Explicit commit before _recalculate_queue_positions, which
+                # opens its own session against this same shared connection.
+                session.commit()
+
+                self._recalculate_queue_positions()
+
+                logger.info(f"Task {task_id} reset to pending from queue (workflow stop)")
+                return True
+
     def get_queued_tasks(self) -> List[Task]:
         """Get all queued tasks ordered by priority.
 
