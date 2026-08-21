@@ -284,6 +284,13 @@ def resolve_declared_output_path(
 # unrelated workflow.yaml files declaring a same-named phase with different
 # required_output would silently clobber each other, last-loaded-wins).
 _PHASE_OUTPUT_ARTIFACTS_CACHE: Dict[str, dict] = {}
+# workflow_id -> definition_id, so a repeat call for the same workflow can
+# skip straight to _PHASE_OUTPUT_ARTIFACTS_CACHE without a Workflow query --
+# a workflow's definition_id never changes after creation, so this never
+# goes stale. Without it, load_phase_output_artifacts hit the DB on every
+# call regardless of whether the artifacts themselves were already cached,
+# and this function sits in process_queue's hot dispatch path.
+_WORKFLOW_DEFINITION_ID_CACHE: Dict[str, str] = {}
 _OPTIONAL_PHASES_CACHE: Dict[str, set] = {}
 _MAX_REVIEW_RUNS_CACHE: Dict[tuple, Optional[int]] = {}
 _MAX_TASK_RETRIES_CACHE: Dict[str, int] = {}
@@ -301,39 +308,43 @@ def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:
         return PHASE_OUTPUT_ARTIFACTS
 
     try:
-        from src.core.database import DatabaseManager, Workflow
+        definition_id = _WORKFLOW_DEFINITION_ID_CACHE.get(workflow_id)
+        if definition_id is None:
+            from src.core.database import DatabaseManager, Workflow
 
-        db = DatabaseManager(None)
-        session = db.get_session()
-        try:
-            wf = session.query(Workflow).filter_by(id=workflow_id).first()
-            if not wf or not wf.definition_id:
-                return PHASE_OUTPUT_ARTIFACTS
+            db = DatabaseManager(None)
+            session = db.get_session()
+            try:
+                wf = session.query(Workflow).filter_by(id=workflow_id).first()
+                if not wf or not wf.definition_id:
+                    return PHASE_OUTPUT_ARTIFACTS
+                definition_id = wf.definition_id
+                _WORKFLOW_DEFINITION_ID_CACHE[workflow_id] = definition_id
+            finally:
+                session.close()
 
-            cached = _PHASE_OUTPUT_ARTIFACTS_CACHE.get(wf.definition_id)
-            if cached is not None:
-                return cached
+        cached = _PHASE_OUTPUT_ARTIFACTS_CACHE.get(definition_id)
+        if cached is not None:
+            return cached
 
-            # Load workflow definition from YAML
-            from src.workflow_registry import _WORKFLOWS_DIR
+        # Load workflow definition from YAML
+        from src.workflow_registry import _WORKFLOWS_DIR
 
-            wf_dir = _WORKFLOWS_DIR / wf.definition_id
-            workflow_yaml = wf_dir / "workflow.yaml"
-            merged = dict(DEFAULT_PHASE_OUTPUT_ARTIFACTS)
-            if workflow_yaml.exists():
-                import yaml
+        wf_dir = _WORKFLOWS_DIR / definition_id
+        workflow_yaml = wf_dir / "workflow.yaml"
+        merged = dict(DEFAULT_PHASE_OUTPUT_ARTIFACTS)
+        if workflow_yaml.exists():
+            import yaml
 
-                with open(workflow_yaml) as f:
-                    wf_config = yaml.safe_load(f)
-                if wf_config and "required_output" in wf_config:
-                    merged.update(wf_config["required_output"])
-                    logger.info(
-                        f"Loaded required_output from workflow.yaml: {merged}"
-                    )
-            _PHASE_OUTPUT_ARTIFACTS_CACHE[wf.definition_id] = merged
-            return merged
-        finally:
-            session.close()
+            with open(workflow_yaml) as f:
+                wf_config = yaml.safe_load(f)
+            if wf_config and "required_output" in wf_config:
+                merged.update(wf_config["required_output"])
+                logger.info(
+                    f"Loaded required_output from workflow.yaml: {merged}"
+                )
+        _PHASE_OUTPUT_ARTIFACTS_CACHE[definition_id] = merged
+        return merged
     except Exception as e:
         logger.debug(f"Could not load required_output from workflow.yaml: {e}")
 
