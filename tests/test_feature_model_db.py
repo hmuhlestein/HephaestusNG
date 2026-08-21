@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.core.database import AutopilotDesign, DatabaseManager, Feature, Workflow
+from src.core.schema_migrations import migrate_feature_model_columns
 
 
 def test_feature_table_exists():
@@ -52,8 +53,10 @@ def test_migration_idempotent():
     """Calling migration twice should not error."""
     db = DatabaseManager(":memory:")
     db.create_tables()
-    db._migrate_feature_model_columns()
-    db._migrate_feature_model_columns()
+    # Moved out of DatabaseManager into schema_migrations (SOLID review 4.1);
+    # takes the engine directly now instead of being a bound method.
+    migrate_feature_model_columns(db.engine)
+    migrate_feature_model_columns(db.engine)
 
 
 def test_feature_default_status():

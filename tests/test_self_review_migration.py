@@ -1,4 +1,4 @@
-"""Regression test for DatabaseManager._migrate_self_review_columns'
+"""Regression test for schema_migrations.migrate_self_review_columns'
 development-phase backfill.
 
 A Phase row created before src/phases/phase_manager.py started passing
@@ -16,6 +16,7 @@ on every backend startup since it landed).
 import pytest
 
 from src.core.database import DatabaseManager, Phase, Workflow
+from src.core.schema_migrations import migrate_self_review_columns
 
 
 @pytest.fixture
@@ -59,7 +60,7 @@ def test_backfills_phases_whose_self_review_is_the_json_null_literal(db_manager)
         )
         conn.commit()
 
-    db_manager._migrate_self_review_columns()
+    migrate_self_review_columns(db_manager.engine)
 
     with db_manager.session_scope() as session:
         phase = session.query(Phase).filter_by(id="phase-json-null").first()
@@ -84,7 +85,7 @@ def test_backfills_phases_with_a_true_sql_null(db_manager):
         )
         conn.commit()
 
-    db_manager._migrate_self_review_columns()
+    migrate_self_review_columns(db_manager.engine)
 
     with db_manager.session_scope() as session:
         phase = session.query(Phase).filter_by(id="phase-sql-null").first()
@@ -100,7 +101,7 @@ def test_does_not_overwrite_an_already_configured_self_review(db_manager):
                   working_directory="/tmp", self_review={"enabled": False})
         )
 
-    db_manager._migrate_self_review_columns()
+    migrate_self_review_columns(db_manager.engine)
 
     with db_manager.session_scope() as session:
         phase = session.query(Phase).filter_by(id="phase-configured").first()
