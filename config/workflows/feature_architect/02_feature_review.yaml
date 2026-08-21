@@ -18,6 +18,7 @@ description: |
 done_definitions:
   - "./.hephaestus/design.md reviewed and full scope understood"
   - "./.hephaestus/features.json and every ./.hephaestus/features/<id>/scope.md reviewed"
+  - "Decomposition Summary written first, describing the feature breakdown as proposed before any critique"
   - "Every design requirement traced to an owning feature (or flagged as missing)"
   - "File/directory ownership checked for overlaps across features"
   - "depends_on graph checked for cycles and unnecessary coupling"
@@ -112,6 +113,16 @@ additional_notes: |
   **Reviewer:** Feature Reviewer (independent of Feature Architect)
   **Target:** features.json + scope.md set for {design_name}
   **Date:** {date}
+
+  ## Decomposition Summary
+
+  Write this FIRST, before any critique -- a plain-language summary of
+  the feature breakdown AS PROPOSED, independent of your verdict on it:
+  how many features, what each one owns/does in one sentence, and how
+  they relate (the depends_on shape -- what's sequential vs. parallel).
+  This grounds a reader in what's actually being reviewed before they hit
+  your findings, and forces you to have a clear picture of the whole
+  decomposition before judging any one part of it.
 
   ## Summary
   - **BLOCKERS:** [count] — decomposition contradicts or omits design scope; must re-decompose
