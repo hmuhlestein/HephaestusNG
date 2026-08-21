@@ -246,6 +246,22 @@ class MechanicalRecoveryDetector:
                                 self._stuck_state.pop(agent.id, None)
 
                                 try:
+                                    # Same retry-context injection as
+                                    # phase_transitions.py's failed-task
+                                    # reset -- without it the fallback agent
+                                    # reads whatever RETRY note this task
+                                    # last carried (or none at all), not the
+                                    # session-limit reason that actually
+                                    # caused this handoff. raw_description
+                                    # as the base avoids accumulating retry
+                                    # messages across repeated handoffs.
+                                    if stuck_task.failure_reason:
+                                        base = stuck_task.raw_description or ""
+                                        stuck_task.enriched_description = (
+                                            f"{base}\n\n--- RETRY: your previous attempt failed with this "
+                                            f"specific error, fix it rather than repeating the same mistake ---\n"
+                                            f"{stuck_task.failure_reason}"
+                                        )
                                     stuck_task.status = "pending"
                                     stuck_task.assigned_agent_id = None
                                     stuck_task.failure_reason = None

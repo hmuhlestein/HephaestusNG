@@ -2446,6 +2446,40 @@ class TestSessionLimitPause:
         mock_agent_manager.terminate_agent.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_fallback_dispatch_injects_session_limit_reason_into_enriched_description(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """The fallback agent must be told WHY it's retrying. Before this
+        fix, the reset below cleared failure_reason straight to None
+        without ever folding it into enriched_description first -- the new
+        agent read whatever RETRY note (or none) the task happened to
+        already carry, never the session-limit reason that actually
+        caused this handoff."""
+        agent = Agent(id="a1", cli_type="claude")
+        self._wire_tmux_pane_output(
+            mock_agent_manager, mock_db, "a1", "You've hit your session limit"
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
+        mock_agent_manager.create_agent_for_task = AsyncMock(return_value=Mock(id="a2"))
+
+        task = Mock(
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1",
+            raw_description="Execute feature_architect", failure_reason=None,
+        )
+        phase = Mock(fallback_cli_tool="pi", fallback_cli_model=None)
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        assert task.status == "pending"
+        assert "--- RETRY:" in task.enriched_description
+        assert "Execute feature_architect" in task.enriched_description
+        assert "CLI session limit reached" in task.enriched_description
+        assert task.failure_reason is None
+
+    @pytest.mark.asyncio
     async def test_falls_back_to_secondary_cli_model_when_default_fallback_is_identical(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
