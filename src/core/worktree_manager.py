@@ -189,14 +189,11 @@ class WorktreeManager:
 
     def _agent_repo(self, agent_id: str) -> Repo:
         """Open the Repo handle for an agent's worktree."""
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             record = self._agent_record(session, agent_id)
             if not record or not record.worktree_path:
                 raise ValueError(f"No worktree record for agent {agent_id}")
             return Repo(record.worktree_path)
-        finally:
-            session.close()
 
     # ── Worktree creation ────────────────────────────────────────
 
@@ -224,103 +221,99 @@ class WorktreeManager:
             f"[WORKTREE] Creating worktree for agent {agent_id} (parent={parent_agent_id})"
         )
 
-        session = self.db_manager.get_session()
-        try:
-            # Determine parent commit
-            if base_commit_sha:
-                parent_commit_sha = base_commit_sha
-            elif parent_agent_id:
-                parent_commit_sha = self._get_parent_commit(parent_agent_id, session)
-                if not parent_commit_sha:
-                    parent_commit_sha = self.main_repo.head.commit.hexsha
-                    logger.info(
-                        f"[WORKTREE] Parent has no commits, using main HEAD: {parent_commit_sha[:8]}"
-                    )
-            else:
-                parent_commit_sha = self.main_repo.head.commit.hexsha
-                logger.info(f"[WORKTREE] Using main HEAD: {parent_commit_sha[:8]}")
-
-            branch_name = f"{self.config.git.branch_prefix}{agent_id}"
-
-            # Create branch from parent commit
+        with self.db_manager.session_scope() as session:
             try:
-                self.main_repo.git.branch(branch_name, parent_commit_sha)
-                logger.info(
-                    f"[WORKTREE] Created branch {branch_name} from {parent_commit_sha[:8]}"
-                )
-            except GitCommandError as e:
-                if "already exists" in str(e):
-                    logger.info(
-                        f"[WORKTREE] Branch exists, recreating from {parent_commit_sha[:8]}"
-                    )
-                    self.main_repo.git.branch("-D", branch_name)
-                    self.main_repo.git.branch(branch_name, parent_commit_sha)
-                elif "not a valid branch point" in str(
-                    e
-                ) or "not a valid object name" in str(e):
-                    logger.warning(
-                        f"[WORKTREE] Commit {parent_commit_sha[:8]} not found, falling back to main HEAD"
-                    )
-                    parent_commit_sha = self.main_repo.head.commit.hexsha
-                    self.main_repo.git.branch(branch_name, parent_commit_sha)
+                # Determine parent commit
+                if base_commit_sha:
+                    parent_commit_sha = base_commit_sha
+                elif parent_agent_id:
+                    parent_commit_sha = self._get_parent_commit(parent_agent_id, session)
+                    if not parent_commit_sha:
+                        parent_commit_sha = self.main_repo.head.commit.hexsha
+                        logger.info(
+                            f"[WORKTREE] Parent has no commits, using main HEAD: {parent_commit_sha[:8]}"
+                        )
                 else:
-                    raise
+                    parent_commit_sha = self.main_repo.head.commit.hexsha
+                    logger.info(f"[WORKTREE] Using main HEAD: {parent_commit_sha[:8]}")
 
-            # Create the worktree checkout
-            self._ensure_excludes()
-            self.worktree_base.mkdir(parents=True, exist_ok=True)
-            worktree_path = self._worktree_path_for(agent_id)
-            if worktree_path.exists():
-                # This path is about to be overwritten by the fresh worktree
-                # `git worktree add` creates right below -- whatever's here
-                # is being intentionally replaced, not swept up as "stale".
-                self._remove_worktree(str(worktree_path), require_clean=False)
-            try:
-                self.main_repo.git.worktree("add", str(worktree_path), branch_name)
-            except GitCommandError:
-                # Stale admin entry — prune and retry once
-                self.main_repo.git.worktree("prune")
-                self.main_repo.git.worktree("add", str(worktree_path), branch_name)
-            logger.info(f"[WORKTREE] Worktree ready at {worktree_path}")
+                branch_name = f"{self.config.git.branch_prefix}{agent_id}"
 
-            # Populate inbound context (git-excluded inside the worktree)
-            context_dir = worktree_path / CONTEXT_DIR_NAME
-            context_dir.mkdir(parents=True, exist_ok=True)
-            if context_files:
-                for rel_path, content in context_files.items():
-                    dest = context_dir / rel_path
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_text(content)
-                logger.info(
-                    f"[WORKTREE] Wrote {len(context_files)} context file(s) to {context_dir}"
+                # Create branch from parent commit
+                try:
+                    self.main_repo.git.branch(branch_name, parent_commit_sha)
+                    logger.info(
+                        f"[WORKTREE] Created branch {branch_name} from {parent_commit_sha[:8]}"
+                    )
+                except GitCommandError as e:
+                    if "already exists" in str(e):
+                        logger.info(
+                            f"[WORKTREE] Branch exists, recreating from {parent_commit_sha[:8]}"
+                        )
+                        self.main_repo.git.branch("-D", branch_name)
+                        self.main_repo.git.branch(branch_name, parent_commit_sha)
+                    elif "not a valid branch point" in str(
+                        e
+                    ) or "not a valid object name" in str(e):
+                        logger.warning(
+                            f"[WORKTREE] Commit {parent_commit_sha[:8]} not found, falling back to main HEAD"
+                        )
+                        parent_commit_sha = self.main_repo.head.commit.hexsha
+                        self.main_repo.git.branch(branch_name, parent_commit_sha)
+                    else:
+                        raise
+
+                # Create the worktree checkout
+                self._ensure_excludes()
+                self.worktree_base.mkdir(parents=True, exist_ok=True)
+                worktree_path = self._worktree_path_for(agent_id)
+                if worktree_path.exists():
+                    # This path is about to be overwritten by the fresh worktree
+                    # `git worktree add` creates right below -- whatever's here
+                    # is being intentionally replaced, not swept up as "stale".
+                    self._remove_worktree(str(worktree_path), require_clean=False)
+                try:
+                    self.main_repo.git.worktree("add", str(worktree_path), branch_name)
+                except GitCommandError:
+                    # Stale admin entry — prune and retry once
+                    self.main_repo.git.worktree("prune")
+                    self.main_repo.git.worktree("add", str(worktree_path), branch_name)
+                logger.info(f"[WORKTREE] Worktree ready at {worktree_path}")
+
+                # Populate inbound context (git-excluded inside the worktree)
+                context_dir = worktree_path / CONTEXT_DIR_NAME
+                context_dir.mkdir(parents=True, exist_ok=True)
+                if context_files:
+                    for rel_path, content in context_files.items():
+                        dest = context_dir / rel_path
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        dest.write_text(content)
+                    logger.info(
+                        f"[WORKTREE] Wrote {len(context_files)} context file(s) to {context_dir}"
+                    )
+
+                # Record in database
+                record = AgentBranch(
+                    agent_id=agent_id,
+                    worktree_path=str(worktree_path),
+                    branch_name=branch_name,
+                    parent_agent_id=parent_agent_id,
+                    parent_commit_sha=parent_commit_sha,
+                    base_commit_sha=parent_commit_sha,
+                    merge_status="active",
                 )
+                session.add(record)
 
-            # Record in database
-            record = AgentBranch(
-                agent_id=agent_id,
-                worktree_path=str(worktree_path),
-                branch_name=branch_name,
-                parent_agent_id=parent_agent_id,
-                parent_commit_sha=parent_commit_sha,
-                base_commit_sha=parent_commit_sha,
-                merge_status="active",
-            )
-            session.add(record)
-            session.commit()
+                return {
+                    "branch_name": branch_name,
+                    "parent_commit": parent_commit_sha,
+                    "working_directory": str(worktree_path),
+                    "context_dir": str(context_dir),
+                }
 
-            return {
-                "branch_name": branch_name,
-                "parent_commit": parent_commit_sha,
-                "working_directory": str(worktree_path),
-                "context_dir": str(context_dir),
-            }
-
-        except Exception as e:
-            logger.error(f"[WORKTREE] Failed to create worktree for {agent_id}: {e}")
-            session.rollback()
-            raise
-        finally:
-            session.close()
+            except Exception as e:
+                logger.error(f"[WORKTREE] Failed to create worktree for {agent_id}: {e}")
+                raise
 
     # Upstream-compatible name for the same operation.
     def create_agent_branch(
@@ -602,8 +595,7 @@ class WorktreeManager:
         self, agent_id: str, since_commit: Optional[str] = None
     ) -> Dict[str, Any]:
         """Get the diff for an agent's changes within its worktree."""
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             record = self._agent_record(session, agent_id)
             if not record:
                 raise ValueError(f"No worktree record for agent {agent_id}")
@@ -643,8 +635,6 @@ class WorktreeManager:
                 "stats": {"insertions": insertions, "deletions": deletions},
                 "detailed_diff": repo.git.diff(base, current.hexsha),
             }
-        finally:
-            session.close()
 
     def get_agent_branch_path(self, agent_id: str) -> Optional[str]:
         """Get the working directory (worktree path) for an agent.
@@ -657,14 +647,11 @@ class WorktreeManager:
         those checks by accident, letting e.g. restart_agent silently
         relaunch an agent into the main repo instead of failing).
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             record = self._agent_record(session, agent_id)
             if record and record.worktree_path:
                 return record.worktree_path
             return None
-        finally:
-            session.close()
 
     def merge_to_parent(self, agent_id: str) -> Dict[str, Any]:
         """Alias for merge_to_main — merges the agent's branch into the base branch."""
