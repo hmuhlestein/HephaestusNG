@@ -1260,9 +1260,14 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
         base_dir = proj.base_dir
 
     if req.destination == "docs":
-        # Locally-uploaded content is new to the repo -- persist it as a
-        # real, git-tracked file instead of the hidden staging dir below.
-        design_dir = Path(base_dir) / "docs"
+        # REQ-12: resolve to primary ProjectRepo's path for git-tracked docs
+        from src.core.repo_resolution import resolve_primary_repo
+
+        with get_db() as db:
+            primary = resolve_primary_repo(db, project_id)
+        if not primary:
+            raise HTTPException(500, f"Project {project_id} has no primary repo")
+        design_dir = Path(primary.path) / "docs"
     else:
         # Store in .hephaestus/designs/ (not git-tracked) so git commits
         # don't delete design files.
