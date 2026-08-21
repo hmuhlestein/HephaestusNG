@@ -1384,7 +1384,7 @@ class TestPromptHumanDismissed:
 
         from src.autopilot.orchestrator import OrchestratorLogger, prompt_human
 
-        with patch("src.autopilot.orchestrator.AUTOPILOT_STATE_DIR", str(tmp_path)):
+        with patch("src.autopilot.orchestrator.pipeline.AUTOPILOT_STATE_DIR", str(tmp_path)):
             logger = OrchestratorLogger(tmp_path / "logs")
             result = {}
 
@@ -2618,7 +2618,7 @@ class TestWaitForTaskTerminal:
                 Task(id="t-1", raw_description="r", done_definition="d", status="in_progress")
             )
 
-        with patch("src.autopilot.orchestrator._should_stop", return_value=True):
+        with patch("src.autopilot.orchestrator.pipeline._should_stop", return_value=True):
             result = _wait_for_task_terminal("t-1", timeout_seconds=5, logger=OrchestratorLogger(tmp_path))
         assert result == "interrupted"
 

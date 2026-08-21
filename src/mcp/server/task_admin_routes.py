@@ -22,7 +22,7 @@ from src.core.database import (
     Task,
     Workflow,
 )
-from src.mcp.server._shared import server_state
+from src.mcp.server._shared import server_state, spawn_background_task
 
 # Import routers at module level for test compatibility
 
@@ -506,7 +506,7 @@ async def complete_task_as_user(
     # exits before this point.
     from src.mcp.server._create_task_steps import _dispatch_ready_dependents
 
-    asyncio.create_task(_dispatch_ready_dependents(task_id, workflow_id))
+    spawn_background_task(_dispatch_ready_dependents(task_id, workflow_id))
 
     return {"success": True, "task_id": task_id, "message": "Task marked done"}
 

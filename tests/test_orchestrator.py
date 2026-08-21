@@ -306,7 +306,7 @@ class TestAttemptRecovery:
         # Mock the workflow query to return a workflow with working_directory
         mock_workflow = MagicMock()
         mock_workflow.working_directory = "/tmp/test-project"
-        with patch("src.autopilot.orchestrator.get_db") as mock_get_db:
+        with patch("src.autopilot.orchestrator.pipeline.get_db") as mock_get_db:
             mock_db = MagicMock()
             mock_db.__enter__ = MagicMock(return_value=mock_db)
             mock_db.__exit__ = MagicMock(return_value=False)

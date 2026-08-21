@@ -19,7 +19,14 @@ logger = logging.getLogger(__name__)
 class ConnectionBroadcaster:
     """Holds the live WebSocket/SSE client lists and broadcasts to them."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        # Annotated -- ServerState's active_websockets/sse_queues properties
+        # read these through self._broadcaster; an unannotated __init__ makes
+        # mypy treat the whole method as untyped and stop propagating these
+        # attributes' declared types to callers outside the class, which
+        # turned both properties into "Returning Any from function declared
+        # to return list[...]" errors even though the runtime types were
+        # always correct.
         self.active_websockets: List[WebSocket] = []
         self.sse_queues: List[asyncio.Queue] = []
 
