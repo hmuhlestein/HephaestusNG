@@ -122,6 +122,13 @@ monitoring:
   # dequeue->dispatch window (LLM enrichment + agent launch), or the sweep
   # races an in-flight dispatch and double-dispatches the task.
   stranded_task_grace_seconds: 900
+  # Minutes of inactivity before an agent is considered stuck
+  # Be patient - agents can be working for a long time before producing output
+  stuck_detection_minutes: 30
+  # Minutes before a guardian nudge is sent
+  guardian_nudge_delay_minutes: 15
+  # Max nudges before considering agent stuck
+  max_stuck_nudges: 5
 mcp:
   # SECURITY: auth_required should be true in production. Set to false only for
   # local development/debugging. When true, endpoints require valid X-Agent-ID header.
@@ -166,13 +173,4 @@ ticket_tracking:
     model: BAAI/bge-small-en-v1.5
     dimensions: 384
     backend: fastembed
-
-monitoring:
-  # Minutes of inactivity before an agent is considered stuck
-  # Be patient - agents can be working for a long time before producing output
-  stuck_detection_minutes: 30
-  # Minutes before a guardian nudge is sent
-  guardian_nudge_delay_minutes: 15
-  # Max nudges before considering agent stuck
-  max_stuck_nudges: 5
 
