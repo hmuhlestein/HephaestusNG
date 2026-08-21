@@ -205,6 +205,23 @@ class CLIFallbackChatModel:
             parts.append(f"{role.capitalize()}: {m.content}")
         return "\n\n".join(parts)
 
+    @staticmethod
+    def _empty_mcp_config_path() -> str:
+        """Path to a `{"mcpServers": {}}` file, written once and reused.
+
+        --mcp-config alone only ADDS to whatever's already auto-discovered
+        (project/user-level MCP settings); paired with --strict-mcp-config
+        it's the only way to guarantee zero MCP tools for these one-shot
+        text/JSON completions, which need no tool access at all -- without
+        it, an unrelated globally-configured MCP server could still attach
+        and let the CLI wander into tool calls instead of just answering.
+        """
+        path = os.path.join(tempfile.gettempdir(), "hephaestus_cli_fallback_empty_mcp.json")
+        if not os.path.exists(path):
+            with open(path, "w") as f:
+                f.write('{"mcpServers": {}}')
+        return path
+
     async def ainvoke(self, messages: list) -> _CLIFallbackResponse:
         if self.cli_tool != "claude":
             # Only claude's non-interactive `-p` mode is implemented -- the
@@ -220,6 +237,7 @@ class CLIFallbackChatModel:
         prompt = self._flatten_messages(messages)
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", "--model", self.cli_model, "--dangerously-skip-permissions",
+            "--mcp-config", self._empty_mcp_config_path(), "--strict-mcp-config",
             # cwd=tempdir, not this process's own cwd: the backend runs from
             # HephaestusNG's own repo root, and Claude Code auto-loads
             # whatever project-level CLAUDE.md sits at its cwd -- these
