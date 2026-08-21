@@ -70,17 +70,31 @@ llm:
       max_tokens: 2000
       reasoning_effort: low
 agents:
-  default_cli_tool: pi
-  cli_model: Qwen3.8-27B-UD-Q4_K_XL.gguf
+  default_cli_tool: claude
+  cli_model: sonnet
   default_fallback_cli_tool: pi
   default_fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
   cli_model_fallback_wait_seconds: 120
-  cli_model_fallback: openrouter/xiaomi/mimo-v2.5-pro
-  secondary_cli_model_fallback: sonnet
+  # cli_model_fallback/secondary_cli_model_fallback feed CLIAgentInterface.
+  # fallback_model's in-session "agent is frozen, switch models" recovery --
+  # a different mechanism from default_fallback_cli_tool/_model above
+  # (which tears down and relaunches under a different CLI entirely). This
+  # pair is resolved by ROLE (primary vs secondary tier), not by which CLI
+  # product is running: cli_model_fallback is whichever CLI is currently
+  # default_cli_tool's own in-session escalation target; secondary_cli_model_
+  # fallback is default_fallback_cli_tool's. Each value must be one that
+  # CLI's own model vocabulary actually understands -- an OpenRouter path
+  # fed to Claude Code's `/model` picker (or a Claude alias fed to pi's,
+  # which resolves bare aliases like "sonnet" via amazon-bedrock, unconfigured
+  # here) fails immediately with no usable credentials. Confirmed live: task
+  # a4863f19 lost ~10 minutes to exactly this mismatch before this fix.
+  cli_model_fallback: opus
+  secondary_cli_model_fallback: Qwen3.8-27B-UD-Q4_K_XL.gguf
   # The local Qwen model has only a single inference slot -- a second agent
   # dispatched onto it just sits frozen waiting its turn instead of doing
-  # anything. Cap it at 1; the queue then dispatches the second task on
-  # cli_model_fallback (mimo-v2.5-pro, above) instead of stalling it.
+  # anything. Cap it at 1 so the queue's concurrency gate (resolve_fallback_
+  # model, same role-based lookup as fallback_model above) won't pile a
+  # second dispatch onto it.
   cli_model_concurrency_limits:
     "pi/Qwen3.8-27B-UD-Q4_K_XL.gguf": 1
   tmux_session_prefix: agent

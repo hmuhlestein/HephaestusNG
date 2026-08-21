@@ -118,8 +118,8 @@ class TestRestartModelResolution:
         (only if cli_type matches default_cli_tool)."""
         agent_id = _setup_restart_prereqs(db_manager, cli_model="")
         restart_agent_manager.tmux_server.has_session.return_value = True
-        restart_agent_manager.config.default_cli_tool = "pi"
-        restart_agent_manager.config.cli_model = "global-pi-model"
+        restart_agent_manager.config.agents.default_cli_tool = "pi"
+        restart_agent_manager.config.agents.cli_model = "global-pi-model"
 
         with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
              patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
@@ -141,7 +141,7 @@ class TestRestartModelResolution:
         the CLI agent's default_model is used."""
         agent_id = _setup_restart_prereqs(db_manager, cli_type="pi", cli_model="")
         restart_agent_manager.tmux_server.has_session.return_value = True
-        restart_agent_manager.config.default_cli_tool = "claude"  # different from pi
+        restart_agent_manager.config.agents.default_cli_tool = "claude"  # different from pi
 
         with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
              patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):

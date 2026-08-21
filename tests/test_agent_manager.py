@@ -610,8 +610,8 @@ class TestCreateAgentForTask:
         # (AgentManager.__init__ never gets a fixture-isolated instance), so
         # a raw attribute assignment here leaks into every other test in the
         # same pytest session -- monkeypatch restores it at teardown instead.
-        monkeypatch.setattr(mock_agent_manager.config, "default_cli_tool", "claude")
-        monkeypatch.setattr(mock_agent_manager.config, "cli_model", "sonnet")
+        monkeypatch.setattr(mock_agent_manager.config.agents, "default_cli_tool", "claude")
+        monkeypatch.setattr(mock_agent_manager.config.agents, "cli_model", "sonnet")
 
         mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={

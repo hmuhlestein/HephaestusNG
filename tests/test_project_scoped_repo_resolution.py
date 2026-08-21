@@ -67,7 +67,9 @@ class TestLinkCommitUsesOwnProjectRepo:
         monkeypatch.setattr(TicketService, "_get_commit_stats", staticmethod(fake_get_commit_stats))
         monkeypatch.setattr(
             "src.core.simple_config.get_config",
-            lambda: type("Cfg", (), {"main_repo_path": "/repo/wrong-active-project"})(),
+            lambda: type("Cfg", (), {
+                "git": type("Git", (), {"main_repo_path": "/repo/wrong-active-project"})()
+            })(),
         )
 
         result = await TicketService.link_commit(
@@ -110,7 +112,9 @@ class TestLinkCommitUsesOwnProjectRepo:
         monkeypatch.setattr(TicketService, "_get_commit_stats", staticmethod(fake_get_commit_stats))
         monkeypatch.setattr(
             "src.core.simple_config.get_config",
-            lambda: type("Cfg", (), {"main_repo_path": "/repo/singleton-fallback"})(),
+            lambda: type("Cfg", (), {
+                "git": type("Git", (), {"main_repo_path": "/repo/singleton-fallback"})()
+            })(),
         )
 
         await TicketService.link_commit(

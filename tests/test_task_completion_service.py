@@ -132,7 +132,7 @@ class TestVerifyOutputArtifact:
         feature_output.parent.mkdir(parents=True)
         feature_output.write_text("output")
 
-        fake_config = Mock(project_root=str(tmp_path))
+        fake_config = Mock(paths=Mock(project_root=str(tmp_path)))
 
         with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]), \
              patch("src.core.simple_config.get_config", return_value=fake_config), \
@@ -219,7 +219,7 @@ class TestVerifyOutputArtifact:
             "src.autopilot.spec.get_phase_required_files", return_value=["qa.md"]
         ), patch("src.autopilot.spec.load_optional_phases", return_value=[]), patch(
             "src.core.simple_config.get_config",
-            return_value=Mock(project_root=tmp_path),
+            return_value=Mock(paths=Mock(project_root=tmp_path)),
         ):
             result = TaskCompletionService.verify_output_artifact(
                 session=mock_session, task=task, phase=phase
@@ -452,7 +452,7 @@ class TestVerifyOutputArtifact:
             "src.autopilot.spec.get_phase_required_files", return_value=["output.md"]
         ), patch("src.autopilot.spec.load_optional_phases", return_value=[]), patch(
             "src.core.simple_config.get_config",
-            return_value=Mock(project_root=other_active_project),
+            return_value=Mock(paths=Mock(project_root=other_active_project)),
         ):
             result = TaskCompletionService.verify_output_artifact(
                 session=mock_session, task=task, phase=phase
