@@ -380,7 +380,9 @@ async def get_resource(resource_uri: str):
                         "description": task.enriched_description or task.raw_description,
                         "status": task.status,
                         "assigned_agent": task.assigned_agent_id,
-                        "created_at": task.created_at.isoformat() if task.created_at else None,
+                        # SOLID review 1.10: missing the "Z" UTC suffix every
+                        # other timestamp in this codebase's API responses uses.
+                        "created_at": task.created_at.isoformat() + "Z" if task.created_at else None,
                     },
                 }
             else:

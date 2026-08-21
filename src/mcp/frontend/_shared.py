@@ -748,7 +748,7 @@ class FrontendAPI:
             if not task:
                 raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
-            return {
+            task_data = {
                 "id": task.id,
                 "description": task.enriched_description or task.raw_description,
                 "done_definition": task.done_definition,
@@ -777,6 +777,18 @@ class FrontendAPI:
                 if task.related_task_ids
                 else [],
             }
+
+            # SOLID review 1.10: this site never resolved phase_id -> phase
+            # name/order at all, unlike get_tasks()'s identical field pair --
+            # every caller of get_task() always saw phase_name/phase_order
+            # as null even when the task had a real phase_id.
+            if task.phase_id:
+                phase = resolve_task_phase(session, task)
+                if phase:
+                    task_data["phase_name"] = phase.name
+                    task_data["phase_order"] = phase.order
+
+            return task_data
         finally:
             session.close()
 
@@ -2105,8 +2117,17 @@ class FrontendAPI:
                         "status": agent.status,
                         "cli_type": agent.cli_type,
                         "current_task_id": agent.current_task_id,
-                        "started_at": agent.created_at.isoformat() + "Z"
-                        if agent.created_at
+                        # SOLID review 1.10: this read agent.created_at (row
+                        # creation, at registration) under the key
+                        # "started_at" -- PhaseAgentList.tsx renders it
+                        # labeled "Started:", and Agent.launched_at is the
+                        # field that actually means "when this agent's CLI
+                        # session launched" (set in launch_pipeline.py).
+                        # Prefers launched_at, falling back to created_at
+                        # for older/never-launched agents rather than
+                        # regressing to no value at all.
+                        "started_at": (agent.launched_at or agent.created_at).isoformat() + "Z"
+                        if (agent.launched_at or agent.created_at)
                         else None,
                         "health_check_failures": agent.health_check_failures,
                     }
