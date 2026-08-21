@@ -327,6 +327,50 @@ def migrate_self_review_columns(engine):
     except Exception as e:
         logger.warning(f"self_review columns migration failed (not just 'already exists' -- check this): {e}")
 
+def backfill_self_review_defaults(engine):
+    """Re-enable self_review on any development Phase row still missing it.
+
+    Deliberately NOT in SCHEMA_MIGRATIONS: that registry records each
+    migration id in schema_migrations and skips it forever afterwards, so
+    a one-shot backfill cannot heal drift that appears LATER. It did not.
+    `migrate_self_review_columns` backfilled once, then
+    `sdk/client.py`'s phase loader -- which never read the YAML's
+    `self_review:` key -- kept creating fresh development rows with
+    self_review = NULL. Every Phase row is per-workflow, so each new
+    workflow seeded through that path reintroduced the gap.
+
+    The failure was silent and asymmetric: `_maybe_fire_self_review_gate`
+    requires `phase.self_review.get("enabled")`, so a NULL row means the
+    gate never fires and the task completes on its FIRST "done" -- which
+    looks exactly like a phase deliberately configured with self-review
+    off. Observed: 2 of 35 development rows had drifted, and a task on one
+    of them silently skipped its self-review.
+
+    The loader is fixed, so new rows carry the value from YAML. This runs
+    every startup so any row that still drifts is repaired rather than
+    quietly disabling a quality gate. One small idempotent UPDATE.
+    """
+    try:
+        with engine.connect() as conn:
+            # Both spellings of "no value": a true SQL NULL and the JSON
+            # null literal. A column written as the four-byte string
+            # 'null' is not SQL NULL, so an IS NULL predicate skips it.
+            result = conn.execute(text(
+                "UPDATE phases SET self_review = :value "
+                "WHERE name = 'development' "
+                "AND (self_review IS NULL OR self_review = 'null')"
+            ), {"value": '{"enabled": true}'})
+            conn.commit()
+            if result.rowcount:
+                logger.warning(
+                    f"[SELF-REVIEW] Repaired {result.rowcount} development phase row(s) "
+                    "that had self_review unset -- the self-review gate would not have "
+                    "fired for tasks on them"
+                )
+    except Exception as e:
+        logger.warning(f"self_review backfill failed: {e}")
+
+
 def migrate_phase_execution_task_claim_column(engine):
     """Add phase_executions.task_creation_claimed_at for existing databases.
 
