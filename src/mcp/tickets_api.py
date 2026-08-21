@@ -171,8 +171,12 @@ class ChangeTicketStatusRequest(BaseModel):
     comment: str = Field(
         ..., min_length=10, description="Required comment explaining status change"
     )
+    # See LinkCommitRequest.commit_sha for why this is hex-only -- this
+    # value reaches the same git-subprocess argument-injection surface
+    # via TicketService.change_status -> link_commit.
     commit_sha: Optional[str] = Field(
-        default=None, description="Optional commit SHA to link"
+        default=None, description="Optional commit SHA to link",
+        pattern=r"^[0-9a-f]{4,40}$",
     )
 
 
@@ -348,8 +352,12 @@ class ResolveTicketRequest(BaseModel):
     resolution_comment: str = Field(
         ..., min_length=10, description="Comment explaining resolution"
     )
+    # See LinkCommitRequest.commit_sha for why this is hex-only -- this
+    # value reaches the same git-subprocess argument-injection surface
+    # via TicketService.resolve_ticket -> link_commit.
     commit_sha: Optional[str] = Field(
-        default=None, description="Commit that resolved the ticket"
+        default=None, description="Commit that resolved the ticket",
+        pattern=r"^[0-9a-f]{4,40}$",
     )
 
 
@@ -366,7 +374,15 @@ class LinkCommitRequest(BaseModel):
     """Request model for linking a commit to a ticket."""
 
     ticket_id: str = Field(..., description="ID of the ticket")
-    commit_sha: str = Field(..., description="Git commit SHA")
+    # Hex-only, git-SHA-shaped -- passed as a bare positional arg to `git
+    # show`/`git diff` subprocess calls (list-form, so no shell injection,
+    # but git itself would happily interpret a leading "--output=<path>"
+    # as an option, writing arbitrary content to a path the server
+    # process can create). Rejecting anything that isn't plain hex closes
+    # that argument-injection route before it ever reaches subprocess.
+    commit_sha: str = Field(
+        ..., description="Git commit SHA", pattern=r"^[0-9a-f]{4,40}$"
+    )
     commit_message: Optional[str] = Field(
         default=None, description="Commit message (auto-fetched if not provided)"
     )
@@ -1276,6 +1292,15 @@ async def get_commit_diff_endpoint(
     loop = asyncio.get_event_loop()
 
     logger.info(f"Agent {agent_id} fetching commit diff for {commit_sha}")
+
+    # commit_sha reaches `git show`/`git diff` as a bare positional
+    # subprocess argument below (list-form, so no shell injection, but
+    # git itself would happily interpret a leading "--output=<path>" as
+    # an option, writing arbitrary content to a path the server process
+    # can create). Reject anything that isn't plain hex before it gets
+    # anywhere near subprocess -- same fix as LinkCommitRequest.commit_sha.
+    if not re.match(r"^[0-9a-f]{4,40}$", commit_sha):
+        raise HTTPException(status_code=400, detail="Invalid commit SHA")
 
     try:
         # Resolve the repo this commit actually belongs to via the ticket
