@@ -938,6 +938,43 @@ stub wired in as if functional.
 `Record<eventType, (msg) => MessageAction[]>` dispatch table, testable with plain objects. Move
 the async validity check into a dedicated `useRespondToInput()` hook.
 
+**Verified 2026-08-21:** The async-side-effect half was already fixed independently before this
+pass — `human_input_required` no longer builds an inline `onClick` around
+`apiService.getAutopilotInput()`; that call now lives in a `useQuery` (line ~122) and the response
+flow is a dedicated inline panel (`expandedMessageId` state), not a stub in the actions array.
+
+Fixed this pass: `getMessageActions` is now a one-line delegator to a module-level, pure
+`deriveMessageActions(msg, handlers)` (testable with plain objects, no `apiService`, no `useState`
+closures — `handlers.onViewFeature` is the only side-channel, passed in by the caller). Deviated
+from the literal `Record<eventType, handler>` shape: several rules key off `data.*` fields (e.g.
+Retry fires on `data.status === 'failed'`, independent of `msg.type`; View Workflow fires on
+`data.workflow_id`/`data.workflow` regardless of type), not cleanly per-type, so forcing a
+type-keyed Record would silently narrow when those rules apply. Used an ordered array of small
+named `MessageActionRule` functions instead — same testability and decomposition goal, without
+changing which messages get which actions. Also collapsed the iteration/phase "View Feature"
+duplication (previously two near-identical `if` blocks) into one rule.
+
+The `// TODO: Implement retry` stub is now wired to `window.open('/autopilot/queue', '_blank')`,
+matching the existing `View Workflow`/`View Agents` pattern in the same function. Retrying a
+design is destructive (restarts its pipeline from scratch and deletes its worktree — see
+`DesignQueuePanel.tsx`'s `rerunDesignMutation` and its confirm dialog) and the message payload
+available here (`data.feature_folder`/`data.feature_id`) does not carry the queue `filename` the
+`/autopilot/queue/rerun` endpoint requires — confirmed by tracing `design_complete`'s event
+payload (`src/autopilot/orchestrator/pipeline.py`) against `AutopilotDesign.filename`'s actual
+source (`path.name`, in `src/autopilot/orchestrator/queue.py`), which are different values with no
+safe derivation between them. Rather than guess a filename against a destructive endpoint, Retry
+now opens the Design Queue tab, where the real rerun action already resolves and confirms it
+safely. Fixed the pre-existing, identically-shaped dead stub on `design_queued`'s "View Queue"
+action (`onClick: () => { /* Already on autopilot page, could scroll to queue tab */ }`) the same
+way, since it's the same bug class surfaced by this same read-through.
+
+`npx tsc --noEmit` clean. No frontend test runner is configured in this repo (no vitest/jest, no
+existing `*.test.*`/`*.spec.*` files) — introducing one was out of scope for this fix. Manually
+verified via the running dev server (Vite, hot-reloads on save) that the module transforms and
+loads without error; did not interactively click-test in a real browser (no browser-automation
+tool available in this session) — flagging this rather than claiming full UI verification per this
+repo's own standard.
+
 ### 5.4 Duplicated 45-line markdown-rendering config instead of reusing the existing shared component
 **Location:** `frontend/src/pages/Results.tsx:253-304` and `:457-509` (identical `ReactMarkdown` +
 `rehypeHighlight`/`remarkGfm` block copy-pasted between `ResultContentDialog` and

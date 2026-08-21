@@ -198,105 +198,8 @@ const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
     grouped[date].push(msg);
   }
 
-  const getMessageActions = (msg: any): MessageAction[] => {
-    const actions: MessageAction[] = [];
-    const data = msg.data || {};
-
-    // Extract feature_id from feature_folder path if not directly provided
-    const featureId = data.feature_id || (data.feature_folder ? data.feature_folder.split('/').pop() : null);
-
-    // Design-related actions
-    if (featureId) {
-      if (msg.type === 'design_complete' || msg.type === 'design_completed') {
-        actions.push({
-          label: 'View Feature',
-          icon: Eye,
-          onClick: () => setSelectedFeature(featureId),
-          color: 'violet',
-        });
-      }
-      if (data.status === 'failed') {
-        actions.push({
-          label: 'Retry',
-          icon: RotateCcw,
-          onClick: () => {
-            // TODO: Implement retry
-            console.log('Retry feature:', featureId);
-          },
-          color: 'amber',
-        });
-      }
-    }
-
-    // Workflow actions
-    if (data.workflow_id || data.workflow) {
-      actions.push({
-        label: 'View Workflow',
-        icon: ExternalLink,
-        onClick: () => {
-          window.open(`/workflows`, '_blank');
-        },
-        color: 'blue',
-      });
-    }
-
-    // human_input_required no longer goes through the generic actions[]
-    // array -- it toggles the row's own inline response panel instead (see
-    // the row's onClick and the expanded-content block below), since
-    // "navigate somewhere else" and "respond in place" are different
-    // interactions and the row needs to know which one it's dealing with
-    // before rendering, not just on click.
-
-    // Stuck agent / warning / error actions
-    if (msg.type === 'stuck_agent' || msg.type === 'warning' || msg.type === 'error') {
-      actions.push({
-        label: 'View Agents',
-        icon: AlertCircle,
-        onClick: () => {
-          window.open(`/agents`, '_blank');
-        },
-        color: 'amber',
-      });
-    }
-
-    // Design queued - view queue
-    if (msg.type === 'design_queued') {
-      actions.push({
-        label: 'View Queue',
-        icon: FolderOpen,
-        onClick: () => {
-          // Already on autopilot page, could scroll to queue tab
-        },
-        color: 'blue',
-      });
-    }
-
-    // Iteration actions
-    if (msg.type === 'iteration_completed' || msg.type === 'iteration_started') {
-      if (featureId) {
-        actions.push({
-          label: 'View Feature',
-          icon: Eye,
-          onClick: () => setSelectedFeature(featureId),
-          color: 'violet',
-        });
-      }
-    }
-
-    // Phase actions
-    if (msg.type === 'phase_completed' || msg.type === 'phase_started') {
-      if (featureId) {
-        actions.push({
-          label: 'View Feature',
-          icon: Eye,
-          onClick: () => setSelectedFeature(featureId),
-          color: 'violet',
-        });
-      }
-    }
-
-    return actions;
-  };
+  const getMessageActions = (msg: any): MessageAction[] =>
+    deriveMessageActions(msg, { onViewFeature: setSelectedFeature });
 
   return (
     <>
@@ -584,6 +487,74 @@ interface MessageAction {
   icon: React.ElementType;
   onClick: () => void;
   color: 'violet' | 'amber' | 'blue';
+}
+
+interface MessageActionHandlers {
+  onViewFeature: (featureId: string) => void;
+}
+
+// Conditions here are cross-cutting (e.g. Retry keys off data.status, not
+// msg.type; View Workflow keys off which data fields are present) rather
+// than a clean one-type-to-one-handler mapping, so this is an ordered list
+// of independent rules rather than a Record<eventType, handler> table --
+// forcing the latter would mean re-deriving msg.type scoping for rules that
+// don't actually have any, silently narrowing when they fire.
+type MessageActionRule = (
+  msg: any,
+  data: any,
+  featureId: string | null,
+  handlers: MessageActionHandlers
+) => MessageAction | null;
+
+const messageActionRules: MessageActionRule[] = [
+  (msg, _data, featureId, handlers) =>
+    featureId && (msg.type === 'design_complete' || msg.type === 'design_completed')
+      ? { label: 'View Feature', icon: Eye, onClick: () => handlers.onViewFeature(featureId), color: 'violet' }
+      : null,
+  (_msg, data, featureId) =>
+    // Retrying re-runs the design's pipeline from scratch and deletes its
+    // worktree -- destructive, and the message payload here doesn't carry
+    // the queue filename that action requires (feature_folder/feature_id
+    // are not the same value). Route to the Design Queue tab, where the
+    // real rerun action already resolves and confirms it safely, instead
+    // of guessing at a filename.
+    featureId && data.status === 'failed'
+      ? { label: 'Retry', icon: RotateCcw, onClick: () => window.open('/autopilot/queue', '_blank'), color: 'amber' }
+      : null,
+  (_msg, data) =>
+    data.workflow_id || data.workflow
+      ? { label: 'View Workflow', icon: ExternalLink, onClick: () => window.open('/workflows', '_blank'), color: 'blue' }
+      : null,
+  (msg) =>
+    msg.type === 'stuck_agent' || msg.type === 'warning' || msg.type === 'error'
+      ? { label: 'View Agents', icon: AlertCircle, onClick: () => window.open('/agents', '_blank'), color: 'amber' }
+      : null,
+  (msg) =>
+    msg.type === 'design_queued'
+      ? { label: 'View Queue', icon: FolderOpen, onClick: () => window.open('/autopilot/queue', '_blank'), color: 'blue' }
+      : null,
+  (msg, _data, featureId, handlers) =>
+    featureId &&
+    (msg.type === 'iteration_completed' ||
+      msg.type === 'iteration_started' ||
+      msg.type === 'phase_completed' ||
+      msg.type === 'phase_started')
+      ? { label: 'View Feature', icon: Eye, onClick: () => handlers.onViewFeature(featureId), color: 'violet' }
+      : null,
+];
+
+// human_input_required is deliberately absent from these rules -- it no
+// longer goes through the generic actions[] list at all. It toggles the
+// row's own inline response panel instead (see the row's onClick and the
+// expanded-content block in the component), since "navigate somewhere
+// else" and "respond in place" are different interactions and the row
+// needs to know which one it's dealing with before rendering.
+function deriveMessageActions(msg: any, handlers: MessageActionHandlers): MessageAction[] {
+  const data = msg.data || {};
+  const featureId = data.feature_id || (data.feature_folder ? data.feature_folder.split('/').pop() : null);
+  return messageActionRules
+    .map((rule) => rule(msg, data, featureId, handlers))
+    .filter((action): action is MessageAction => action !== null);
 }
 
 const formatEventType = (type: string): string => {
