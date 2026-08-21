@@ -194,6 +194,9 @@ class RepairService:
                         # so this pause is short-lived -- migrated for
                         # consistency with the requeue path above, not because
                         # the auto-resume race is a practical concern here.
+                        # Same "user" flavor as requeue_design's above: a
+                        # short-lived technical guard, not a standing /stop-
+                        # style pause -- see that call site's note.
                         pause_workflow(wf.id, reason="user", session=db)
 
                 db.commit()
