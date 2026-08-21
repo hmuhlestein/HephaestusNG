@@ -233,7 +233,13 @@ class StartWorkflowRequest(BaseModel):
 class ServerState:
     """Global server state."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        # Annotated: an unannotated __init__ is "untyped" to mypy, which
+        # skips checking its body entirely (see
+        # ConnectionBroadcaster.__init__'s comment) -- meaning it never
+        # learned self._broadcaster's type, and the active_websockets/
+        # sse_queues properties below both read as "Returning Any" despite
+        # being correctly typed at runtime.
         self.db_manager: Optional[DatabaseManager] = None
         self.vector_store: Optional[VectorStoreProtocol] = None
         self.llm_provider = None
