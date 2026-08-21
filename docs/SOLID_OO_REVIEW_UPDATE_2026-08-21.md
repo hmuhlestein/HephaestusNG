@@ -294,3 +294,36 @@ retirement.
    retroactively confirm (or note the absence of) the product sign-off
    `design_docs/phase2_solid_consolidations_prompt.md` required before the
    `/api/projects/*` retirement.
+
+## 5. Follow-up: priorities 1-3 and 5 actioned, 2026-08-21
+
+Items 1-3 above are done — see `docs/AUTOPILOT_REFACTOR_PLAN.md` §4.12 (queue-
+dispatch claim primitive), §4.8's 2026-08-21 follow-up (pause-state extended to
+queued tasks), Tier 4 (the three unrelated live bugs), §4.13 (`pipeline.py`,
+partial — one safe extraction landed, the rest deliberately deferred, same
+"deliberate final boundary" pattern already used for `AgentManager`/
+`MonitoringLoop`), and §4.14 (`project_routes.py` split three ways;
+`_mcp_tool_registry.py`/`task_admin_routes.py` reviewed and deliberately not
+split, each for a documented reason rather than left silently undone).
+
+**Item 5's own framing was corrected while acting on it.** `manager.py:440`'s
+`_find_tmux_session` is not an independent duplicate — it's a one-line
+delegator to `output_capture.py:544`'s real implementation, the same thin-
+facade pattern already used by its three neighboring methods (verified by
+reading both, not just grepping the name). The real finding is the 9 call
+sites that hand-roll the same has-session-then-iterate logic instead of
+calling the shared helper — but of those, only `launch_pipeline.py`'s
+restart-path kill-session block turned out to be a clean, low-risk
+consolidation candidate (no diagnostic logging, no same-day fragility, already
+holds a reference to the collaborator that owns the real method): fixed.
+`messenger.py`'s and `terminator.py`'s copies sit in message-delivery/
+termination hot paths patched twice today for unrelated live incidents
+(`d57b14f`, `e733a9e`/`ce975ca`) — deliberately left alone rather than risk a
+regression in code stabilized hours earlier for a cosmetic DRY win, and
+`messenger.py`'s version also carries debug logging that looks deliberately
+added to diagnose a past incident, not safe to silently collapse.
+`orphan_reaper.py`/`mechanical_recovery.py` don't actually duplicate the
+pattern at all — they iterate `.sessions` directly without a `has_session`
+precheck, a different (arguably better) shape. See
+`docs/AUTOPILOT_REFACTOR_PLAN.md`'s commit history (`2c41a37`) for the fix and
+full reasoning.
