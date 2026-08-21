@@ -66,6 +66,20 @@ additional_notes: |
   - Have minimal dependencies on other features
   - Be independently testable
 
+  ⛔ MULTI-REPO PROJECTS: if the PROJECT section above lists a
+  "## PROJECT REPOS" section, this project spans more than one repo.
+  In that case:
+  - Every feature you create MUST be bound to exactly one of those repos.
+  - An API change and its UI consumer are TWO features (one per repo),
+    never one feature spanning both.
+  - Use `depends_on` to order them across repos (e.g. the frontend
+    feature depends_on the backend feature's id) -- do not describe
+    cross-repo ordering in free text.
+  - Set each feature's `"repo"` field (see Step 4) to the exact repo
+    label from "## PROJECT REPOS".
+  If no "## PROJECT REPOS" section is present, the project is single-repo
+  -- omit the `"repo"` field entirely and proceed as normal.
+
   ### Step 4: Create features.json
   Write `.hephaestus/features.json` with this schema:
 
@@ -79,7 +93,8 @@ additional_notes: |
         "scope": "<one paragraph describing what this feature does>",
         "files": ["<owned source directory or module>/", "<owned test file(s)>"],
         "depends_on": [],
-        "execution": "parallel"
+        "execution": "parallel",
+        "repo": "<repo label from PROJECT REPOS, multi-repo projects only>"
       }
     ]
   }
@@ -94,6 +109,8 @@ additional_notes: |
     root, etc.) — determine it by exploring the codebase, don't assume `src/`.
   - `depends_on`: List of feature ids this depends on (empty array if none)
   - `execution`: "parallel" if it can run alongside other features, "sequential" if it must wait
+  - `repo`: (multi-repo projects only, see MULTI-REPO PROJECTS above) the exact repo
+    label this feature belongs to. Omit entirely for single-repo projects.
 
   ### Step 5: Create Scope Documents
   For EACH feature, create `.hephaestus/features/<id>/scope.md` with:
@@ -143,6 +160,9 @@ additional_notes: |
   4. No file paths overlap between features
   5. Each feature has a scope.md file
   6. A `tech-debt` feature exists and depends on all other features
+  7. If the project is multi-repo (a "## PROJECT REPOS" section was shown to you),
+     every feature has a `"repo"` field set to one of the listed labels, and no
+     feature's `files` span more than one of those repos' paths
 
   ### Step 8: Mark Done
   Mark your task as done with a summary of the features created.

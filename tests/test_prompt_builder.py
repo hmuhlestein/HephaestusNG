@@ -98,6 +98,47 @@ class TestFeatureArchitectRepoAssignmentRule:
         ) is None
 
 
+class TestFeatureArchitectWorkflowYamlRepoRule:
+    """REQ-19/20, take 2: product_validation kept finding this unmet even
+    after feature_architect_system_prompt (system_prompts.yaml, verified
+    above) got the hard-rule text -- because that's not the only prompt
+    content the architect actually reads. config/workflows/feature_architect/
+    01_feature_architect.yaml's additional_notes field is injected via
+    PhaseContext.to_prompt_context() (src/phases/models.py's "##
+    PHASE-SPECIFIC INSTRUCTIONS" section, appended to project_context in
+    build_dispatch_context) -- and it's this file, not system_prompts.yaml,
+    that shows the architect the concrete features.json schema example it
+    actually copies. The schema example had no "repo" key at all and
+    Step 7's own validation checklist never mentioned repos, so an
+    architect could read the hard rule in feature_architect_system_prompt
+    and still emit a schema with nowhere to put the repo assignment."""
+
+    def _load_additional_notes(self) -> str:
+        from src.services.prompt_proposal_service import phase_yaml_path
+
+        path = phase_yaml_path("feature_architect", "feature_architect")
+        assert path is not None
+        import yaml
+
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        return data["additional_notes"]
+
+    def test_multi_repo_rule_present(self):
+        notes = self._load_additional_notes()
+        assert "MULTI-REPO PROJECTS" in notes
+        assert "PROJECT REPOS" in notes
+
+    def test_schema_example_includes_repo_field(self):
+        notes = self._load_additional_notes()
+        assert '"repo"' in notes
+
+    def test_validation_checklist_mentions_repo(self):
+        notes = self._load_additional_notes()
+        step7 = notes.split("Step 7")[1].split("Step 8")[0]
+        assert "repo" in step7.lower()
+
+
 class TestCreateTaskToolSignature:
     def test_uses_real_parameter_names(self):
         builder = AgentPromptBuilder(phase_manager=None)
