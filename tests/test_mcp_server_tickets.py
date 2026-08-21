@@ -284,7 +284,7 @@ class TestMCPTicketEndpoints:
             headers=headers,
             json={
                 "ticket_id": test_state['ticket_id_1'],
-                "commit_sha": "mcp123abc456",
+                "commit_sha": "abc123def456",
                 "commit_message": "feat: Add MCP test feature",
                 "link_method": "manual",
             },
@@ -293,7 +293,7 @@ class TestMCPTicketEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert data["commit_sha"] == "mcp123abc456"
+        assert data["commit_sha"] == "abc123def456"
         print(f"✅ Linked commit: {data['commit_sha']}")
 
     def test_09_get_ticket_stats(self, client, headers):
@@ -341,7 +341,7 @@ class TestMCPTicketEndpoints:
             json={
                 "ticket_id": test_state['ticket_id_1'],
                 "resolution_comment": "Resolved via MCP endpoint test",
-                "commit_sha": "mcp123abc456",
+                "commit_sha": "abc123def456",
             },
         )
 
@@ -358,7 +358,7 @@ class TestMCPTicketEndpoints:
     def test_11_get_commit_diff(self, client, headers):
         """Test GET /tickets/commit-diff/{commit_sha} - Get commit diff."""
         response = client.get(
-            "/api/tickets/commit-diff/mcp123abc456",
+            "/api/tickets/commit-diff/abc123def456",
             headers=headers,
         )
 
