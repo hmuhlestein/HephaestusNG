@@ -87,26 +87,26 @@ class _PipelineHarness:
 
         self._stack = [
             patch("src.sdk.HephaestusSDK", return_value=fake_sdk),
-            patch("src.autopilot.orchestrator.get_config"),
-            patch("src.autopilot.orchestrator.PersistentPipelineState", return_value=persistent),
+            patch("src.autopilot.orchestrator.pipeline.get_config"),
+            patch("src.autopilot.orchestrator.pipeline.PersistentPipelineState", return_value=persistent),
             patch("src.workflow_registry.get_all_workflow_definitions", return_value=[]),
-            patch("src.autopilot.orchestrator._register_orchestrator_agent", return_value="orch-1"),
-            patch("src.autopilot.orchestrator._should_stop", side_effect=self._should_stop),
-            patch("src.autopilot.orchestrator.get_active_workflows", side_effect=self._get_active_workflows),
-            patch("src.autopilot.orchestrator._escalate_stale_active_workflows", side_effect=lambda *a, **k: list(self.still_blocking)),
-            patch("src.autopilot.orchestrator._has_resumable_active_design", side_effect=lambda *a, **k: self.resumable_elsewhere),
-            patch("src.autopilot.orchestrator.pick_next_design", side_effect=self._pick_next_design),
-            patch("src.autopilot.orchestrator.run_single_design", self.run_single_design),
-            patch("src.autopilot.orchestrator._update_orchestrator_status"),
-            patch("src.autopilot.orchestrator._interruptible_sleep"),
-            patch("src.autopilot.orchestrator.pause_workflow_direct"),
-            patch("src.autopilot.orchestrator.get_workflow_status", return_value={"status": "active", "project_id": "proj-1"}),
-            patch("src.autopilot.orchestrator.is_design_fully_complete", return_value=(True, "done")),
-            patch("src.autopilot.orchestrator._clean_stale_assigned_tasks"),
-            patch("src.autopilot.orchestrator.attempt_recovery", return_value=(True, "recovered")),
-            patch("src.autopilot.orchestrator.DESIGN_QUEUE_SCAN_INTERVAL", 0),
-            patch("src.autopilot.orchestrator.POLL_INTERVAL", 0),
-            patch("src.autopilot.orchestrator.time.sleep"),
+            patch("src.autopilot.orchestrator.pipeline._register_orchestrator_agent", return_value="orch-1"),
+            patch("src.autopilot.orchestrator.pipeline._should_stop", side_effect=self._should_stop),
+            patch("src.autopilot.orchestrator.pipeline.get_active_workflows", side_effect=self._get_active_workflows),
+            patch("src.autopilot.orchestrator.pipeline._escalate_stale_active_workflows", side_effect=lambda *a, **k: list(self.still_blocking)),
+            patch("src.autopilot.orchestrator.pipeline._has_resumable_active_design", side_effect=lambda *a, **k: self.resumable_elsewhere),
+            patch("src.autopilot.orchestrator.pipeline.pick_next_design", side_effect=self._pick_next_design),
+            patch("src.autopilot.orchestrator.pipeline.run_single_design", self.run_single_design),
+            patch("src.autopilot.orchestrator.pipeline._update_orchestrator_status"),
+            patch("src.autopilot.orchestrator.pipeline._interruptible_sleep"),
+            patch("src.autopilot.orchestrator.pipeline.pause_workflow_direct"),
+            patch("src.autopilot.orchestrator.pipeline.get_workflow_status", return_value={"status": "active", "project_id": "proj-1"}),
+            patch("src.autopilot.orchestrator.pipeline.is_design_fully_complete", return_value=(True, "done")),
+            patch("src.autopilot.orchestrator.pipeline._clean_stale_assigned_tasks"),
+            patch("src.autopilot.orchestrator.pipeline.attempt_recovery", return_value=(True, "recovered")),
+            patch("src.autopilot.orchestrator.pipeline.DESIGN_QUEUE_SCAN_INTERVAL", 0),
+            patch("src.autopilot.orchestrator.pipeline.POLL_INTERVAL", 0),
+            patch("src.autopilot.orchestrator.pipeline.time.sleep"),
         ]
         for p in self._stack:
             p.start()
@@ -210,7 +210,7 @@ class TestShutdown:
         harness.still_blocking = []
 
         with harness:
-            with patch("src.autopilot.orchestrator.pause_workflow_direct") as pause:
+            with patch("src.autopilot.orchestrator.pipeline.pause_workflow_direct") as pause:
                 orchestrator.run_continuous_pipeline(args)
 
         assert {c.args[0] for c in pause.call_args_list} == {"wf-1", "wf-2"}
@@ -223,7 +223,7 @@ class TestShutdown:
 
         with harness:
             with patch(
-                "src.autopilot.orchestrator.get_active_workflows",
+                "src.autopilot.orchestrator.pipeline.get_active_workflows",
                 side_effect=harness._get_active_workflows,
             ) as gaw:
                 orchestrator.run_continuous_pipeline(args)
