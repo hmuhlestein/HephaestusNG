@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict
 
-from src.core.database import Agent, AgentLog, Task, Workflow
+from src.core.database import Agent, AgentLog, Task, TaskStatus, Workflow
 from src.core.simple_config import get_config
 from src.interfaces import get_cli_agent
 from src.monitoring.patterns import (
@@ -1623,6 +1623,62 @@ class MechanicalRecoveryDetector:
             return True
         except Exception as e:
             logger.warning(f"[BAD-MODEL] check failed for {agent.id[:8]}: {e}")
+        return False
+
+
+    async def detect_zombie_agent(self, agent) -> bool:
+        """Reap an agent still "working"/"starting"/"idle" whose current
+        task has already reached a terminal status -- a safety net against
+        the whole class of bug, not any one specific mechanism. Checked by
+        observable SYMPTOM (agent alive, task already resolved) rather
+        than by cause, since the cause can be almost anything: a dropped
+        fire-and-forget termination call (c1cc687/f5a10fa's own root
+        cause), an exception in the completion handler after the task row
+        committed but before termination ran, a request that got cancelled
+        mid-flight, or a future regression nobody has hit yet.
+
+        Confirmed live: three agents each sat "working" for 3-7+ minutes
+        after their own tasks completed "done", with zero agent_logs
+        entries in between -- not hung, just never told to stop. Each was
+        eventually misdiagnosed by an unrelated detector (this file's own
+        frozen-agent rescue, further down) as "frozen" and given a wasted
+        in-session model-switch on work that had already finished. From
+        the dashboard, several such zombies piling up for the same phase
+        within minutes of each other is indistinguishable from several
+        agents genuinely running concurrently on it.
+
+        Terminal, not just "done": TaskStatus.TERMINAL also covers
+        "failed"/"duplicated" -- the same zombie risk applies to a
+        completion handler that flips status to any of those and then
+        never reaches its own termination call, not just a successful one.
+
+        No task-side cleanup here, unlike this file's other detectors --
+        the task already reached a legitimate terminal status through
+        whatever completed it; only the agent's own zombie "working" state
+        needs correcting.
+        """
+        if agent.status not in ("working", "starting", "idle"):
+            return False
+        if not agent.current_task_id:
+            return False
+        try:
+            with self.db_manager.session_scope() as session:
+                from src.core.database import Task as _Task
+
+                task = session.query(_Task).filter_by(id=agent.current_task_id).first()
+                if not task or task.status not in TaskStatus.TERMINAL:
+                    return False
+                task_id = task.id
+                task_status = task.status
+
+            logger.warning(
+                f"[ZOMBIE] Agent {agent.id[:8]} still {agent.status} but its "
+                f"task {task_id[:8]} is already {task_status} -- terminating"
+            )
+            await self.agent_manager.terminate_agent(agent.id)
+            return True
+        except Exception as e:
+            logger.warning(f"[ZOMBIE] check failed for {agent.id[:8]}: {e}")
         return False
 
 
