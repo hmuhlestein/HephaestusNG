@@ -777,6 +777,49 @@ class TestClaimNextQueuedTaskAtomicity:
     def test_returns_none_when_queue_is_empty(self, queue_service):
         assert queue_service.claim_next_queued_task() is None
 
+    def test_dequeue_task_takes_the_dequeue_lock(self, queue_service, db_manager):
+        """Regression: dequeue_task has direct callers besides
+        claim_next_queued_task -- task_admin_routes.py's
+        bump_task_priority_endpoint and cancel_queued_task_endpoint, async
+        FastAPI handlers on the event-loop thread. Those used to run
+        UNLOCKED: harmless while everything shared the single event loop,
+        but a genuine check-then-write race against an executor-thread
+        claim ever since process_queue's DB work moved to
+        run_in_executor. dequeue_task must itself hold _dequeue_lock so
+        both entry points serialize -- verified here by holding the lock
+        in the main thread and asserting a concurrent dequeue_task blocks
+        until it's released."""
+        import threading
+
+        task_id = create_test_task(db_manager, status="queued")
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            task.queued_at = datetime.utcnow()
+            session.commit()
+        finally:
+            session.close()
+
+        finished = threading.Event()
+        t = threading.Thread(
+            target=lambda: (queue_service.dequeue_task(task_id), finished.set())
+        )
+
+        with queue_service._dequeue_lock:
+            t.start()
+            t.join(timeout=0.5)
+            assert t.is_alive(), "dequeue_task ran without holding _dequeue_lock"
+
+        t.join(timeout=5)
+        assert finished.is_set(), "dequeue_task never completed after the lock was released"
+
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            assert task.status == "assigned"
+        finally:
+            session.close()
+
     def test_returns_none_when_at_capacity(self, db_manager):
         qs = QueueService(db_manager, max_concurrent_agents=1)
         create_test_agent(db_manager, status="working")
@@ -969,6 +1012,87 @@ class TestCalculateQueuePosition:
             )
         finally:
             session.close()
+
+
+class TestCancelQueuedTask:
+    """Tests for cancel_queued_task -- the locked check-and-fail write
+    task_admin_routes.py's cancel endpoint delegates to (see the method's
+    docstring for the claim race it closes)."""
+
+    def test_cancel_queued_task(self, queue_service, db_manager):
+        task_id = create_test_task(db_manager, status="queued")
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            task.queued_at = datetime.utcnow()
+            task.queue_position = 1
+            session.commit()
+        finally:
+            session.close()
+
+        outcome, workflow_id = queue_service.cancel_queued_task(task_id)
+
+        assert outcome == "cancelled"
+        # No workflow row is attached in this fixture, so workflow_id is
+        # None here; the point is that it's threaded through for broadcast.
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            assert task.status == "failed"
+            assert task.failure_reason == "Cancelled by user from queue"
+            assert task.completed_at is not None
+        finally:
+            session.close()
+
+    def test_cancel_non_queued_task(self, queue_service, db_manager):
+        task_id = create_test_task(db_manager, status="assigned")
+
+        outcome, workflow_id = queue_service.cancel_queued_task(task_id)
+
+        assert outcome == "not_queued"
+        assert workflow_id is None
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            assert task.status == "assigned"
+        finally:
+            session.close()
+
+    def test_cancel_nonexistent_task(self, queue_service):
+        outcome, workflow_id = queue_service.cancel_queued_task("nonexistent-task-id")
+
+        assert outcome == "not_found"
+        assert workflow_id is None
+
+    def test_cancel_takes_the_dequeue_lock(self, queue_service, db_manager):
+        """Same proof shape as test_dequeue_task_takes_the_dequeue_lock: a
+        concurrent cancel must block while the lock is held -- otherwise
+        its status=failed write can land inside claim_next_queued_task's
+        select-then-dequeue window and dispatch a cancelled task."""
+        import threading
+
+        task_id = create_test_task(db_manager, status="queued")
+        session = db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            task.queued_at = datetime.utcnow()
+            session.commit()
+        finally:
+            session.close()
+
+        finished = threading.Event()
+        t = threading.Thread(
+            target=lambda: (queue_service.cancel_queued_task(task_id), finished.set())
+        )
+
+        with queue_service._dequeue_lock:
+            t.start()
+            t.join(timeout=0.5)
+            assert t.is_alive(), "cancel_queued_task ran without holding _dequeue_lock"
+
+        t.join(timeout=5)
+        assert finished.is_set(), "cancel_queued_task never completed after the lock was released"
+
 
 
 class TestBoostTaskPriority:
