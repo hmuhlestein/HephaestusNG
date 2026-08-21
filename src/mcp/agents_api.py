@@ -643,38 +643,36 @@ async def get_agent_status(
     """Get status of specific agent or all agents."""
     server_state = _get_server_state()
     try:
-        session = server_state.db_manager.get_session()
+        with server_state.db_manager.session_scope() as session:
+            if agent_id:
+                agent = session.query(Agent).filter_by(id=agent_id).first()
+                if not agent:
+                    raise HTTPException(status_code=404, detail="Agent not found")
 
-        if agent_id:
-            agent = session.query(Agent).filter_by(id=agent_id).first()
-            if not agent:
-                raise HTTPException(status_code=404, detail="Agent not found")
-
-            result = {
-                "id": agent.id,
-                "status": agent.status,
-                "current_task_id": agent.current_task_id,
-                "last_activity": agent.last_activity.isoformat() + "Z"
-                if agent.last_activity
-                else None,
-                "health_check_failures": agent.health_check_failures,
-            }
-        else:
-            agents = session.query(Agent).filter(Agent.status != "terminated").all()
-
-            result = [
-                {
+                result = {
                     "id": agent.id,
                     "status": agent.status,
                     "current_task_id": agent.current_task_id,
                     "last_activity": agent.last_activity.isoformat() + "Z"
                     if agent.last_activity
                     else None,
+                    "health_check_failures": agent.health_check_failures,
                 }
-                for agent in agents
-            ]
+            else:
+                agents = session.query(Agent).filter(Agent.status != "terminated").all()
 
-        session.close()
+                result = [
+                    {
+                        "id": agent.id,
+                        "status": agent.status,
+                        "current_task_id": agent.current_task_id,
+                        "last_activity": agent.last_activity.isoformat() + "Z"
+                        if agent.last_activity
+                        else None,
+                    }
+                    for agent in agents
+                ]
+
         return result
 
     except HTTPException:
