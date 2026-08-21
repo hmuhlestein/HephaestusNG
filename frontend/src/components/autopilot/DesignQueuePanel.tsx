@@ -34,6 +34,7 @@ import RealTimeAgentOutput from '../RealTimeAgentOutput';
 import { Agent } from '@/types';
 import { CostDisplay, FeatureCostBadge } from '@/components/cost';
 import { DESIGN_FEATURE_STATUS_CONFIG, TASK_STATUS_CONFIG } from './statusConfig';
+import { useProject } from '@/context/ProjectContext';
 
 interface DesignQueuePanelProps {
   projectId: string | null;
@@ -46,6 +47,11 @@ interface DesignQueuePanelProps {
 
 const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, onLoadDesign, currentDesign, onReviewFeature, onRefreshStatus }) => {
   const queryClient = useQueryClient();
+  // Whether the project LIST itself is still loading -- projectId is
+  // null both while that's in flight (too early to say "no project
+  // selected") and once it's resolved with genuinely no project chosen.
+  // ProjectContext.loading distinguishes the two.
+  const { loading: projectsLoading } = useProject();
   const [search, setSearch] = useState('');
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
   const [detailFile, setDetailFile] = useState<string | null>(null);
@@ -284,6 +290,15 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     !search || item.name.toLowerCase().includes(search.toLowerCase()) ||
     item.filename.toLowerCase().includes(search.toLowerCase())
   );
+
+  if (!projectId && projectsLoading) {
+    return (
+      <div className="bg-gray-50 dark:bg-gray-800 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-2xl p-12 text-center">
+        <Loader2 className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4 animate-spin" />
+        <h3 className="text-lg font-semibold text-gray-600 dark:text-gray-300 mb-2">Loading project...</h3>
+      </div>
+    );
+  }
 
   if (!projectId) {
     return (
