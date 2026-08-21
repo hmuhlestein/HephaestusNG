@@ -173,3 +173,111 @@ class TestCreateFeatureRecords:
         )
 
         assert len(records) == 0
+
+
+class TestCreateFeatureRecordsRepoResolution:
+    """REQ-19: architecture.md's Flow 1 documents each feature's stated
+    repo LABEL (features.json's new optional "repo" field) resolving to
+    Feature.repo_id via the design's project's ProjectRepo rows -- this
+    was the missing half of REQ-19: the prompt could instruct the
+    architect perfectly and Feature.repo_id would still never get set,
+    since nothing read the label back out of features.json."""
+
+    def _seed_project_and_repos(self, db_manager, project_id="proj-1", design_id="des-1"):
+        from src.core.database import AutopilotDesign, AutopilotProject, ProjectRepo
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id=project_id, name=project_id, base_dir="/tmp/proj-1"))
+            session.add(
+                ProjectRepo(id="repo-backend", project_id=project_id, label="backend", path="/tmp/proj-1/backend", is_primary=True)
+            )
+            session.add(
+                ProjectRepo(id="repo-frontend", project_id=project_id, label="frontend", path="/tmp/proj-1/frontend", is_primary=False)
+            )
+            session.add(
+                AutopilotDesign(
+                    id=design_id, project_id=project_id,
+                    filename="design.md", name="Test Design",
+                )
+            )
+
+    def test_resolves_repo_label_to_repo_id(self, test_db, designs_folder, mock_logger):
+        self._seed_project_and_repos(test_db)
+        features_json = {
+            "design_name": "Test Design",
+            "features": [
+                {
+                    "id": "api",
+                    "name": "API",
+                    "scope": "Backend API",
+                    "files": [],
+                    "depends_on": [],
+                    "execution": "parallel",
+                    "repo": "backend",
+                },
+                {
+                    "id": "ui",
+                    "name": "UI",
+                    "scope": "Frontend UI",
+                    "files": [],
+                    "depends_on": [],
+                    "execution": "parallel",
+                    "repo": "frontend",
+                },
+            ],
+        }
+
+        records = _create_feature_records(
+            "des-1", features_json, designs_folder, mock_logger
+        )
+
+        by_key = {r["feature_key"]: r for r in records}
+        assert by_key["api"]["repo_id"] == "repo-backend"
+        assert by_key["ui"]["repo_id"] == "repo-frontend"
+
+    def test_unresolvable_label_leaves_repo_id_none_and_warns(self, test_db, designs_folder, mock_logger):
+        self._seed_project_and_repos(test_db)
+        features_json = {
+            "design_name": "Test Design",
+            "features": [
+                {
+                    "id": "api",
+                    "name": "API",
+                    "scope": "Backend API",
+                    "files": [],
+                    "depends_on": [],
+                    "execution": "parallel",
+                    "repo": "does-not-exist",
+                },
+            ],
+        }
+
+        records = _create_feature_records(
+            "des-1", features_json, designs_folder, mock_logger
+        )
+
+        assert records[0]["repo_id"] is None
+        mock_logger.warning.assert_called_once()
+
+    def test_no_repo_field_leaves_repo_id_none(self, test_db, designs_folder, mock_logger):
+        self._seed_project_and_repos(test_db)
+        features_json = {
+            "design_name": "Test Design",
+            "features": [
+                {
+                    "id": "api",
+                    "name": "API",
+                    "scope": "Backend API",
+                    "files": [],
+                    "depends_on": [],
+                    "execution": "parallel",
+                },
+            ],
+        }
+
+        records = _create_feature_records(
+            "des-1", features_json, designs_folder, mock_logger
+        )
+
+        assert records[0]["repo_id"] is None
+        mock_logger.warning.assert_not_called()

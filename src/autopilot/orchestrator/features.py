@@ -3,19 +3,18 @@
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional
-
+from typing import TYPE_CHECKING, List, Optional
 
 from src.core.database import (
     Agent,
+    AutopilotDesign,
+    ProjectRepo,
     Task,
     Workflow,
     get_db,
 )
 from src.core.simple_config import get_config
 from src.core.status_derivation import derive_feature_status
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -67,15 +66,37 @@ def _create_feature_records(
                     "files": f.files,
                     "depends_on": f.depends_on,
                     "execution": f.execution,
+                    "repo_id": f.repo_id,
                     "scope_doc_path": f.scope_doc_path,
                     "feature_record_path": f.feature_record_path,
                 }
                 for f in existing
             ]
 
+        # REQ-19: resolve each feature's stated repo label to Feature.repo_id.
+        # design_id -> AutopilotDesign.project_id -> ProjectRepo lookup by
+        # label. A missing/unresolvable label leaves repo_id=None, which
+        # resolve_repo()'s REQ-06 fallback treats as "use the project's
+        # primary repo" at every downstream read -- never a hard failure.
+        repo_by_label: dict = {}
+        if design_id:
+            design_row = db.query(AutopilotDesign).filter_by(id=design_id).first()
+            if design_row and design_row.project_id:
+                for repo in db.query(ProjectRepo).filter_by(project_id=design_row.project_id).all():
+                    repo_by_label[repo.label] = repo.id
+
         for feat in features_json.get("features", []):
             feature_id = f"feat-{uuid.uuid4().hex[:8]}"
             feature_key = feat.get("id", "")
+
+            repo_label = feat.get("repo")
+            resolved_repo_id = repo_by_label.get(repo_label) if repo_label else None
+            if repo_label and resolved_repo_id is None:
+                logger.warning(
+                    f"Feature {feature_key} named repo '{repo_label}' which doesn't "
+                    f"match any of this project's repos ({list(repo_by_label)}) -- "
+                    "leaving repo_id unset, falls back to the project's primary repo"
+                )
 
             # Create feature record path
             feature_record_path = designs_folder / "features" / feature_key
@@ -99,6 +120,7 @@ def _create_feature_records(
                 status="pending",
                 scope_doc_path=scope_doc_path_str,
                 feature_record_path=str(feature_record_path),
+                repo_id=resolved_repo_id,
             )
             db.add(feature)
 
@@ -111,6 +133,7 @@ def _create_feature_records(
                     "files": feat.get("files", []),
                     "depends_on": feat.get("depends_on", []),
                     "execution": feat.get("execution", "parallel"),
+                    "repo_id": resolved_repo_id,
                     "scope_doc_path": scope_doc_path_str,
                     "feature_record_path": str(feature_record_path),
                 }
@@ -527,6 +550,15 @@ def _validate_features_json(features_json: dict) -> None:
         execution = feat.get("execution", "parallel")
         if execution not in ("parallel", "sequential"):
             raise ValueError(f"Feature {feat_id} has invalid execution: {execution}")
+
+        # REQ-19: optional repo label -- resolved to Feature.repo_id by
+        # _create_feature_records. Type-checked here only; an unresolvable
+        # label (doesn't match any of the project's actual repos) is a
+        # warning at resolution time, not a validation failure here, since
+        # this function has no project context to check the label against.
+        repo = feat.get("repo")
+        if repo is not None and not isinstance(repo, str):
+            raise ValueError(f"Feature {feat_id} 'repo' must be a string label")
 
         # Check depends_on references
         depends_on = feat.get("depends_on", [])

@@ -285,3 +285,43 @@ class TestValidateFeaturesJson:
         }
         with pytest.raises(ValueError, match="missing 'scope'"):
             _validate_features_json(features_json)
+
+    def test_repo_field_omitted_is_valid(self):
+        """REQ-19: 'repo' is optional -- single-repo projects never set it."""
+        features_json = {
+            "design_name": "Test",
+            "features": [
+                {
+                    "id": "auth", "name": "Auth", "scope": "Scope",
+                    "files": [], "depends_on": [], "execution": "parallel",
+                }
+            ],
+        }
+        _validate_features_json(features_json)  # Should not raise
+
+    def test_repo_field_string_is_valid(self):
+        features_json = {
+            "design_name": "Test",
+            "features": [
+                {
+                    "id": "auth", "name": "Auth", "scope": "Scope",
+                    "files": [], "depends_on": [], "execution": "parallel",
+                    "repo": "backend",
+                }
+            ],
+        }
+        _validate_features_json(features_json)  # Should not raise
+
+    def test_repo_field_non_string_rejected(self):
+        features_json = {
+            "design_name": "Test",
+            "features": [
+                {
+                    "id": "auth", "name": "Auth", "scope": "Scope",
+                    "files": [], "depends_on": [], "execution": "parallel",
+                    "repo": ["backend"],
+                }
+            ],
+        }
+        with pytest.raises(ValueError, match="'repo' must be a string"):
+            _validate_features_json(features_json)

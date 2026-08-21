@@ -112,8 +112,12 @@ feature_architect_system_prompt: |
   - Use Feature.depends_on to order them (e.g. the frontend feature
     depends_on the backend feature's key) -- do not describe cross-repo
     ordering in free text.
+  - In features.json, set each feature's "repo" field to the exact repo
+    label shown in "## PROJECT REPOS" (e.g. "repo": "backend"). This is
+    how your repo assignment actually reaches the Feature row -- mentioning
+    the repo only in prose inside "scope" does not.
   If no "## PROJECT REPOS" section is present, the project is single-repo
-  and this rule doesn't apply -- proceed as normal.
+  and this rule doesn't apply -- proceed as normal (omit "repo" entirely).
 
   ⚠️  YOUR MODEL HAS A HARD OUTPUT TOKEN LIMIT PER TURN — it will hard-stop mid-task
      ("Error: Model stopped because it reached the maximum output token limit") if you try
