@@ -42,6 +42,15 @@ export const useRealTimeAgentOutput = (
   const lastOutputRef = useRef('');
   const mountedRef = useRef(true);
   const pauseUpdatesRef = useRef(false);
+  // Tracks the currently-selected agentId synchronously (updated every
+  // render, not via an effect) so an in-flight fetch for a PREVIOUS agent
+  // can detect it's stale once agentId changes -- stopPolling/startPolling
+  // below only stop FUTURE polls; they don't cancel a fetch already
+  // awaiting apiService.getAgentOutput when the switch happens, and
+  // mountedRef alone doesn't catch this since the component stays mounted,
+  // just pointed at a different agent.
+  const currentAgentIdRef = useRef(agentId);
+  currentAgentIdRef.current = agentId;
 
   const fetchAgentOutput = useCallback(async () => {
     if (!agentId || !enabled || !mountedRef.current) {
@@ -56,7 +65,7 @@ export const useRealTimeAgentOutput = (
 
       const result = await apiService.getAgentOutput(agentId, lines);
 
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || currentAgentIdRef.current !== agentId) return;
 
       // Only update if output has changed to prevent unnecessary re-renders
       const hasChanged = result.output !== lastOutputRef.current;
@@ -77,7 +86,7 @@ export const useRealTimeAgentOutput = (
 
       retryCountRef.current = 0; // Reset retry count on success
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || currentAgentIdRef.current !== agentId) return;
 
       console.warn(`Failed to fetch agent output for ${agentId}:`, error);
       retryCountRef.current++;

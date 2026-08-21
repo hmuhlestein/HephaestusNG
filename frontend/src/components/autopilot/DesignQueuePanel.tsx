@@ -102,16 +102,27 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   // Periodically reload designs from disk every 30 seconds
   useEffect(() => {
     if (!projectId) return;
+    // Guards against a reload for the PREVIOUS project resolving after
+    // projectId has already changed -- clearInterval below stops future
+    // ticks but doesn't cancel one already in flight, and localOrder isn't
+    // namespaced per-project, so a stale response would overwrite the
+    // just-reset localOrder (see the projectId-change effect below) with
+    // the old project's designs.
+    let cancelled = false;
     const interval = setInterval(async () => {
       try {
         const data = await apiService.reloadAutopilotProjectDesigns(projectId);
+        if (cancelled) return;
         setLocalOrder(data);
         queryClient.setQueryData(['autopilot-project-designs', projectId], data);
       } catch {
         // Silently ignore reload failures during periodic refresh
       }
     }, 30000);
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [projectId, queryClient]);
 
   const items = localOrder ?? designs ?? [];
