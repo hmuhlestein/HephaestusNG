@@ -439,6 +439,7 @@ export interface CommitDiff {
   total_insertions: number;
   total_deletions: number;
   total_files: number;
+  repo_label?: string | null;  // REQ-23: repo attribution for multi-repo projects
 }
 
 export interface TicketSearchResult {
