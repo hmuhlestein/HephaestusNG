@@ -343,24 +343,30 @@ precheck, a different (arguably better) shape. See
 `docs/AUTOPILOT_REFACTOR_PLAN.md`'s commit history (`2c41a37`) for the fix and
 full reasoning.
 
-**Item 5's frontend half (`StatusBadge`) reviewed, not merged — same
-"correct the framing before acting" outcome, this time landing on don't-touch
-rather than a partial fix.** Reading all three definitions found they are not
-interchangeable copies the way the finding's "three independent definitions"
-framing implies: `components/StatusBadge.tsx` is the broadest (full status
-vocabulary, a `size` prop) but has **no dark-mode classes at all**;
-`pages/Autopilot.tsx`'s (a narrower 5-state vocabulary) is fully
-dark-mode-aware (`dark:bg-...`/`dark:text-...` on every variant) but has no
-`size` prop; `components/autopilot/DesignQueuePanel.tsx`'s is config-driven
-off the already-consolidated `DESIGN_FEATURE_STATUS_CONFIG` map, renders an
-icon alongside the label (neither of the other two do), and has a
-`pausedBy`-driven special-case label the other two don't need. A safe merge
-requires designing one component whose API covers all three shapes (optional
-icon, optional dark-mode variants, optional size, optional `pausedBy`) and
-then visually verifying every call site in a browser before/after — this
-project's own standing rule for UI changes (see `CLAUDE.md`'s "For UI or
-frontend changes, start the dev server and use the feature in a browser
-before reporting the task as complete"), not something to do blind in one
-pass. Left unmerged rather than force a mechanical rename that would silently
-drop dark-mode support from the `Autopilot.tsx` call sites — flagged for a
-session that can verify visually.
+**Item 5's frontend half (`StatusBadge`) merged 2026-08-21, commit
+`64b0a0d`.** Reading all four definitions first (a 4th, `FeatureStatusBadge`
+in `DesignQueuePanel.tsx`, surfaced during this pass — same markup as its
+sibling `StatusBadge` there minus the `pausedBy` case, missed by the
+original finding's exact-name grep) confirmed they are not interchangeable
+copies: `components/StatusBadge.tsx` had no dark-mode classes at all;
+`pages/Autopilot.tsx`'s was dark-mode-aware but had a narrower vocabulary,
+no `size` prop, and a bordered style; `DesignQueuePanel.tsx`'s two were
+config-driven off `DESIGN_FEATURE_STATUS_CONFIG`, rendered an icon, and one
+had the `pausedBy` case. Rather than defer for a browser session that might
+not materialize, designed `components/StatusBadge.tsx`'s API to cover all
+four shapes without forcing any of them onto its own palette: three new
+optional props — `icon`, `label` (override), `colorClassName` (override) —
+plus dark-mode variants added to every existing color bucket. The other
+three definitions became thin wrappers passing their *existing* icon/
+label/color values through those overrides, so their rendered output is
+byte-for-byte unchanged, not redesigned onto the canonical palette; only
+the ~20 call sites that only ever passed `status`/`size` gain anything
+visually (dark mode, previously absent — a pure addition, nothing removed).
+Verified via `tsc --noEmit` and a full `vite build`, both clean; no
+`StatusBadge` test coverage exists to run. **Not verified in a browser** —
+this project's standing UI-change rule — since neither `chromium-cli` nor
+Playwright is available in this environment without a fresh install; the
+design choice above (preserve every existing call site's exact rendered
+output via explicit overrides, rather than adopt one palette) exists
+specifically to keep this safe without that verification step. The user is
+installing Playwright to check visually.
