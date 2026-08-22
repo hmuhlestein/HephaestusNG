@@ -754,22 +754,42 @@ def record_review_finding(
     verifying what was already found. Only meaningful for phases that opt
     into max_review_runs; callers should check get_max_review_runs first
     to avoid writing history nothing ever reads.
+
+    Idempotent against a duplicate call for the SAME physical run: the
+    documented race in fire_spec_gate_if_ready/mark_phase_complete (see
+    that function's own comment on _claim_phase_task_creation) can invoke
+    this twice for one goto decision when a concurrent sweep tick
+    re-evaluates the same completed phase before the first caller's
+    _consume_gate_artifacts_for has deleted the report file both callers
+    read. A second call carrying the identical (blocker_count, summary) as
+    the last recorded entry is that race, not a new run -- appending it
+    anyway desyncs run_count (Task rows actually created) from
+    len(history), the symptom being a "capped_after_runs: 4" frontmatter
+    sitting above a body listing 6 "Run N" entries.
     """
     from datetime import datetime
 
     from src.core.database import ProjectContext, get_db
 
+    bounded_summary = (summary or "")[:500]
+
     with get_db() as session:
         key = f"review_findings:{workflow_id}:{phase_name}"
         row = session.query(ProjectContext).filter_by(key=key).first()
         history = list(row.value) if row and row.value else []
+        if (
+            history
+            and history[-1]["blocker_count"] == blocker_count
+            and history[-1]["summary"] == bounded_summary
+        ):
+            return
         history.append(
             {
                 "run_number": len(history) + 1,
                 "blocker_count": blocker_count,
                 # Bounded -- this gets echoed into a task description, not
                 # stored for its own sake.
-                "summary": (summary or "")[:500],
+                "summary": bounded_summary,
                 "timestamp": datetime.utcnow().isoformat(),
             }
         )
@@ -777,6 +797,24 @@ def record_review_finding(
             row.value = history
         else:
             session.add(ProjectContext(key=key, value=history))
+
+
+def format_review_finding_line(h: Dict[str, Any], limit: int = 200) -> str:
+    """Render one review_findings_history entry as a single caveat/context
+    line, shared by _cap_out_review_phase's caveats block and
+    _create_phase_task's prior_findings_block (phase_transitions.py) so
+    they don't each truncate the same stored summary independently.
+
+    Appends "..." when `limit` actually cuts the summary short -- without
+    it, a truncated sentence (e.g. "...as source of truth and") reads as
+    if the finding itself just stops mid-thought, indistinguishable from a
+    genuinely short summary.
+    """
+    summary = h.get("summary") or ""
+    shown = summary[:limit]
+    if len(summary) > limit:
+        shown = shown.rstrip() + "..."
+    return f"- Run {h['run_number']}: {h['blocker_count']} unresolved finding(s) -- {shown}"
 
 
 # Score anchors for the three bands.

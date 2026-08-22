@@ -2160,7 +2160,12 @@ def _cap_out_review_phase(
     above; doc_review is the sole remaining user of this one.)
     """
     from src.autopilot.okf_markdown import write_okf
-    from src.autopilot.spec import GATE_RESULT_ARTIFACTS, get_review_findings_history, synthetic_clean_result
+    from src.autopilot.spec import (
+        GATE_RESULT_ARTIFACTS,
+        format_review_finding_line,
+        get_review_findings_history,
+        synthetic_clean_result,
+    )
 
     workflow = db.query(Workflow).filter_by(id=workflow_id).first()
     if not workflow or not workflow.working_directory:
@@ -2176,7 +2181,7 @@ def _cap_out_review_phase(
     docs_dir.mkdir(parents=True, exist_ok=True)
 
     history = get_review_findings_history(workflow_id, phase.name)
-    caveats = "\n".join(f"- Run {h['run_number']}: {h['blocker_count']} unresolved finding(s) -- {h['summary'][:200]}" for h in history) or "(no findings history recorded)"
+    caveats = "\n".join(format_review_finding_line(h) for h in history) or "(no findings history recorded)"
     body = (
         f"# {phase.name} -- capped after {run_count} runs\n\n"
         f"Stopped re-reviewing after {max_runs} runs without a clean "
@@ -2473,7 +2478,7 @@ def _create_phase_task(
             # PhaseExecution (reused in place across goto resets), a Task
             # row is created fresh on every re-entry, so this is a correct
             # "how many times has this phase run" total.
-            from src.autopilot.spec import get_max_review_runs, get_review_findings_history
+            from src.autopilot.spec import format_review_finding_line, get_max_review_runs, get_review_findings_history
 
             max_review_runs = get_max_review_runs(workflow_id, phase.name)
             prior_findings_block = ""
@@ -2489,7 +2494,7 @@ def _create_phase_task(
                 if run_count > 0:
                     history = get_review_findings_history(workflow_id, phase.name)
                     if history:
-                        findings_lines = "\n".join(f"- Run {h['run_number']}: {h['blocker_count']} unresolved finding(s) -- {h['summary'][:200]}" for h in history)
+                        findings_lines = "\n".join(format_review_finding_line(h) for h in history)
                         prior_findings_block = (
                             f"\n\nPRIOR FINDINGS FROM {len(history)} EARLIER "
                             f"RUN(S) OF THIS PHASE:\n{findings_lines}\n\n"
