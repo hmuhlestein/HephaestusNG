@@ -140,6 +140,37 @@ class PipelineState:
     queue_status: Dict[str, str] = field(default_factory=dict)
     start_time: float = field(default_factory=time.time)
     run_id: Optional[str] = None
+    # Runtime display (PipelineStatusCard's "Runtime") must reflect actual
+    # working time, not wall-clock since start_time -- a pipeline can sit
+    # idle for long stretches (empty queue, waiting on another active
+    # workflow) between designs. active_elapsed accumulates completed
+    # active stretches; active_since is the timestamp the current stretch
+    # began, or None while idle -- mark_working/mark_idle are the only
+    # legitimate way to move between them, called alongside every
+    # _update_orchestrator_status("working"/"idle", ...) site in
+    # run_continuous_pipeline so the two stay in lockstep.
+    active_elapsed: float = 0.0
+    active_since: Optional[float] = None
+
+    def mark_working(self) -> None:
+        """Start (or continue) an active stretch. Idempotent -- calling it
+        while already active is a no-op, not a reset."""
+        if self.active_since is None:
+            self.active_since = time.time()
+
+    def mark_idle(self) -> None:
+        """End the current active stretch, folding it into active_elapsed.
+        Idempotent -- calling it while already idle is a no-op."""
+        if self.active_since is not None:
+            self.active_elapsed += time.time() - self.active_since
+            self.active_since = None
+
+    def live_active_elapsed(self) -> float:
+        """active_elapsed plus the still-open active stretch, if any --
+        what the status endpoint should report as Runtime."""
+        if self.active_since is not None:
+            return self.active_elapsed + (time.time() - self.active_since)
+        return self.active_elapsed
 
     def to_dict(self) -> dict:
         return {
@@ -153,6 +184,8 @@ class PipelineState:
             "current_iteration": self.current_iteration,
             "queue_status": self.queue_status,
             "run_id": self.run_id,
+            "active_elapsed": self.active_elapsed,
+            "active_since": self.active_since,
         }
 
     @classmethod
@@ -168,6 +201,8 @@ class PipelineState:
         state.current_iteration = data.get("current_iteration", 0)
         state.queue_status = data.get("queue_status", {})
         state.run_id = data.get("run_id")
+        state.active_elapsed = data.get("active_elapsed", 0.0)
+        state.active_since = data.get("active_since")
         return state
 
 

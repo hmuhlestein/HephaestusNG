@@ -3193,21 +3193,28 @@ class TestOrchestratorLogger:
         log_files = list(tmp_path.glob("*.log"))
         assert len(log_files) > 0
 
-    def test_event(self, tmp_path):
+    def test_event(self, tmp_path, orch_db_env):
         from src.autopilot.orchestrator import OrchestratorLogger
+        from src.core.database import AutopilotPipelineEvent, get_db
 
-        logger = OrchestratorLogger(tmp_path)
+        logger = OrchestratorLogger(tmp_path, project_id="proj-1")
         logger.event("test_event", {"key": "value"})
-        # Should not raise
 
-    def test_save_state(self, tmp_path):
+        with get_db() as db:
+            row = db.query(AutopilotPipelineEvent).filter_by(project_id="proj-1").one()
+            assert row.event_type == "test_event"
+            assert row.data == {"key": "value"}
+
+    def test_save_state(self, tmp_path, orch_db_env):
         from src.autopilot.orchestrator import OrchestratorLogger, PipelineState
+        from src.autopilot.orchestrator.state import PersistentPipelineState
 
-        logger = OrchestratorLogger(tmp_path)
+        logger = OrchestratorLogger(tmp_path, project_id="proj-1")
         state = PipelineState(designs_processed=5)
         logger.save_state(state)
-        state_file = tmp_path / "state.json"
-        assert state_file.exists()
+
+        loaded, _processed = PersistentPipelineState(project_id="proj-1").load()
+        assert loaded.designs_processed == 5
 
 
 class TestCheckApiCredits:

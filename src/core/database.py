@@ -369,6 +369,35 @@ class ProjectContext(Base):
     description = Column(Text)
 
 
+class AutopilotPipelineEvent(Base):
+    """Append-only milestone log for an autopilot pipeline run -- replaces
+    the old per-run events.jsonl file (OrchestratorLogger.event()).
+
+    Low-volume by nature: one row per workflow launch, design completion,
+    pipeline stop, or human-escalation prompt/response -- not per-poll or
+    per-second telemetry. project_id is nullable only for the one
+    inherently cross-project writer (background_loops.py's phase-
+    advancement sweep, which has no single project in scope); every
+    per-project pipeline run always sets it, which is what makes this
+    table -- unlike the old file, located by a global "latest run dir"
+    scan -- actually safe to query under concurrent multi-project runs.
+    """
+
+    __tablename__ = "autopilot_pipeline_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(String, nullable=True)
+    run_id = Column(String, nullable=True)
+    event_type = Column(String, nullable=False)
+    data = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_autopilot_pipeline_events_project_id", "project_id"),
+        Index("ix_autopilot_pipeline_events_created_at", "created_at"),
+    )
+
+
 class WorkflowDefinition(Base):
     """Workflow definition model representing a reusable workflow template."""
 

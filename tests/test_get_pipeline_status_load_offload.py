@@ -28,11 +28,9 @@ async def test_persistent_state_load_runs_off_the_event_loop_thread(db_manager, 
 
     import src.mcp.autopilot.control_routes as routes
 
-    # Force a cache miss and skip the run-specific-state branch so
-    # execution falls through to the PersistentPipelineState.load() call
-    # under test.
+    # Force a cache miss so execution reaches the PersistentPipelineState.load()
+    # call under test (the only state-read path now -- state.json was retired).
     monkeypatch.setattr(routes, "_cached", lambda *a, **k: None)
-    monkeypatch.setattr(routes, "_get_latest_run_dir", lambda: None)
     monkeypatch.setattr(routes, "_store", lambda *a, **k: a[1] if len(a) > 1 else None)
 
     mock_service = MagicMock()
