@@ -135,6 +135,73 @@ class TestCreateAgentForTask:
             )
 
     @pytest.mark.asyncio
+    async def test_returns_existing_agent_when_one_is_already_active_for_task(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Characterization (pre-extraction): the duplicate-active-agent guard
+        is the FIRST check in create_agent_for_task -- a task that already has
+        a working/idle Agent returns that agent as-is, with no new Agent row
+        and no worktree/tmux/prompt work attempted at all."""
+        existing_id = str(uuid.uuid4())
+        with db_manager.session_scope() as session:
+            session.add(Agent(
+                id=existing_id,
+                system_prompt="existing",
+                status="working",
+                cli_type="pi",
+                current_task_id="task-1",
+            ))
+
+        agent = await mock_agent_manager.create_agent_for_task(
+            task=sample_task,
+            enriched_data={},
+            memories=[],
+            project_context="",
+            cli_type="pi",
+            working_directory="/tmp/test-project",
+        )
+
+        assert agent is not None
+        assert agent.id == existing_id
+        with db_manager.session_scope() as session:
+            count = session.query(Agent).filter(
+                Agent.current_task_id == "task-1"
+            ).count()
+            assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_dispatch_when_phase_has_another_active_task(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Characterization (pre-extraction): the phase-sibling guard is the
+        SECOND check -- a different task on the same phase in an active status
+        makes create_agent_for_task return None (skip the dispatch entirely),
+        creating no Agent row."""
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id="task-sibling",
+                workflow_id="wf-1",
+                phase_id="phase-1",
+                raw_description="sibling",
+                enriched_description="sibling",
+                done_definition="d",
+                status="in_progress",
+            ))
+
+        result = await mock_agent_manager.create_agent_for_task(
+            task=sample_task,
+            enriched_data={},
+            memories=[],
+            project_context="",
+            cli_type="pi",
+            working_directory="/tmp/test-project",
+        )
+
+        assert result is None
+        with db_manager.session_scope() as session:
+            assert session.query(Agent).count() == 0
+
+    @pytest.mark.asyncio
     async def test_dispatches_git_expert_normally_in_review_mode(
         self, mock_agent_manager, sample_task, db_manager
     ):
