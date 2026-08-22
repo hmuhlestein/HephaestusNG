@@ -1844,6 +1844,32 @@ class TestProjectDesigns:
         # unrelated .hephaestus/designs/ staging dir
         assert not (dirs["design_dir"] / "Docs_Remove.md").exists()
 
+    def test_content_status_and_delete_resolve_an_arbitrary_nested_destination(self, project_client):
+        """The docs-destination fix above (file_path-based resolution)
+        must generalize to ANY non-"queue" destination -- not just the
+        literal "docs" string -- since destination now accepts arbitrary
+        folder paths (the New Feature/Report Bug flows' docs/design and
+        docs/bugfix defaults, or a user-picked folder)."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+        client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={"name": "Nested Bug", "content": "repro steps", "destination": "docs/bugfix"},
+        )
+        nested_file = dirs["project_dir"] / "docs" / "bugfix" / "Nested_Bug.md"
+        assert nested_file.exists()
+
+        content_resp = client.get(f"/api/autopilot/projects/{pid}/designs/Nested_Bug.md/content")
+        assert content_resp.status_code == 200
+        assert content_resp.json()["content"] == "repro steps"
+
+        status_resp = client.get(f"/api/autopilot/projects/{pid}/designs/Nested_Bug.md/status")
+        assert status_resp.status_code == 200
+
+        delete_resp = client.delete(f"/api/autopilot/projects/{pid}/designs/Nested_Bug.md")
+        assert delete_resp.status_code == 200
+        assert not nested_file.exists()
+
     def test_remove_design(self, project_client):
         client, dirs = project_client
         pid = self._create_project(client, dirs)
