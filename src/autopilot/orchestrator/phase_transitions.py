@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple
 # resolves against the CURRENT module's attribute, not the original
 # definition site, so re-exporting here is sufficient; the "as X" form is
 # ruff's own marker for "this import is intentionally unused, don't flag it."
-from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY, _trigger_arbitration
 from src.autopilot.orchestrator.arbitration import (
     _build_arbitration_prompt as _build_arbitration_prompt,
 )
@@ -44,7 +44,6 @@ from src.autopilot.orchestrator.arbitration import (
 from src.autopilot.orchestrator.arbitration import (
     _resolve_arbitration_outcome as _resolve_arbitration_outcome,
 )
-from src.autopilot.orchestrator.arbitration import _trigger_arbitration
 from src.autopilot.orchestrator.engine_client import (
     create_agent_for_task_direct,
     get_tasks,
@@ -112,12 +111,7 @@ def _clear_stale_task_creation_claim(db, phase_id: str, *, repair_status: bool =
     if cleared and repair_status:
         execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
         if execution and execution.status in ("pending", "completed"):
-            latest_task = (
-                db.query(Task)
-                .filter_by(phase_id=phase_id)
-                .order_by(Task.created_at.desc())
-                .first()
-            )
+            latest_task = db.query(Task).filter_by(phase_id=phase_id).order_by(Task.created_at.desc()).first()
             if latest_task:
                 execution.status = "in_progress"
                 execution.started_at = execution.started_at or latest_task.created_at
@@ -232,10 +226,7 @@ def _try_advance_phases(workflow_id: str, call_logger: "OrchestratorLogger") -> 
     with _advance_phases_locks_guard:
         lock = _advance_phases_locks.setdefault(workflow_id, _threading.Lock())
     if not lock.acquire(blocking=False):
-        logger.debug(
-            f"[ADVANCE-PHASES] Skipping concurrent call for workflow "
-            f"{workflow_id[:8]} -- already in progress elsewhere"
-        )
+        logger.debug(f"[ADVANCE-PHASES] Skipping concurrent call for workflow {workflow_id[:8]} -- already in progress elsewhere")
         return False
     try:
         return _advance_phases(workflow_id, call_logger)
@@ -292,9 +283,7 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
 
         max_retry = get_max_task_retries(workflow_id)
         if retry_count >= max_retry and not is_orphan:
-            logger.info(
-                f"  Task {task_id[:8]} failed {retry_count} times - skipping retry"
-            )
+            logger.info(f"  Task {task_id[:8]} failed {retry_count} times - skipping retry")
             continue
 
         # Pre-check: does this phase already have an active task -- e.g. one
@@ -330,10 +319,7 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
                 )
                 _sibling_id = _sibling.id if _sibling else None
         if _sibling_id:
-            logger.info(
-                f"  Task {task_id[:8]} superseded by active task {_sibling_id[:8]} "
-                "on the same phase -- marking duplicated without retrying"
-            )
+            logger.info(f"  Task {task_id[:8]} superseded by active task {_sibling_id[:8]} on the same phase -- marking duplicated without retrying")
             with get_db() as _db_skip:
                 _t_skip = _db_skip.query(Task).filter_by(id=task_id).first()
                 if _t_skip and _t_skip.status == "failed":
@@ -367,9 +353,7 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
             # log it and leave/revert the task to "failed" for another
             # retry pass to pick up.
             if not update_task_status(task_id, "pending"):
-                raise RuntimeError(
-                    f"Failed to reset task {task_id[:8]} to pending before retry"
-                )
+                raise RuntimeError(f"Failed to reset task {task_id[:8]} to pending before retry")
             # Create agent for it
             agent_data = create_agent_for_task_direct(task_id, workflow_id, phase_id)
             if not agent_data:
@@ -404,10 +388,7 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
                         )
                         sibling_id = sibling.id if sibling else None
                 if sibling_id:
-                    logger.info(
-                        f"  Task {task_id[:8]} superseded by active task {sibling_id[:8]} "
-                        "on the same phase -- marking duplicated, not failed"
-                    )
+                    logger.info(f"  Task {task_id[:8]} superseded by active task {sibling_id[:8]} on the same phase -- marking duplicated, not failed")
                     with get_db() as _db_skip:
                         _t_skip = _db_skip.query(Task).filter_by(id=task_id).first()
                         if _t_skip and _t_skip.status == "pending":
@@ -557,19 +538,27 @@ def _retry_exhausted_paused_workflows(logger: "OrchestratorLogger") -> int:
             # failed or pending tasks in in_progress phases (conditions may have changed)
             if wf.paused_by == "system-exhausted":
                 in_progress_phase_ids = {
-                    pid for (pid,) in db.query(PhaseExecution.phase_id).join(
-                        Phase, PhaseExecution.phase_id == Phase.id
-                    ).filter(
+                    pid
+                    for (pid,) in db.query(PhaseExecution.phase_id)
+                    .join(Phase, PhaseExecution.phase_id == Phase.id)
+                    .filter(
                         Phase.workflow_id == wf.id,
                         PhaseExecution.status == "in_progress",
-                    ).all()
+                    )
+                    .all()
                 }
                 # Check for failed OR pending tasks (pending with no agent = stuck)
-                stuck_tasks = db.query(Task).filter(
-                    Task.workflow_id == wf.id,
-                    Task.phase_id.in_(in_progress_phase_ids),
-                    Task.status.in_(["failed", "pending"]),
-                ).all() if in_progress_phase_ids else []
+                stuck_tasks = (
+                    db.query(Task)
+                    .filter(
+                        Task.workflow_id == wf.id,
+                        Task.phase_id.in_(in_progress_phase_ids),
+                        Task.status.in_(["failed", "pending"]),
+                    )
+                    .all()
+                    if in_progress_phase_ids
+                    else []
+                )
                 # Filter pending tasks to only those with no assigned agent (truly stuck)
                 stuck_tasks = [t for t in stuck_tasks if t.status == "failed" or (t.status == "pending" and not t.assigned_agent_id)]
                 if not stuck_tasks:
@@ -584,10 +573,7 @@ def _retry_exhausted_paused_workflows(logger: "OrchestratorLogger") -> int:
                 wf.status_reason = None
                 wf.paused_at = None
                 wf.paused_retry_count = 0
-                logger.warning(
-                    f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} was system-exhausted but has "
-                    f"{len(stuck_tasks)} stuck task(s) in in_progress phase -- retrying"
-                )
+                logger.warning(f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} was system-exhausted but has {len(stuck_tasks)} stuck task(s) in in_progress phase -- retrying")
                 recovered += 1
                 continue
 
@@ -815,12 +801,7 @@ def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: "Orchestr
     """
     if wf.paused_by not in (None, "system"):
         return  # Respect any deliberate pause ("user", "budget", "review")
-    phases = (
-        db.query(Phase)
-        .filter_by(workflow_id=workflow_id)
-        .order_by(Phase.order)
-        .all()
-    )
+    phases = db.query(Phase).filter_by(workflow_id=workflow_id).order_by(Phase.order).all()
     for phase in phases:
         exec = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
         if exec and exec.status == "in_progress":
@@ -998,12 +979,7 @@ def _release_pending_phases_with_orphaned_task(db, workflow_id: str, logger: "Or
     task and unconditionally skips whenever any phase (including the
     parked git_expert one) is "in_progress".
     """
-    live_task = (
-        db.query(Task)
-        .join(Phase, Task.phase_id == Phase.id)
-        .filter(Phase.workflow_id == workflow_id, Task.status.in_(["assigned", "in_progress"]))
-        .first()
-    )
+    live_task = db.query(Task).join(Phase, Task.phase_id == Phase.id).filter(Phase.workflow_id == workflow_id, Task.status.in_(["assigned", "in_progress"])).first()
     if live_task:
         return
 
@@ -1140,12 +1116,7 @@ def _release_phase_task_creation_claim(db, phase_id: str) -> None:
         return
     if execution.status in ("pending", "completed"):
         execution.status = "in_progress"
-        earliest_task = (
-            db.query(Task)
-            .filter_by(phase_id=phase_id)
-            .order_by(Task.created_at.asc())
-            .first()
-        )
+        earliest_task = db.query(Task).filter_by(phase_id=phase_id).order_by(Task.created_at.asc()).first()
         execution.started_at = earliest_task.created_at if earliest_task else datetime.utcnow()
     execution.task_creation_claimed_at = None
     db.commit()
@@ -1275,11 +1246,7 @@ def _case_completed_with_successor(db, workflow_id: str, completed: list, pendin
             # 'done' row from three weeks earlier -- every poll saw
             # existing_tasks > 0 and silently backed off forever.
             last_completed_execution = last_completed.get("execution")
-            cycle_filter = (
-                (Task.created_at >= last_completed_execution.completed_at,)
-                if last_completed_execution and last_completed_execution.completed_at
-                else ()
-            )
+            cycle_filter = (Task.created_at >= last_completed_execution.completed_at,) if last_completed_execution and last_completed_execution.completed_at else ()
             existing_tasks = db.query(Task).filter(Task.phase_id == successor["phase"].id, *cycle_filter).count()
             # This case only fires when last_completed's PhaseExecution.status
             # is ALREADY "completed" (that's what put it in the `completed`
@@ -1420,9 +1387,7 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                 continue
             agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
             if agent is None or agent.status not in ("working", "idle", "starting"):
-                orphaned_pending.append(
-                    (t, f"assigned agent {t.assigned_agent_id[:8]} is no longer active")
-                )
+                orphaned_pending.append((t, f"assigned agent {t.assigned_agent_id[:8]} is no longer active"))
         for orphan, reason in orphaned_pending:
             logger.info(f"[PHASE-ADVANCE] {phase.name} has an orphaned pending task {orphan.id[:8]} ({reason}, stale >1min) -- marking failed so it becomes eligible for retry")
             orphan.status = "failed"
@@ -1581,16 +1546,17 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                 from src.autopilot.spec import get_max_task_retries
 
                 max_retry_count = get_max_task_retries(phase.workflow_id)
+
                 def _limit_failure(r):
                     return "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
+
                 def _stuck_failure(r):
                     return "task stuck" in (r or "").lower()
+
                 retryable_tasks = [
-                    t for t in failed_tasks
-                    if (t.retry_count or 0) < max_retry_count
-                    or "orphaned" in (t.failure_reason or "").lower()
-                    or _limit_failure(t.failure_reason)
-                    or _stuck_failure(t.failure_reason)
+                    t
+                    for t in failed_tasks
+                    if (t.retry_count or 0) < max_retry_count or "orphaned" in (t.failure_reason or "").lower() or _limit_failure(t.failure_reason) or _stuck_failure(t.failure_reason)
                 ]
                 if retryable_tasks:
                     logger.info(f"[PHASE-ADVANCE] {phase.name} has {done_count} done but {len(retryable_tasks)} failed tasks to retry")
@@ -1606,9 +1572,7 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                     # Dispatch agents for the retried tasks
                     for task in retryable_tasks:
                         try:
-                            agent_data = create_agent_for_task_direct(
-                                task.id, phase.workflow_id, phase.id
-                            )
+                            agent_data = create_agent_for_task_direct(task.id, phase.workflow_id, phase.id)
                             if agent_data:
                                 task.assigned_agent_id = agent_data.get("agent_id")
                                 task.status = "in_progress"
@@ -1641,10 +1605,7 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                     wf = db.query(Workflow).filter_by(id=workflow_id).first()
                     if wf and wf.status != "failed":
                         wf.status = "failed"
-                        wf.status_reason = (
-                            f"{phase.name}: {failed_count} task(s) exhausted the retry cap "
-                            "without producing a valid output"
-                        )
+                        wf.status_reason = f"{phase.name}: {failed_count} task(s) exhausted the retry cap without producing a valid output"
                         # A concurrent, unrelated phase's review gate can
                         # leave paused_by="review" set on this workflow
                         # (_advance_phases deliberately keeps other
@@ -1755,32 +1716,24 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
         from src.autopilot.spec import get_max_task_retries
 
         max_retry_count = get_max_task_retries(phase.workflow_id)
-        failed_tasks = (
-            db.query(Task)
-            .filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter)
-            .all()
-        )
+        failed_tasks = db.query(Task).filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter).all()
+
         # Orphaned tasks (never dispatched), session/spend limit failures,
         # and stuck-task failures are not agent faults -- they should always
         # be retryable. Session limit failures will use the fallback model on retry.
         def _limit_failure(r):
             return "session limit" in (r or "").lower() or "spend limit" in (r or "").lower()
+
         def _stuck_failure(r):
             return "task stuck" in (r or "").lower()
+
         retryable_tasks = [
-            t for t in failed_tasks
-            if (t.retry_count or 0) < max_retry_count
-            or "orphaned" in (t.failure_reason or "").lower()
-            or _limit_failure(t.failure_reason)
-            or _stuck_failure(t.failure_reason)
+            t for t in failed_tasks if (t.retry_count or 0) < max_retry_count or "orphaned" in (t.failure_reason or "").lower() or _limit_failure(t.failure_reason) or _stuck_failure(t.failure_reason)
         ]
         if not retryable_tasks:
             reasons = sorted({t.failure_reason for t in failed_tasks if t.failure_reason})
             reason_text = "; ".join(reasons) if reasons else "no reason recorded"
-            logger.warning(
-                f"[PHASE-ADVANCE] Phase {phase.name} has {len(failed_tasks)} failed "
-                f"task(s), all past the retry cap ({max_retry_count})"
-            )
+            logger.warning(f"[PHASE-ADVANCE] Phase {phase.name} has {len(failed_tasks)} failed task(s), all past the retry cap ({max_retry_count})")
             # Check if there are still pending tasks in other phases —
             # don't pause the workflow if there's still work to do.
             other_pending = (
@@ -1793,10 +1746,7 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                 .count()
             )
             if other_pending > 0:
-                logger.info(
-                    f"[PHASE-ADVANCE] {phase.name} exhausted retries but {other_pending} "
-                    f"pending tasks remain in other phases — not pausing workflow"
-                )
+                logger.info(f"[PHASE-ADVANCE] {phase.name} exhausted retries but {other_pending} pending tasks remain in other phases — not pausing workflow")
                 return None
             workflow = db.query(Workflow).filter_by(id=phase.workflow_id).first()
             if workflow and workflow.status != "paused":
@@ -1878,8 +1828,8 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                     if phase.id:
                         _phase = check_db.query(Phase).filter_by(id=phase.id).first()
                         if _phase:
-                            session_limit_override_cli = getattr(_phase, 'fallback_cli_tool', None)
-                            session_limit_override_model = getattr(_phase, 'fallback_cli_model', None)
+                            session_limit_override_cli = getattr(_phase, "fallback_cli_tool", None)
+                            session_limit_override_model = getattr(_phase, "fallback_cli_model", None)
                     if not session_limit_override_cli:
                         cfg = get_config()
                         if cfg.agents.default_fallback_cli_tool:
@@ -1887,12 +1837,13 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                             session_limit_override_model = cfg.agents.default_fallback_cli_model
                     if session_limit_override_cli:
                         logger.info(
-                            f"[PHASE-ADVANCE] Task {task_id[:8]} failed due to session limit -- "
-                            f"retrying with fallback {session_limit_override_cli}/{session_limit_override_model or 'default'}"
+                            f"[PHASE-ADVANCE] Task {task_id[:8]} failed due to session limit -- retrying with fallback {session_limit_override_cli}/{session_limit_override_model or 'default'}"
                         )
 
             agent_data = create_agent_for_task_direct(
-                task_id, phase.workflow_id, phase.id,
+                task_id,
+                phase.workflow_id,
+                phase.id,
                 phase_cli_tool_override=session_limit_override_cli,
                 phase_cli_model_override=session_limit_override_model,
             )
@@ -1969,7 +1920,8 @@ def _fire_phase_transition(
                 # mark_phase_complete ever got called.
                 if wf and wf.working_directory and Path(wf.working_directory).exists():
                     phase_output = build_phase_output(
-                        phase_name, Path(wf.working_directory),
+                        phase_name,
+                        Path(wf.working_directory),
                         skip_independent_verification=True,
                     )
 
@@ -2400,30 +2352,11 @@ def _create_phase_task(
                 # still active. Observed live: a task sat "pending" pointing
                 # at a terminated agent indefinitely, since this check only
                 # ever looked at assigned_agent_id being NULL.
-                assigned_agent = (
-                    db.query(Agent).filter_by(id=existing.assigned_agent_id).first()
-                    if existing.assigned_agent_id
-                    else None
-                )
-                agent_is_dead = existing.assigned_agent_id and (
-                    assigned_agent is None
-                    or assigned_agent.status not in ("working", "idle", "starting")
-                )
-                if (
-                    existing.status == "pending"
-                    and (not existing.assigned_agent_id or agent_is_dead)
-                    and existing.created_at < orphan_cutoff
-                ):
-                    reason = (
-                        "never dispatched to an agent"
-                        if not existing.assigned_agent_id
-                        else f"assigned agent {existing.assigned_agent_id[:8]} is no longer active"
-                    )
-                    logger.info(
-                        f"[PHASE-TASK] {phase_name} has an orphaned pending task "
-                        f"{existing.id[:8]} ({reason}, stale >1min) -- "
-                        "marking failed and creating a fresh one"
-                    )
+                assigned_agent = db.query(Agent).filter_by(id=existing.assigned_agent_id).first() if existing.assigned_agent_id else None
+                agent_is_dead = existing.assigned_agent_id and (assigned_agent is None or assigned_agent.status not in ("working", "idle", "starting"))
+                if existing.status == "pending" and (not existing.assigned_agent_id or agent_is_dead) and existing.created_at < orphan_cutoff:
+                    reason = "never dispatched to an agent" if not existing.assigned_agent_id else f"assigned agent {existing.assigned_agent_id[:8]} is no longer active"
+                    logger.info(f"[PHASE-TASK] {phase_name} has an orphaned pending task {existing.id[:8]} ({reason}, stale >1min) -- marking failed and creating a fresh one")
                     existing.status = "failed"
                     existing.failure_reason = f"Orphaned: {reason}"
                     db.commit()
@@ -2517,16 +2450,16 @@ def _create_phase_task(
             from src.autopilot.spec import build_input_manifest
 
             wf_for_inputs = db.query(Workflow).filter_by(id=workflow_id).first()
-            input_manifest = (
-                build_input_manifest(workflow_id, phase.name, wf_for_inputs.working_directory)
-                if wf_for_inputs and wf_for_inputs.working_directory
-                else ""
-            )
+            input_manifest = build_input_manifest(workflow_id, phase.name, wf_for_inputs.working_directory) if wf_for_inputs and wf_for_inputs.working_directory else ""
             description = (
-                f"{base_description}\n\n{GOTO_REASON_PREFIX}{feedback}\nAddress this specifically -- this is not a fresh implementation pass, it's a return from review with a concrete issue to fix."
-                if feedback
-                else base_description
-            ) + input_manifest + prior_findings_block
+                (
+                    f"{base_description}\n\n{GOTO_REASON_PREFIX}{feedback}\nAddress this specifically -- this is not a fresh implementation pass, it's a return from review with a concrete issue to fix."
+                    if feedback
+                    else base_description
+                )
+                + input_manifest
+                + prior_findings_block
+            )
             from src.autopilot.orchestrator.runtime_registries import _get_orchestrator_agent_id
             from src.core.database import get_project_info_for_workflow
 
@@ -2624,9 +2557,7 @@ def _create_phase_task(
         # nothing was actually started.
         if own_claim:
             with get_db() as _release_db:
-                _release_db.query(PhaseExecution).filter_by(phase_id=phase_id).update(
-                    {"task_creation_claimed_at": None}, synchronize_session=False
-                )
+                _release_db.query(PhaseExecution).filter_by(phase_id=phase_id).update({"task_creation_claimed_at": None}, synchronize_session=False)
                 _release_db.commit()
 
 
@@ -2665,15 +2596,11 @@ def _create_corrective_task(
 
     task_id = str(uuid.uuid4())
     try:
-        _corrective_task_id = _create_corrective_task_body(
-            workflow_id, phase_id, phase_name, feedback, logger, task_id
-        )
+        _corrective_task_id = _create_corrective_task_body(workflow_id, phase_id, phase_name, feedback, logger, task_id)
         return _corrective_task_id
     finally:
         with get_db() as _release_db:
-            _release_db.query(PhaseExecution).filter_by(phase_id=phase_id).update(
-                {"task_creation_claimed_at": None}, synchronize_session=False
-            )
+            _release_db.query(PhaseExecution).filter_by(phase_id=phase_id).update({"task_creation_claimed_at": None}, synchronize_session=False)
             _release_db.commit()
 
 
@@ -3177,7 +3104,9 @@ async def fire_spec_gate_if_ready(session, task) -> None:
         target_order = session.query(Phase.order).filter_by(id=result["target_phase_id"]).scalar()
         if target_order is not None:
             reset_stale_executions_on_goto(
-                session, task.workflow_id, target_order,
+                session,
+                task.workflow_id,
+                target_order,
                 exclude_phase_id=phase.id,
             )
 

@@ -129,11 +129,7 @@ def _extract_declared_files(outputs: Any) -> list:
                 outputs = [outputs]
     if not isinstance(outputs, list):
         return []
-    return [
-        o.strip()
-        for o in outputs
-        if isinstance(o, str) and _FILENAME_RE.match(o.strip())
-    ]
+    return [o.strip() for o in outputs if isinstance(o, str) and _FILENAME_RE.match(o.strip())]
 
 
 def get_phase_required_files(phase: Any, workflow_id: Optional[str] = None) -> list:
@@ -173,9 +169,7 @@ OUTPUT_NAME_ALIASES: Dict[str, str] = {
 }
 
 
-def resolve_declared_output_path(
-    working_directory: str, phase_name: str, declared_output: str
-) -> Optional[Path]:
+def resolve_declared_output_path(working_directory: str, phase_name: str, declared_output: str) -> Optional[Path]:
     """Find where a phase's declared output file actually landed in its
     worktree, trying every sanctioned location and old-name alias in the
     same order verify_output_artifact/verify_output_survived_commit have
@@ -229,10 +223,7 @@ def resolve_declared_output_path(
     # only a real scoring-time location for a non-gated phase, or a gated
     # phase whose GATE_RESULT_SUBDIR override IS that flat location (none
     # currently -- kept for a future phase that might genuinely need it).
-    gate_excludes_flat = (
-        phase_name in GATED_PHASES
-        and GATE_RESULT_SUBDIR.get(phase_name) != CONTEXT_DIR_NAME
-    )
+    gate_excludes_flat = phase_name in GATED_PHASES and GATE_RESULT_SUBDIR.get(phase_name) != CONTEXT_DIR_NAME
     for name in names_to_check:
         candidates = [
             base / CONTEXT_DIR_NAME / phase_name / name,
@@ -327,9 +318,7 @@ def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:
                     wf_config = yaml.safe_load(f)
                 if wf_config and "required_output" in wf_config:
                     merged.update(wf_config["required_output"])
-                    logger.info(
-                        f"Loaded required_output from workflow.yaml: {merged}"
-                    )
+                    logger.info(f"Loaded required_output from workflow.yaml: {merged}")
             _PHASE_OUTPUT_ARTIFACTS_CACHE[wf.definition_id] = merged
             return merged
         finally:
@@ -375,9 +364,7 @@ def load_optional_phases(workflow_id: Optional[str] = None) -> set:
                     wf_config = yaml.safe_load(f)
                 if wf_config and "optional_phases" in wf_config:
                     result = set(wf_config["optional_phases"])
-                    logger.info(
-                        f"Loaded optional_phases from workflow.yaml: {result}"
-                    )
+                    logger.info(f"Loaded optional_phases from workflow.yaml: {result}")
             _OPTIONAL_PHASES_CACHE[wf.definition_id] = result
             return result
         finally:
@@ -424,9 +411,7 @@ def get_max_review_runs(workflow_id: Optional[str], phase_name: str) -> Optional
 
                 with open(workflow_yaml) as f:
                     wf_config = yaml.safe_load(f)
-                eval_points = (wf_config or {}).get("orchestrator", {}).get(
-                    "evaluation_points", []
-                )
+                eval_points = (wf_config or {}).get("orchestrator", {}).get("evaluation_points", [])
                 for ep in eval_points:
                     if ep.get("after_phase") == phase_name:
                         value = ep.get("max_review_runs")
@@ -478,9 +463,7 @@ def get_max_task_retries(workflow_id: Optional[str]) -> int:
 
                 with open(workflow_yaml) as f:
                     wf_config = yaml.safe_load(f)
-                configured = (wf_config or {}).get("orchestrator", {}).get(
-                    "max_task_retries"
-                )
+                configured = (wf_config or {}).get("orchestrator", {}).get("max_task_retries")
                 if isinstance(configured, int) and configured >= 0:
                     value = configured
             _MAX_TASK_RETRIES_CACHE[wf.definition_id] = value
@@ -499,11 +482,7 @@ def get_review_findings_history(workflow_id: str, phase_name: str) -> list:
     from src.core.database import ProjectContext, get_db
 
     with get_db() as session:
-        row = (
-            session.query(ProjectContext)
-            .filter_by(key=f"review_findings:{workflow_id}:{phase_name}")
-            .first()
-        )
+        row = session.query(ProjectContext).filter_by(key=f"review_findings:{workflow_id}:{phase_name}").first()
         return list(row.value) if row and row.value else []
 
 
@@ -612,9 +591,7 @@ def input_producer_phases(workflow_id: Optional[str], filename: str) -> list:
         return []
 
 
-def resolve_phase_input(
-    working_directory: Any, filename: str, workflow_id: Optional[str] = None
-) -> Optional[Path]:
+def resolve_phase_input(working_directory: Any, filename: str, workflow_id: Optional[str] = None) -> Optional[Path]:
     """Find an input file one phase produced and another consumes.
 
     Checks every .hephaestus/<phase_name>/ subdirectory that a phase is
@@ -646,9 +623,7 @@ def resolve_phase_input(
     return None
 
 
-def build_input_manifest(
-    workflow_id: Optional[str], phase_name: str, working_directory: Any
-) -> str:
+def build_input_manifest(workflow_id: Optional[str], phase_name: str, working_directory: Any) -> str:
     """A concrete, per-run list of which declared inputs actually exist right
     now, for injection into the phase's task description.
 
@@ -686,10 +661,7 @@ def build_input_manifest(
     if not lines:
         return ""
 
-    manifest = (
-        "\n\nINPUTS AVAILABLE TO YOU THIS RUN (resolved at dispatch, do not "
-        "guess these paths):\n" + "\n".join(lines)
-    )
+    manifest = "\n\nINPUTS AVAILABLE TO YOU THIS RUN (resolved at dispatch, do not guess these paths):\n" + "\n".join(lines)
     if missing_required:
         manifest += (
             f"\n\nNOTE: {', '.join(missing_required)} "
@@ -728,18 +700,14 @@ def gate_finding_count(phase_name: str, result: Optional[Dict[str, Any]]) -> int
     if phase_name == "security_review":
         return int(result.get("unresolved_count") or 0)
     if phase_name == "qa_validation":
-        return int(result.get("failed_tests") or 0) + int(
-            result.get("critical_issues") or 0
-        )
+        return int(result.get("failed_tests") or 0) + int(result.get("critical_issues") or 0)
     if phase_name == "product_validation":
         unmet = result.get("unmet_requirements") or []
         return len(unmet) if isinstance(unmet, (list, tuple)) else 0
     return int(result.get("blocker_count") or 0)
 
 
-def record_review_finding(
-    workflow_id: str, phase_name: str, blocker_count: int, summary: str
-) -> None:
+def record_review_finding(workflow_id: str, phase_name: str, blocker_count: int, summary: str) -> None:
     """Append one run's findings to this phase's persistent history.
 
     `blocker_count` is the stored key name (kept as-is: history rows
@@ -777,11 +745,7 @@ def record_review_finding(
         key = f"review_findings:{workflow_id}:{phase_name}"
         row = session.query(ProjectContext).filter_by(key=key).first()
         history = list(row.value) if row and row.value else []
-        if (
-            history
-            and history[-1]["blocker_count"] == blocker_count
-            and history[-1]["summary"] == bounded_summary
-        ):
+        if history and history[-1]["blocker_count"] == blocker_count and history[-1]["summary"] == bounded_summary:
             return
         history.append(
             {
@@ -856,9 +820,7 @@ def _pass_with_subjective(agent_score: Any) -> float:
 #: anywhere in this repo, and not something we can assume a target project
 #: has installed) — this format is emitted by vanilla pytest with zero
 #: extra plugins, which is the only thing we can rely on being present.
-_PYTEST_SUMMARY_COUNT_RE = re.compile(
-    r"(\d+)\s+(failed|passed|error(?:s)?|skipped|xfailed|xpassed)"
-)
+_PYTEST_SUMMARY_COUNT_RE = re.compile(r"(\d+)\s+(failed|passed|error(?:s)?|skipped|xfailed|xpassed)")
 
 
 def _parse_pytest_summary(output: str) -> Optional[Dict[str, int]]:
@@ -904,7 +866,11 @@ def run_independent_test_verification(
     try:
         result = subprocess.run(
             [
-                "python", "-m", "pytest", "-q", "--tb=no",
+                "python",
+                "-m",
+                "pytest",
+                "-q",
+                "--tb=no",
                 # -p no:libtmux: if this subprocess inherits the same Python
                 # environment/site-packages as the orchestrator itself (the
                 # common case unless the target project has its own venv on
@@ -914,7 +880,8 @@ def run_independent_test_verification(
                 # target project's own test files — verified reproducible.
                 # Disabling it here only affects auto-loaded Hephaestus-side
                 # plugins, not anything the target project installed itself.
-                "-p", "no:libtmux",
+                "-p",
+                "no:libtmux",
             ],
             cwd=working_directory,
             capture_output=True,
@@ -924,10 +891,7 @@ def run_independent_test_verification(
 
         counts = _parse_pytest_summary(result.stdout)
         if counts is None:
-            logger.warning(
-                f"[INDEPENDENT_TEST] Could not parse pytest output "
-                f"(exit code: {result.returncode}); falling back to agent report"
-            )
+            logger.warning(f"[INDEPENDENT_TEST] Could not parse pytest output (exit code: {result.returncode}); falling back to agent report")
             return None
 
         failed = counts["failed"] + counts["error"]
@@ -935,11 +899,7 @@ def run_independent_test_verification(
         total = failed + passed + counts["skipped"] + counts["xfailed"]
         pass_rate = (passed / total * 100.0) if total > 0 else 0.0
 
-        logger.info(
-            f"[INDEPENDENT_TEST] Verification complete: "
-            f"{passed}/{total} passed ({pass_rate:.1f}%), "
-            f"{failed} failed"
-        )
+        logger.info(f"[INDEPENDENT_TEST] Verification complete: {passed}/{total} passed ({pass_rate:.1f}%), {failed} failed")
 
         return {
             "failed": failed,
@@ -950,13 +910,9 @@ def run_independent_test_verification(
         }
 
     except subprocess.TimeoutExpired:
-        logger.warning(
-            f"[INDEPENDENT_TEST] Test suite timed out after {timeout_seconds}s"
-        )
+        logger.warning(f"[INDEPENDENT_TEST] Test suite timed out after {timeout_seconds}s")
     except FileNotFoundError:
-        logger.warning(
-            "[INDEPENDENT_TEST] pytest not available in working directory"
-        )
+        logger.warning("[INDEPENDENT_TEST] pytest not available in working directory")
     except Exception as e:
         logger.warning(f"[INDEPENDENT_TEST] Unexpected error: {e}")
 
@@ -972,11 +928,7 @@ def verify_qa_against_independent(
     Returns:
         (is_consistent, discrepancy_message)
     """
-    agent_failed = int(
-        agent_result.get("failed_tests")
-        or agent_result.get("tests_failed")
-        or 0
-    )
+    agent_failed = int(agent_result.get("failed_tests") or agent_result.get("tests_failed") or 0)
     agent_pass_rate = float(agent_result.get("pass_rate", 0.0))
 
     ind_failed = independent_result.get("failed", 0)
@@ -986,16 +938,11 @@ def verify_qa_against_independent(
 
     # Check if agent claims 0 failures but independent run found failures
     if agent_failed == 0 and ind_failed > 0:
-        discrepancies.append(
-            f"Agent reported 0 failed tests but independent run found {ind_failed} failures"
-        )
+        discrepancies.append(f"Agent reported 0 failed tests but independent run found {ind_failed} failures")
 
     # Check if pass rates diverge significantly (>5%)
     if abs(agent_pass_rate - ind_pass_rate) > 5.0:
-        discrepancies.append(
-            f"Pass rate divergence: agent={agent_pass_rate:.1f}%, "
-            f"independent={ind_pass_rate:.1f}%"
-        )
+        discrepancies.append(f"Pass rate divergence: agent={agent_pass_rate:.1f}%, independent={ind_pass_rate:.1f}%")
 
     if discrepancies:
         msg = "; ".join(discrepancies)
@@ -1039,11 +986,7 @@ def score_scope_review(
     # Normalise: agents sometimes write {"scope_review": {"verdict": ...}} instead
     # of the flat {"verdict": ...} schema specified in scope_review.yaml.
     flat = result
-    if (
-        "verdict" not in result
-        and "scope_review" in result
-        and isinstance(result["scope_review"], dict)
-    ):
+    if "verdict" not in result and "scope_review" in result and isinstance(result["scope_review"], dict):
         flat = result["scope_review"]
 
     verdict = str(flat.get("verdict", "")).strip().upper()
@@ -1058,18 +1001,8 @@ def score_scope_review(
             verdict = "FAIL"
 
     # out_of_scope / missing: try multiple key names agents use
-    out_of_scope = (
-        result.get("out_of_scope")
-        or flat.get("out_of_scope")
-        or result.get("out_of_scope_items")
-        or []
-    )
-    missing = (
-        result.get("missing")
-        or flat.get("missing")
-        or result.get("missing_items")
-        or []
-    )
+    out_of_scope = result.get("out_of_scope") or flat.get("out_of_scope") or result.get("out_of_scope_items") or []
+    missing = result.get("missing") or flat.get("missing") or result.get("missing_items") or []
     meta = {
         "gate": "scope_review",
         "verdict": verdict,
@@ -1097,9 +1030,7 @@ def score_scope_review(
         # staring at a dangling "Scope drift detected — " with nothing
         # after it and no way to know what to actually fix.
         summary_text = flat.get("summary") or result.get("summary")
-        reason_parts.append(
-            summary_text or "no specific out-of-scope/missing items reported by the agent"
-        )
+        reason_parts.append(summary_text or "no specific out-of-scope/missing items reported by the agent")
     return 0.2, {
         **meta,
         "band": "requirements",
@@ -1133,9 +1064,7 @@ def score_qa(
     spec = spec or DEFAULT_SPEC
     failed = int(result.get("failed_tests") or result.get("tests_failed") or 0)
     passed = int(result.get("passed_tests") or result.get("tests_passed") or 0)
-    total = int(
-        result.get("total_tests") or result.get("tests_run") or (passed + failed) or 0
-    )
+    total = int(result.get("total_tests") or result.get("tests_run") or (passed + failed) or 0)
     critical = int(result.get("critical_issues", 0) or 0)
 
     pass_rate = result.get("pass_rate")
@@ -1154,9 +1083,7 @@ def score_qa(
         independent_result = run_independent_test_verification(working_directory)
         if independent_result:
             independent_verification = independent_result
-            is_consistent, discrepancy = verify_qa_against_independent(
-                result, independent_result
-            )
+            is_consistent, discrepancy = verify_qa_against_independent(result, independent_result)
             if not is_consistent:
                 verification_discrepancy = discrepancy
                 ind_failed = independent_result.get("failed", 0)
@@ -1184,10 +1111,7 @@ def score_qa(
                     pass_rate = independent_result.get("pass_rate", pass_rate)
                 elif ind_failed > failed:
                     # Use the independent (worse) metrics if agent claims better results
-                    logger.warning(
-                        f"[QA_GATE] Overriding agent metrics with independent results: "
-                        f"failed_tests {failed} -> {ind_failed}"
-                    )
+                    logger.warning(f"[QA_GATE] Overriding agent metrics with independent results: failed_tests {failed} -> {ind_failed}")
                     failed = ind_failed
                     passed = independent_result.get("passed", passed)
                     total = independent_result.get("total", total)
@@ -1195,19 +1119,13 @@ def score_qa(
 
     violations = []
     if critical > spec.get("max_critical_issues", 0):
-        violations.append(
-            f"critical_issues={critical} > {spec.get('max_critical_issues', 0)}"
-        )
+        violations.append(f"critical_issues={critical} > {spec.get('max_critical_issues', 0)}")
     if failed > spec.get("max_failed_tests", 0):
         violations.append(f"failed_tests={failed} > {spec.get('max_failed_tests', 0)}")
     if pass_rate < spec.get("required_pass_rate", 100):
-        violations.append(
-            f"pass_rate={pass_rate:.0f}% < {spec.get('required_pass_rate', 100)}%"
-        )
+        violations.append(f"pass_rate={pass_rate:.0f}% < {spec.get('required_pass_rate', 100)}%")
     if req_rate < spec.get("min_requirements_met_rate", 100):
-        violations.append(
-            f"requirements_met={req_rate:.0f}% < {spec.get('min_requirements_met_rate', 100)}%"
-        )
+        violations.append(f"requirements_met={req_rate:.0f}% < {spec.get('min_requirements_met_rate', 100)}%")
 
     meta = {
         "gate": "qa",
@@ -1285,12 +1203,7 @@ def score_product_validation(
         # as score_adversarial_review/score_architectural_review/
         # score_feature_review: always the failing band, report text is
         # context for the developer, never a route to a pass.
-        reason = (
-            f"no validation.md frontmatter found, but a report was "
-            f"written:\n\n{report_text}"
-            if report_text
-            else "no validation.md found"
-        )
+        reason = f"no validation.md frontmatter found, but a report was written:\n\n{report_text}" if report_text else "no validation.md found"
         return _DEV, {
             "gate": "product",
             "reason": reason,
@@ -1376,12 +1289,7 @@ def score_adversarial_review(
         # The agent may have written the markdown report but failed (or
         # forgot) to also emit the structured JSON -- don't discard real
         # findings just because the JSON is missing.
-        reason = (
-            f"no adversarial.md frontmatter found, but a report was "
-            f"written:\n\n{report_text}"
-            if report_text
-            else "no adversarial.md found"
-        )
+        reason = f"no adversarial.md frontmatter found, but a report was written:\n\n{report_text}" if report_text else "no adversarial.md found"
         return 0.4, {
             "gate": "adversarial_review",
             "reason": reason,
@@ -1396,11 +1304,7 @@ def score_adversarial_review(
         # a developer agent with no other context needs the actual attack
         # vectors, failure sequences, and recommended fixes the reviewer
         # wrote, not a summary that strips them back out.
-        reason = (
-            f"{blockers} BLOCKER(s) found in adversarial review:\n\n{report_text}"
-            if report_text
-            else f"{blockers} BLOCKER(s) found — returning to development"
-        )
+        reason = f"{blockers} BLOCKER(s) found in adversarial review:\n\n{report_text}" if report_text else f"{blockers} BLOCKER(s) found — returning to development"
         return 0.4, {
             "gate": "adversarial_review",
             "band": "development",
@@ -1409,11 +1313,7 @@ def score_adversarial_review(
             "reason": reason,
         }
     if warnings > 0:
-        reason = (
-            f"{warnings} WARNING(s) found in adversarial review:\n\n{report_text}"
-            if report_text
-            else f"{warnings} WARNING(s) found — returning to development"
-        )
+        reason = f"{warnings} WARNING(s) found in adversarial review:\n\n{report_text}" if report_text else f"{warnings} WARNING(s) found — returning to development"
         return 0.5, {
             "gate": "adversarial_review",
             "band": "development",
@@ -1444,12 +1344,7 @@ def score_design_review(
         # The agent may have written the markdown report but failed (or
         # forgot) to also emit the structured JSON -- don't discard real
         # findings just because the JSON is missing.
-        reason = (
-            f"no challenge.md frontmatter found, but a report was "
-            f"written:\n\n{report_text}"
-            if report_text
-            else "no challenge.md found"
-        )
+        reason = f"no challenge.md frontmatter found, but a report was written:\n\n{report_text}" if report_text else "no challenge.md found"
         return 0.4, {
             "gate": "design_review",
             "reason": reason,
@@ -1460,11 +1355,7 @@ def score_design_review(
     warnings = int(result.get("warning_count") or 0)
 
     if blockers > 0:
-        reason = (
-            f"{blockers} BLOCKER(s) found in design review:\n\n{report_text}"
-            if report_text
-            else f"{blockers} BLOCKER(s) found — returning to architecture_design"
-        )
+        reason = f"{blockers} BLOCKER(s) found in design review:\n\n{report_text}" if report_text else f"{blockers} BLOCKER(s) found — returning to architecture_design"
         return 0.4, {
             "gate": "design_review",
             "band": "architecture_design",
@@ -1473,11 +1364,7 @@ def score_design_review(
             "reason": reason,
         }
     if warnings > 0:
-        reason = (
-            f"{warnings} WARNING(s) found in design review:\n\n{report_text}"
-            if report_text
-            else f"{warnings} WARNING(s) found — returning to architecture_design"
-        )
+        reason = f"{warnings} WARNING(s) found in design review:\n\n{report_text}" if report_text else f"{warnings} WARNING(s) found — returning to architecture_design"
         return 0.5, {
             "gate": "design_review",
             "band": "architecture_design",
@@ -1504,12 +1391,7 @@ def score_architectural_review(
         # The agent may have written the markdown report but failed (or
         # forgot) to also emit the structured JSON -- don't discard real
         # findings just because the JSON is missing.
-        reason = (
-            f"no review.md frontmatter found, but a report was "
-            f"written:\n\n{report_text}"
-            if report_text
-            else "no review.md found"
-        )
+        reason = f"no review.md frontmatter found, but a report was written:\n\n{report_text}" if report_text else "no review.md found"
         return 0.4, {
             "gate": "architectural_review",
             "reason": reason,
@@ -1520,11 +1402,7 @@ def score_architectural_review(
     fixes = int(result.get("fix_count") or 0)
 
     if blockers > 0:
-        reason = (
-            f"{blockers} BLOCKER(s) found in architectural review:\n\n{report_text}"
-            if report_text
-            else f"{blockers} BLOCKER(s) found — returning to development"
-        )
+        reason = f"{blockers} BLOCKER(s) found in architectural review:\n\n{report_text}" if report_text else f"{blockers} BLOCKER(s) found — returning to development"
         return 0.4, {
             "gate": "architectural_review",
             "band": "development",
@@ -1533,11 +1411,7 @@ def score_architectural_review(
             "reason": reason,
         }
     if fixes > 0:
-        reason = (
-            f"{fixes} FIX item(s) found in architectural review:\n\n{report_text}"
-            if report_text
-            else f"{fixes} FIX item(s) found — returning to development"
-        )
+        reason = f"{fixes} FIX item(s) found in architectural review:\n\n{report_text}" if report_text else f"{fixes} FIX item(s) found — returning to development"
         return 0.5, {
             "gate": "architectural_review",
             "band": "development",
@@ -1582,12 +1456,7 @@ def score_security_review(
         # Same rationale as score_adversarial_review's: the agent may have
         # written the report but failed to emit the structured frontmatter
         # -- don't discard real findings over a missing header.
-        reason = (
-            f"no security.md frontmatter found, but a report was "
-            f"written:\n\n{report_text}"
-            if report_text
-            else "no security.md found"
-        )
+        reason = f"no security.md frontmatter found, but a report was written:\n\n{report_text}" if report_text else "no security.md found"
         return 0.4, {
             "gate": "security_review",
             "reason": reason,
@@ -1603,11 +1472,9 @@ def score_security_review(
         # other context needs the actual file:line references and
         # remediation the reviewer wrote.
         reason = (
-            f"{unresolved} unresolved critical/high vulnerability(ies) left "
-            f"in the code by security review:\n\n{report_text}"
+            f"{unresolved} unresolved critical/high vulnerability(ies) left in the code by security review:\n\n{report_text}"
             if report_text
-            else f"{unresolved} unresolved critical/high vulnerability(ies) "
-            "— returning to development"
+            else f"{unresolved} unresolved critical/high vulnerability(ies) — returning to development"
         )
         return 0.4, {
             "gate": "security_review",
@@ -1620,11 +1487,7 @@ def score_security_review(
     return 0.9, {
         "gate": "security_review",
         "band": "pass",
-        "reason": (
-            f"clean — {criticals} critical / {highs} high found, all fixed"
-            if criticals or highs
-            else "clean"
-        ),
+        "reason": (f"clean — {criticals} critical / {highs} high found, all fixed" if criticals or highs else "clean"),
     }
 
 
@@ -1649,12 +1512,7 @@ def score_feature_review(
         # The agent may have written the markdown report but failed (or
         # forgot) to also emit the structured JSON -- don't discard real
         # findings just because the JSON is missing.
-        reason = (
-            f"no feature_review.md frontmatter found, but a report was "
-            f"written:\n\n{report_text}"
-            if report_text
-            else "no feature_review.md found"
-        )
+        reason = f"no feature_review.md frontmatter found, but a report was written:\n\n{report_text}" if report_text else "no feature_review.md found"
         return 0.4, {
             "gate": "feature_review",
             "reason": reason,
@@ -1666,11 +1524,7 @@ def score_feature_review(
 
     if blockers > 0 or fixes > 0:
         findings = f"{blockers} BLOCKER(s), {fixes} FIX item(s)"
-        reason = (
-            f"{findings} found in feature review:\n\n{report_text}"
-            if report_text
-            else f"{findings} found — returning to Feature Architect"
-        )
+        reason = f"{findings} found in feature review:\n\n{report_text}" if report_text else f"{findings} found — returning to Feature Architect"
         return 0.1, {
             "gate": "feature_review",
             "band": "feature_architect",
@@ -1872,15 +1726,9 @@ def consume_gate_artifacts(phase_name: str, working_directory: Any) -> list:
                     candidate.unlink()
                     deleted.append(str(candidate))
                 except OSError as e:
-                    logger.warning(
-                        f"[SPEC-GATE] Could not remove consumed gate artifact "
-                        f"{candidate}: {e}"
-                    )
+                    logger.warning(f"[SPEC-GATE] Could not remove consumed gate artifact {candidate}: {e}")
     if deleted:
-        logger.info(
-            f"[SPEC-GATE] {phase_name}: consumed gate artifacts after goto "
-            f"(re-run must regenerate them): {deleted}"
-        )
+        logger.info(f"[SPEC-GATE] {phase_name}: consumed gate artifacts after goto (re-run must regenerate them): {deleted}")
     return deleted
 
 
@@ -1942,9 +1790,7 @@ def expected_gate_result_type(phase_name: str) -> str:
     return GATE_RESULT_TYPE_OVERRIDE.get(phase_name, phase_name)
 
 
-def validate_gate_result_schema(
-    phase_name: str, result: Optional[Dict[str, Any]]
-) -> Optional[str]:
+def validate_gate_result_schema(phase_name: str, result: Optional[Dict[str, Any]]) -> Optional[str]:
     """Check a gated phase's OKF frontmatter declares the right `type` and
     has at least one of its required top-level keys actually present (not
     just defaulted).
@@ -2024,29 +1870,19 @@ def build_phase_output(
     spec = spec if spec is not None else load_spec()
 
     if phase_name == "scope_review":
-        result, _ = read_okf_report(
-            working_directory, "scope.md", phase_name=phase_name
-        )
+        result, _ = read_okf_report(working_directory, "scope.md", phase_name=phase_name)
         score, meta = score_scope_review(result)
     elif phase_name == "design_review":
-        result, report_text = read_okf_report(
-            working_directory, "challenge.md", phase_name=phase_name
-        )
+        result, report_text = read_okf_report(working_directory, "challenge.md", phase_name=phase_name)
         score, meta = score_design_review(result, report_text=report_text)
     elif phase_name == "architectural_review":
-        result, report_text = read_okf_report(
-            working_directory, "review.md", phase_name=phase_name
-        )
+        result, report_text = read_okf_report(working_directory, "review.md", phase_name=phase_name)
         score, meta = score_architectural_review(result, report_text=report_text)
     elif phase_name == "adversarial_review":
-        result, report_text = read_okf_report(
-            working_directory, "adversarial.md", phase_name=phase_name
-        )
+        result, report_text = read_okf_report(working_directory, "adversarial.md", phase_name=phase_name)
         score, meta = score_adversarial_review(result, report_text=report_text)
     elif phase_name == "security_review":
-        result, report_text = read_okf_report(
-            working_directory, "security.md", phase_name=phase_name
-        )
+        result, report_text = read_okf_report(working_directory, "security.md", phase_name=phase_name)
         score, meta = score_security_review(result, report_text=report_text)
     elif phase_name == "qa_validation":
         result, _ = read_okf_report(working_directory, "qa.md", phase_name=phase_name)
@@ -2056,16 +1892,12 @@ def build_phase_output(
     elif phase_name == "feature_review":
         # .hephaestus/feature_review/, not docs/ -- the same convention
         # every other gated phase uses (Phase 2 §4.9 follow-up).
-        result, report_text = read_okf_report(
-            working_directory, "feature_review.md", phase_name=phase_name
-        )
+        result, report_text = read_okf_report(working_directory, "feature_review.md", phase_name=phase_name)
         if result is None:
             result, report_text = _feature_review_legacy_report(working_directory)
         score, meta = score_feature_review(result, report_text=report_text)
     else:  # product_validation
-        result, report_text = read_okf_report(
-            working_directory, "validation.md", phase_name=phase_name
-        )
+        result, report_text = read_okf_report(working_directory, "validation.md", phase_name=phase_name)
         score, meta = score_product_validation(result, spec, report_text=report_text)
 
     return {"score": score, "spec_gate": meta}
