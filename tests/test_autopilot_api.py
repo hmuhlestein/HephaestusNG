@@ -2921,7 +2921,7 @@ class TestPhase0ReviewAction:
         pid = self._create_project(client, dirs)
         self._seed_paused_phase0(pid, dirs, "wf-phase0-redo")
 
-        from src.mcp.autopilot import feature_routes as autopilot_api
+        from src.mcp.autopilot import feature_review_routes as autopilot_api
 
         spawn_mock = AsyncMock()
         monkeypatch.setattr(autopilot_api, "_spawn_agent_for_task", spawn_mock)
@@ -2961,7 +2961,7 @@ class TestPhase0ReviewAction:
         pid = self._create_project(client, dirs)
         self._seed_paused_phase0(pid, dirs, "wf-phase0-redo2")
 
-        from src.mcp.autopilot import feature_routes as autopilot_api
+        from src.mcp.autopilot import feature_review_routes as autopilot_api
 
         spawn_mock = AsyncMock()
         monkeypatch.setattr(autopilot_api, "_spawn_agent_for_task", spawn_mock)
@@ -3029,7 +3029,7 @@ class TestPhase0ReviewAction:
                 )
             )
 
-        from src.mcp.autopilot import feature_routes as autopilot_api
+        from src.mcp.autopilot import feature_review_routes as autopilot_api
 
         spawn_mock = AsyncMock()
         monkeypatch.setattr(autopilot_api, "_spawn_agent_for_task", spawn_mock)

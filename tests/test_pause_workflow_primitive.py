@@ -709,7 +709,7 @@ class TestHistoricalPauseSiteConsistency:
 
     @pytest.mark.asyncio
     async def test_review_feature_approve_clears_full_triad(self, orch_db_env):
-        """review_feature's approve branch (feature_routes.py) -- found
+        """review_feature's approve branch (feature_review_routes.py) -- found
         during this handoff's own re-audit, not one of the four named
         commits: cleared status/paused_by but left paused_at stale, same
         bug class as the other resume-side gaps."""
@@ -729,7 +729,7 @@ class TestHistoricalPauseSiteConsistency:
                 )
             )
 
-        from src.mcp.autopilot.feature_routes import FeatureReviewRequest, review_feature
+        from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
 
         result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
 
@@ -743,7 +743,7 @@ class TestHistoricalPauseSiteConsistency:
 
     @pytest.mark.asyncio
     async def test_phase0_review_approve_clears_full_triad(self, orch_db_env):
-        """_review_phase0_decomposition's approve branch (feature_routes.py)
+        """_review_phase0_decomposition's approve branch (feature_review_routes.py)
         -- same gap as review_feature's, found in the same re-audit."""
         from unittest.mock import patch
 
@@ -757,7 +757,7 @@ class TestHistoricalPauseSiteConsistency:
                 )
             )
 
-        from src.mcp.autopilot.feature_routes import (
+        from src.mcp.autopilot.feature_review_routes import (
             FeatureReviewRequest,
             _review_phase0_decomposition,
         )
@@ -876,12 +876,12 @@ class TestReviewFeatureReopensCompletedDevelopmentPhase:
                 status="completed",
             ))
 
-        from src.mcp.autopilot import feature_routes
+        from src.mcp.autopilot import feature_review_routes
         spawn_mock = AsyncMock()
-        monkeypatch_target = feature_routes
+        monkeypatch_target = feature_review_routes
         import unittest.mock
         with unittest.mock.patch.object(monkeypatch_target, "_spawn_agent_for_task", spawn_mock):
-            from src.mcp.autopilot.feature_routes import FeatureReviewRequest, review_feature
+            from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
             result = await review_feature(
                 "feat-1", FeatureReviewRequest(action="request_changes", feedback="do another lint check"),
             )
@@ -952,11 +952,11 @@ class TestReviewAndResumeReuseOldPendingTasks:
         self._seed_review_mode_project_and_workflow(orch_db_env)
         self._seed_old_pending_task(orch_db_env)
 
-        from src.mcp.autopilot import feature_routes
+        from src.mcp.autopilot import feature_review_routes
         spawn_mock = AsyncMock()
-        monkeypatch.setattr(feature_routes, "_spawn_agent_for_task", spawn_mock)
+        monkeypatch.setattr(feature_review_routes, "_spawn_agent_for_task", spawn_mock)
 
-        from src.mcp.autopilot.feature_routes import FeatureReviewRequest, review_feature
+        from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
         result = await review_feature(
             "feat-1", FeatureReviewRequest(action="request_changes", feedback="do another lint check"),
         )
@@ -1081,7 +1081,7 @@ class TestReviewFeatureApproveLocalMergeFallback:
                 scope="s", workflow_id="wf-1", status="paused", pr_url=None,
             ))
 
-        from src.mcp.autopilot.feature_routes import FeatureReviewRequest, review_feature
+        from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
         result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
         assert result["success"] is True
 
@@ -1119,7 +1119,7 @@ class TestReviewFeatureApproveLocalMergeFallback:
             "subprocess.run",
             return_value=MagicMock(returncode=0, stdout="", stderr=""),
         ) as mock_run:
-            from src.mcp.autopilot.feature_routes import FeatureReviewRequest, review_feature
+            from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
             result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
         assert result["success"] is True
         mock_run.assert_called_once()
