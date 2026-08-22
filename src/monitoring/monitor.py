@@ -478,6 +478,12 @@ class MonitoringLoop:
         except Exception as e:
             logger.error(f"Error cleaning up orphaned tmux sessions: {e}")
 
+        # Clean up stale/orphaned worktrees
+        try:
+            await self._cleanup_stale_worktrees()
+        except Exception as e:
+            logger.error(f"Error cleaning up stale worktrees: {e}")
+
         # Auto-discover active workflow if phase_manager has no workflow_id
         if self.phase_manager and not self.phase_manager.workflow_id:
             logger.info(
@@ -755,6 +761,52 @@ class MonitoringLoop:
         monitor._orphan_reaper.last_check_time directly.
         """
         await self._orphan_reaper.cleanup_orphaned_tmux_sessions()
+
+    async def _cleanup_stale_worktrees(self):
+        """Periodic backstop for orphaned worktree directories.
+
+        terminate_agent's own cleanup_worktree call (terminator.py) only
+        removes ITS agent's own worktree at the moment it terminates --
+        that's entirely DB-record-driven (AgentBranch), so it can never
+        find a worktree whose *creation* was interrupted between `git
+        worktree add` succeeding and its AgentBranch row committing (e.g.
+        a backend restart mid-creation). cleanup_all_stale_branches closes
+        that gap: it cross-references `git worktree list` directly against
+        the DB, not the other way around, so a directory with zero DB
+        record still gets found and removed. Nothing called this
+        periodically before -- only a manual POST /cleanup-branches or a
+        design's own Rerun action, so orphans from any interrupted
+        creation just accumulated under .worktrees/ indefinitely. Scoped
+        to every active project (see the concurrent-active-projects
+        invariant), each swept with its own WorktreeManager instance
+        (never the shared one -- .reload() on a shared long-lived instance
+        would race a concurrent request relying on it pointing elsewhere).
+        """
+        import asyncio
+
+        from src.core.database import AutopilotProject
+        from src.core.worktree_manager import WorktreeManager
+
+        with self.db_manager.session_scope() as session:
+            active_projects = [
+                (p.id, p.base_dir)
+                for p in session.query(AutopilotProject).filter_by(is_active=True).all()
+                if p.base_dir
+            ]
+
+        loop = asyncio.get_event_loop()
+        for project_id, base_dir in active_projects:
+            try:
+                bm = WorktreeManager(self.db_manager)
+                bm.reload(base_dir)
+                # Real git/filesystem work -- offload so it doesn't block
+                # the event loop, same reasoning as the identical pattern
+                # in control_routes.py's /cleanup-branches endpoint.
+                result = await loop.run_in_executor(None, bm.cleanup_all_stale_branches)
+                if any(result.get(k) for k in ("worktrees_cleaned", "cleaned", "merged", "orphan_worktrees_reclaimed")):
+                    logger.info(f"[WORKTREE-SWEEP] project {project_id[:8]}: {result}")
+            except Exception as e:
+                logger.warning(f"[WORKTREE-SWEEP] Failed for project {project_id[:8]}: {e}")
 
     async def _check_workflow_stuck_state(self, *args, **kwargs):
         """Delegator to _diagnostics.check_workflow_stuck_state()."""
