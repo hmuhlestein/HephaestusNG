@@ -125,6 +125,7 @@ from src.autopilot.orchestrator.pipeline import (
     _merge_design_branch_into_main as _merge_design_branch_into_main,
     run_single_workflow as run_single_workflow,
     run_phase0 as run_phase0,
+    run_bugfix_single_feature as run_bugfix_single_feature,
     _should_pause_for_review as _should_pause_for_review,
     _pause_feature_for_review as _pause_feature_for_review,
     _wait_for_review_clearance as _wait_for_review_clearance,
