@@ -399,6 +399,61 @@ if command -v gh >/dev/null 2>&1; then
     fi
 fi
 
+# ─── 4.9. Playwright ───────────────────────────────────────────────
+# Playwright provides browser automation (Chromium, Firefox, WebKit)
+# and Chrome DevTools Protocol (CDP) support. Used for visual QA,
+# screenshot capture, and CDP-based browser interactions.
+
+header "Playwright"
+
+PW_INSTALLED=false
+if "$PYTHON" -c "import playwright" 2>/dev/null; then
+    PW_INSTALLED=true
+    ok "Playwright Python package already installed"
+fi
+
+# Check if browsers are installed
+if $PW_INSTALLED && "$PYTHON" -c "
+import playwright._impl._driver as d
+import os
+browsers_path = os.path.join(os.path.expanduser('~'), 'Library', 'Caches', 'ms-playwright')
+print('found' if os.path.isdir(browsers_path) and os.listdir(browsers_path) else 'missing')
+" 2>/dev/null | grep -q found; then
+    ok "Playwright browsers installed"
+else
+    _install_pw=true
+    if [ -t 0 ] || [ -r /dev/tty ]; then
+        _pw_tty="/dev/tty"
+        if [ -t 0 ]; then
+            _pw_tty="/dev/stdin"
+        fi
+        printf "${BLUE}[heph]${NC} Install Playwright (browser automation + CDP support)? [Y/n] "
+        read -r _pw_reply <"$_pw_tty"
+        case "${_pw_reply:-Y}" in
+            [Nn]*) _install_pw=false ;;
+        esac
+    fi
+
+    if $_install_pw; then
+        log "Installing Playwright..."
+        "$UV_BIN" pip install playwright --quiet --python "$PYTHON" 2>&1 | tail -3
+        if [ $? -eq 0 ]; then
+            log "Downloading Playwright browsers (Chromium, Firefox, WebKit)..."
+            "$PYTHON" -m playwright install 2>&1 | tail -5
+            if [ $? -eq 0 ]; then
+                ok "Playwright installed with browsers"
+            else
+                warn "Playwright package installed but browser download failed"
+                warn "Run manually: playwright install"
+            fi
+        else
+            warn "Playwright install failed"
+        fi
+    else
+        ok "Playwright skipped"
+    fi
+fi
+
 # ─── 5. heph CLI ──────────────────────────────────────────────────
 
 header "heph CLI"
