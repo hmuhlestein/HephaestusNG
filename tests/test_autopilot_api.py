@@ -1730,6 +1730,46 @@ class TestProjectDesigns:
         finally:
             session.close()
 
+    def test_add_design_accepts_an_arbitrary_nested_destination_folder(self, project_client):
+        """destination isn't limited to the "queue"/"docs" literals -- any
+        other value is a real folder path relative to the project root,
+        used verbatim (e.g. the New Feature/Report Bug flows' docs/design
+        and docs/bugfix defaults, or a folder the user picked)."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={
+                "name": "Login Crash",
+                "content": "# Login Crash\nRepro steps.",
+                "destination": "docs/bugfix",
+            },
+        )
+        assert resp.status_code == 200
+
+        bugfix_file = dirs["project_dir"] / "docs" / "bugfix" / "Login_Crash.md"
+        assert bugfix_file.exists()
+        assert bugfix_file.read_text() == "# Login Crash\nRepro steps."
+
+    def test_add_design_rejects_a_destination_that_escapes_the_project_root(self, project_client):
+        """destination is client-supplied (typed or browsed) for any
+        non-"queue" value, unlike the old hardcoded "docs" literal -- it
+        must be validated to stay within the project root, not trusted
+        verbatim."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={
+                "name": "Escape Attempt",
+                "content": "content",
+                "destination": "../../etc",
+            },
+        )
+        assert resp.status_code == 400
+
     def test_get_design_content_resolves_docs_destination(self, project_client):
         """content/status/delete all resolved unconditionally against
         .hephaestus/designs/ (_get_design_queue_dir), ignoring
