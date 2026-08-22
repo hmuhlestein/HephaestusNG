@@ -293,8 +293,23 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                 )}
 
 
-              {/* Failure Reason Banner */}
-              {taskDetails?.failure_reason && taskDetails.status === 'failed' && (
+              {/* Failure Reason Banner. Also shown for status === 'duplicated'
+                  without a duplicate_of_task_id -- that combination means this
+                  task was routed elsewhere (e.g. a ticket-blocked git_expert/
+                  doc_review task rerouted to development, see
+                  _retry_failed_tasks/_maybe_retry_failed_tasks in
+                  phase_transitions.py) rather than superseded by a genuinely
+                  similar sibling task, which gets its own richer "This task is
+                  a duplicate" banner below instead. Previously this banner was
+                  gated on status === 'failed' only, so a task's own
+                  failure_reason -- the one piece of text explaining WHY it got
+                  rerouted -- silently disappeared the moment the routing fix
+                  (correctly) marked it "duplicated" instead of leaving it
+                  "failed" forever. */}
+              {taskDetails?.failure_reason && (
+                taskDetails.status === 'failed' ||
+                (taskDetails.status === 'duplicated' && !taskDetails.duplicate_of_task_id)
+              ) && (
                 <div className="mt-3 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700">
                   <div className="flex items-start gap-2">
                     <XCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />

@@ -61,8 +61,13 @@ export default function WorkflowCard({
   onViewAgent,
 }: WorkflowCardProps) {
   const navigate = useNavigate();
-  const { selectExecution } = useWorkflow();
+  const { selectExecution, definitions } = useWorkflow();
   const queryClient = useQueryClient();
+  // Not execution.phases -- that's only populated once the details query
+  // below has run, which is gated on isExpanded, so it's always empty on
+  // a collapsed card. definitions loads independently (WorkflowContext),
+  // so this is available immediately, collapsed or not.
+  const definitionPhasesCount = definitions.find((d) => d.id === execution.definition_id)?.phases_count ?? 0;
 
   const stopMutation = useMutation({
     mutationFn: () => apiService.stopWorkflow(execution.id),
@@ -116,12 +121,12 @@ export default function WorkflowCard({
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className={`bg-white rounded-lg shadow-md border-2 transition-all ${
+      className={`bg-white dark:bg-gray-800 rounded-lg shadow-md border-2 transition-all ${
         isSelected
-          ? 'border-blue-500 ring-2 ring-blue-200'
+          ? 'border-blue-500 ring-2 ring-blue-200 dark:ring-blue-900'
           : isExpanded
-            ? 'border-blue-200'
-            : 'border-transparent hover:border-gray-200'
+            ? 'border-blue-200 dark:border-blue-800'
+            : 'border-transparent hover:border-gray-200 dark:hover:border-gray-700'
       }`}
     >
       {/* Card header */}
@@ -137,7 +142,7 @@ export default function WorkflowCard({
             {getStatusLabel(execution)}
           </span>
           <div className="flex items-center gap-2">
-            <span className="text-gray-500 text-sm">{execution.definition_name}</span>
+            <span className="text-gray-500 dark:text-gray-400 text-sm">{execution.definition_name}</span>
             {execution.status === 'active' && (
               <button
                 onClick={handlePause}
@@ -182,31 +187,44 @@ export default function WorkflowCard({
         </div>
 
         {/* Title */}
-        <h3 className="text-lg font-semibold text-gray-800 mb-2 truncate">
+        <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2 truncate">
           {execution.description?.split('\n')[0] || execution.definition_name}
         </h3>
 
         {/* Stats */}
         <WorkflowStats execution={execution} />
 
-        {/* Phase count indicator */}
-        {phases.length > 0 && (
-          <div className="flex items-center gap-1 text-xs text-gray-500 mb-2">
+        {/* Phase count indicator -- links out to the Phases page's config
+            view for this workflow's definition, separate from expanding
+            this card (which shows the EXECUTION's own phase progress).
+            Uses definitionPhasesCount (always available), not phases.length
+            (only populated once the card has been expanded at least once,
+            so that count is always 0 on a collapsed card -- this button
+            would never render). */}
+        {definitionPhasesCount > 0 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/phases?definition=${encodeURIComponent(execution.definition_id)}`);
+            }}
+            className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:underline mb-2"
+            title="View this workflow's phase configuration"
+          >
             <Layers className="w-3 h-3" />
-            {phases.length} phases
-          </div>
+            {definitionPhasesCount} phases
+          </button>
         )}
 
         {/* Footer */}
-        <div className="flex justify-between items-center text-xs text-gray-500">
+        <div className="flex justify-between items-center text-xs text-gray-500 dark:text-gray-400">
           <span>Started: {new Date(execution.created_at).toLocaleString()}</span>
-          <span className="text-gray-400">{formatDuration(execution.created_at)}</span>
+          <span className="text-gray-400 dark:text-gray-500">{formatDuration(execution.created_at)}</span>
         </div>
       </div>
 
       {/* Expanded content: phases */}
       {isExpanded && (
-        <div className="px-4 pb-4 border-t">
+        <div className="px-4 pb-4 border-t border-gray-200 dark:border-gray-700">
           <PhaseList
             phases={phases}
             expandedPhaseId={expandedPhaseId}
@@ -215,13 +233,13 @@ export default function WorkflowCard({
           />
 
           {/* Go to Overview */}
-          <div className="mt-3 pt-3 border-t flex justify-end">
+          <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700 flex justify-end">
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 handleGoToOverview();
               }}
-              className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+              className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 flex items-center gap-1"
             >
               Go to Overview <ExternalLink className="w-3 h-3" />
             </button>

@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useWorkflow } from '@/context/WorkflowContext';
 import { Workflow, Layers, Rocket } from 'lucide-react';
 import LaunchWorkflowModal from '@/components/LaunchWorkflowModal';
@@ -6,6 +7,7 @@ import WorkflowCard from '@/components/workflow/WorkflowCard';
 import AgentDetailModal from '@/components/AgentDetailModal';
 
 export default function WorkflowExecutions() {
+  const navigate = useNavigate();
   const {
     executions,
     definitions,
@@ -78,8 +80,8 @@ export default function WorkflowExecutions() {
 
       {/* Workflow Definitions Section */}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
-        <h2 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-          <Layers className="w-5 h-5 text-purple-600" />
+        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2">
+          <Layers className="w-5 h-5 text-purple-600 dark:text-purple-400" />
           Loaded Workflow Definitions ({definitions.length})
         </h2>
         {definitions.length === 0 ? (
@@ -90,12 +92,22 @@ export default function WorkflowExecutions() {
               <div
                 key={def.id}
                 onClick={() => { setLaunchDefinitionId(def.id); setShowLaunchModal(true); }}
-                className="bg-purple-50 border border-purple-200 rounded-lg p-3 cursor-pointer hover:shadow-md hover:border-purple-400 transition-all"
+                className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-3 cursor-pointer hover:shadow-md hover:border-purple-400 dark:hover:border-purple-600 transition-all"
               >
                 <div className="font-medium text-gray-800 dark:text-gray-200">{def.name}</div>
                 <div className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">{def.description}</div>
-                <div className="text-xs text-purple-600 mt-1">
-                  {def.phases_count} phases • Click to launch →
+                <div className="text-xs text-purple-600 dark:text-purple-400 mt-1 flex items-center gap-1">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/phases?definition=${encodeURIComponent(def.id)}`);
+                    }}
+                    className="hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
+                    title="View this workflow's phase configuration"
+                  >
+                    {def.phases_count} phases
+                  </button>
+                  <span>• Click card to launch →</span>
                 </div>
               </div>
             ))}
@@ -154,7 +166,7 @@ export default function WorkflowExecutions() {
               >
                 ← Prev
               </button>
-              <span className="text-sm text-gray-600 dark:text-gray-400 dark:text-gray-500">
+              <span className="text-sm text-gray-600 dark:text-gray-400">
                 Page {page} of {totalPages}
               </span>
               <button
@@ -168,7 +180,7 @@ export default function WorkflowExecutions() {
           )}
         </div>
       ) : (
-        <div className="text-center text-gray-500 py-8">
+        <div className="text-center text-gray-500 dark:text-gray-400 py-8">
           {filter === 'active' ? 'No active workflows' : 'No workflows found'}
         </div>
       )}
@@ -176,7 +188,7 @@ export default function WorkflowExecutions() {
       {/* Empty state */}
       {executions.length === 0 && (
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-12 text-center">
-          <Workflow className="w-16 h-16 mx-auto mb-4 text-gray-300" />
+          <Workflow className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
           <div className="text-gray-500 dark:text-gray-400 mb-4">No workflow executions yet</div>
           <button
             onClick={() => setShowLaunchModal(true)}

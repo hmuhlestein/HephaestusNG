@@ -39,14 +39,14 @@ export default function PromptFieldList({ items, onChange, disabled }: PromptFie
     <div className="space-y-1.5">
       {items.map((item, index) => (
         <div key={index} className="flex items-center gap-1.5 group">
-          <GripVertical className="w-3 h-3 text-gray-300 opacity-0 group-hover:opacity-100 flex-shrink-0" />
-          <span className="text-xs text-gray-400 w-4 text-right flex-shrink-0">{index + 1}.</span>
+          <GripVertical className="w-3 h-3 text-gray-300 dark:text-gray-600 opacity-0 group-hover:opacity-100 flex-shrink-0" />
+          <span className="text-xs text-gray-400 dark:text-gray-500 w-4 text-right flex-shrink-0">{index + 1}.</span>
           <input
             type="text"
             value={item}
             onChange={(e) => handleUpdate(index, e.target.value)}
             disabled={disabled}
-            className="flex-1 text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-200 disabled:opacity-50"
+            className="flex-1 text-sm border border-gray-200 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-200 dark:focus:ring-blue-800 disabled:opacity-50"
           />
           {!disabled && (
             <Button
@@ -70,7 +70,7 @@ export default function PromptFieldList({ items, onChange, disabled }: PromptFie
             onChange={(e) => setNewItem(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Add criterion..."
-            className="flex-1 text-sm border border-dashed border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-200 placeholder:text-gray-400"
+            className="flex-1 text-sm border border-dashed border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-200 dark:focus:ring-blue-800 placeholder:text-gray-400 dark:placeholder:text-gray-500"
           />
           <Button
             variant="ghost"
