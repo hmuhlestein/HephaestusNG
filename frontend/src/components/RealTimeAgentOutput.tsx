@@ -16,7 +16,8 @@ import {
   MessageCircle,
   Send,
   Check,
-  XCircle
+  XCircle,
+  RotateCcw
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { useRealTimeAgentOutput } from '@/hooks/useRealTimeAgentOutput';
@@ -226,6 +227,34 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       // Could add toast notification here
     } catch (err) {
       console.error('Failed to copy to clipboard:', err);
+    }
+  };
+
+  const handleTerminateAgent = async () => {
+    if (!agent) return;
+    if (!window.confirm('Terminate this agent? This will mark its task as failed and free up a slot for queued tasks.')) {
+      return;
+    }
+    try {
+      await apiService.terminateAgent(agent.id);
+      onClose();
+    } catch (err) {
+      console.error('Failed to terminate agent:', err);
+      window.alert('Failed to terminate agent. Please try again.');
+    }
+  };
+
+  const handleRerunTask = async () => {
+    if (!agent?.current_task_id) return;
+    if (!window.confirm('Rerun this task? This will:\n• Clear all completion data and trajectory analysis\n• Create a fresh agent (or queue if at capacity)\n• Start the task from scratch')) {
+      return;
+    }
+    try {
+      await apiService.restartTask(agent.current_task_id);
+      onClose();
+    } catch (err) {
+      console.error('Failed to rerun task:', err);
+      window.alert('Failed to rerun task. Please try again.');
     }
   };
 
@@ -457,6 +486,26 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
               >
                 {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
               </button>
+
+              {agent.current_task_id && (
+                <button
+                  onClick={handleRerunTask}
+                  className="p-2 rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-800 dark:text-purple-200 transition-colors"
+                  title="Rerun this task from scratch"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+              )}
+
+              {currentStatus !== 'terminated' && (
+                <button
+                  onClick={handleTerminateAgent}
+                  className="p-2 rounded-lg bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-800 dark:text-red-200 transition-colors"
+                  title="Terminate this agent"
+                >
+                  <XCircle className="w-4 h-4" />
+                </button>
+              )}
 
               {error && (
                 <button
