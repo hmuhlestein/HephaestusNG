@@ -484,8 +484,10 @@ def verify_output_survived_commit(session, task, phase=None) -> Optional[Dict[st
                     for commit in repo.iter_commits(paths=f"**/{name}", max_count=5):
                         found = True
                         break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        f"Git history check for {name} failed in {wf.working_directory}: {e}"
+                    )
                 if found:
                     break
         if not found:

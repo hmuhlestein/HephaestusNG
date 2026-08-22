@@ -297,6 +297,7 @@ class TestRestartSessionId:
                 "  health_check_failures INTEGER DEFAULT 0,"
                 "  restart_count INTEGER DEFAULT 0,"
                 "  cli_model VARCHAR,"
+                "  pending_message_sent_at DATETIME,"
                 "  agent_type VARCHAR,"
                 "  kept_alive_for_validation BOOLEAN DEFAULT 0,"
                 "  terminated_at DATETIME"

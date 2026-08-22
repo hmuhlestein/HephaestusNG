@@ -419,7 +419,7 @@ async def remove_project_design(project_id: str, filename: str):
                         try:
                             import functools
 
-                            await loop.run_in_executor(
+                            kill_result = await loop.run_in_executor(
                                 None,
                                 functools.partial(
                                     subprocess.run,
@@ -428,8 +428,16 @@ async def remove_project_design(project_id: str, filename: str):
                                     timeout=3,
                                 ),
                             )
-                        except Exception:
-                            pass
+                            if kill_result.returncode != 0:
+                                logger.warning(
+                                    f"tmux kill-session failed for agent {agent.id} "
+                                    f"({agent.tmux_session_name}); it may still be running"
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                f"tmux kill-session failed for agent {agent.id} "
+                                f"({agent.tmux_session_name}): {e}"
+                            )
                         terminate_agent(agent.id, session=db)
 
                 # Delete dependent records (order matters for FK constraints)
