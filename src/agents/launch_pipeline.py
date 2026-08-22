@@ -1246,6 +1246,32 @@ class LaunchPipeline:
         condition = (task.done_definition or "").strip()
         if not condition:
             return
+        # done_definition is written as pure success criteria (an AND-chain
+        # of what must be true for "done") -- it has no clause for a
+        # legitimate give-up. When the task genuinely can't succeed for a
+        # reason outside the agent's control (e.g. git_expert blocked by an
+        # unrelated open bug ticket the merge gate correctly refuses to
+        # ignore), the agent has nowhere to go: update_task_status(failed)
+        # is a real, supported terminal status, but the goal condition as
+        # written only ever matches "done". The CLI's own self-checked-
+        # completion hook then refuses to let the turn end, since by
+        # definition the goal was never met -- it just cycles "goal not
+        # met -- continuing" until the CLI's own stop-hook block cap gives
+        # up and ends the turn anyway, leaving the task stuck in_progress
+        # server-side with an idle agent nothing will ever nudge again.
+        # Observed live: task 7ef17b96 (git_expert) deadlocked exactly this
+        # way over ticket-6de20f94. Appending an explicit OR-escape makes a
+        # legitimate failed-with-reason call satisfy the goal too, so the
+        # hook lets the turn end the moment the agent actually calls it,
+        # instead of only after however many blocked-turn retries it takes
+        # to hit the CLI's cap.
+        condition = (
+            f"{condition} OR the task has been legitimately marked failed "
+            "via update_task_status(status='failed') with a clear reason "
+            "recorded (e.g. blocked by something outside this task's "
+            "control, like an open bug ticket only a different task can "
+            "resolve)"
+        )
         goal_command = cli_agent.format_goal_command(condition)
         if not goal_command:
             return
@@ -2072,8 +2098,11 @@ class LaunchPipeline:
                     if "tmux_session" in locals():
                         try:
                             tmux_session.kill_session()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to kill stale tmux session before CLI "
+                                f"fallback; it may linger: {e}"
+                            )
                     if "agent_id" in locals():
                         try:
                             from src.autopilot.orchestrator.engine_client import (
@@ -2087,12 +2116,18 @@ class LaunchPipeline:
                                 # expects to claim it from.
                                 terminate_agent(agent_id, session=_cs)
                                 _cs.commit()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to terminate agent {agent_id} before CLI "
+                                f"fallback; its task may not be claimable: {e}"
+                            )
                         try:
                             wt_mgr.discard_agent(agent_id)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to discard worktree for agent {agent_id} "
+                                f"before CLI fallback: {e}"
+                            )
                     return await self.create_agent_for_task(
                         task=task, enriched_data=enriched_data, memories=memories,
                         project_context=project_context, cli_type=phase_config.fallback_cli_tool,
@@ -2222,8 +2257,11 @@ class LaunchPipeline:
                     tmux_session = self._output_capture._find_tmux_session(agent.tmux_session_name)
                     if tmux_session:
                         tmux_session.kill_session()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to kill tmux session {agent.tmux_session_name} "
+                        f"before restart; the old agent may still be running: {e}"
+                    )
 
             # Resolve env vars and model (restart path: uses agent's frozen values)
             env_vars, model, cli_agent = self._resolve_env_and_model(
@@ -2254,8 +2292,11 @@ class LaunchPipeline:
                     restart_phase = resolve_task_phase(restart_session, task)
                     if restart_phase:
                         restart_phase_name = restart_phase.name
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to resolve phase name for restarted agent {agent_id}; "
+                        f"output dir will be named by phase_id: {e}"
+                    )
                 finally:
                     restart_session.close()
 
