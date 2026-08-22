@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from src.core.database import (
     Agent,
+    PhaseExecution,
     Task,
     Workflow,
     get_db,
@@ -474,6 +475,56 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
             task.status = "queued"
             task.queue_position = None
         if stranded:
+            db.commit()
+
+        # 4. Pending tasks with no agent whose own PHASE has already
+        # completed via a sibling task -- a duplicate-creation race left a
+        # second row that was never dispatched, and nothing else ever
+        # revisits it: case 2 above only fires once the WHOLE WORKFLOW is
+        # "completed", but a workflow sitting "paused" for human review
+        # (which can take arbitrarily long) never reaches that even though
+        # an individual phase inside it finished hours ago. Left "pending"
+        # forever, this also silently blocks the frontend's review-ready
+        # check (DesignQueuePanel.tsx's readyForGitPushReview requires
+        # every non-git_expert task to be done/failed/duplicated), hiding
+        # the Review button with no visible cause. "duplicated" (not
+        # "failed") matches the established convention for "superseded by
+        # other real work, not an actual failure" -- see
+        # _retry_failed_tasks's identical sibling-task check.
+        #
+        # PhaseExecution.status only reads "completed" once, on a cycle
+        # that actually finished and was never reopened -- a goto/retry
+        # re-entry flips it back to "pending"/"in_progress" first (see
+        # reopen_phase_execution), so this cannot fire on a phase currently
+        # doing real work. created_at age guard matches this function's
+        # other checks' caution around a task that's simply mid-creation
+        # (the task row and its phase_execution's in_progress flip commit
+        # together in _create_phase_task, so there's no real race here,
+        # but the age floor costs nothing and matches the pattern).
+        # Observed live: task 36a04e0e (product_requirements) sat pending
+        # for 10+ hours after its sibling task completed the phase, hiding
+        # the Review button on a feature otherwise ready for merge.
+        stale_cutoff = datetime.utcnow() - timedelta(minutes=5)
+        stale_in_completed_phase = (
+            db.query(Task)
+            .join(PhaseExecution, PhaseExecution.phase_id == Task.phase_id)
+            .filter(
+                Task.workflow_id == workflow_id,
+                Task.status == "pending",
+                Task.assigned_agent_id.is_(None),
+                Task.created_at < stale_cutoff,
+                PhaseExecution.status == "completed",
+            )
+            .all()
+        )
+        for task in stale_in_completed_phase:
+            logger.info(
+                f"[STALE-TASK] Task {task.id[:8]} pending with no agent in an "
+                "already-completed phase — marking duplicated"
+            )
+            task.status = "duplicated"
+            task.failure_reason = "Orphaned: never dispatched, and its phase already completed via another task"
+        if stale_in_completed_phase:
             db.commit()
 
 
