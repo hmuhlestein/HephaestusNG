@@ -10,7 +10,7 @@ tests/test_mcp_server_tickets.py::TestGetCommitDiffTimeouts, which also
 now exercises the offloaded path end-to-end):
 - control_routes.get_system_health -> run_health_audit
 - design_file_routes.remove_project_design's per-agent tmux kill-session
-- feature_routes.review_feature's `gh pr merge`
+- feature_review_routes.review_feature's `gh pr merge`
 """
 
 from datetime import datetime
@@ -194,7 +194,7 @@ class _SessionCtx:
 
 @pytest.mark.asyncio
 async def test_review_feature_offloads_gh_pr_merge(db):
-    from src.mcp.autopilot import feature_routes
+    from src.mcp.autopilot import feature_review_routes
 
     session = db.get_session()
     session.add(
@@ -239,11 +239,11 @@ async def test_review_feature_offloads_gh_pr_merge(db):
             "src.core.status_derivation.derive_workflow_status",
             return_value="active",
         ),
-        patch.object(feature_routes, "_invalidate", return_value=None),
+        patch.object(feature_review_routes, "_invalidate", return_value=None),
     ):
-        from src.mcp.autopilot.feature_routes import FeatureReviewRequest
+        from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest
 
-        await feature_routes.review_feature(
+        await feature_review_routes.review_feature(
             "feat-1", FeatureReviewRequest(action="approve")
         )
 

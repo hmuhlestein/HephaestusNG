@@ -17,7 +17,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from src.mcp.autopilot.feature_routes import _feature_record_cost
+from src.mcp.autopilot.feature_record_routes import _feature_record_cost
 
 
 @pytest.fixture
