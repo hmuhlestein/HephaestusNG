@@ -765,7 +765,9 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
             className="border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 rounded-b-xl"
           >
             <div className="px-5 py-3">
-              <h5 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Features</h5>
+              <h5 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                {workflowType === 'bugfix' ? 'Workflow' : 'Features'}
+              </h5>
               {features.length > 0 ? (
                 <div className="space-y-2">
                   {features.map((feature) => (
@@ -782,7 +784,9 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-4">No features yet</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-4">
+                  {workflowType === 'bugfix' ? 'No workflow yet' : 'No features yet'}
+                </p>
               )}
             </div>
           </motion.div>
