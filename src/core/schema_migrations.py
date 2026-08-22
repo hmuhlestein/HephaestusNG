@@ -710,6 +710,34 @@ def migrate_workflow_type_columns(engine):
         logger.warning(f"workflow_type columns migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_autopilot_pipeline_events_table(engine):
+    """Create autopilot_pipeline_events for existing databases -- replaces
+    the old per-run events.jsonl file (OrchestratorLogger.event()).
+
+    Idempotent - safe to call on every startup.
+    """
+    from src.core.database import AutopilotPipelineEvent, Base
+
+    try:
+        Base.metadata.create_all(engine, tables=[AutopilotPipelineEvent.__table__], checkfirst=True)
+        logger.info("Ensured autopilot_pipeline_events table exists")
+    except Exception as e:
+        logger.warning(f"autopilot_pipeline_events table creation failed (not just 'already exists' -- check this): {e}")
+
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_autopilot_pipeline_events_project_id ON autopilot_pipeline_events(project_id)")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_autopilot_pipeline_events_created_at ON autopilot_pipeline_events(created_at)")
+            )
+            conn.commit()
+            logger.info("Created autopilot_pipeline_events indexes")
+    except Exception as e:
+        logger.warning(f"autopilot_pipeline_events indexes failed (not just 'already exists' -- check this): {e}")
+
+
 # ── Registry ─────────────────────────────────────────────────────────
 # (id, function). Ids match the pre-split method names -- see module
 # docstring for why they must not be renamed.
@@ -734,4 +762,5 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_review_mode_columns", migrate_review_mode_columns),
     ("_migrate_agent_pending_message_column", migrate_agent_pending_message_column),
     ("_migrate_workflow_type_columns", migrate_workflow_type_columns),
+    ("_migrate_autopilot_pipeline_events_table", migrate_autopilot_pipeline_events_table),
 ]

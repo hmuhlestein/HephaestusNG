@@ -1,38 +1,52 @@
 """Message and log routes. — extracted from src/mcp/autopilot_api.py (backend_module_decomposition.md §3.2)."""
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
 
 # Import authentication function from server module
 
-from src.mcp.autopilot._shared import MessageItem, _cached, _get_latest_run_dir, _read_jsonl_tail, _store
+from src.mcp.autopilot._shared import MessageItem, _cached, _get_latest_run_dir, _store
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 @router.get("/messages", response_model=List[MessageItem])
-async def get_messages(limit: int = Query(50, ge=1, le=500)):
-    cache_key = f"messages:{limit}"
+async def get_messages(limit: int = Query(50, ge=1, le=500), project_id: Optional[str] = None):
+    # project_id wasn't previously a param here at all -- events.jsonl was
+    # found via _get_latest_run_dir(), a global (not project-scoped) "most
+    # recently created run dir" scan, so under concurrent multi-project
+    # runs this could silently return a DIFFERENT project's messages.
+    # AutopilotPipelineEvent rows carry a real project_id column, so
+    # querying by it (when given) actually fixes that instead of just
+    # relocating the same bug into the DB.
+    cache_key = f"messages:{limit}:{project_id}"
     cached = _cached(cache_key, ttl=5.0)
     if cached is not None:
         return cached
 
-    run_dir = _get_latest_run_dir()
-    if not run_dir:
-        return _store(cache_key, [])
+    from src.core.database import AutopilotPipelineEvent
+    from src.core.database import get_db as _get_db
 
-    events = _read_jsonl_tail(run_dir / "events.jsonl", limit=limit)
+    try:
+        with _get_db() as db:
+            query = db.query(AutopilotPipelineEvent)
+            if project_id:
+                query = query.filter(AutopilotPipelineEvent.project_id == project_id)
+            rows = query.order_by(AutopilotPipelineEvent.created_at.desc()).limit(limit).all()
+    except Exception:
+        rows = []
+
     result = [
         MessageItem(
-            timestamp=e.get("timestamp", ""),
-            type=e.get("type", "unknown"),
-            data={k: v for k, v in e.items() if k not in ("timestamp", "type")},
+            timestamp=row.created_at.isoformat(),
+            type=row.event_type,
+            data=row.data or {},
         )
-        for e in events
+        for row in reversed(rows)
     ]
     return _store(cache_key, result)
 

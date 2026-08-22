@@ -842,6 +842,88 @@ def run_single_workflow(
                 logger.warning(f"Workflow cleanup failed: {e}")
 
 
+def run_bugfix_single_feature(
+    design_entry: DesignEntry,
+    project_path: Path,
+    logger: OrchestratorLogger,
+) -> Tuple[Optional[dict], Optional[Path]]:
+    """Bugfix designs skip Phase 0 (Feature Architect decomposition)
+    entirely -- a bug report already states the single, atomic fix it
+    wants; there's nothing for an LLM to decompose it into, and running
+    that agent anyway would just add the decomposition-overhead cost this
+    whole workflow-type split was meant to remove.
+
+    Constructs the exact (features_json, designs_folder) result run_phase0
+    returns, reusing its downstream machinery unchanged
+    (_create_feature_records denormalizes design.workflow_type='bugfix'
+    onto the Feature row; _run_one_feature's WORKFLOW_TYPE_DEFINITION_IDS
+    lookup then dispatches it to the "bugfix" workflow definition) -- only
+    the Feature Architect agent launch itself is skipped.
+
+    Idempotent the same way run_phase0's own Tier 1 is: if a Feature row
+    already exists for this design (a prior call already ran, or a restart
+    re-entered here), reuse it rather than creating a duplicate.
+    """
+    from src.core.database import Feature as FeatureModel
+    from src.core.database import get_db as _get_db
+
+    with _get_db() as _db:
+        existing_features = _db.query(FeatureModel).filter_by(design_id=design_entry.db_id).all()
+        existing_feature_data = [
+            {"id": f.feature_key, "name": f.name, "scope": f.scope, "files": f.files or [], "depends_on": f.depends_on or [], "execution": f.execution}
+            for f in existing_features
+        ]
+    if existing_feature_data:
+        logger.info(f"Feature already exists for bugfix design {design_entry.name} -- skipping single-feature creation")
+        features_json = {"design_name": design_entry.name, "features": existing_feature_data}
+        designs_folder = _create_designs_folder(project_path, design_entry, logger)
+        _update_design_status(design_entry.db_id, "active", designs_folder=str(designs_folder), error=None, logger=logger)
+        return features_json, designs_folder
+
+    logger.info("=" * 70)
+    logger.info("STAGE 1: BUGFIX -- SKIPPING PHASE 0 (no decomposition needed)")
+    logger.info("=" * 70)
+
+    designs_folder = _create_designs_folder(project_path, design_entry, logger)
+    import re
+
+    # Same sanitization as get_session_id's safe() (src/autopilot/phases.py)
+    # -- a user-typed bug title can contain punctuation (":", "'", "!") that
+    # isn't safe as a directory name component on every filesystem.
+    feature_key = re.sub(r"[^a-z0-9\-_]", "", (design_entry.name or "fix").lower().replace(" ", "-"))[:40] or "fix"
+
+    design_content = ""
+    try:
+        design_content = Path(design_entry.path).read_text()
+    except OSError as e:
+        logger.warning(f"Could not read bugfix design content from {design_entry.path}: {e}")
+
+    # _create_feature_records only picks up scope_doc_path if scope.md
+    # already exists on disk when it runs (mirrors run_phase0, which
+    # copies each feature's scope.md before calling in) -- write it first.
+    scope_path = designs_folder / "features" / feature_key / "scope.md"
+    scope_path.parent.mkdir(parents=True, exist_ok=True)
+    scope_path.write_text(design_content)
+
+    features_json = {
+        "design_name": design_entry.name,
+        "features": [{
+            "id": feature_key,
+            "name": design_entry.name,
+            "scope": design_content,
+            "files": [],
+            "depends_on": [],
+            "execution": "sequential",
+        }],
+    }
+    (designs_folder / "features.json").write_text(json.dumps(features_json, indent=2))
+
+    feature_records = _create_feature_records(design_entry.db_id, features_json, designs_folder, logger)
+    logger.info(f"Bugfix single feature created: {len(feature_records)} feature(s)")
+    _update_design_status(design_entry.db_id, "active", designs_folder=str(designs_folder), error=None, logger=logger)
+    return features_json, designs_folder
+
+
 def run_phase0(
     sdk,
     design_entry: DesignEntry,
@@ -2301,8 +2383,22 @@ def run_single_design(
     logger.info(f"  Project: {project_path}")
     logger.info("=" * 70)
 
-    # ── Stage 1: Phase 0 — Feature Architect ──
-    features_json, designs_folder = run_phase0(sdk, design_entry, project_path, logger, state, project_id=project_id)
+    # ── Stage 1: Phase 0 — Feature Architect (feature designs only) ──
+    # Bugfix designs skip decomposition entirely -- see
+    # run_bugfix_single_feature's docstring for why running Phase 0 on a
+    # bug report anyway would be pure overhead, not just a shorter version
+    # of the same work.
+    from src.core.database import AutopilotDesign as _AutopilotDesign
+    from src.core.database import get_db as _get_db_wt
+
+    with _get_db_wt() as _db_wt:
+        _design_row = _db_wt.query(_AutopilotDesign).filter_by(id=design_entry.db_id).first()
+        design_workflow_type = _design_row.workflow_type if _design_row else "feature"
+
+    if design_workflow_type == "bugfix":
+        features_json, designs_folder = run_bugfix_single_feature(design_entry, project_path, logger)
+    else:
+        features_json, designs_folder = run_phase0(sdk, design_entry, project_path, logger, state, project_id=project_id)
     if features_json is None:
         raise RuntimeError(f"Phase 0 failed to produce features.json for design '{design_entry.name}'. Check the feature_architect workflow and agent logs.")
 
@@ -2460,6 +2556,7 @@ def _shutdown_pipeline(
 ) -> None:
     """Final accounting, workflow pausing, and SDK shutdown."""
     state.total_elapsed = int(time.time() - state.start_time)
+    state.mark_idle()
     state.queue_status = {"status": "stopped"}
 
     logger.info("")
@@ -2515,22 +2612,32 @@ def _shutdown_pipeline(
 
 def run_continuous_pipeline(args) -> None:
     log_dir = Path(AUTOPILOT_STATE_DIR) / datetime.now().strftime("run-%Y%m%d-%H%M%S")
-    logger = OrchestratorLogger(log_dir)
 
     # Used everywhere this loop needs to tell "is this workflow/design/stop
     # request/pipeline-state ours" apart from a different project's (see
     # _workflow_belongs_to_project, pick_next_design, _should_stop,
-    # PersistentPipelineState). AutopilotService.start() already resolved
-    # this reliably (via _get_or_create_project_id) before this loop ever
-    # began and passes it straight through args. Only the standalone CLI
-    # path (`python -m src.autopilot.orchestrator`, which builds its own
+    # PersistentPipelineState) -- and now also which project owns this
+    # logger's DB-backed state/event rows (OrchestratorLogger.save_state/
+    # event). AutopilotService.start() already resolved this reliably (via
+    # _get_or_create_project_id) before this loop ever began and passes it
+    # straight through args. Only the standalone CLI path
+    # (`python -m src.autopilot.orchestrator`, which builds its own
     # argparse Namespace with no project_id) falls back to a DB lookup
-    # further below, once project_path is available.
+    # further below, once project_path is available -- logger.set_project_id
+    # picks that up once resolved.
     current_project_id = getattr(args, "project_id", None)
+    logger = OrchestratorLogger(log_dir, project_id=current_project_id)
 
     # Load persistent state from previous runs
     persistent_state = PersistentPipelineState(project_id=current_project_id)
     state, processed_hashes = persistent_state.load()
+
+    # A still-open active_since here means the previous process died
+    # without reaching _shutdown_pipeline (which flushes it) -- time.time()
+    # minus that stale timestamp would span the whole downtime, not real
+    # work, so discard it rather than folding it into active_elapsed via
+    # mark_idle(). A clean stop/restart never leaves this set.
+    state.active_since = None
 
     # Check for incomplete work from previous run
     if persistent_state.has_incomplete_work():
@@ -2580,6 +2687,7 @@ def run_continuous_pipeline(args) -> None:
                 _proj = _pdb.query(_AutopilotProject).filter_by(base_dir=str(project_path.resolve())).first()
                 if _proj:
                     current_project_id = _proj.id
+                    logger.set_project_id(current_project_id)
         except Exception as e:
             logger.warning(
                 f"Could not resolve current_project_id for {project_path}; stop/pause "
@@ -2853,6 +2961,7 @@ def run_continuous_pipeline(args) -> None:
                         "status": "empty",
                         "processed": len(processed_hashes),
                     }
+                    state.mark_idle()
                     logger.save_state(state)
                     _update_orchestrator_status("idle", current_project_id)
                     persistent_state.save(state, processed_hashes)
@@ -2867,11 +2976,19 @@ def run_continuous_pipeline(args) -> None:
                     "current": next_design.name,
                     "processed": len(processed_hashes),
                 }
+                state.mark_working()
                 _update_orchestrator_status("working", current_project_id)
                 # Checkpoint immediately, not just after run_single_design
                 # returns (see save_state_only's docstring) -- a design's
                 # run can take minutes to hours, and the status endpoint's
-                # current_design reads this same persisted state.
+                # current_design reads this same persisted state. Both
+                # stores: logger.save_state's state.json is what the
+                # status endpoint actually reads first (persistent_state
+                # is DB-backed and only consulted when state.json is
+                # missing/empty) -- without it, current_design/active_since
+                # stay frozen at whatever the last idle save wrote for the
+                # design's entire run, only catching up once it finishes.
+                logger.save_state(state)
                 persistent_state.save(state, processed_hashes)
 
                 try:
@@ -2908,6 +3025,7 @@ def run_continuous_pipeline(args) -> None:
                 state.current_feature_folder = None
                 state.current_iteration = 0
                 state.total_elapsed = int(time.time() - state.start_time)
+                state.mark_idle()
                 state.queue_status = {
                     "status": "idle",
                     "processed": len(processed_hashes),

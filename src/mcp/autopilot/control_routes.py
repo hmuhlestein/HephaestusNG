@@ -21,10 +21,7 @@ from src.mcp.autopilot._shared import (
     _cached,
     _get_active_project_id,
     _get_effective_queue_dir,
-    _get_latest_run_dir,
     _invalidate,
-    _read_json,
-    _read_jsonl_tail,
     _store,
 )
 
@@ -58,6 +55,11 @@ async def get_pipeline_status(
     # before per-project services existed (kept below as a belt-and-
     # suspenders check, not the primary source of truth anymore).
     running_projects_list: List[Dict[str, Any]] = []
+    # Which project's DB-backed state/event rows to read below -- when no
+    # project_id is given, fall back to the first running project (same
+    # "genuinely no multi-project representation in this response shape"
+    # convention service_status/current_design already use in that branch).
+    effective_project_id = project_id
     if project_id:
         service_status = get_autopilot_service(project_id).status()
     else:
@@ -70,6 +72,7 @@ async def get_pipeline_status(
         # of resorting to a bare stop-all call.
         running_services = get_registry().running()
         if running_services:
+            effective_project_id = getattr(running_services[0], "project_id", None)
             service_status = dict(running_services[0].status())
             for extra in running_services[1:]:
                 extra_status = extra.status()
@@ -95,7 +98,6 @@ async def get_pipeline_status(
         else:
             service_status = {}
 
-    run_dir = _get_latest_run_dir()
     running = service_status.get("running", False)
 
     # When project_id is provided, also check if THIS project has an active
@@ -157,43 +159,34 @@ async def get_pipeline_status(
         except Exception:
             pass
 
-    state = _cached("state", ttl=2.0)
+    state = _cached(f"state:{effective_project_id}", ttl=2.0)
     if state is None:
-        # Try run-specific state first, then persistent state
-        if run_dir:
-            state = _read_json(run_dir / "state.json") or {}
+        try:
+            import asyncio
 
-        # Fall back to persistent state if run-specific state is empty
-        if not state:
-            try:
-                import asyncio
+            from src.autopilot.orchestrator.state import PersistentPipelineState
 
-                from src.autopilot.orchestrator.state import PersistentPipelineState
+            # .load() does two synchronous DB round-trips and deserializes
+            # a JSON blob that grows with every design ever processed
+            # (838+ processed-design hashes on the live DB) -- called
+            # directly here, that blocks the single-threaded event loop on
+            # every uncached poll of this endpoint, which the dashboard
+            # hits every 3s (see frontend Autopilot.tsx). The 2s cache
+            # above limits how often this actually runs, but doesn't make
+            # each run free. Confirmed live 2026-08-19: /health -- a bare
+            # dict return with zero I/O of its own -- intermittently took
+            # several seconds (once the full 8s curl timeout) even after
+            # offloading the two other blocking cost-recording call sites
+            # found in the same investigation.
+            loop = asyncio.get_event_loop()
+            state_obj, _processed = await loop.run_in_executor(
+                None, PersistentPipelineState(project_id=effective_project_id).load
+            )
+            state = state_obj.to_dict()
+        except Exception:
+            state = {}
 
-                # .load() does two synchronous DB round-trips and
-                # deserializes a JSON blob that grows with every design
-                # ever processed (838+ processed-design hashes on the
-                # live DB) -- called directly here, that blocks the
-                # single-threaded event loop on every uncached poll of
-                # this endpoint, which the dashboard hits every 3s (see
-                # frontend Autopilot.tsx). The 2s cache above limits how
-                # often this actually runs, but doesn't make each run
-                # free. Confirmed live 2026-08-19: /health -- a bare dict
-                # return with zero I/O of its own -- intermittently took
-                # several seconds (once the full 8s curl timeout) even
-                # after offloading the two other blocking cost-recording
-                # call sites found in the same investigation.
-                loop = asyncio.get_event_loop()
-                state_obj, _processed = await loop.run_in_executor(
-                    None, PersistentPipelineState(project_id=project_id).load
-                )
-                state = state_obj.to_dict()
-            except Exception:
-                state = {}
-
-        # No run dir AND no persistent state file: state was never assigned
-        # above and stays None, crashing every state.get(...) call below.
-        state = _store("state", state or {})
+        state = _store(f"state:{effective_project_id}", state or {})
 
     # Count queue depth from DB when project_id is provided (consistent with
     # the queue panel which reads from the DB). Fall back to filesystem count.
@@ -214,13 +207,30 @@ async def get_pipeline_status(
         except (FileNotFoundError, RuntimeError):
             pass  # Queue dir not configured or missing — return queue_depth=0
 
-    last_event = _cached("last_event", ttl=5.0)
+    last_event = _cached(f"last_event:{effective_project_id}", ttl=5.0)
     if last_event is None:
-        if run_dir:
-            events = _read_jsonl_tail(run_dir / "events.jsonl", limit=1)
-            last_event = _store("last_event", events[-1] if events else None)
-        else:
-            last_event = _store("last_event", None)
+        last_event = None
+        if effective_project_id:
+            from src.core.database import AutopilotPipelineEvent
+            from src.core.database import get_db as _get_db
+
+            try:
+                with _get_db() as _db:
+                    row = (
+                        _db.query(AutopilotPipelineEvent)
+                        .filter(AutopilotPipelineEvent.project_id == effective_project_id)
+                        .order_by(AutopilotPipelineEvent.created_at.desc())
+                        .first()
+                    )
+                    if row:
+                        last_event = {
+                            "timestamp": row.created_at.isoformat(),
+                            "type": row.event_type,
+                            **(row.data or {}),
+                        }
+            except Exception:
+                pass
+        last_event = _store(f"last_event:{effective_project_id}", last_event)
 
     # Count active agents
     from src.core.database import Agent
@@ -269,6 +279,21 @@ async def get_pipeline_status(
         elif designs_failed > 0:
             last_error = f"{designs_failed} design(s) failed"
 
+    # Runtime shown on PipelineStatusCard must be actual working time, not
+    # wall-clock since the service object's last start() -- the latter
+    # (service_status["elapsed_seconds"]) resets on every backend restart
+    # and never pauses while the pipeline sits idle between designs.
+    # active_elapsed/active_since (PipelineState.mark_working/mark_idle)
+    # persist across restarts and only accumulate while a design is
+    # actually being worked, so prefer them; fall back to the service's
+    # raw elapsed, then the old undifferentiated snapshot, only when
+    # they're genuinely unset (0 and no open stretch -- e.g. state.json
+    # predates this field, or nothing has ever run).
+    active_since = state.get("active_since")
+    live_active_elapsed = state.get("active_elapsed", 0) or 0
+    if active_since:
+        live_active_elapsed += time.time() - active_since
+
     result = PipelineStatus(
         running=running,
         current_design=service_status.get("current_design") or state.get("current_design"),
@@ -276,7 +301,7 @@ async def get_pipeline_status(
         designs_processed=service_status.get("designs_processed", 0) or state.get("designs_processed", 0),
         designs_succeeded=service_status.get("designs_succeeded", 0) or state.get("designs_succeeded", 0),
         designs_failed=designs_failed,
-        total_elapsed=service_status.get("elapsed_seconds", 0) or state.get("total_elapsed", 0),
+        total_elapsed=int(live_active_elapsed) or service_status.get("elapsed_seconds", 0) or state.get("total_elapsed", 0),
         queue_depth=queue_depth,
         last_event=last_event,
         last_error=last_error,

@@ -946,24 +946,21 @@ class TestPipelineStatus:
         assert data["designs_processed"] == 0
 
     def test_status_with_state(self, client, autopilot_dirs):
+        """Pipeline state is DB-backed (PersistentPipelineState), not a
+        state.json file -- control_routes.py's /status reads it directly."""
+        from src.autopilot.orchestrator.state import PersistentPipelineState, PipelineState
         from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
-        state_dir = autopilot_dirs["state"]
-        run_dir = state_dir / "run-20260101"
-        run_dir.mkdir(parents=True)
-        (run_dir / "state.json").write_text(
-            json.dumps(
-                {
-                    "designs_processed": 5,
-                    "designs_succeeded": 4,
-                    "designs_failed": 1,
-                    "current_design": "My Feature",
-                    "total_elapsed": 3600,
-                }
-            )
+        state = PipelineState(
+            designs_processed=5,
+            designs_succeeded=4,
+            designs_failed=1,
+            current_design="My Feature",
+            total_elapsed=3600,
         )
+        PersistentPipelineState(project_id=None).save_state_only(state)
 
         resp = client.get("/api/autopilot/status")
         data = resp.json()
@@ -1253,32 +1250,31 @@ class TestMessages:
         assert resp.json() == []
 
     def test_messages_with_events(self, client, autopilot_dirs):
+        """Events are DB-backed (AutopilotPipelineEvent rows), not an
+        events.jsonl file -- message_routes.py's /messages reads them
+        directly, oldest first (matching the old file-tail's order)."""
+        from datetime import datetime
+
+        from src.core.database import AutopilotPipelineEvent, get_db
         from src.mcp.autopilot import _shared as api_mod
 
         api_mod._cache.clear()
 
-        state_dir = autopilot_dirs["state"]
-        run_dir = state_dir / "run-20260101"
-        run_dir.mkdir(parents=True)
-        events_file = run_dir / "events.jsonl"
-        events_file.write_text(
-            json.dumps(
-                {
-                    "timestamp": "2026-01-01T00:00:00",
-                    "type": "design_started",
-                    "name": "A",
-                }
+        with get_db() as db:
+            db.add(
+                AutopilotPipelineEvent(
+                    event_type="design_started",
+                    data={"name": "A"},
+                    created_at=datetime(2026, 1, 1, 0, 0, 0),
+                )
             )
-            + "\n"
-            + json.dumps(
-                {
-                    "timestamp": "2026-01-01T00:01:00",
-                    "type": "design_completed",
-                    "name": "A",
-                }
+            db.add(
+                AutopilotPipelineEvent(
+                    event_type="design_completed",
+                    data={"name": "A"},
+                    created_at=datetime(2026, 1, 1, 0, 1, 0),
+                )
             )
-            + "\n"
-        )
 
         resp = client.get("/api/autopilot/messages?limit=10")
         assert len(resp.json()) == 2
@@ -1733,7 +1729,7 @@ class TestProjectDesigns:
     def test_add_design_accepts_an_arbitrary_nested_destination_folder(self, project_client):
         """destination isn't limited to the "queue"/"docs" literals -- any
         other value is a real folder path relative to the project root,
-        used verbatim (e.g. the New Feature/Report Bug flows' docs/design
+        used verbatim (e.g. the New Feature/Report Bug flows' docs/spec
         and docs/bugfix defaults, or a folder the user picked)."""
         client, dirs = project_client
         pid = self._create_project(client, dirs)
@@ -1772,7 +1768,7 @@ class TestProjectDesigns:
 
     def test_ensure_folder_creates_a_not_yet_existing_destination(self, project_client):
         """The New Feature/Report Bug destination-folder field defaults to
-        docs/design or docs/bugfix, which may not exist yet on a project
+        docs/spec or docs/bugfix, which may not exist yet on a project
         that's never had one -- ensure-folder makes it real immediately
         (rather than only once a design is actually submitted), so a
         browse/select round-trip against it works right away."""
@@ -1848,7 +1844,7 @@ class TestProjectDesigns:
         """The docs-destination fix above (file_path-based resolution)
         must generalize to ANY non-"queue" destination -- not just the
         literal "docs" string -- since destination now accepts arbitrary
-        folder paths (the New Feature/Report Bug flows' docs/design and
+        folder paths (the New Feature/Report Bug flows' docs/spec and
         docs/bugfix defaults, or a user-picked folder)."""
         client, dirs = project_client
         pid = self._create_project(client, dirs)

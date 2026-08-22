@@ -43,7 +43,7 @@ def test_shutdown_pipeline_terminates_orchestrator_agent(db_manager, tmp_path, m
     monkeypatch.setattr(orchestrator.pipeline, "get_active_workflows", lambda *a, **k: [])
 
     log_dir = tmp_path / "logs"
-    logger = orchestrator.OrchestratorLogger(log_dir)
+    logger = orchestrator.OrchestratorLogger(log_dir, project_id="proj-1")
     state = PipelineState()
     persistent_state = PersistentPipelineState(project_id="proj-1")
 

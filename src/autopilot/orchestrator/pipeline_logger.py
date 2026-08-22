@@ -9,23 +9,29 @@ by grepping every tests/*.py mock.patch target before moving), so the
 move is a pure relocation -- no test updates needed.
 """
 import asyncio
-import json
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from src.autopilot.orchestrator.runtime_registries import _should_stop
-from src.autopilot.orchestrator.state import PipelineState
+from src.autopilot.orchestrator.state import PersistentPipelineState, PipelineState
 
 
 class OrchestratorLogger:
-    def __init__(self, log_dir: Path):
+    def __init__(self, log_dir: Path, project_id: Optional[str] = None):
         self.log_dir = log_dir
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.log_file = log_dir / "orchestrator.log"
-        self.events_file = log_dir / "events.jsonl"
-        self.state_file = log_dir / "state.json"
+        # project_id is None only for the one inherently cross-project
+        # writer (background_loops.py's phase-advancement sweep) -- the
+        # standalone-CLI path in run_continuous_pipeline resolves it a few
+        # lines after construction, via set_project_id.
+        self.project_id = project_id
         self._lock = threading.Lock()
+
+    def set_project_id(self, project_id: Optional[str]) -> None:
+        self.project_id = project_id
 
     def log(self, message: str, level: str = "INFO"):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -54,29 +60,39 @@ class OrchestratorLogger:
         self.log(message, "ERROR")
 
     def event(self, event_type: str, data: dict):
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "type": event_type,
-            **data,
-        }
-        with self._lock:
-            with open(self.events_file, "a") as f:
-                f.write(json.dumps(entry) + "\n")
+        # Was an append to a per-run events.jsonl file, located by a global
+        # (not project-scoped) "latest run dir" scan -- under concurrent
+        # multi-project runs, message_routes.py's /messages and this
+        # class's own last_event could both read a DIFFERENT project's
+        # events. A real row with a real project_id column fixes that.
+        from src.core.database import AutopilotPipelineEvent, get_db
+
+        try:
+            with get_db() as db:
+                db.add(
+                    AutopilotPipelineEvent(
+                        project_id=self.project_id,
+                        event_type=event_type,
+                        data=data,
+                    )
+                )
+        except Exception as e:
+            self.warning(f"Failed to record pipeline event {event_type!r}: {e}")
 
     def save_state(self, state: PipelineState):
-        with open(self.state_file, "w") as f:
-            json.dump(
-                {
-                    "designs_processed": state.designs_processed,
-                    "designs_succeeded": state.designs_succeeded,
-                    "designs_failed": state.designs_failed,
-                    "total_elapsed": state.total_elapsed,
-                    "current_design": state.current_design,
-                    "queue_status": state.queue_status,
-                },
-                f,
-                indent=2,
-            )
+        # Was an overwrite of a per-run state.json file -- control_routes.py's
+        # PRIMARY read source, ahead of the DB-backed PersistentPipelineState
+        # fallback it already had. Two consequences of going straight to the
+        # DB store instead: (1) no more hand-curated field subset silently
+        # starving the status endpoint of anything left off the list
+        # (previously missing current_workflow_id/current_feature_folder/
+        # current_iteration/run_id, and active_elapsed/active_since -- Runtime
+        # always fell back to the stale wall-clock value because the file,
+        # not the DB, is what a running pipeline's status poll actually read);
+        # (2) this store is already project-id-scoped (STATE_KEY_PREFIX +
+        # project_id), unlike the file's global "latest run dir" lookup, so
+        # concurrent multi-project runs can no longer cross-contaminate.
+        PersistentPipelineState(project_id=self.project_id).save_state_only(state)
 
 
 def _resync_pipeline_registry(logger: OrchestratorLogger, loop: "asyncio.AbstractEventLoop") -> int:
