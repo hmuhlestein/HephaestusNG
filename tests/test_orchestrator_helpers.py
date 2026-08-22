@@ -211,7 +211,6 @@ class TestPersistentPipelineState:
         from unittest.mock import patch
 
         from src.autopilot.orchestrator import PipelineState
-
         from src.autopilot.orchestrator.state import PersistentPipelineState
 
         pps = PersistentPipelineState()
@@ -1758,6 +1757,158 @@ class TestRetryFailedTasks:
             unrelated = session.query(Task).filter_by(id="unrelated-null-phase-task").first()
             assert unrelated.status == "assigned", "the unrelated task must be untouched"
 
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_ticket_blocked_git_expert_routes_to_development_instead_of_retrying(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        """git_expert can't fix a bug ticket itself -- verify_no_open_tickets
+        rejects its 'done' call and leaves it failed with an "open bug
+        ticket(s)" reason, but retrying git_expert in place just repeats
+        the identical rejection forever. Must route to development instead
+        of burning through the retry cap. Observed live: workflow ca539a75's
+        git_expert task retried 5 times against the same open ticket before
+        landing permanently failed with no forward path."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
+        from src.core.database import Phase, Task
+
+        with orch_db_env.session_scope() as session:
+            session.add(Phase(
+                id="phase-git-expert", workflow_id="wf-1", name="git_expert",
+                order=10, description="d", done_definitions=["x"],
+            ))
+            session.add(Phase(
+                id="phase-dev", workflow_id="wf-1", name="development",
+                order=4, description="d", done_definitions=["x"],
+            ))
+        self._make_workflow_and_failed_task(orch_db_env, phase_id="phase-git-expert")
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            task.failure_reason = (
+                "Cannot mark done: 1 open bug ticket(s) still unresolved — "
+                "ticket-abc: some finding. This phase cannot fix code itself "
+                "— the workflow needs to route back to development."
+            )
+
+        recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert recovered == []
+        mock_create_agent.assert_not_called()
+        mock_create_phase_task.assert_called_once()
+        call_args = mock_create_phase_task.call_args
+        assert call_args.args[0] == "wf-1"
+        assert call_args.args[1] == "phase-dev"
+        assert call_args.args[2] == "development"
+        assert call_args.args[3] == "goto"
+        assert call_args.kwargs["source_phase_name"] == "git_expert"
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            # Marked duplicated (not left "failed") -- otherwise this same
+            # task matches get_tasks(status="failed") again on the very
+            # next sweep tick and fires ANOTHER goto, forever. Also not
+            # retried in place -- retry_count must not have been burned on
+            # a retry that would only repeat the same rejection.
+            assert task.status == "duplicated"
+            assert task.retry_count == 0
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_ticket_blocked_git_expert_does_not_get_re_routed_on_a_second_sweep(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        """Regression for the duplicate-goto-storm bug: leaving the source
+        task "failed" after routing meant every subsequent sweep tick
+        re-matched it and fired another goto to development, unbounded.
+        Observed live: 7 duplicate goto-to-development tasks in 8 minutes
+        before this was caught. A second call to _retry_failed_tasks right
+        after the first must not create a second goto task."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
+        from src.core.database import Phase, Task
+
+        with orch_db_env.session_scope() as session:
+            session.add(Phase(
+                id="phase-git-expert", workflow_id="wf-1", name="git_expert",
+                order=10, description="d", done_definitions=["x"],
+            ))
+            session.add(Phase(
+                id="phase-dev", workflow_id="wf-1", name="development",
+                order=4, description="d", done_definitions=["x"],
+            ))
+        self._make_workflow_and_failed_task(orch_db_env, phase_id="phase-git-expert")
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            task.failure_reason = "Cannot mark done: 1 open bug ticket(s) still unresolved — ticket-abc: some finding."
+
+        _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+        _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        mock_create_agent.assert_not_called()
+        mock_create_phase_task.assert_called_once()
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_ticket_blocked_doc_review_also_routes_to_development(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        """doc_review sits between development and git_expert and is
+        equally unable to fix a bug ticket -- same routing applies."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
+        from src.core.database import Phase, Task
+
+        with orch_db_env.session_scope() as session:
+            session.add(Phase(
+                id="phase-doc-review", workflow_id="wf-1", name="doc_review",
+                order=9, description="d", done_definitions=["x"],
+            ))
+            session.add(Phase(
+                id="phase-dev", workflow_id="wf-1", name="development",
+                order=4, description="d", done_definitions=["x"],
+            ))
+        self._make_workflow_and_failed_task(orch_db_env, phase_id="phase-doc-review")
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            task.failure_reason = "Cannot mark done: 1 open bug ticket(s) still unresolved — ticket-abc: some finding."
+
+        recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert recovered == []
+        mock_create_agent.assert_not_called()
+        mock_create_phase_task.assert_called_once()
+        assert mock_create_phase_task.call_args.kwargs["source_phase_name"] == "doc_review"
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_ticket_blocked_development_itself_retries_normally(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        """The ticket-blocked routing is only for phases that CAN'T fix the
+        ticket themselves -- development hitting this same rejection means
+        the agent didn't actually fix/ship the ticket yet, so a normal
+        retry (giving it another attempt) is correct, not a goto to itself."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
+        from src.core.database import Agent, Phase, Task
+
+        with orch_db_env.session_scope() as session:
+            session.add(Phase(
+                id="phase-dev", workflow_id="wf-1", name="development",
+                order=4, description="d", done_definitions=["x"],
+            ))
+        self._make_workflow_and_failed_task(orch_db_env, phase_id="phase-dev")
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            task.failure_reason = "Cannot mark done: 1 open bug ticket(s) still unresolved — ticket-abc: some finding."
+            session.add(Agent(id="new-agent", system_prompt="p", status="working", cli_type="pi"))
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert recovered == ["retried task task-1"]
+        mock_create_phase_task.assert_not_called()
+
 
 class TestMaybeRetryFailedTasksPreservesGotoTarget:
     """Regression: a task's action/action_target_phase, when it's still
@@ -1867,6 +2018,150 @@ class TestMaybeRetryFailedTasksPreservesGotoTarget:
             task = session.query(Task).filter_by(id="task-dev").first()
             assert task.action == ""
             assert task.action_target_phase is None
+
+
+class TestMaybeRetryFailedTasksRoutesTicketBlockedToDevelopment:
+    """Regression: _maybe_retry_failed_tasks is a SEPARATE retry path from
+    _retry_failed_tasks (triggered when every task in the phase is failed,
+    vs that one's per-task sweep) with its own reset-to-pending loop --
+    the identical ticket-blocked routing fix had to be applied here too.
+    Observed live: workflow ca539a75's git_expert task, already routed
+    correctly once via _retry_failed_tasks, got retried right back in
+    place by THIS function on the very next cycle, because it never knew
+    about the ticket-blocked check at all."""
+
+    def _seed(self, db, phase_name="git_expert", failure_reason=None):
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+            )
+            session.add(Phase(
+                id="phase-under-test", workflow_id="wf-1", name=phase_name,
+                order=10, description="d", done_definitions=["x"],
+            ))
+            session.add(Phase(
+                id="phase-dev", workflow_id="wf-1", name="development",
+                order=4, description="d", done_definitions=["x"],
+            ))
+            session.add(
+                PhaseExecution(
+                    id="exec-under-test", phase_id="phase-under-test",
+                    workflow_execution_id="wf-1", status="in_progress",
+                )
+            )
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", phase_id="phase-under-test",
+                raw_description="r", done_definition="d", status="failed",
+                failure_reason=failure_reason or (
+                    "Cannot mark done: 1 open bug ticket(s) still unresolved "
+                    "— ticket-abc: some finding."
+                ),
+                retry_count=0,
+            ))
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_ticket_blocked_git_expert_routes_to_development(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+        from src.core.database import Phase, Task
+
+        self._seed(orch_db_env, phase_name="git_expert")
+        with orch_db_env.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-under-test").first()
+            result = _maybe_retry_failed_tasks(session, phase, OrchestratorLogger(tmp_path))
+
+        assert result is True
+        mock_create_agent.assert_not_called()
+        mock_create_phase_task.assert_called_once()
+        call_args = mock_create_phase_task.call_args
+        assert call_args.args[1] == "phase-dev"
+        assert call_args.args[2] == "development"
+        assert call_args.args[3] == "goto"
+        assert call_args.kwargs["source_phase_name"] == "git_expert"
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            # Marked duplicated (not left "failed") -- otherwise the
+            # failed_count == total_count gate at the top of this function
+            # matches this same task again on the very next call and fires
+            # another goto, forever. Also not reset to pending/retried in
+            # place.
+            assert task.status == "duplicated"
+            assert task.retry_count == 0
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_ticket_blocked_git_expert_does_not_get_re_routed_on_a_second_call(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        """Regression for the duplicate-goto-storm bug (see the identical
+        test in TestRetryFailedTasks): a second call right after the first
+        must not create a second goto-to-development task."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+        from src.core.database import Phase
+
+        self._seed(orch_db_env, phase_name="git_expert")
+        with orch_db_env.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-under-test").first()
+            _maybe_retry_failed_tasks(session, phase, OrchestratorLogger(tmp_path))
+        with orch_db_env.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-under-test").first()
+            _maybe_retry_failed_tasks(session, phase, OrchestratorLogger(tmp_path))
+
+        mock_create_agent.assert_not_called()
+        mock_create_phase_task.assert_called_once()
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_ticket_blocked_doc_review_routes_to_development(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+        from src.core.database import Phase
+
+        self._seed(orch_db_env, phase_name="doc_review")
+        with orch_db_env.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-under-test").first()
+            result = _maybe_retry_failed_tasks(session, phase, OrchestratorLogger(tmp_path))
+
+        assert result is True
+        mock_create_agent.assert_not_called()
+        assert mock_create_phase_task.call_args.kwargs["source_phase_name"] == "doc_review"
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_non_ticket_failure_still_retries_normally(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        """Only the specific ticket-blocked rejection reroutes -- an
+        unrelated git_expert failure (e.g. a git conflict) must still go
+        through the normal retry-in-place path."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+        from src.core.database import Agent, Phase, Task
+
+        self._seed(orch_db_env, phase_name="git_expert", failure_reason="git push rejected: non-fast-forward")
+        with orch_db_env.session_scope() as session:
+            session.add(Agent(id="new-agent", system_prompt="p", status="working", cli_type="pi"))
+            phase = session.query(Phase).filter_by(id="phase-under-test").first()
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        with orch_db_env.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-under-test").first()
+            result = _maybe_retry_failed_tasks(session, phase, OrchestratorLogger(tmp_path))
+
+        assert result is True
+        mock_create_phase_task.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "in_progress"
+            assert task.retry_count == 1
 
 
 class TestFailWorkflowDirect:
@@ -2108,7 +2403,6 @@ class TestResumeStuckWorkflowTasks:
         from datetime import datetime, timedelta
 
         from src.autopilot.orchestrator import OrchestratorLogger
-
         from src.autopilot.orchestrator.phase_transitions import _resume_stuck_workflow_tasks
         from src.core.database import Task
 
@@ -4517,7 +4811,6 @@ class TestResyncPipelineRegistry:
 
     @pytest.mark.asyncio
     async def test_leaves_an_already_running_project_alone(self):
-        from unittest.mock import AsyncMock
 
         from src.autopilot.orchestrator import _resync_pipeline_registry
 
@@ -4582,7 +4875,6 @@ class TestResyncPipelineRegistry:
         Restarting it from this sweep would race the graceful pause
         itself. _should_stop(project_id) (the same signal
         pause_for_restart()/stop() set) must prevent that."""
-        from unittest.mock import AsyncMock
 
         from src.autopilot import orchestrator
         from src.autopilot.orchestrator import _resync_pipeline_registry
@@ -5146,7 +5438,6 @@ class TestRecoverAbandonedWorkflowsWithCompletedPhase:
         try to evaluate a phase with nowhere to read its output from."""
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.worktree_integration import _recover_abandoned_workflows_with_completed_phase
-        from src.core.database import Workflow
 
         with orch_db_env.session_scope() as session:
             self._seed(session, task_status="done", working_directory=None)
@@ -5762,8 +6053,7 @@ class TestEscalateStaleActiveWorkflows:
         self, orch_db_env, tmp_path, monkeypatch
     ):
         from src.autopilot.orchestrator import OrchestratorLogger
-        from src.autopilot.orchestrator.policy import STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS
-        from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
+        from src.autopilot.orchestrator.policy import STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS, _escalate_stale_active_workflows
         from src.core.database import Workflow
 
         self._make_workflow(orch_db_env, "wf-1")
@@ -5798,8 +6088,7 @@ class TestEscalateStaleActiveWorkflows:
 
     def test_activity_resets_the_streak(self, orch_db_env, tmp_path, monkeypatch):
         from src.autopilot.orchestrator import OrchestratorLogger
-        from src.autopilot.orchestrator.policy import STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS
-        from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
+        from src.autopilot.orchestrator.policy import STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS, _escalate_stale_active_workflows
         from src.core.database import Workflow
 
         self._make_workflow(orch_db_env, "wf-1")
@@ -5835,8 +6124,7 @@ class TestEscalateStaleActiveWorkflows:
         self, orch_db_env, tmp_path
     ):
         from src.autopilot.orchestrator import OrchestratorLogger
-        from src.autopilot.orchestrator.policy import STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS
-        from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
+        from src.autopilot.orchestrator.policy import STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS, _escalate_stale_active_workflows
         from src.core.database import Task, Workflow
 
         self._make_workflow(orch_db_env, "wf-1")
@@ -6242,7 +6530,6 @@ class TestEnsureGitExcluded:
         import logging
 
         from src.autopilot.orchestrator import OrchestratorLogger
-
         from src.autopilot.orchestrator.worktree_integration import _ensure_git_excluded
 
         repo_path = tmp_path / "repo"
@@ -7366,7 +7653,8 @@ class TestTerminateAgentInvariant:
     def test_terminate_agent_backward_compat_alias(self, orch_db_env):
         """terminate_agent_direct is a backward-compatible alias."""
         from src.autopilot.orchestrator.engine_client import (
-            terminate_agent, terminate_agent_direct,
+            terminate_agent,
+            terminate_agent_direct,
         )
 
         assert terminate_agent_direct is terminate_agent
@@ -7425,7 +7713,7 @@ class TestCheckPhaseSiblingActive:
     )
     def test_sees_sibling_in_review_or_validation_statuses(self, orch_db_env, sibling_status):
         from src.autopilot.orchestrator.engine_client import check_phase_sibling_active
-        from src.core.database import Task, Workflow, Phase
+        from src.core.database import Phase, Task, Workflow
 
         with orch_db_env.session_scope() as session:
             session.add(Workflow(id="wf-1", name="w", phases_folder_path="/tmp", status="active"))
