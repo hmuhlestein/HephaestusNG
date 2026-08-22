@@ -18,6 +18,12 @@ description: |
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - validation.md, wherever mentioned below, means validation-<your Task
+    ID's first 8 hex characters>.md (find your Task ID in "Task ID:"
+    above) -- written to .hephaestus/product_validation/. Not optional: a
+    duplicate/concurrent dispatch for this same phase then writes to a
+    DIFFERENT suffixed file instead of racing yours, and the gate reads
+    your own task's suffixed file specifically, not a bare validation.md.
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
   - Write ONE file, validation.md, to ./.hephaestus/product_validation/ — a
     YAML frontmatter block (structured verdict + unmet_requirements, the
@@ -56,6 +62,12 @@ additional_notes: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - validation.md, wherever mentioned below, means validation-<your Task
+    ID's first 8 hex characters>.md (find your Task ID in "Task ID:"
+    above) -- written to .hephaestus/product_validation/. Not optional: a
+    duplicate/concurrent dispatch for this same phase then writes to a
+    DIFFERENT suffixed file instead of racing yours, and the gate reads
+    your own task's suffixed file specifically, not a bare validation.md.
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory.
   - ALL docs/reports go in "Artifacts Path" (validation.md, etc.).

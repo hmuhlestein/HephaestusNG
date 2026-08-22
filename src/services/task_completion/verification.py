@@ -178,7 +178,7 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
         # above is treated as an error).
         if wf and wf.working_directory:
             found_path = resolve_declared_output_path(
-                wf.working_directory, phase.name, declared_output
+                wf.working_directory, phase.name, declared_output, task_id=task.id
             )
         # 2. Check feature folder
         if found_path is None and feature_dir.exists():
@@ -306,6 +306,7 @@ def verify_gate_result_schema(session, task, phase=None) -> Optional[Dict[str, A
         report_filename,
         subdir=GATE_RESULT_SUBDIR.get(phase.name),
         phase_name=phase.name,
+        task_id=task.id,
     )
     if result is None and phase.name == "feature_review":
         # TEMPORARY (Phase 2 §4.9 follow-up) -- see
@@ -468,7 +469,9 @@ def verify_output_survived_commit(session, task, phase=None) -> Optional[Dict[st
 
     missing = []
     for declared_output in required_files:
-        found = resolve_declared_output_path(wf.working_directory, phase.name, declared_output) is not None
+        found = resolve_declared_output_path(
+            wf.working_directory, phase.name, declared_output, task_id=task.id
+        ) is not None
         # Also check if the file exists in git (already committed) --
         # resolve_declared_output_path only checks the worktree's current
         # state, but a file already committed and then removed from the

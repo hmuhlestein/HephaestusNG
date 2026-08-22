@@ -16,6 +16,12 @@ description: |
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - scope.md, wherever mentioned below, means scope-<your Task ID's first
+    8 hex characters>.md (find your Task ID in "Task ID:" above) --
+    written to .hephaestus/scope_review/. Not optional: a duplicate/
+    concurrent dispatch for this same phase then writes to a DIFFERENT
+    suffixed file instead of racing yours, and the gate reads your own
+    task's suffixed file specifically, not a bare scope.md.
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
   - Write ONE file, scope.md, to ./.hephaestus/scope_review/ — a
     YAML frontmatter block (structured verdict + out-of-scope/missing

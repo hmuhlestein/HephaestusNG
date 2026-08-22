@@ -1207,6 +1207,14 @@ def run_phase0(
         feature_review_dir = features_json_path.parent / "feature_review"
         review_src = feature_review_dir / "feature_review.md"
         if not review_src.exists():
+            # Agents now write feature_review-<task_id[:8]>.md, not the
+            # bare name -- find the current one the same way scoring does.
+            from src.autopilot.spec import _newest_glob_match
+
+            newest = _newest_glob_match(feature_review_dir, "feature_review.md")
+            if newest:
+                review_src = newest
+        if not review_src.exists():
             # TEMPORARY (Phase 2 §4.9 follow-up) -- an in-flight Phase 0
             # run started before the normalization may still be writing
             # to the old flat .hephaestus/review.md. Remove once no such
@@ -1215,7 +1223,13 @@ def run_phase0(
             if legacy_review_src.exists():
                 review_src = legacy_review_src
         if review_src.exists():
-            shutil.copy2(review_src, designs_folder / review_src.name)
+            # Archived under the bare name, not review_src's own (possibly
+            # suffixed) one -- designs_folder is a one-time final copy, not
+            # a repeatedly-retried working file, so it has none of the
+            # collision risk the suffix exists for, and every reader of
+            # this archival copy (get_workflow_decomposition_review's own
+            # phase0_designs_folder fallback) expects the bare name.
+            shutil.copy2(review_src, designs_folder / "feature_review.md")
 
         # Copy feature_review's HTML decomposition synopsis out too, same
         # reason and same durability requirement as feature_review.md above
@@ -1564,14 +1578,25 @@ def finalize_phase0_workflow(
     feature_review_dir = features_json_path.parent / "feature_review"
     review_src = feature_review_dir / "feature_review.md"
     if not review_src.exists():
+        # Agents now write feature_review-<task_id[:8]>.md, not the bare
+        # name -- find the current one the same way scoring does.
+        from src.autopilot.spec import _newest_glob_match
+
+        newest = _newest_glob_match(feature_review_dir, "feature_review.md")
+        if newest:
+            review_src = newest
+    if not review_src.exists():
         # TEMPORARY (Phase 2 §4.9 follow-up) -- see the matching fallback
         # in run_phase0 above. Remove once no in-flight run predating the
         # normalization can still be active.
         legacy_review_src = features_json_path.parent / "review.md"
         if legacy_review_src.exists():
             review_src = legacy_review_src
-    if review_src.exists() and review_src != designs_folder / review_src.name:
-        shutil.copy2(review_src, designs_folder / review_src.name)
+    review_dest = designs_folder / "feature_review.md"
+    if review_src.exists() and review_src != review_dest:
+        # Archived under the bare name, not review_src's own (possibly
+        # suffixed) one -- see run_phase0's matching copy above for why.
+        shutil.copy2(review_src, review_dest)
     synopsis_src = feature_review_dir / "feature_report.html"
     if not synopsis_src.exists():
         legacy_synopsis_src = features_json_path.parent / "feature_report.html"
