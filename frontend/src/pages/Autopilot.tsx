@@ -286,7 +286,7 @@ const Autopilot: React.FC = () => {
   });
 
   const tabs: { id: Tab; label: string; icon: React.ElementType; badge?: number; reviewBadge?: boolean; urgent?: boolean }[] = [
-    { id: 'queue', label: 'Design Queue', icon: ListOrdered, badge: status?.queue_depth, reviewBadge: (status?.features_awaiting_review ?? 0) > 0 },
+    { id: 'queue', label: 'Spec Queue', icon: ListOrdered, badge: status?.queue_depth, reviewBadge: (status?.features_awaiting_review ?? 0) > 0 },
     { id: 'features', label: 'Completed', icon: History, badge: featuresList?.length },
     { id: 'improvements', label: 'Improvements', icon: Lightbulb, badge: promptProposals?.pending_count },
     // urgent: the pipeline is blocked waiting on a human decision. Replaces
