@@ -13,7 +13,6 @@ import DesignQueuePanel from '@/components/autopilot/DesignQueuePanel';
 import FeatureGallery from '@/components/autopilot/FeatureGallery';
 import FeatureDetailModal from '@/components/autopilot/FeatureDetailModal';
 import MessageCenter from '@/components/autopilot/MessageCenter';
-import AddDesignModal from '@/components/autopilot/AddDesignModal';
 import LoadDesignModal from '@/components/autopilot/LoadDesignModal';
 import ReviewModeToggle from '@/components/autopilot/ReviewModeToggle';
 import FeatureReviewModal from '@/components/autopilot/FeatureReviewModal';
@@ -436,10 +435,10 @@ const Autopilot: React.FC = () => {
         featureId={selectedFeatureId}
         onClose={() => setSelectedFeatureId(null)}
       />
-      <AddDesignModal
+      <LoadDesignModal
         open={showAddDesign}
         projectId={projectId}
-        defaultType={addDesignType}
+        workflowType={addDesignType}
         onClose={() => setShowAddDesign(false)}
       />
       <LoadDesignModal

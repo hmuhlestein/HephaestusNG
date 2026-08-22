@@ -61,9 +61,11 @@ class DesignAddRequest(BaseModel):
     extension: str = ".md"
     # "queue" (default): .hephaestus/designs/, not git-tracked -- used by
     # "Load from Remote" (the file already lives somewhere in the project,
-    # nothing new is being introduced). "docs": a locally-uploaded file is
-    # new content coming from outside the repo, so it's persisted as a
-    # real, git-tracked file under docs/ instead of the hidden staging dir.
+    # nothing new is being introduced). Any other value is a real,
+    # git-tracked folder path relative to the project root -- "docs"
+    # (legacy literal), DESIGN_SUBDIR/BUGFIX_SUBDIR (New Feature/Report
+    # Bug flow defaults), or an arbitrary folder the user picked.
+    # Validated server-side (_safe_path) to stay within the project root.
     destination: str = "queue"
     # "feature" / "bugfix" -- which pipeline this design runs through (see
     # docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md). None (default): auto-detect via
@@ -163,14 +165,21 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
             raise HTTPException(404, "Project not found")
         base_dir = proj.base_dir
 
-    if req.destination == "docs":
-        # Locally-uploaded content is new to the repo -- persist it as a
-        # real, git-tracked file instead of the hidden staging dir below.
-        design_dir = Path(base_dir) / "docs"
-    else:
+    if req.destination == "queue":
         # Store in .hephaestus/designs/ (not git-tracked) so git commits
         # don't delete design files.
         design_dir = Path(base_dir) / DESIGN_CONTEXT_SUBDIR
+    else:
+        # Any other destination is a real, git-tracked folder under the
+        # project root -- "docs" (legacy literal), DESIGN_SUBDIR/
+        # BUGFIX_SUBDIR (the New Feature/Report Bug flows' defaults), or
+        # an arbitrary folder the user picked via the destination-folder
+        # browser. Unlike "queue" above, this value can come from the
+        # client (typed or browsed), so it MUST be validated to stay
+        # within base_dir -- _safe_path does that (raises 400 on escape),
+        # the same check every other browse/content endpoint in this
+        # file already applies to user-supplied paths.
+        design_dir = _safe_path(base_dir, req.destination)
     design_dir.mkdir(parents=True, exist_ok=True)
 
     ext = req.extension if req.extension in ALLOWED_EXTENSIONS else ".md"
@@ -204,12 +213,12 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
             filename=filename,
             name=req.name,
             ordinal=max_ord + 1,
-            # Set for destination="docs" so pick_next_design (queue.py)
-            # resolves the design from docs/ instead of falling back to
-            # its DESIGN_CONTEXT_SUBDIR-based reconstruction, which would
-            # look in the wrong directory for a docs/-stored design. Left
+            # Set for any real (non-"queue") destination so pick_next_design
+            # (queue.py) resolves the design from its actual folder instead
+            # of falling back to its DESIGN_CONTEXT_SUBDIR-based
+            # reconstruction, which would look in the wrong directory. Left
             # unset for destination="queue", unchanged from before.
-            file_path=str(filepath) if req.destination == "docs" else None,
+            file_path=str(filepath) if req.destination != "queue" else None,
             size_bytes=stat.st_size,
             extension=ext,
             modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),

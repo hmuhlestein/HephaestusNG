@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Upload, FileText, Check, FolderOpen, Folder, ArrowLeft } from 'lucide-react';
+import { X, Upload, FileText, Check, FolderOpen, Folder, ArrowLeft, Sparkles, Bug, FolderInput } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import toast from 'react-hot-toast';
@@ -9,6 +9,14 @@ import toast from 'react-hot-toast';
 interface LoadDesignModalProps {
   open: boolean;
   projectId: string | null;
+  // Fixes the workflow type instead of letting the backend auto-detect it,
+  // and switches on the destination-folder picker below (spec-driven
+  // development happens outside this UI -- these two flows exist to pull
+  // an already-written design/bug doc in and route it to the right
+  // pipeline, not to type one from scratch). Omitted for the plain "Load
+  // Design" entry point, which keeps today's auto-detect + queue/docs
+  // behavior completely unchanged.
+  workflowType?: 'feature' | 'bugfix';
   onClose: () => void;
 }
 
@@ -25,7 +33,39 @@ interface RemoteEntry {
   type: 'dir' | 'file';
 }
 
-const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onClose }) => {
+const TYPE_COPY = {
+  feature: {
+    icon: Sparkles,
+    title: 'New Feature',
+    subtitle: 'Select or drag & drop design documents describing what to build.',
+    accent: 'blue',
+    defaultFolder: 'docs/design',
+  },
+  bugfix: {
+    icon: Bug,
+    title: 'Report Bug',
+    subtitle: "Select or drag & drop bug reports describing what's broken.",
+    accent: 'amber',
+    defaultFolder: 'docs/bugfix',
+  },
+} as const;
+
+const ACCENT_CLASSES = {
+  violet: {
+    iconBg: 'bg-violet-100', iconText: 'text-violet-600',
+    ring: 'focus:ring-violet-500', button: 'bg-violet-600 hover:bg-violet-700 text-white',
+  },
+  blue: {
+    iconBg: 'bg-blue-100', iconText: 'text-blue-600',
+    ring: 'focus:ring-blue-500', button: 'bg-blue-600 hover:bg-blue-700 text-white',
+  },
+  amber: {
+    iconBg: 'bg-amber-100', iconText: 'text-amber-600',
+    ring: 'focus:ring-amber-500', button: 'bg-amber-600 hover:bg-amber-700 text-white',
+  },
+} as const;
+
+const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, workflowType, onClose }) => {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [loadedFiles, setLoadedFiles] = useState<LoadedFile[]>([]);
@@ -38,7 +78,13 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
   const [remoteError, setRemoteError] = useState<string | null>(null);
   const [addingRemotePath, setAddingRemotePath] = useState<string | null>(null);
   const [addedRemotePaths, setAddedRemotePaths] = useState<Set<string>>(new Set());
+  const [browsingForFolder, setBrowsingForFolder] = useState(false);
+  const [destinationFolder, setDestinationFolder] = useState('');
   const remoteRequestId = useRef(0);
+
+  const copy = workflowType ? TYPE_COPY[workflowType] : null;
+  const accent = ACCENT_CLASSES[copy?.accent ?? 'violet'];
+  const Icon = copy?.icon ?? Upload;
 
   useEffect(() => {
     if (!open) {
@@ -49,8 +95,12 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
       setRemoteEntries([]);
       setRemoteError(null);
       setAddedRemotePaths(new Set());
+      setBrowsingForFolder(false);
+    } else {
+      setDestinationFolder(copy?.defaultFolder ?? '');
     }
-  }, [open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, workflowType]);
 
   const loadRemoteDir = async (path: string) => {
     if (!projectId) return;
@@ -74,8 +124,15 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
   };
 
   const openRemoteBrowser = () => {
+    setBrowsingForFolder(false);
     setRemoteOpen(true);
     loadRemoteDir('');
+  };
+
+  const openFolderBrowser = () => {
+    setBrowsingForFolder(true);
+    setRemoteOpen(true);
+    loadRemoteDir(destinationFolder);
   };
 
   const handleSelectRemoteFile = async (entry: RemoteEntry) => {
@@ -92,6 +149,12 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
     }
   };
 
+  const useCurrentFolderAsDestination = () => {
+    setDestinationFolder(remotePath);
+    setRemoteOpen(false);
+    setBrowsingForFolder(false);
+  };
+
   const addMutation = useMutation({
     mutationFn: async (files: LoadedFile[]) => {
       if (!projectId) throw new Error('No project selected');
@@ -100,13 +163,18 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
       for (const file of files) {
         const ext = file.name.endsWith('.txt') ? '.txt' : '.md';
         const name = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
-        // Files picked from the user's own machine are new content being
-        // introduced into the project -- persist them as real, git-tracked
-        // files in docs/. Files picked via "Load from Remote" already live
-        // somewhere in the project, so they keep going to the existing
-        // .hephaestus/designs/ staging dir (unchanged behavior).
-        const destination = file.remotePath ? 'queue' : 'docs';
-        const result = await apiService.addAutopilotProjectDesign(projectId, name, file.content, ext, destination);
+        // New Feature/Report Bug: every file (local or remote-picked) goes
+        // to the one destination folder the user chose for this flow.
+        // Plain "Load Design" (workflowType unset): unchanged -- files
+        // picked from the user's own machine are new content being
+        // introduced into the project (persisted as real, git-tracked
+        // files in docs/), while files picked via "Load from Remote"
+        // already live somewhere in the project and keep going to the
+        // existing .hephaestus/designs/ staging dir.
+        const destination = workflowType
+          ? destinationFolder
+          : (file.remotePath ? 'queue' : 'docs');
+        const result = await apiService.addAutopilotProjectDesign(projectId, name, file.content, ext, destination, workflowType ?? null);
         results.push(result);
       }
       return results;
@@ -213,12 +281,12 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
             {/* Header */}
             <div className="px-6 py-4 border-b flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-violet-100 rounded-lg">
-                  <Upload className="w-5 h-5 text-violet-600" />
+                <div className={`p-2 rounded-lg ${accent.iconBg}`}>
+                  <Icon className={`w-5 h-5 ${accent.iconText}`} />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-gray-800">Load Design Files</h2>
-                  <p className="text-xs text-gray-500">Select or drag & drop design documents from anywhere</p>
+                  <h2 className="text-lg font-bold text-gray-800">{copy?.title ?? 'Load Design Files'}</h2>
+                  <p className="text-xs text-gray-500">{copy?.subtitle ?? 'Select or drag & drop design documents from anywhere'}</p>
                 </div>
               </div>
               <button
@@ -231,6 +299,33 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
 
             {/* Content */}
             <div className="p-6 space-y-4">
+              {/* Destination Folder (New Feature / Report Bug flows only) */}
+              {workflowType && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Destination Folder</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={destinationFolder}
+                      onChange={(e) => setDestinationFolder(e.target.value)}
+                      placeholder={copy?.defaultFolder}
+                      className={`flex-1 px-4 py-2 border border-gray-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 ${accent.ring}`}
+                    />
+                    <button
+                      type="button"
+                      onClick={openFolderBrowser}
+                      className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 flex-shrink-0"
+                    >
+                      <FolderInput className="w-3.5 h-3.5" />
+                      Browse…
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Every file below is stored here, whether uploaded from your machine or picked from the project.
+                  </p>
+                </div>
+              )}
+
               {/* Drop Zone */}
               <div
                 onDrop={handleDrop}
@@ -248,7 +343,8 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
                   {isDragOver ? 'Drop files here' : 'Click to select files or drag & drop'}
                 </p>
                 <p className="text-xs text-gray-400">
-                  Supports .md and .txt files &middot; stored in <code className="font-mono">docs/</code>
+                  Supports .md and .txt files &middot; stored in{' '}
+                  <code className="font-mono">{workflowType ? destinationFolder || copy?.defaultFolder : 'docs/'}</code>
                 </p>
               </div>
 
@@ -287,13 +383,23 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
                       </button>
                       <span className="text-xs text-gray-500 truncate">/{remotePath}</span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setRemoteOpen(false)}
-                      className="text-xs font-medium text-gray-500 hover:text-gray-700"
-                    >
-                      Done
-                    </button>
+                    {browsingForFolder ? (
+                      <Button
+                        type="button"
+                        onClick={useCurrentFolderAsDestination}
+                        className={`h-7 px-2.5 text-xs ${accent.button}`}
+                      >
+                        Use This Folder
+                      </Button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setRemoteOpen(false)}
+                        className="text-xs font-medium text-gray-500 hover:text-gray-700"
+                      >
+                        Done
+                      </button>
+                    )}
                   </div>
                   <div className="max-h-64 overflow-y-auto divide-y divide-gray-100">
                     {remoteLoading ? (
@@ -301,9 +407,13 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
                     ) : remoteError ? (
                       <div className="p-4 text-center text-xs text-red-500">{remoteError}</div>
                     ) : remoteEntries.length === 0 ? (
-                      <div className="p-4 text-center text-xs text-gray-400">No folders or .md/.txt files here</div>
+                      <div className="p-4 text-center text-xs text-gray-400">
+                        {browsingForFolder ? 'No subfolders here' : 'No folders or .md/.txt files here'}
+                      </div>
                     ) : (
-                      remoteEntries.map((entry) => {
+                      remoteEntries
+                        .filter((entry) => !browsingForFolder || entry.type === 'dir')
+                        .map((entry) => {
                         const isAdded = entry.type === 'file' && addedRemotePaths.has(entry.path);
                         return (
                           <button
@@ -368,8 +478,8 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
                 </Button>
                 <Button
                   onClick={() => addMutation.mutate(loadedFiles)}
-                  className="bg-violet-600 hover:bg-violet-700 text-white"
-                  disabled={addMutation.isPending || loadedFiles.length === 0}
+                  className={accent.button}
+                  disabled={addMutation.isPending || loadedFiles.length === 0 || (!!workflowType && !destinationFolder.trim())}
                 >
                   {addMutation.isPending ? (
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
