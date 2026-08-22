@@ -233,23 +233,23 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
   ];
 
   return (
-    <div className="bg-gradient-to-br from-white via-blue-50/30 to-purple-50/20 rounded-xl shadow-lg border border-gray-200/50 overflow-hidden">
+    <div className="bg-gradient-to-br from-white via-blue-50/30 to-purple-50/20 dark:from-gray-800 dark:via-blue-900/10 dark:to-purple-900/10 rounded-xl shadow-lg border border-gray-200/50 dark:border-gray-700 overflow-hidden">
       {/* Header with Search */}
-      <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 p-5">
+      <div className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm border-b border-gray-200/50 dark:border-gray-700 p-5">
         <div className="relative">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
           <input
             id="task-search-input"
             type="text"
             placeholder="Search tasks, agents, or IDs... (Press / to focus)"
             value={filters.searchText}
             onChange={(e) => onFiltersChange({ ...filters, searchText: e.target.value })}
-            className="w-full pl-12 pr-12 py-3.5 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm placeholder:text-gray-400 bg-white"
+            className="w-full pl-12 pr-12 py-3.5 border-2 border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
           />
           {filters.searchText && (
             <button
               onClick={() => onFiltersChange({ ...filters, searchText: '' })}
-              className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
               title="Clear search"
             >
               <X className="w-5 h-5" />
@@ -260,11 +260,11 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
 
       {/* Filter Status Bar */}
       {(activeFiltersCount > 0 || filteredCount !== tasks.length) && (
-        <div className="bg-blue-50/50 backdrop-blur-sm border-b border-blue-100 px-5 py-3">
+        <div className="bg-blue-50/50 dark:bg-blue-900/20 backdrop-blur-sm border-b border-blue-100 dark:border-blue-800 px-5 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Sparkles className="w-4 h-4 text-blue-600" />
-              <span className="text-sm font-semibold text-blue-900">
+              <Sparkles className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+              <span className="text-sm font-semibold text-blue-900 dark:text-blue-300">
                 Showing {filteredCount} of {tasks.length} tasks
               </span>
               {activeFiltersCount > 0 && (
@@ -276,7 +276,7 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
             {activeFiltersCount > 0 && (
               <button
                 onClick={clearAllFilters}
-                className="text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors"
+                className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
               >
                 Clear All
               </button>
@@ -299,16 +299,16 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
                     initial={{ scale: 0.9, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
                     exit={{ scale: 0.9, opacity: 0 }}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-blue-200 rounded-full text-xs font-medium shadow-sm"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-800 rounded-full text-xs font-medium shadow-sm"
                   >
-                    <span className="text-blue-600 font-bold">{filter.label}:</span>
-                    <span className="text-gray-700">{filter.value}</span>
+                    <span className="text-blue-600 dark:text-blue-400 font-bold">{filter.label}:</span>
+                    <span className="text-gray-700 dark:text-gray-300">{filter.value}</span>
                     <button
                       onClick={() => removeFilter(filter.key)}
-                      className="ml-0.5 hover:bg-blue-100 rounded-full p-0.5 transition-colors"
+                      className="ml-0.5 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded-full p-0.5 transition-colors"
                       title="Remove filter"
                     >
-                      <X className="w-3 h-3 text-blue-600" />
+                      <X className="w-3 h-3 text-blue-600 dark:text-blue-400" />
                     </button>
                   </motion.div>
                 ))}
@@ -323,8 +323,8 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
         {/* Status Filter */}
         <div>
           <div className="flex items-center gap-2 mb-3">
-            <Filter className="w-4 h-4 text-gray-600" />
-            <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Status</h3>
+            <Filter className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+            <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100 uppercase tracking-wide">Status</h3>
           </div>
           <div className="flex flex-wrap gap-2">
             {statuses.map((status) => {
@@ -340,16 +340,16 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
                   className={`
                     px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200
                     ${isActive
-                      ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-300'
+                      ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-300 dark:ring-blue-700'
                       : isEmpty
-                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                      : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200 hover:border-blue-300 hover:shadow-sm'
+                      ? 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
+                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600 hover:border-blue-300 dark:hover:border-blue-600 hover:shadow-sm'
                     }
                   `}
                 >
                   <span className="mr-1.5">{status.emoji}</span>
                   {status.label}
-                  <span className={`ml-2 ${isActive ? 'text-blue-100' : 'text-gray-500'} font-bold`}>
+                  <span className={`ml-2 ${isActive ? 'text-blue-100' : 'text-gray-500 dark:text-gray-400'} font-bold`}>
                     {count}
                   </span>
                 </button>
@@ -361,8 +361,8 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
         {/* Phase Filter */}
         <div>
           <div className="flex items-center gap-2 mb-3">
-            <Sparkles className="w-4 h-4 text-gray-600" />
-            <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Phase</h3>
+            <Sparkles className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+            <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100 uppercase tracking-wide">Phase</h3>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -370,13 +370,13 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
               className={`
                 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200
                 ${filters.phase === 'all'
-                  ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-md scale-105 ring-2 ring-green-300'
-                  : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200 hover:border-green-300 hover:shadow-sm'
+                  ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-md scale-105 ring-2 ring-green-300 dark:ring-green-700'
+                  : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600 hover:border-green-300 dark:hover:border-green-600 hover:shadow-sm'
                 }
               `}
             >
               All Phases
-              <span className={`ml-2 ${filters.phase === 'all' ? 'text-green-100' : 'text-gray-500'} font-bold`}>
+              <span className={`ml-2 ${filters.phase === 'all' ? 'text-green-100' : 'text-gray-500 dark:text-gray-400'} font-bold`}>
                 {tasks.length}
               </span>
             </button>
@@ -385,13 +385,13 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
               className={`
                 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200
                 ${filters.phase === 'no-phase'
-                  ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-md scale-105 ring-2 ring-green-300'
-                  : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200 hover:border-green-300 hover:shadow-sm'
+                  ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-md scale-105 ring-2 ring-green-300 dark:ring-green-700'
+                  : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600 hover:border-green-300 dark:hover:border-green-600 hover:shadow-sm'
                 }
               `}
             >
               No Phase
-              <span className={`ml-2 ${filters.phase === 'no-phase' ? 'text-green-100' : 'text-gray-500'} font-bold`}>
+              <span className={`ml-2 ${filters.phase === 'no-phase' ? 'text-green-100' : 'text-gray-500 dark:text-gray-400'} font-bold`}>
                 {filterCounts.phase['no-phase'] || 0}
               </span>
             </button>
@@ -404,13 +404,13 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
                   className={`
                     px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200
                     ${isActive
-                      ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-md scale-105 ring-2 ring-green-300'
-                      : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200 hover:border-green-300 hover:shadow-sm'
+                      ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-md scale-105 ring-2 ring-green-300 dark:ring-green-700'
+                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600 hover:border-green-300 dark:hover:border-green-600 hover:shadow-sm'
                     }
                   `}
                 >
                   Phase {phase.order}: {phase.name}
-                  <span className={`ml-2 ${isActive ? 'text-green-100' : 'text-gray-500'} font-bold`}>
+                  <span className={`ml-2 ${isActive ? 'text-green-100' : 'text-gray-500 dark:text-gray-400'} font-bold`}>
                     {phase.count}
                   </span>
                 </button>
@@ -420,10 +420,10 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
         </div>
 
         {/* Advanced Filters Toggle */}
-        <div className="pt-3 border-t border-gray-200">
+        <div className="pt-3 border-t border-gray-200 dark:border-gray-700">
           <button
             onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors group"
+            className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 transition-colors group"
           >
             <Filter className={`w-4 h-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
             <span>Advanced Filters</span>
@@ -448,8 +448,8 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
               {/* Priority */}
               <div>
                 <div className="flex items-center gap-2 mb-3">
-                  <Flag className="w-4 h-4 text-gray-600" />
-                  <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Priority</h3>
+                  <Flag className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                  <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100 uppercase tracking-wide">Priority</h3>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {priorities.map((priority) => {
@@ -458,10 +458,10 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
                     const isEmpty = count === 0 && priority.value !== 'all';
 
                     const colors = {
-                      high: 'from-red-500 to-red-600 ring-red-300',
-                      medium: 'from-yellow-500 to-yellow-600 ring-yellow-300',
-                      low: 'from-gray-500 to-gray-600 ring-gray-300',
-                      all: 'from-purple-500 to-purple-600 ring-purple-300',
+                      high: 'from-red-500 to-red-600 ring-red-300 dark:ring-red-700',
+                      medium: 'from-yellow-500 to-yellow-600 ring-yellow-300 dark:ring-yellow-700',
+                      low: 'from-gray-500 to-gray-600 ring-gray-300 dark:ring-gray-600',
+                      all: 'from-purple-500 to-purple-600 ring-purple-300 dark:ring-purple-700',
                     };
 
                     return (
@@ -474,13 +474,13 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
                           ${isActive
                             ? `bg-gradient-to-r ${colors[priority.value as keyof typeof colors]} text-white shadow-md scale-105 ring-2`
                             : isEmpty
-                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                            : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200 hover:border-purple-300 hover:shadow-sm'
+                            ? 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
+                            : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600 hover:border-purple-300 dark:hover:border-purple-600 hover:shadow-sm'
                           }
                         `}
                       >
                         {priority.label}
-                        <span className={`ml-2 ${isActive ? 'opacity-80' : 'text-gray-500'} font-bold`}>
+                        <span className={`ml-2 ${isActive ? 'opacity-80' : 'text-gray-500 dark:text-gray-400'} font-bold`}>
                           {count}
                         </span>
                       </button>
@@ -492,8 +492,8 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
               {/* Assignment */}
               <div>
                 <div className="flex items-center gap-2 mb-3">
-                  <User className="w-4 h-4 text-gray-600" />
-                  <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Assignment</h3>
+                  <User className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                  <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100 uppercase tracking-wide">Assignment</h3>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {assignments.map((assignment) => {
@@ -509,15 +509,15 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
                         className={`
                           px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200
                           ${isActive
-                            ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white shadow-md scale-105 ring-2 ring-purple-300'
+                            ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white shadow-md scale-105 ring-2 ring-purple-300 dark:ring-purple-700'
                             : isEmpty
-                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                            : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200 hover:border-purple-300 hover:shadow-sm'
+                            ? 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
+                            : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600 hover:border-purple-300 dark:hover:border-purple-600 hover:shadow-sm'
                           }
                         `}
                       >
                         {assignment.label}
-                        <span className={`ml-2 ${isActive ? 'text-purple-100' : 'text-gray-500'} font-bold`}>
+                        <span className={`ml-2 ${isActive ? 'text-purple-100' : 'text-gray-500 dark:text-gray-400'} font-bold`}>
                           {count}
                         </span>
                       </button>
@@ -529,8 +529,8 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
               {/* Date Range */}
               <div>
                 <div className="flex items-center gap-2 mb-3">
-                  <Calendar className="w-4 h-4 text-gray-600" />
-                  <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Created</h3>
+                  <Calendar className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                  <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100 uppercase tracking-wide">Created</h3>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {dateRanges.map((range) => {
@@ -542,8 +542,8 @@ const TaskFilterBar: React.FC<TaskFilterBarProps> = ({
                         className={`
                           px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200
                           ${isActive
-                            ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white shadow-md scale-105 ring-2 ring-purple-300'
-                            : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200 hover:border-purple-300 hover:shadow-sm'
+                            ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white shadow-md scale-105 ring-2 ring-purple-300 dark:ring-purple-700'
+                            : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600 hover:border-purple-300 dark:hover:border-purple-600 hover:shadow-sm'
                           }
                         `}
                       >
