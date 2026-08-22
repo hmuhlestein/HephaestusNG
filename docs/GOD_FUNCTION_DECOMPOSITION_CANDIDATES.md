@@ -28,6 +28,93 @@ has been attempted — it's a scoped, evidence-based backlog, not a plan.
 
 ---
 
+## Status: executed 2026-08-22 (3 of 5+2 items done, proven by tests)
+
+Executed in one session following each entry's own "characterization
+tests first, then verbatim extraction" guidance. All extracted code is
+byte-identical to the original at its original indentation (verified by
+script against pre-extraction snapshots); the only deltas are the
+`self` → explicit-parameter renames and early-`return` → return-value
+conversions documented in each step function's docstring.
+
+**Independently re-verified, 2026-08-22** — every line-count and test-count
+claim above checked out exactly against the actual code (534→250, 491→86,
+409→232/385→319/247→129, 20/49/166/223/745 test counts all matched or beat
+what was claimed); the except/fallback block in `create_agent_for_task`
+confirmed to have zero diff lines, not just claimed unchanged; the lazy-
+import lesson for `_trigger_arbitration` confirmed genuinely applied. One
+gap found: `ruff` caught 4 leftover/redundant imports the extraction left
+behind (`DESIGN_CONTEXT_SUBDIR`/`GOTO_REASON_PREFIX` no longer used in
+their original files, a stray `import uuid` shadowed by a later local
+import, `get_max_task_retries` redundantly re-imported locally after
+already being imported at module level in `_phase_case_steps.py`) — fixed
+via `ruff --fix`, re-verified compile + 241 tests green. Also fixed
+`mechanical_recovery.py`'s `new_agent` unused-variable warning (pre-existing
+at HEAD, not introduced by this extraction) by adding the same
+"[CONTEXT-OVERFLOW] Fallback agent {id} created" log line its two sibling
+call sites (session-limit, connection-error) already have — a real,
+pre-existing observability gap, not just lint noise.
+
+**#1 `create_agent_for_task` — DONE (534 → 250 lines).**
+`src/agents/_create_agent_for_task_steps.py` holds five named steps
+(`_phase_sibling_guard`, `_insert_stub_agent_row`,
+`_run_launch_preparations`, `_prepare_tmux_and_prompt`,
+`_send_launch_command_and_record_agent`, `_deliver_initial_prompt_flow`;
+the fallback/cleanup failure path deliberately stayed in the orchestrator
+because its `"tmux_session" in locals()` checks depend on the orchestrator's
+own binding scope). Proof: `tests/test_agent_manager.py` — 18
+characterization tests pass identically before and after extraction,
+including the pre-existing `assign_to_task` same-commit race regression
+(simulated mid-dispatch process kill); two guard tests (duplicate-active
+agent, phase-sibling skip) were added and verified against the
+pre-extraction code first. 735 further dispatch/monitor tests green after.
+
+**#2 `mechanical_recovery_for_agent` — DONE (492 → 86 lines).**
+Five sections became named class methods on `MechanicalRecoveryDetector`
+(`_check_spend_or_session_limit`, `_update_stuck_signature`,
+`_check_context_overflow`, `_attempt_recovery_nudge`,
+`_abandon_exhausted_agent`); the orchestrator keeps the check ORDER and the
+frozen-state threading. The doc's "ordered list of (check_fn, action) pairs"
+idea was not used — the sections have non-uniform early-return semantics
+and the order is itself load-bearing, so a data-driven loop would have been
+a rewrite. Proof: `tests/test_monitor.py` +
+`tests/test_mechanical_recovery_offloading.py` 164/164 before; 166/166
+after, including two new firing-order characterization tests
+(session-limit beats frozen-nudge; context-overflow beats frozen-nudge),
+each verified against the pre-extraction code first.
+
+**#3 `phase_transitions.py` — 3 of 5 passes DONE; 2 deferred.**
+New sibling `src/autopilot/orchestrator/_phase_case_steps.py`:
+- `_case_in_progress_complete`: 409 → 232
+  (`_mark_orphaned_and_stale_pending_tasks_failed`,
+  `_retry_failed_tasks_with_done` extracted)
+- `_create_phase_task`: 385 → 319
+  (`_review_run_cap_and_findings`, `_build_phase_task` extracted)
+- `fire_spec_gate_if_ready`: 247 → 129
+  (`_handle_spec_gate_result` extracted — its four-action dispatch)
+
+  Deferred: `_retry_failed_tasks` (316) and `_maybe_retry_failed_tasks`
+  (270). Rationale: they call each other, `_retry_failed_tasks` grew ~120
+  lines in commit `29f6b99` (ticket-blocked routing) while a concurrent
+  session was actively working this file, and a clean extraction wants a
+calm version of both. Proof for the three done passes:
+`tests/test_advance_phases.py`, `tests/test_phase_manager.py`,
+`tests/test_phase_transitions_spec_gate.py`,
+`tests/test_phase_advancement_sweep.py`,
+`tests/test_attempt_recovery_strategies.py`, `tests/test_goto_reconvergence.py`,
+`tests/test_update_task_status_ordering.py` — 223/223 after extraction,
+identical to the pre-extraction baseline; plus a 532-test
+orchestrator/monitor wide sweep green.
+
+  One lesson recorded for the deferred passes: step functions that call
+sibling functions defined in `phase_transitions.py` must import them
+lazily FROM `phase_transitions` (not from their definition modules) so
+tests' `patch("...phase_transitions.<name>")` targets keep resolving —
+importing `_trigger_arbitration` from `arbitration` instead let the real
+function run against a mocked test and SQLite locked up.
+
+---
+
 ## 1. `launch_pipeline.py::LaunchPipeline.create_agent_for_task` — 534 lines
 
 **Location:** `src/agents/launch_pipeline.py:1663-2196` (file is 2433 lines

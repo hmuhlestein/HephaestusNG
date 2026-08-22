@@ -2847,6 +2847,81 @@ class TestSessionLimitPause:
         assert workflow.paused_by is None
         mock_agent_manager.terminate_agent.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_session_limit_fires_before_frozen_nudge_when_both_patterns_match(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Characterization (pre-extraction): check order is load-bearing.
+        A pane matching BOTH the session-limit pattern and a frozen
+        signature well past frozen_seconds must take the session-limit
+        path (checked first) -- terminate + fail the task, NOT a
+        keys+nudge recovery attempt."""
+        pane_text = "You've hit your session limit\nSame frozen output forever"
+        mock_agent_manager.get_agent_output.return_value = pane_text
+        self._wire_tmux_pane_output(mock_agent_manager, mock_db, "a1", pane_text)
+        mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.send_recovery_keystrokes = AsyncMock(return_value=True)
+
+        # Frozen well past frozen_seconds -- the nudge branch's condition
+        # would be true too if it were ever reached.
+        make_monitoring_loop._stuck_state = {
+            "a1": {"sig": None, "since": None, "recov": 0}
+        }
+
+        task = Mock(id="t1", status="in_progress", phase_id="p1", workflow_id="wf1")
+        phase = Mock(fallback_cli_tool=None)
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
+            mock_cfg.return_value.agents.default_fallback_cli_tool = None
+            mock_cfg.return_value.agents.secondary_cli_model_fallback = None
+            result = await make_monitoring_loop._mechanical_recovery_for_agent(
+                Agent(id="a1", cli_type="claude")
+            )
+
+        assert result is True
+        mock_agent_manager.terminate_agent.assert_called_once_with("a1")
+        mock_agent_manager.send_recovery_keystrokes.assert_not_called()
+        assert task.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_context_overflow_fires_before_frozen_nudge_when_both_match(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Characterization (pre-extraction): a pane matching the
+        context-overflow pattern while frozen past frozen_seconds must take
+        the context-overflow restart path (checked before the nudge
+        branch), not a keys+nudge recovery attempt."""
+        pane_text = "exceeds the available context size"
+        mock_agent_manager.get_agent_output.return_value = pane_text
+        self._wire_tmux_pane_output(mock_agent_manager, mock_db, "a1", pane_text)
+        mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.send_recovery_keystrokes = AsyncMock(return_value=True)
+        mock_agent_manager.create_agent_for_task = AsyncMock(return_value=Mock(id="a2"))
+
+        agent = Agent(id="a1", cli_type="pi", cli_model="local-model")
+        # Baseline, then freeze past frozen_seconds -- the nudge branch's
+        # condition would be true too if it were ever reached.
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        make_monitoring_loop._stuck_state["a1"]["since"] = time.time() - 400
+
+        task = Mock(id="t1", status="in_progress", phase_id="p1", workflow_id="wf1")
+        phase = Mock(fallback_cli_tool="claude", fallback_cli_model=None)
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        with patch("src.monitoring.mechanical_recovery.get_config") as mock_cfg:
+            mock_cfg.return_value.agents.default_fallback_cli_tool = None
+            mock_cfg.return_value.agents.secondary_cli_model_fallback = None
+            result = await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        assert result is True
+        mock_agent_manager.create_agent_for_task.assert_called_once()
+        mock_agent_manager.terminate_agent.assert_called_once_with("a1")
+        mock_agent_manager.send_recovery_keystrokes.assert_not_called()
+        assert task.status == "pending"
+
 
 class TestDetectConnectionErrors:
     """Regression #1: resetting a connection-error-killed task straight to

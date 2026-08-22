@@ -147,232 +147,13 @@ class MechanicalRecoveryDetector:
                 out = self.agent_manager.get_agent_output(agent.id, lines=40)
             if not out:
                 return
-            # Spend/session limit check using the already-captured pane output.
-            # The interactive menu ("Stop and wait for limit to reset") only
-            # appears in the live pane, not in the transcript log.
-            stripped_raw = _strip_sgr(raw_text)
-            if stripped_raw:
-                spend_limit_hit = _SPEND_LIMIT_RE.search(stripped_raw)
-                if spend_limit_hit or _SESSION_LIMIT_RE.search(stripped_raw):
-                    # Determine the specific limit kind for accurate logging
-                    if spend_limit_hit:
-                        matched_text = spend_limit_hit.group(0).lower()
-                        if "weekly" in matched_text:
-                            limit_kind = "weekly spend limit"
-                        else:
-                            limit_kind = "monthly spend limit"
-                    else:
-                        limit_kind = "session limit"
-                    logger.warning(
-                        f"[SESSION-LIMIT] Agent {agent.id[:8]} ({agent.cli_type}) hit {limit_kind} — "
-                        f"terminating immediately (not recoverable)"
-                    )
-                    with self.db_manager.session_scope() as session:
-                        from src.core.database import Phase as _Phase
+            if await self._check_spend_or_session_limit(agent, raw_text):
+                return True
 
-                        stuck_task = (
-                            session.query(Task)
-                            .filter_by(assigned_agent_id=agent.id)
-                            .filter(Task.status.in_(STUCK_TASK_STATUSES))
-                            .first()
-                        )
-                        if stuck_task:
-                            stuck_task.status = "failed"
-                            stuck_task.failure_reason = f"CLI {limit_kind} reached"
-                            logger.info(
-                                f"[SESSION-LIMIT] Task {stuck_task.id[:8]} marked failed; "
-                                f"phase will be retried"
-                            )
-
-                            fallback_tool = None
-                            fallback_model = None
-                            if stuck_task.phase_id:
-                                phase = session.query(_Phase).filter_by(id=stuck_task.phase_id).first()
-                                if phase:
-                                    fallback_tool = getattr(phase, "fallback_cli_tool", None)
-                                    fallback_model = getattr(phase, "fallback_cli_model", None)
-
-                            cfg = get_config()
-
-                            # Fall back to global config defaults
-                            if not fallback_tool:
-                                if cfg.agents.default_fallback_cli_tool and (cfg.agents.default_fallback_cli_tool != agent.cli_type or cfg.agents.default_fallback_cli_model != agent.cli_model):
-                                    fallback_tool = cfg.agents.default_fallback_cli_tool
-                                    fallback_model = cfg.agents.default_fallback_cli_model
-
-                            # Last resort: default_fallback_cli_tool/_model can
-                            # resolve to the exact same cli+model that just hit
-                            # the limit (e.g. default_cli_tool and
-                            # default_fallback_cli_tool both "pi" on the same
-                            # model) -- nothing to actually switch to via that
-                            # pair. secondary_cli_model_fallback is normally
-                            # reserved for a non-primary cli_type via the
-                            # role-based lookup in CLIAgentInterface.fallback_model,
-                            # so it's unreachable through THAT path when the
-                            # stuck agent's cli_type IS the primary (the common
-                            # case here -- every phase agent runs as "pi") --
-                            # but it's still a real, different MODEL on the
-                            # same CLI harness (pi understands "sonnet" as a
-                            # model string), worth trying before giving up and
-                            # pausing the whole workflow. Observed live: this
-                            # exact case paused a workflow with a viable
-                            # secondary_cli_model_fallback configured and
-                            # never consulted.
-                            if (
-                                not fallback_tool
-                                or (fallback_tool == agent.cli_type and fallback_model == agent.cli_model)
-                            ) and cfg.agents.secondary_cli_model_fallback and cfg.agents.secondary_cli_model_fallback != agent.cli_model:
-                                fallback_tool = agent.cli_type
-                                fallback_model = cfg.agents.secondary_cli_model_fallback
-
-                            if fallback_tool and (fallback_tool != agent.cli_type or fallback_model != agent.cli_model):
-                                logger.warning(
-                                    f"[SESSION-LIMIT] Re-dispatching with fallback: "
-                                    f"{fallback_tool}/{fallback_model or 'default'}"
-                                )
-                                self.log_agent_event(
-                                    agent.id, "session_limit_terminated",
-                                    f"Hit {limit_kind} ({agent.cli_type}) — terminated "
-                                    f"and redispatched to {fallback_tool}/{fallback_model or 'default'}",
-                                    {
-                                        "task_id": stuck_task.id,
-                                        "limit_kind": limit_kind,
-                                        "from_cli_type": agent.cli_type,
-                                        "fallback_cli_type": fallback_tool,
-                                        "fallback_cli_model": fallback_model,
-                                    },
-                                    session=session,
-                                )
-                                session.commit()
-                                await self.agent_manager.terminate_agent(agent.id)
-                                self._stuck_state.pop(agent.id, None)
-
-                                try:
-                                    # Same retry-context injection as
-                                    # phase_transitions.py's failed-task
-                                    # reset -- without it the fallback agent
-                                    # reads whatever RETRY note this task
-                                    # last carried (or none at all), not the
-                                    # session-limit reason that actually
-                                    # caused this handoff. raw_description
-                                    # as the base avoids accumulating retry
-                                    # messages across repeated handoffs.
-                                    if stuck_task.failure_reason:
-                                        base = stuck_task.raw_description or ""
-                                        stuck_task.enriched_description = (
-                                            f"{base}\n\n--- RETRY: your previous attempt failed with this "
-                                            f"specific error, fix it rather than repeating the same mistake ---\n"
-                                            f"{stuck_task.failure_reason}"
-                                        )
-                                    stuck_task.status = "pending"
-                                    stuck_task.assigned_agent_id = None
-                                    stuck_task.failure_reason = None
-                                    session.commit()
-
-                                    new_agent = await self.agent_manager.create_agent_for_task(
-                                        task=stuck_task,
-                                        enriched_data={},
-                                        memories=[],
-                                        project_context="",
-                                        cli_type=fallback_tool,
-                                        phase_cli_tool=fallback_tool,
-                                        phase_cli_model=fallback_model,
-                                    )
-                                    logger.info(
-                                        f"[SESSION-LIMIT] Fallback agent {new_agent.id[:8]} "
-                                        f"created for task {stuck_task.id[:8]}"
-                                    )
-                                    if stuck_task.workflow_id:
-                                        from src.autopilot.orchestrator.engine_client import resume_workflow
-                                        resume_workflow(stuck_task.workflow_id, session=session)
-                                except Exception as fallback_err:
-                                    logger.error(f"[SESSION-LIMIT] Fallback agent creation failed: {fallback_err}")
-                                    stuck_task.status = "failed"
-                                    stuck_task.failure_reason = f"Primary hit {limit_kind}, fallback also failed: {fallback_err}"
-                                    self.log_agent_event(
-                                        agent.id, "session_limit_terminated",
-                                        f"Hit {limit_kind} ({agent.cli_type}) — terminated, fallback ({fallback_tool}) also failed: {fallback_err}",
-                                        {"task_id": stuck_task.id, "limit_kind": limit_kind, "from_cli_type": agent.cli_type, "fallback_cli_type": fallback_tool},
-                                        session=session,
-                                    )
-                                    session.commit()
-                                return True
-                            elif stuck_task.workflow_id:
-                                workflow = session.query(Workflow).filter_by(id=stuck_task.workflow_id).first()
-                                if workflow and workflow.status != "paused":
-                                    from src.autopilot.orchestrator.engine_client import pause_workflow
-                                    pause_workflow(
-                                        stuck_task.workflow_id,
-                                        reason="system",
-                                        status_reason=f"CLI {limit_kind} hit ({agent.cli_type}), no fallback configured",
-                                        session=session,
-                                    )
-                        if stuck_task:
-                            self.log_agent_event(
-                                agent.id, "session_limit_terminated",
-                                f"Hit {limit_kind} ({agent.cli_type}) — terminated, no fallback configured",
-                                {"task_id": stuck_task.id, "limit_kind": limit_kind, "from_cli_type": agent.cli_type},
-                                session=session,
-                            )
-                            await self.agent_manager.terminate_agent(agent.id)
-                            self._stuck_state.pop(agent.id, None)
-                        return True
-
-            # Strip SGR color codes here, for the signature only -- other
-            # consumers of get_agent_output still get color preserved. See
-            # _strip_sgr's docstring: a TUI that re-emits color codes on
-            # every redraw otherwise makes two reads of an identical frozen
-            # screen differ byte-for-byte, silently disabling this whole
-            # detector -- observed live: an agent hard-stopped on a model
-            # error sat frozen for 12+ minutes with zero [MECH-RECOVERY] log
-            # lines, because its frozen screen still had colored text.
-            out_no_color = _strip_sgr(out)
-            # Drop volatile lines (status bar %/tokens/$/MCP/time, spinner glyphs) so a
-            # live spinner or ticking cost doesn't masquerade as real progress.
-            sig = "\n".join(
-                ln
-                for ln in out_no_color.splitlines()
-                if not re.search(r"%/[\d.]+M|\$[\d.]+|MCP:|Took |[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣿]", ln)
-            ).strip()
-            now = time.time()
-            st = self._stuck_state.setdefault(
-                agent.id, {"sig": None, "since": None, "recov": 0}
-            )
-            if sig and sig == st["sig"]:
-                if st["since"] is None:
-                    st["since"] = now
-            else:
-                # Output changed → real progress; reset everything.
-                st["sig"] = sig
-                st["since"] = None
-                st["recov"] = 0
-                # Also refresh Agent.last_activity -- the separate "task
-                # stuck" check in _audit_system_health relies entirely on
-                # this field, which is otherwise ONLY touched by an MCP
-                # tool call (_touch_agent_activity, server.py) or a
-                # successful Guardian analysis cycle. A read-heavy phase
-                # (e.g. feature_review reading design.md + several scope.md
-                # files before writing anything) can go 5+ minutes without
-                # either of those firing while genuinely, visibly working --
-                # the stuck-task check would then kill it on its hard
-                # stuck_detection_minutes timer despite real progress being
-                # right here in the tmux output. Observed live: the same
-                # feature_review task died to "no agent activity for >5
-                # minutes" on three consecutive retries, each time visibly
-                # active (spinner, new tool calls) when checked manually.
-                try:
-                    with self.db_manager.session_scope() as _session:
-                        from src.core.database import Agent as _Agent
-
-                        _db_agent = (
-                            _session.query(_Agent).filter_by(id=agent.id).first()
-                        )
-                        if _db_agent:
-                            _db_agent.last_activity = datetime.utcnow()
-                except Exception:
-                    pass  # best-effort; the mechanical-recovery check itself must not fail
+            frozen = self._update_stuck_signature(agent, out)
+            if frozen is None:
                 return
-            frozen_for = now - st["since"] if st["since"] else 0
+            sig, st, now, frozen_for = frozen
 
             # A backgrounded tool call (Claude Code's own Monitor-tool UI,
             # e.g. "Monitor started · task bg0fucqr2 · timeout 300s")
@@ -394,15 +175,51 @@ class MechanicalRecoveryDetector:
                     declared_timeout + get_config().monitoring.monitoring_interval_seconds,
                 )
 
-            # Context overflow: local model hit its context size limit.
-            # This is a hard blocker — the agent can't continue with the
-            # current model. Terminate and restart with fresh context on
-            # the fallback model rather than switching in-session (which
-            # would inherit the bloated context and degrade performance).
-            if _CONTEXT_OVERFLOW_RE.search(sig):
+            if await self._check_context_overflow(agent, sig):
+                return True
+
+            # Fast-path: "Operation aborted" leaves the agent idle at the shell
+            # prompt.  The output signature changed (so the 5-min clock reset),
+            # but the agent won't self-rescue — 30 s is enough to be sure.
+            abort_frozen = "Operation aborted" in sig and frozen_for >= 30
+            if (abort_frozen or frozen_for >= effective_frozen_seconds) and st[
+                "recov"
+            ] < max_recov:
+                if await self._attempt_recovery_nudge(agent, sig, st, out, frozen_for, max_recov, now):
+                    return True
+            elif (abort_frozen or frozen_for >= effective_frozen_seconds) and st["recov"] >= max_recov:
+                if await self._abandon_exhausted_agent(agent, frozen_for, max_recov):
+                    return True
+        except Exception as e:
+            logger.warning(f"[MECH-RECOVERY] check failed for {agent.id[:8]}: {e}")
+        return False
+
+
+    async def _check_spend_or_session_limit(self, agent, raw_text) -> bool:
+        """Spend/session-limit hard blocker check against the live pane --
+        mechanical_recovery_for_agent's first check. Terminate + fail the task,
+        then re-dispatch on a configured fallback (injecting the retry context)
+        or pause the workflow. Verbatim extraction; returns True when an
+        intervention happened."""
+        # Spend/session limit check using the already-captured pane output.
+        # The interactive menu ("Stop and wait for limit to reset") only
+        # appears in the live pane, not in the transcript log.
+        stripped_raw = _strip_sgr(raw_text)
+        if stripped_raw:
+            spend_limit_hit = _SPEND_LIMIT_RE.search(stripped_raw)
+            if spend_limit_hit or _SESSION_LIMIT_RE.search(stripped_raw):
+                # Determine the specific limit kind for accurate logging
+                if spend_limit_hit:
+                    matched_text = spend_limit_hit.group(0).lower()
+                    if "weekly" in matched_text:
+                        limit_kind = "weekly spend limit"
+                    else:
+                        limit_kind = "monthly spend limit"
+                else:
+                    limit_kind = "session limit"
                 logger.warning(
-                    f"[CONTEXT-OVERFLOW] Agent {agent.id[:8]} ({agent.cli_type}) "
-                    f"hit context size limit — terminating for fresh restart"
+                    f"[SESSION-LIMIT] Agent {agent.id[:8]} ({agent.cli_type}) hit {limit_kind} — "
+                    f"terminating immediately (not recoverable)"
                 )
                 with self.db_manager.session_scope() as session:
                     from src.core.database import Phase as _Phase
@@ -414,7 +231,13 @@ class MechanicalRecoveryDetector:
                         .first()
                     )
                     if stuck_task:
-                        # Resolve fallback model
+                        stuck_task.status = "failed"
+                        stuck_task.failure_reason = f"CLI {limit_kind} reached"
+                        logger.info(
+                            f"[SESSION-LIMIT] Task {stuck_task.id[:8]} marked failed; "
+                            f"phase will be retried"
+                        )
+
                         fallback_tool = None
                         fallback_model = None
                         if stuck_task.phase_id:
@@ -422,183 +245,408 @@ class MechanicalRecoveryDetector:
                             if phase:
                                 fallback_tool = getattr(phase, "fallback_cli_tool", None)
                                 fallback_model = getattr(phase, "fallback_cli_model", None)
+
+                        cfg = get_config()
+
+                        # Fall back to global config defaults
                         if not fallback_tool:
-                            cfg = get_config()
                             if cfg.agents.default_fallback_cli_tool and (cfg.agents.default_fallback_cli_tool != agent.cli_type or cfg.agents.default_fallback_cli_model != agent.cli_model):
                                 fallback_tool = cfg.agents.default_fallback_cli_tool
                                 fallback_model = cfg.agents.default_fallback_cli_model
 
-                        if fallback_tool and fallback_tool != agent.cli_type:
-                            logger.info(
-                                f"[CONTEXT-OVERFLOW] Restarting with {fallback_tool}/{fallback_model or 'default'}"
-                            )
-                            stuck_task.status = "pending"
-                            stuck_task.assigned_agent_id = None
-                            stuck_task.failure_reason = None
-                            session.commit()
+                        # Last resort: default_fallback_cli_tool/_model can
+                        # resolve to the exact same cli+model that just hit
+                        # the limit (e.g. default_cli_tool and
+                        # default_fallback_cli_tool both "pi" on the same
+                        # model) -- nothing to actually switch to via that
+                        # pair. secondary_cli_model_fallback is normally
+                        # reserved for a non-primary cli_type via the
+                        # role-based lookup in CLIAgentInterface.fallback_model,
+                        # so it's unreachable through THAT path when the
+                        # stuck agent's cli_type IS the primary (the common
+                        # case here -- every phase agent runs as "pi") --
+                        # but it's still a real, different MODEL on the
+                        # same CLI harness (pi understands "sonnet" as a
+                        # model string), worth trying before giving up and
+                        # pausing the whole workflow. Observed live: this
+                        # exact case paused a workflow with a viable
+                        # secondary_cli_model_fallback configured and
+                        # never consulted.
+                        if (
+                            not fallback_tool
+                            or (fallback_tool == agent.cli_type and fallback_model == agent.cli_model)
+                        ) and cfg.agents.secondary_cli_model_fallback and cfg.agents.secondary_cli_model_fallback != agent.cli_model:
+                            fallback_tool = agent.cli_type
+                            fallback_model = cfg.agents.secondary_cli_model_fallback
 
+                        if fallback_tool and (fallback_tool != agent.cli_type or fallback_model != agent.cli_model):
+                            logger.warning(
+                                f"[SESSION-LIMIT] Re-dispatching with fallback: "
+                                f"{fallback_tool}/{fallback_model or 'default'}"
+                            )
+                            self.log_agent_event(
+                                agent.id, "session_limit_terminated",
+                                f"Hit {limit_kind} ({agent.cli_type}) — terminated "
+                                f"and redispatched to {fallback_tool}/{fallback_model or 'default'}",
+                                {
+                                    "task_id": stuck_task.id,
+                                    "limit_kind": limit_kind,
+                                    "from_cli_type": agent.cli_type,
+                                    "fallback_cli_type": fallback_tool,
+                                    "fallback_cli_model": fallback_model,
+                                },
+                                session=session,
+                            )
+                            session.commit()
                             await self.agent_manager.terminate_agent(agent.id)
                             self._stuck_state.pop(agent.id, None)
 
-                            new_agent = await self.agent_manager.create_agent_for_task(
-                                task=stuck_task,
-                                enriched_data={},
-                                memories=[],
-                                project_context="",
-                                cli_type=fallback_tool,
-                                phase_cli_tool=fallback_tool,
-                                phase_cli_model=fallback_model,
-                            )
-                            self.log_agent_event(
-                                agent.id, "context_overflow_terminated",
-                                f"Context overflow ({agent.cli_model}) — terminated and restarted "
-                                f"with {fallback_tool}/{fallback_model or 'default'} (fresh context)",
-                                {"task_id": stuck_task.id, "from_model": agent.cli_model, "fallback": fallback_tool},
-                                session=session,
-                            )
+                            try:
+                                # Same retry-context injection as
+                                # phase_transitions.py's failed-task
+                                # reset -- without it the fallback agent
+                                # reads whatever RETRY note this task
+                                # last carried (or none at all), not the
+                                # session-limit reason that actually
+                                # caused this handoff. raw_description
+                                # as the base avoids accumulating retry
+                                # messages across repeated handoffs.
+                                if stuck_task.failure_reason:
+                                    base = stuck_task.raw_description or ""
+                                    stuck_task.enriched_description = (
+                                        f"{base}\n\n--- RETRY: your previous attempt failed with this "
+                                        f"specific error, fix it rather than repeating the same mistake ---\n"
+                                        f"{stuck_task.failure_reason}"
+                                    )
+                                stuck_task.status = "pending"
+                                stuck_task.assigned_agent_id = None
+                                stuck_task.failure_reason = None
+                                session.commit()
+
+                                new_agent = await self.agent_manager.create_agent_for_task(
+                                    task=stuck_task,
+                                    enriched_data={},
+                                    memories=[],
+                                    project_context="",
+                                    cli_type=fallback_tool,
+                                    phase_cli_tool=fallback_tool,
+                                    phase_cli_model=fallback_model,
+                                )
+                                logger.info(
+                                    f"[SESSION-LIMIT] Fallback agent {new_agent.id[:8]} "
+                                    f"created for task {stuck_task.id[:8]}"
+                                )
+                                if stuck_task.workflow_id:
+                                    from src.autopilot.orchestrator.engine_client import resume_workflow
+                                    resume_workflow(stuck_task.workflow_id, session=session)
+                            except Exception as fallback_err:
+                                logger.error(f"[SESSION-LIMIT] Fallback agent creation failed: {fallback_err}")
+                                stuck_task.status = "failed"
+                                stuck_task.failure_reason = f"Primary hit {limit_kind}, fallback also failed: {fallback_err}"
+                                self.log_agent_event(
+                                    agent.id, "session_limit_terminated",
+                                    f"Hit {limit_kind} ({agent.cli_type}) — terminated, fallback ({fallback_tool}) also failed: {fallback_err}",
+                                    {"task_id": stuck_task.id, "limit_kind": limit_kind, "from_cli_type": agent.cli_type, "fallback_cli_type": fallback_tool},
+                                    session=session,
+                                )
+                                session.commit()
                             return True
-                        else:
-                            logger.warning(f"[CONTEXT-OVERFLOW] No fallback available for {agent.id[:8]}")
-
-            # Session limit: hard blocker — can't recover, fail immediately.
-            # This fires on an already-running agent mid-session (unlike
-            # AgentManager.create_agent_for_task's equivalent check, which
-            # only sees a session-limit rejection during initial prompt
-            # delivery) -- e.g. an agent that did 10+ minutes of real work
-            # before running out of session budget. If the phase has no
-            # Fast-path: "Operation aborted" leaves the agent idle at the shell
-            # prompt.  The output signature changed (so the 5-min clock reset),
-            # but the agent won't self-rescue — 30 s is enough to be sure.
-            abort_frozen = "Operation aborted" in sig and frozen_for >= 30
-            if (abort_frozen or frozen_for >= effective_frozen_seconds) and st[
-                "recov"
-            ] < max_recov:
-                st["recov"] += 1
-                st["since"] = now  # restart the window after an attempt
-                logger.warning(
-                    f"[MECH-RECOVERY] Agent {agent.id[:8]} ({agent.cli_type}) output frozen "
-                    f"{int(frozen_for)}s — recovery attempt {st['recov']}/{max_recov} (keys + nudge)"
-                )
-                # Reconnect MCP if disconnected before sending the nudge.
-                mcp_disconnected = bool(re.search(r"MCP:\s*0/", out))
-                if mcp_disconnected:
-                    logger.warning(
-                        f"[MECH-RECOVERY] Agent {agent.id[:8]}: MCP disconnected — reconnecting"
-                    )
-                    session_name = getattr(agent, "tmux_session_name", None)
-                    if session_name:
-                        import subprocess as _sp
-
-                        # Offloaded -- subprocess.run blocks the event loop
-                        # for however long tmux takes to respond, same
-                        # class of issue fixed elsewhere in this codebase
-                        # today.
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(
-                            None, _sp.run,
-                            ["tmux", "send-keys", "-t", session_name, "Escape", ""],
-                        )
-                        await asyncio.sleep(0.5)
-                        await loop.run_in_executor(
-                            None, _sp.run,
-                            ["tmux", "send-keys", "-t", session_name, "/mcp", "Enter"],
-                        )
-                        await asyncio.sleep(2.0)
-                        await loop.run_in_executor(
-                            None, _sp.run,
-                            ["tmux", "send-keys", "-t", session_name, "C-r", ""],
-                        )
-                        await asyncio.sleep(3.0)
-                        await loop.run_in_executor(
-                            None, _sp.run,
-                            ["tmux", "send-keys", "-t", session_name, "Escape", ""],
-                        )
-                        await asyncio.sleep(0.5)
-                if await self.agent_manager.send_recovery_keystrokes(agent.id):
-                    mcp_note = (
-                        " MCP was disconnected and has been reconnected."
-                        if mcp_disconnected
-                        else ""
-                    )
-                    if "Operation aborted" in sig:
-                        msg = get_monitor_nudge("operation_aborted", mcp_note=mcp_note)
-                    elif _MAX_TOKEN_LIMIT_RE.search(_strip_sgr(sig)):
-                        msg = get_monitor_nudge("max_token_limit_recovery", mcp_note=mcp_note)
-                    else:
-                        msg = get_monitor_nudge("stuck_or_looping", mcp_note=mcp_note)
-                    await self.agent_manager.send_message_to_agent(agent.id, msg)
-                    # Re-baseline st["sig"] to the pane AFTER our own nudge
-                    # lands, not before. The nudge text gets echoed into the
-                    # pane (most CLIs show sent messages in the transcript),
-                    # so the very next poll's sig almost always differs from
-                    # the pre-nudge baseline captured above -- purely from
-                    # our own message, not the agent doing anything. Left
-                    # unbaselined, that "changed" (line ~825) reads as real
-                    # progress and resets st["recov"] to 0 every single
-                    # cycle, so max_recov is never actually reached: the
-                    # agent sits frozen at the same "Operation aborted"
-                    # prompt while the nudge fires over and over, never
-                    # escalating to fail+terminate. Observed live: 5+
-                    # consecutive "Operation aborted" nudges for the same
-                    # agent well past max_recov=2. Best-effort -- if the
-                    # re-capture fails, fall through with the stale
-                    # baseline (matches this function's pre-existing
-                    # behavior before this fix).
-                    try:
-                        post_nudge_out = self.agent_manager.get_agent_output(agent.id, lines=40)
-                        if post_nudge_out:
-                            post_nudge_no_color = _strip_sgr(post_nudge_out)
-                            st["sig"] = "\n".join(
-                                ln
-                                for ln in post_nudge_no_color.splitlines()
-                                if not re.search(r"%/[\d.]+M|\$[\d.]+|MCP:|Took |[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣿]", ln)
-                            ).strip()
-                    except Exception:
-                        pass
-                    return True
-            elif (abort_frozen or frozen_for >= effective_frozen_seconds) and st["recov"] >= max_recov:
-                # All recovery attempts exhausted and agent is still frozen.
-                # Mirrors the nudge-trigger condition above (abort_frozen or
-                # frozen_for >= effective_frozen_seconds), not just frozen_seconds --
-                # without this, an "Operation aborted" agent that exhausts
-                # max_recov via the fast 30s abort_frozen path then has to
-                # sit frozen for the FULL frozen_seconds (300s, timed from
-                # the last nudge's since=now reset) before this branch would
-                # ever fire, since neither branch's condition was true in
-                # between: recov >= max_recov blocks the nudge branch, and
-                # frozen_for was only ~30s, not yet 300s. Fail the task so
-                # the monitor's retry-bound path handles it
-                # (MAX_PHASE_ATTEMPTS → impasse if exceeded). §9.4 / §11.2 fix #2.
-                logger.warning(
-                    f"[MECH-RECOVERY] Agent {agent.id[:8]} frozen {int(frozen_for)}s after "
-                    f"{max_recov} recovery attempts — abandoning: fail task, terminate agent"
-                )
-                with self.db_manager.session_scope() as session:
-                    from src.core.database import Task as _Task
-
-                    stuck_task = (
-                        session.query(_Task)
-                        .filter_by(assigned_agent_id=agent.id)
-                        .filter(_Task.status.in_(STUCK_TASK_STATUSES))
-                        .first()
-                    )
+                        elif stuck_task.workflow_id:
+                            workflow = session.query(Workflow).filter_by(id=stuck_task.workflow_id).first()
+                            if workflow and workflow.status != "paused":
+                                from src.autopilot.orchestrator.engine_client import pause_workflow
+                                pause_workflow(
+                                    stuck_task.workflow_id,
+                                    reason="system",
+                                    status_reason=f"CLI {limit_kind} hit ({agent.cli_type}), no fallback configured",
+                                    session=session,
+                                )
                     if stuck_task:
-                        stuck_task.status = "failed"
-                        stuck_task.failure_reason = (
-                            f"Agent output frozen {int(frozen_for)}s; "
-                            f"{max_recov} recovery attempts exhausted"
+                        self.log_agent_event(
+                            agent.id, "session_limit_terminated",
+                            f"Hit {limit_kind} ({agent.cli_type}) — terminated, no fallback configured",
+                            {"task_id": stuck_task.id, "limit_kind": limit_kind, "from_cli_type": agent.cli_type},
+                            session=session,
+                        )
+                        await self.agent_manager.terminate_agent(agent.id)
+                        self._stuck_state.pop(agent.id, None)
+                    return True
+
+
+    def _update_stuck_signature(self, agent, out):
+        """Frozen-signature tracking -- verbatim extraction of
+        mechanical_recovery_for_agent's signature/stuck-state section. Returns
+        (sig, st, now, frozen_for), or None when the output changed (real
+        progress: state reset, last_activity refreshed) and the caller must
+        return without any check firing."""
+        # Strip SGR color codes here, for the signature only -- other
+        # consumers of get_agent_output still get color preserved. See
+        # _strip_sgr's docstring: a TUI that re-emits color codes on
+        # every redraw otherwise makes two reads of an identical frozen
+        # screen differ byte-for-byte, silently disabling this whole
+        # detector -- observed live: an agent hard-stopped on a model
+        # error sat frozen for 12+ minutes with zero [MECH-RECOVERY] log
+        # lines, because its frozen screen still had colored text.
+        out_no_color = _strip_sgr(out)
+        # Drop volatile lines (status bar %/tokens/$/MCP/time, spinner glyphs) so a
+        # live spinner or ticking cost doesn't masquerade as real progress.
+        sig = "\n".join(
+            ln
+            for ln in out_no_color.splitlines()
+            if not re.search(r"%/[\d.]+M|\$[\d.]+|MCP:|Took |[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣿]", ln)
+        ).strip()
+        now = time.time()
+        st = self._stuck_state.setdefault(
+            agent.id, {"sig": None, "since": None, "recov": 0}
+        )
+        if sig and sig == st["sig"]:
+            if st["since"] is None:
+                st["since"] = now
+        else:
+            # Output changed → real progress; reset everything.
+            st["sig"] = sig
+            st["since"] = None
+            st["recov"] = 0
+            # Also refresh Agent.last_activity -- the separate "task
+            # stuck" check in _audit_system_health relies entirely on
+            # this field, which is otherwise ONLY touched by an MCP
+            # tool call (_touch_agent_activity, server.py) or a
+            # successful Guardian analysis cycle. A read-heavy phase
+            # (e.g. feature_review reading design.md + several scope.md
+            # files before writing anything) can go 5+ minutes without
+            # either of those firing while genuinely, visibly working --
+            # the stuck-task check would then kill it on its hard
+            # stuck_detection_minutes timer despite real progress being
+            # right here in the tmux output. Observed live: the same
+            # feature_review task died to "no agent activity for >5
+            # minutes" on three consecutive retries, each time visibly
+            # active (spinner, new tool calls) when checked manually.
+            try:
+                with self.db_manager.session_scope() as _session:
+                    from src.core.database import Agent as _Agent
+
+                    _db_agent = (
+                        _session.query(_Agent).filter_by(id=agent.id).first()
+                    )
+                    if _db_agent:
+                        _db_agent.last_activity = datetime.utcnow()
+            except Exception:
+                pass  # best-effort; the mechanical-recovery check itself must not fail
+            return None
+        frozen_for = now - st["since"] if st["since"] else 0
+        return sig, st, now, frozen_for
+
+
+    async def _check_context_overflow(self, agent, sig) -> bool:
+        """Context-overflow hard blocker -- verbatim extraction. Terminate +
+        restart with the fallback model on FRESH context when a different
+        cli_type is configured; otherwise just warns. Returns True when a
+        restart was dispatched."""
+        # Context overflow: local model hit its context size limit.
+        # This is a hard blocker — the agent can't continue with the
+        # current model. Terminate and restart with fresh context on
+        # the fallback model rather than switching in-session (which
+        # would inherit the bloated context and degrade performance).
+        if _CONTEXT_OVERFLOW_RE.search(sig):
+            logger.warning(
+                f"[CONTEXT-OVERFLOW] Agent {agent.id[:8]} ({agent.cli_type}) "
+                f"hit context size limit — terminating for fresh restart"
+            )
+            with self.db_manager.session_scope() as session:
+                from src.core.database import Phase as _Phase
+
+                stuck_task = (
+                    session.query(Task)
+                    .filter_by(assigned_agent_id=agent.id)
+                    .filter(Task.status.in_(STUCK_TASK_STATUSES))
+                    .first()
+                )
+                if stuck_task:
+                    # Resolve fallback model
+                    fallback_tool = None
+                    fallback_model = None
+                    if stuck_task.phase_id:
+                        phase = session.query(_Phase).filter_by(id=stuck_task.phase_id).first()
+                        if phase:
+                            fallback_tool = getattr(phase, "fallback_cli_tool", None)
+                            fallback_model = getattr(phase, "fallback_cli_model", None)
+                    if not fallback_tool:
+                        cfg = get_config()
+                        if cfg.agents.default_fallback_cli_tool and (cfg.agents.default_fallback_cli_tool != agent.cli_type or cfg.agents.default_fallback_cli_model != agent.cli_model):
+                            fallback_tool = cfg.agents.default_fallback_cli_tool
+                            fallback_model = cfg.agents.default_fallback_cli_model
+
+                    if fallback_tool and fallback_tool != agent.cli_type:
+                        logger.info(
+                            f"[CONTEXT-OVERFLOW] Restarting with {fallback_tool}/{fallback_model or 'default'}"
+                        )
+                        stuck_task.status = "pending"
+                        stuck_task.assigned_agent_id = None
+                        stuck_task.failure_reason = None
+                        session.commit()
+
+                        await self.agent_manager.terminate_agent(agent.id)
+                        self._stuck_state.pop(agent.id, None)
+
+                        new_agent = await self.agent_manager.create_agent_for_task(
+                            task=stuck_task,
+                            enriched_data={},
+                            memories=[],
+                            project_context="",
+                            cli_type=fallback_tool,
+                            phase_cli_tool=fallback_tool,
+                            phase_cli_model=fallback_model,
                         )
                         logger.info(
-                            f"[MECH-RECOVERY] Task {stuck_task.id[:8]} marked failed; "
-                            f"phase will be retried (MAX_PHASE_ATTEMPTS bound)"
+                            f"[CONTEXT-OVERFLOW] Fallback agent {new_agent.id[:8]} "
+                            f"created for task {stuck_task.id[:8]}"
                         )
-                await self.agent_manager.terminate_agent(agent.id)
-                self._stuck_state.pop(agent.id, None)
-                return True
-        except Exception as e:
-            logger.warning(f"[MECH-RECOVERY] check failed for {agent.id[:8]}: {e}")
-        return False
+                        self.log_agent_event(
+                            agent.id, "context_overflow_terminated",
+                            f"Context overflow ({agent.cli_model}) — terminated and restarted "
+                            f"with {fallback_tool}/{fallback_model or 'default'} (fresh context)",
+                            {"task_id": stuck_task.id, "from_model": agent.cli_model, "fallback": fallback_tool},
+                            session=session,
+                        )
+                        return True
+                    else:
+                        logger.warning(f"[CONTEXT-OVERFLOW] No fallback available for {agent.id[:8]}")
 
+
+    async def _attempt_recovery_nudge(self, agent, sig, st, out, frozen_for, max_recov, now) -> bool:
+        """One keys+nudge recovery attempt -- verbatim extraction of
+        mechanical_recovery_for_agent's nudge branch: MCP reconnect keystrokes,
+        the CLI's recovery keystrokes, a situation-specific nudge message, and
+        the post-nudge signature re-baseline. Returns True when the nudge was
+        sent (send_recovery_keystrokes succeeded)."""
+        st["recov"] += 1
+        st["since"] = now  # restart the window after an attempt
+        logger.warning(
+            f"[MECH-RECOVERY] Agent {agent.id[:8]} ({agent.cli_type}) output frozen "
+            f"{int(frozen_for)}s — recovery attempt {st['recov']}/{max_recov} (keys + nudge)"
+        )
+        # Reconnect MCP if disconnected before sending the nudge.
+        mcp_disconnected = bool(re.search(r"MCP:\s*0/", out))
+        if mcp_disconnected:
+            logger.warning(
+                f"[MECH-RECOVERY] Agent {agent.id[:8]}: MCP disconnected — reconnecting"
+            )
+            session_name = getattr(agent, "tmux_session_name", None)
+            if session_name:
+                import subprocess as _sp
+
+                # Offloaded -- subprocess.run blocks the event loop
+                # for however long tmux takes to respond, same
+                # class of issue fixed elsewhere in this codebase
+                # today.
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None, _sp.run,
+                    ["tmux", "send-keys", "-t", session_name, "Escape", ""],
+                )
+                await asyncio.sleep(0.5)
+                await loop.run_in_executor(
+                    None, _sp.run,
+                    ["tmux", "send-keys", "-t", session_name, "/mcp", "Enter"],
+                )
+                await asyncio.sleep(2.0)
+                await loop.run_in_executor(
+                    None, _sp.run,
+                    ["tmux", "send-keys", "-t", session_name, "C-r", ""],
+                )
+                await asyncio.sleep(3.0)
+                await loop.run_in_executor(
+                    None, _sp.run,
+                    ["tmux", "send-keys", "-t", session_name, "Escape", ""],
+                )
+                await asyncio.sleep(0.5)
+        if await self.agent_manager.send_recovery_keystrokes(agent.id):
+            mcp_note = (
+                " MCP was disconnected and has been reconnected."
+                if mcp_disconnected
+                else ""
+            )
+            if "Operation aborted" in sig:
+                msg = get_monitor_nudge("operation_aborted", mcp_note=mcp_note)
+            elif _MAX_TOKEN_LIMIT_RE.search(_strip_sgr(sig)):
+                msg = get_monitor_nudge("max_token_limit_recovery", mcp_note=mcp_note)
+            else:
+                msg = get_monitor_nudge("stuck_or_looping", mcp_note=mcp_note)
+            await self.agent_manager.send_message_to_agent(agent.id, msg)
+            # Re-baseline st["sig"] to the pane AFTER our own nudge
+            # lands, not before. The nudge text gets echoed into the
+            # pane (most CLIs show sent messages in the transcript),
+            # so the very next poll's sig almost always differs from
+            # the pre-nudge baseline captured above -- purely from
+            # our own message, not the agent doing anything. Left
+            # unbaselined, that "changed" (line ~825) reads as real
+            # progress and resets st["recov"] to 0 every single
+            # cycle, so max_recov is never actually reached: the
+            # agent sits frozen at the same "Operation aborted"
+            # prompt while the nudge fires over and over, never
+            # escalating to fail+terminate. Observed live: 5+
+            # consecutive "Operation aborted" nudges for the same
+            # agent well past max_recov=2. Best-effort -- if the
+            # re-capture fails, fall through with the stale
+            # baseline (matches this function's pre-existing
+            # behavior before this fix).
+            try:
+                post_nudge_out = self.agent_manager.get_agent_output(agent.id, lines=40)
+                if post_nudge_out:
+                    post_nudge_no_color = _strip_sgr(post_nudge_out)
+                    st["sig"] = "\n".join(
+                        ln
+                        for ln in post_nudge_no_color.splitlines()
+                        if not re.search(r"%/[\d.]+M|\$[\d.]+|MCP:|Took |[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣿]", ln)
+                    ).strip()
+            except Exception:
+                pass
+            return True
+
+
+    async def _abandon_exhausted_agent(self, agent, frozen_for, max_recov) -> bool:
+        """Recovery-exhaustion terminal -- verbatim extraction of
+        mechanical_recovery_for_agent's last branch: fail the task (so the
+        monitor's retry-bound path handles it) and terminate the agent.
+        Returns True."""
+        # All recovery attempts exhausted and agent is still frozen.
+        # Mirrors the nudge-trigger condition above (abort_frozen or
+        # frozen_for >= effective_frozen_seconds), not just frozen_seconds --
+        # without this, an "Operation aborted" agent that exhausts
+        # max_recov via the fast 30s abort_frozen path then has to
+        # sit frozen for the FULL frozen_seconds (300s, timed from
+        # the last nudge's since=now reset) before this branch would
+        # ever fire, since neither branch's condition was true in
+        # between: recov >= max_recov blocks the nudge branch, and
+        # frozen_for was only ~30s, not yet 300s. Fail the task so
+        # the monitor's retry-bound path handles it
+        # (MAX_PHASE_ATTEMPTS → impasse if exceeded). §9.4 / §11.2 fix #2.
+        logger.warning(
+            f"[MECH-RECOVERY] Agent {agent.id[:8]} frozen {int(frozen_for)}s after "
+            f"{max_recov} recovery attempts — abandoning: fail task, terminate agent"
+        )
+        with self.db_manager.session_scope() as session:
+            from src.core.database import Task as _Task
+
+            stuck_task = (
+                session.query(_Task)
+                .filter_by(assigned_agent_id=agent.id)
+                .filter(_Task.status.in_(STUCK_TASK_STATUSES))
+                .first()
+            )
+            if stuck_task:
+                stuck_task.status = "failed"
+                stuck_task.failure_reason = (
+                    f"Agent output frozen {int(frozen_for)}s; "
+                    f"{max_recov} recovery attempts exhausted"
+                )
+                logger.info(
+                    f"[MECH-RECOVERY] Task {stuck_task.id[:8]} marked failed; "
+                    f"phase will be retried (MAX_PHASE_ATTEMPTS bound)"
+                )
+        await self.agent_manager.terminate_agent(agent.id)
+        self._stuck_state.pop(agent.id, None)
+        return True
 
     async def detect_cli_model_fallback(self, agent) -> bool:
         """When an agent has been frozen too long on its default model,
