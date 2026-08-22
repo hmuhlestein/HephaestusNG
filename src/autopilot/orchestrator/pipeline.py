@@ -8,102 +8,86 @@ review: a package __init__ should be a re-export surface, not host 3000+
 lines of the package's own business logic -- see
 docs/SOLID_OO_REVIEW_UPDATE_2026-08-19.md).
 """
-from src.autopilot.orchestrator.policy import ACTIVE_AGENT_STATUSES
+import copy
 import json
+import logging
+import os
 import shutil
 import sys
-from src.core.constants import AUTOPILOT_STATE_DIR
-from typing import Any
-from src.core.constants import CONTEXT_DIR_NAME
-from src.core.constants import DESIGN_CONTEXT_SUBDIR
-from src.core.database import DatabaseManager
-from src.core.database import Workflow
-from src.core.database import get_db
-from src.core.simple_config import get_config
-from src.autopilot.orchestrator.state import DesignEntry
-from src.autopilot.orchestrator.state import DesignStatus
-from typing import Dict
-from typing import NamedTuple
-from src.autopilot.orchestrator.state import FeatureReport
-from src.autopilot.orchestrator.state import FeatureRunStatus
-from typing import Optional
-from src.core.constants import PHASE0_DEFINITION_IDS
-from src.autopilot.orchestrator.phase_transitions import POLL_INTERVAL
+import time
+from datetime import datetime
 from pathlib import Path
-from src.autopilot.orchestrator.state import PersistentPipelineState
-from src.autopilot.orchestrator.state import PipelineState
-from src.autopilot.orchestrator.state import StopReason
-from typing import Tuple
-from src.autopilot.orchestrator.features import _clean_stale_assigned_tasks
-from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree
-from src.autopilot.orchestrator.worktree_integration import _create_designs_folder
-from src.autopilot.orchestrator.features import _create_feature_records
-from src.autopilot.orchestrator.worktree_integration import _create_integration_worktree
-from src.autopilot.orchestrator.state import _delete_project_context
-from src.autopilot.orchestrator.reporting import _empty_report
-from src.autopilot.orchestrator.policy import _escalate_stale_active_workflows
-from src.autopilot.orchestrator.reporting import _generate_design_report_html
+from typing import Any, Dict, NamedTuple, Optional, Tuple
+
+from src.autopilot.orchestrator.agent_registration import _register_orchestrator_agent
 from src.autopilot.orchestrator.config import (
     _get_paused_workflow_max_retry_cycles as _get_paused_workflow_max_retry_cycles,
 )
 from src.autopilot.orchestrator.config import (
     _get_paused_workflow_retry_cooldown_seconds as _get_paused_workflow_retry_cooldown_seconds,
 )
-from src.autopilot.orchestrator.queue import _get_phase0_completion
-from src.autopilot.orchestrator.config import _get_phase0_timeout
-from src.autopilot.orchestrator.config import _get_workflow_timeout
-from src.autopilot.orchestrator.queue import _has_resumable_active_design
-from src.autopilot.orchestrator.runtime_registries import _interruptible_sleep
-from src.autopilot.orchestrator.runtime_registries import (
-    _is_workflow_monitored as _is_workflow_monitored,
+from src.autopilot.orchestrator.config import _get_phase0_timeout, _get_workflow_timeout
+from src.autopilot.orchestrator.engine_client import (
+    _update_orchestrator_status,
+    get_active_workflows,
+    get_agents,
+    get_tasks,
+    get_workflow_status,
+    pause_workflow_direct,
+    peek_agent_output,
+    terminate_agent_direct,
 )
-from src.autopilot.orchestrator.phase_transitions import _negotiate_validation_fix
-from src.autopilot.orchestrator.runtime_registries import _get_orchestrator_agent_id
-from src.autopilot.orchestrator.runtime_registries import _orchestrator_agent_ids
-from src.autopilot.orchestrator.runtime_registries import _register_monitored_workflow
-from src.autopilot.orchestrator.agent_registration import _register_orchestrator_agent
-from src.autopilot.orchestrator.features import _relink_features_to_workflows
-from src.autopilot.orchestrator.features import _resolve_execution_order
-from src.autopilot.orchestrator.phase_transitions import _resume_stuck_workflow_tasks
-from src.autopilot.orchestrator.queue import _set_workflow_type
-from src.autopilot.orchestrator.runtime_registries import _should_stop
-from src.autopilot.orchestrator.runtime_registries import _stop_events as _stop_events
-from src.autopilot.orchestrator.phase_transitions import _try_advance_phases
-from src.autopilot.orchestrator.runtime_registries import _unregister_monitored_workflow
-from src.autopilot.orchestrator.queue import _update_design_status
-from src.autopilot.orchestrator.features import _update_feature_status
-from src.autopilot.orchestrator.engine_client import _update_orchestrator_status
-from src.autopilot.orchestrator.policy import _update_resumed_workflow_recovery_attempts
-from src.autopilot.orchestrator.features import _validate_features_json
-from src.autopilot.orchestrator.state import _workflow_belongs_to_project
-from src.autopilot.orchestrator.policy import attempt_recovery
-from src.autopilot.orchestrator.policy import check_api_credits
-import copy
-from datetime import datetime
-from src.autopilot.orchestrator.policy import detect_hard_error
-from src.autopilot.orchestrator.policy import detect_impasse
-from src.autopilot.orchestrator.engine_client import get_active_workflows
-from src.autopilot.orchestrator.engine_client import get_agents
-from src.autopilot.orchestrator.engine_client import get_tasks
-from src.autopilot.orchestrator.engine_client import get_workflow_status
-from src.autopilot.orchestrator.queue import is_design_fully_complete
-import logging
-import os
-from src.autopilot.orchestrator.engine_client import pause_workflow_direct
-from src.autopilot.orchestrator.engine_client import peek_agent_output
-from src.autopilot.orchestrator.queue import pick_next_design
+from src.autopilot.orchestrator.features import (
+    _clean_stale_assigned_tasks,
+    _create_feature_records,
+    _relink_features_to_workflows,
+    _resolve_execution_order,
+    _update_feature_status,
+    _validate_features_json,
+)
 from src.autopilot.orchestrator.human_escalation import prompt_human
+from src.autopilot.orchestrator.phase_transitions import POLL_INTERVAL, _negotiate_validation_fix, _resume_stuck_workflow_tasks, _try_advance_phases
 from src.autopilot.orchestrator.pipeline_logger import OrchestratorLogger
 from src.autopilot.orchestrator.pipeline_logger import (
     _resync_pipeline_registry as _resync_pipeline_registry,
 )
-from src.autopilot.orchestrator.engine_client import terminate_agent_direct
-import time
-
-
-
-
-
+from src.autopilot.orchestrator.policy import (
+    ACTIVE_AGENT_STATUSES,
+    _escalate_stale_active_workflows,
+    _update_resumed_workflow_recovery_attempts,
+    attempt_recovery,
+    check_api_credits,
+    detect_hard_error,
+    detect_impasse,
+)
+from src.autopilot.orchestrator.queue import _get_phase0_completion, _has_resumable_active_design, _set_workflow_type, _update_design_status, is_design_fully_complete, pick_next_design
+from src.autopilot.orchestrator.reporting import _empty_report, _generate_design_report_html
+from src.autopilot.orchestrator.runtime_registries import (
+    _get_orchestrator_agent_id,
+    _interruptible_sleep,
+    _orchestrator_agent_ids,
+    _register_monitored_workflow,
+    _should_stop,
+    _unregister_monitored_workflow,
+)
+from src.autopilot.orchestrator.runtime_registries import (
+    _is_workflow_monitored as _is_workflow_monitored,
+)
+from src.autopilot.orchestrator.runtime_registries import _stop_events as _stop_events
+from src.autopilot.orchestrator.state import (
+    DesignEntry,
+    DesignStatus,
+    FeatureReport,
+    FeatureRunStatus,
+    PersistentPipelineState,
+    PipelineState,
+    _delete_project_context,
+    _workflow_belongs_to_project,
+)
+from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree, _create_designs_folder, _create_integration_worktree
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, PHASE0_DEFINITION_IDS
+from src.core.database import DatabaseManager, Workflow, get_db
+from src.core.simple_config import get_config
 
 # Module-level logger for persistent state operations
 logger = logging.getLogger(__name__)
