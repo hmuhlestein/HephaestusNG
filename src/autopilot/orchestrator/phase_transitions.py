@@ -342,6 +342,17 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
                                 "Routed to development via goto to resolve blocking "
                                 "ticket(s); this task itself is not being retried"
                             )
+                            # This phase's own PhaseExecution is still
+                            # "in_progress" from the run that just failed --
+                            # reset it to "pending" so development's later
+                            # goto back to this phase name can find it via
+                            # _case_completed_with_successor's pending-list
+                            # search. See the identical fix (and its own
+                            # "observed live" note) in
+                            # _maybe_retry_failed_tasks's sibling branch.
+                            _execution = _db_consume.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+                            if _execution:
+                                reopen_phase_execution(_execution, status="pending", started_at="clear")
                             _db_consume.commit()
                     continue
 
@@ -1866,6 +1877,25 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                             "Routed to development via goto to resolve blocking "
                             "ticket(s); this task itself is not being retried"
                         )
+                    # This phase's own PhaseExecution is still "in_progress"
+                    # from the run that just failed -- reset it to "pending"
+                    # so that when development's own goto eventually targets
+                    # this phase name again, _case_completed_with_successor's
+                    # target search (which only matches phases in the
+                    # `pending` list) can actually find it. Left in_progress,
+                    # the workflow permanently stalls once development
+                    # returns: the only task this phase has is "duplicated"
+                    # (not "done", not "failed", not live), a status none of
+                    # _case_in_progress_no_tasks/_case_in_progress_complete/
+                    # _case_completed_with_successor treat as "needs a fresh
+                    # task" -- see the identical fix in _retry_failed_tasks.
+                    # Observed live: workflow ca539a75's git_expert phase
+                    # sat in_progress for 12+ hours after this exact branch
+                    # fired, with development's later goto back to it
+                    # silently never creating a new task.
+                    execution = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
+                    if execution:
+                        reopen_phase_execution(execution, status="pending", started_at="clear")
                     db.commit()
                     failed_tasks = [t for t in failed_tasks if t not in ticket_blocked]
                     if not failed_tasks:
