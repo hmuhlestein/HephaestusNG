@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple
 # resolves against the CURRENT module's attribute, not the original
 # definition site, so re-exporting here is sufficient; the "as X" form is
 # ruff's own marker for "this import is intentionally unused, don't flag it."
-from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY, _trigger_arbitration
 from src.autopilot.orchestrator.arbitration import (
     _build_arbitration_prompt as _build_arbitration_prompt,
 )
@@ -44,7 +44,6 @@ from src.autopilot.orchestrator.arbitration import (
 from src.autopilot.orchestrator.arbitration import (
     _resolve_arbitration_outcome as _resolve_arbitration_outcome,
 )
-from src.autopilot.orchestrator.arbitration import _trigger_arbitration
 from src.autopilot.orchestrator.engine_client import (
     create_agent_for_task_direct,
     get_tasks,
@@ -287,6 +286,65 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
         # found". A capital-only match silently exempted the first two from
         # the retry cap and not the third, for the same condition.
         is_orphan = "orphaned" in (task.get("failure_reason") or "").lower()
+
+        # git_expert/doc_review can't fix code -- verify_no_open_tickets
+        # (task_completion/verification.py) rejects their "done" call with
+        # "open bug ticket(s)" and leaves the task failed, but retrying
+        # either phase in place just repeats the identical rejection
+        # forever: neither one can resolve a bug ticket itself. Route
+        # straight to development instead -- the phase equipped to fix
+        # it -- the same way product_validation's own spec-gate already
+        # does for unmet requirements. Observed live: workflow ca539a75's
+        # git_expert task burned 5 retries against the same open ticket
+        # before landing permanently failed with no forward path.
+        failure_reason = task.get("failure_reason") or ""
+        if phase_id and "open bug ticket" in failure_reason.lower():
+            with get_db() as _db_phase:
+                _phase = _db_phase.query(Phase).filter_by(id=phase_id).first()
+            if _phase and _phase.name in ("git_expert", "doc_review"):
+                with get_db() as _db_dev:
+                    dev_phase = (
+                        _db_dev.query(Phase)
+                        .filter_by(workflow_id=workflow_id, name="development")
+                        .first()
+                    )
+                if not dev_phase:
+                    logger.warning(
+                        f"  Task {task_id[:8]} ({_phase.name}) blocked by an open "
+                        "bug ticket, but this workflow has no development phase "
+                        "to route back to -- falling through to normal retry"
+                    )
+                else:
+                    logger.info(
+                        f"  Task {task_id[:8]} ({_phase.name}) blocked by an open "
+                        "bug ticket -- routing to development instead of "
+                        "retrying in place"
+                    )
+                    _create_phase_task(
+                        workflow_id, dev_phase.id, "development", "goto", logger,
+                        feedback=failure_reason, source_phase_name=_phase.name,
+                    )
+                    # Must leave "failed" -- otherwise this same still-
+                    # "failed" task matches get_tasks(status="failed")
+                    # again on the very next sweep tick and fires ANOTHER
+                    # goto, forever, 15s apart, with no code change ever
+                    # able to stop it. Same "superseded, stop tracking"
+                    # convention this function's own sibling-task check
+                    # above already uses. Observed live: 7 duplicate goto-
+                    # to-development tasks in 8 minutes before this was
+                    # caught and the source task manually marked
+                    # "duplicated" to break the loop.
+                    with get_db() as _db_consume:
+                        _t_consume = _db_consume.query(Task).filter_by(id=task_id).first()
+                        if _t_consume and _t_consume.status == "failed":
+                            _t_consume.status = "duplicated"
+                            _t_consume.failure_reason = (
+                                "Routed to development via goto to resolve blocking "
+                                "ticket(s); this task itself is not being retried"
+                            )
+                            _db_consume.commit()
+                    continue
+
         # Read max_task_retries from workflow config, default to 5
         from src.autopilot.spec import get_max_task_retries
 
@@ -1760,6 +1818,65 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
             .filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter)
             .all()
         )
+
+        # git_expert/doc_review can't fix a bug ticket themselves --
+        # verify_no_open_tickets (task_completion/verification.py) rejects
+        # their "done" call and leaves them failed with an "open bug
+        # ticket(s)" reason. Left to the retryable/exhausted classification
+        # below, this either retries the same phase forever (never
+        # resolves) or wrongly pauses the whole workflow once retries are
+        # exhausted. Route to development instead -- the phase equipped to
+        # fix it, mirroring product_validation's own spec-gate goto. Same
+        # fix as _retry_failed_tasks's identical check; this function is a
+        # separate retry path (triggered when EVERY task in the phase is
+        # failed, vs that one's "any individual failed task") so both need
+        # it independently. Observed live: workflow ca539a75's git_expert
+        # task got retried here even after already being fixed in
+        # _retry_failed_tasks, because this is a genuinely different code
+        # path with its own reset-to-pending loop.
+        if phase.name in ("git_expert", "doc_review"):
+            ticket_blocked = [
+                t for t in failed_tasks
+                if "open bug ticket" in (t.failure_reason or "").lower()
+            ]
+            if ticket_blocked:
+                dev_phase = (
+                    db.query(Phase)
+                    .filter_by(workflow_id=phase.workflow_id, name="development")
+                    .first()
+                )
+                if dev_phase:
+                    for t in ticket_blocked:
+                        logger.info(
+                            f"[PHASE-ADVANCE] Task {t.id[:8]} ({phase.name}) blocked "
+                            "by an open bug ticket -- routing to development instead "
+                            "of retrying in place"
+                        )
+                        _create_phase_task(
+                            phase.workflow_id, dev_phase.id, "development", "goto", logger,
+                            feedback=t.failure_reason, source_phase_name=phase.name,
+                        )
+                        # Must leave "failed" -- otherwise this same task
+                        # matches Task.status == "failed" again on the very
+                        # next sweep tick and fires ANOTHER goto, forever.
+                        # See the identical fix (and its own "observed
+                        # live" note) in _retry_failed_tasks.
+                        t.status = "duplicated"
+                        t.failure_reason = (
+                            "Routed to development via goto to resolve blocking "
+                            "ticket(s); this task itself is not being retried"
+                        )
+                    db.commit()
+                    failed_tasks = [t for t in failed_tasks if t not in ticket_blocked]
+                    if not failed_tasks:
+                        return True
+                else:
+                    logger.warning(
+                        f"[PHASE-ADVANCE] {phase.name} has {len(ticket_blocked)} "
+                        "ticket-blocked task(s), but this workflow has no development "
+                        "phase to route back to -- falling through to normal retry handling"
+                    )
+
         # Orphaned tasks (never dispatched), session/spend limit failures,
         # and stuck-task failures are not agent faults -- they should always
         # be retryable. Session limit failures will use the fallback model on retry.
