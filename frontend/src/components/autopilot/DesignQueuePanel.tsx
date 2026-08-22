@@ -335,16 +335,16 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
         </Button>
         <Button onClick={() => onAddDesign('feature')} className="bg-blue-600 hover:bg-blue-700 text-white">
           <Sparkles className="w-4 h-4 mr-1" />
-          New Feature
+          Feature Spec
         </Button>
         <Button onClick={() => onAddDesign('bugfix')} className="bg-amber-600 hover:bg-amber-700 text-white">
           <Bug className="w-4 h-4 mr-1" />
-          Report Bug
+          Bug Spec
         </Button>
       </div>
       <p className="text-xs text-gray-400">
-        Sorted by filename by default. Drag to reorder manually. Or add to
-        <code>docs/design-queue</code> which finds them automatically.
+        Sorted by filename by default. Drag to reorder manually. Or add to&nbsp;
+        <code>docs/spec-queue</code> which finds them automatically.
       </p>
 
       {isLoading ? (
@@ -419,11 +419,11 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           </p>
           <Button onClick={() => onAddDesign('feature')} className="bg-blue-600 hover:bg-blue-700 text-white">
             <Sparkles className="w-4 h-4 mr-1" />
-            New Feature
+            Feature Spec
           </Button>
           <Button onClick={() => onAddDesign('bugfix')} className="bg-amber-600 hover:bg-amber-700 text-white">
             <Bug className="w-4 h-4 mr-1" />
-            Report Bug
+            Bug Spec
           </Button>
         </div>
       )}

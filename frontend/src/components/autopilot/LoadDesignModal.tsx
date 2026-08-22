@@ -36,14 +36,14 @@ interface RemoteEntry {
 const TYPE_COPY = {
   feature: {
     icon: Sparkles,
-    title: 'New Feature',
+    title: 'Feature Spec',
     subtitle: 'Select or drag & drop design documents describing what to build.',
     accent: 'blue',
-    defaultFolder: 'docs/design',
+    defaultFolder: 'docs/spec',
   },
   bugfix: {
     icon: Bug,
-    title: 'Report Bug',
+    title: 'Bug Spec',
     subtitle: "Select or drag & drop bug reports describing what's broken.",
     accent: 'amber',
     defaultFolder: 'docs/bugfix',
@@ -80,6 +80,14 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
   const [addedRemotePaths, setAddedRemotePaths] = useState<Set<string>>(new Set());
   const [browsingForFolder, setBrowsingForFolder] = useState(false);
   const [destinationFolder, setDestinationFolder] = useState('');
+  // Bug Spec flow only: typed/pasted content saved directly to a file in
+  // the destination folder, instead of the feature flow's drag & drop --
+  // a bug report is usually written fresh on the spot, not dragged in
+  // from an existing file. Local-file selection still exists for this
+  // flow (see the "Select Local File" button in Actions below), it's
+  // just no longer the primary composition surface.
+  const [textContent, setTextContent] = useState('');
+  const [textFilename, setTextFilename] = useState('bug-report.md');
   const remoteRequestId = useRef(0);
 
   const copy = workflowType ? TYPE_COPY[workflowType] : null;
@@ -96,6 +104,8 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
       setRemoteError(null);
       setAddedRemotePaths(new Set());
       setBrowsingForFolder(false);
+      setTextContent('');
+      setTextFilename('bug-report.md');
     } else {
       const defaultFolder = copy?.defaultFolder ?? '';
       setDestinationFolder(defaultFolder);
@@ -105,13 +115,28 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
       // Expanded by default -- these flows exist specifically to pull in
       // an already-written doc, so the remote browser (not the local
       // drop zone) is the primary path, not a secondary one behind a
-      // click.
+      // click. Kept expanded for Bug Spec too (its own list is shrunk
+      // instead -- see the max-h-32 remote browser below -- rather than
+      // hiding the option entirely).
       setBrowsingForFolder(false);
       setRemoteOpen(true);
       loadRemoteDir('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, workflowType]);
+
+  // Close on Escape, same as the existing backdrop-click-to-close --
+  // applies to both the Feature Spec and Bug Spec flows (and the plain
+  // "Load Design" entry point), since this one component renders all of
+  // them via workflowType.
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [open, onClose]);
 
   const loadRemoteDir = async (path: string) => {
     if (!projectId) return;
@@ -211,7 +236,25 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-    
+
+    // Bug Spec: "Select Local File" feeds the same filename/textarea pair
+    // as typing directly, so the picked file previews (and stays editable)
+    // there instead of disappearing into a "1 file(s) selected" row with
+    // no visible content -- only the first file applies, since there's
+    // just one filename/textarea pair to preview it in.
+    if (workflowType === 'bugfix') {
+      const file = files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        setTextFilename(file.name);
+        setTextContent((event.target?.result as string) ?? '');
+      };
+      reader.readAsText(file);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     Array.from(files).forEach(file => {
       const reader = new FileReader();
       reader.onload = (event) => {
@@ -224,7 +267,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
       };
       reader.readAsText(file);
     });
-    
+
     // Reset input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -278,6 +321,20 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
+
+  // Bug Spec's typed content is a file in its own right (see the textarea
+  // above) -- combine it with anything picked via "Select Local File" /
+  // "Load from Remote" at submit time rather than threading it through
+  // loadedFiles on every keystroke.
+  const typedFile: LoadedFile[] =
+    workflowType === 'bugfix' && textContent.trim()
+      ? [{
+          name: textFilename.trim() || 'bug-report.md',
+          content: textContent,
+          size: new Blob([textContent]).size,
+        }]
+      : [];
+  const filesToSubmit = [...typedFile, ...loadedFiles];
 
   return (
     <AnimatePresence>
@@ -335,7 +392,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                       className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 flex-shrink-0"
                     >
                       <FolderInput className="w-3.5 h-3.5" />
-                      Browse…
+                      Select or Create
                     </button>
                   </div>
                   <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
@@ -344,32 +401,59 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                 </div>
               )}
 
-              {/* Drop Zone */}
-              <div
-                onDrop={handleDrop}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onClick={() => fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
-                  isDragOver
-                    ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20'
-                    : 'border-gray-200 dark:border-gray-600 hover:border-violet-300 dark:hover:border-violet-500 hover:bg-gray-50 dark:hover:bg-gray-700/50'
-                }`}
-              >
-                <FileText className={`w-12 h-12 mx-auto mb-3 ${isDragOver ? 'text-violet-500 dark:text-violet-400' : 'text-gray-300 dark:text-gray-600'}`} />
-                <p className="text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">
-                  {isDragOver ? 'Drop files here' : 'Click to select files or drag & drop'}
-                </p>
-                <p className="text-xs text-gray-400 dark:text-gray-500">
-                  Supports .md and .txt files &middot; stored in{' '}
-                  <code className="font-mono">{workflowType ? destinationFolder || copy?.defaultFolder : 'docs/'}</code>
-                </p>
-              </div>
+              {/* Bug Spec: write the report directly, saved to a file in the
+                  destination folder -- a bug report is usually composed on
+                  the spot, not dragged in from an existing local file. */}
+              {workflowType === 'bugfix' ? (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <input
+                      type="text"
+                      value={textFilename}
+                      onChange={(e) => setTextFilename(e.target.value)}
+                      placeholder="bug-report.md"
+                      className={`w-48 px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-xs font-mono bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 ${accent.ring}`}
+                    />
+                    <span className="text-xs text-gray-400 dark:text-gray-500">
+                      saved to{' '}
+                      <code className="font-mono">{destinationFolder || copy?.defaultFolder}</code>
+                    </span>
+                  </div>
+                  <textarea
+                    value={textContent}
+                    onChange={(e) => setTextContent(e.target.value)}
+                    placeholder="Describe what's broken: steps to reproduce, expected vs. actual behavior, error messages…"
+                    rows={6}
+                    className={`w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 ${accent.ring}`}
+                  />
+                </div>
+              ) : (
+                <div
+                  onDrop={handleDrop}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
+                    isDragOver
+                      ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20'
+                      : 'border-gray-200 dark:border-gray-600 hover:border-violet-300 dark:hover:border-violet-500 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                  }`}
+                >
+                  <FileText className={`w-12 h-12 mx-auto mb-3 ${isDragOver ? 'text-violet-500 dark:text-violet-400' : 'text-gray-300 dark:text-gray-600'}`} />
+                  <p className="text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">
+                    {isDragOver ? 'Drop files here' : 'Click to select files or drag & drop'}
+                  </p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500">
+                    Supports .md and .txt files &middot; stored in{' '}
+                    <code className="font-mono">{workflowType ? destinationFolder || copy?.defaultFolder : 'docs/'}</code>
+                  </p>
+                </div>
+              )}
 
               <input
                 ref={fileInputRef}
                 type="file"
-                multiple
+                multiple={workflowType !== 'bugfix'}
                 accept=".md,.txt,text/plain,text/markdown"
                 onChange={handleFileSelect}
                 className="hidden"
@@ -419,7 +503,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                       </button>
                     )}
                   </div>
-                  <div className="max-h-64 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700">
+                  <div className={`${workflowType === 'bugfix' ? 'max-h-32' : 'max-h-64'} overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700`}>
                     {remoteLoading ? (
                       <div className="p-4 text-center text-xs text-gray-400 dark:text-gray-500">Loading…</div>
                     ) : remoteError ? (
@@ -491,20 +575,36 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
 
               {/* Actions */}
               <div className="flex items-center justify-end gap-3 pt-2">
-                <Button type="button" variant="outline" onClick={onClose}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={onClose}
+                  className="text-gray-700 dark:text-gray-300 dark:border-gray-600"
+                >
                   Cancel
                 </Button>
+                {workflowType === 'bugfix' && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-gray-700 dark:text-gray-300 dark:border-gray-600"
+                  >
+                    <Upload className="w-4 h-4 mr-1" />
+                    Select Local File
+                  </Button>
+                )}
                 <Button
-                  onClick={() => addMutation.mutate(loadedFiles)}
+                  onClick={() => addMutation.mutate(filesToSubmit)}
                   className={accent.button}
-                  disabled={addMutation.isPending || loadedFiles.length === 0 || (!!workflowType && !destinationFolder.trim())}
+                  disabled={addMutation.isPending || filesToSubmit.length === 0 || (!!workflowType && !destinationFolder.trim())}
                 >
                   {addMutation.isPending ? (
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
                   ) : (
                     <Check className="w-4 h-4 mr-1" />
                   )}
-                  Add {loadedFiles.length > 0 ? `${loadedFiles.length} ` : ''}to Queue
+                  Add {filesToSubmit.length > 0 ? `${filesToSubmit.length} ` : ''}to Queue
                 </Button>
               </div>
             </div>
