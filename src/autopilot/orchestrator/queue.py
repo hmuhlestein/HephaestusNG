@@ -164,9 +164,9 @@ def is_design_fully_complete(workflow_id: str, logger: "OrchestratorLogger") -> 
 def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: list = None) -> List[DesignEntry]:
     designs = []
     dirs = [queue_dir]
-    # Also scan docs/design-queue if it exists as a sibling of the primary queue.
+    # Also scan docs/spec-queue if it exists as a sibling of the primary queue.
     # queue_dir is typically <project>/.hephaestus/designs, so .parent.parent is
-    # the project root. docs/design-queue is the conventional fallback location.
+    # the project root. docs/spec-queue is the conventional fallback location.
     if extra_dirs:
         dirs.extend(extra_dirs)
     elif queue_dir.parent.parent.exists():
@@ -222,7 +222,7 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: l
                     )
                 )
 
-    # Check for manual reorder file — stored in .hephaestus/ (not in docs/design/)
+    # Check for manual reorder file — stored in .hephaestus/ (not in docs/spec/)
     order_file = queue_dir.parent.parent / CONTEXT_DIR_NAME / ".queue_order.json"
     if order_file.exists():
         try:

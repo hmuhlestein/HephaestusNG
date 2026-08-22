@@ -84,7 +84,7 @@ class AutopilotService:
 
         Args:
             project_path: Root directory of the project to work on
-            design_queue: Directory containing design documents (default: <project>/docs/design)
+            design_queue: Directory containing design documents (default: <project>/docs/spec)
             max_iterations: Maps to engine's max_total_gotos
 
         Returns:

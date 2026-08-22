@@ -141,7 +141,7 @@ different mechanism — they can disagree about whether it's running.
 ### P4 — Dual, drifting data models for the queue
 
 Two parallel representations of "designs to process":
-- **File queue:** `docs/design-queue/*.md|txt`, ordered by mtime, dedup by
+- **File queue:** `docs/spec-queue/*.md|txt`, ordered by mtime, dedup by
   SHA-256 content hash, plus a `queue_order` sidecar file (`_load_queue_order`).
 - **DB model:** `autopilot_projects` / `autopilot_designs` tables, with
   `_sync_project_designs()` reconciling files ↔ rows by filename ordinal.
@@ -568,7 +568,7 @@ couldn't reach out-of-tree paths they were told to read. The fix is to remove th
 ### 9.3 Design intake (resolved: DB-authoritative, no forced directory)
 
 **Finding:** intake is currently a *forced, hardcoded, in-repo* directory —
-`<project>/docs/design-queue/*.md|txt` (auto-created by the CLI/API, watched by
+`<project>/docs/spec-queue/*.md|txt` (auto-created by the CLI/API, watched by
 mtime + a `queue_order` sidecar) — running in parallel with the
 `autopilot_designs` DB table. This is the dual-store drift of **P4**, and it's
 conceptually backwards: designs are *inputs/specs*, not project artifacts, yet
@@ -584,7 +584,7 @@ code they describe. It also bifurcates the API (`/queue/*` vs
 - **File-drop is kept as one *optional, configurable* import method** — not the
   canonical store. It is demoted from "required magic directory" to an importer
   that upserts into the DB; its location is config, **not** a hardcoded
-  `<project>/docs/design-queue`, and it is not auto-required.
+  `<project>/docs/spec-queue`, and it is not auto-required.
 - **Multiple intake methods all converge on the DB:** API/UI (paste or upload),
   CLI (`heph autopilot add <file>` reads from anywhere), and the optional watched
   folder. Ordering is a DB column; the `queue_order` sidecar is removed.
@@ -1023,7 +1023,7 @@ it gets picked up: add `Phase as _Phase` to that import block (and check the
 3. Persist `PipelineState`/messages/events to DB (not `pipeline_state.json` / `events.jsonl`); register the service with backend startup/shutdown hooks (closes the module-singleton, state-lost-on-restart gap). Still not started — both files are still actively read/written in `orchestrator.py` and `autopilot_api.py`.
 4. **Split `OrchestratorLogger`** (`orchestrator.py:630`, was `:259` when this doc was written — the file has grown) — still one class conflating logging, an event sink (`event()`→`events.jsonl`), and state (`save_state()`→`state.json`). Not started.
 
-**Tier 3 — unify the queue / design intake (P4):** see **§9.3** — DB-authoritative; kill the forced `<project>/docs/design-queue`; file-drop becomes one optional config-located importer; merge `/queue/*` + `/projects/{id}/designs/*`; retire frontend file-queue calls; drop the `queue_order` sidecar. **Still not done** — `_get_queue_order_path`/`_load_queue_order`/`_save_queue_order` (`autopilot_api.py:545-568`, called from 5 route handlers) still maintain `.queue_order.json` alongside the DB `autopilot_designs` table.
+**Tier 3 — unify the queue / design intake (P4):** see **§9.3** — DB-authoritative; kill the forced `<project>/docs/spec-queue`; file-drop becomes one optional config-located importer; merge `/queue/*` + `/projects/{id}/designs/*`; retire frontend file-queue calls; drop the `queue_order` sidecar. **Still not done** — `_get_queue_order_path`/`_load_queue_order`/`_save_queue_order` (`autopilot_api.py:545-568`, called from 5 route handlers) still maintain `.queue_order.json` alongside the DB `autopilot_designs` table.
 
 **Tier 4 — C4.4:** ensure `prompt_human` has no blocking `input()` under API spawn (moot once Tier 2 #1 lands — still open since #1 hasn't landed; the terminal-input branch at `orchestrator.py:1864` is still live).
 

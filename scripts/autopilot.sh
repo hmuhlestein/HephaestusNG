@@ -271,7 +271,7 @@ ${BOLD}USAGE:${NC}
 
 ${BOLD}OPTIONS:${NC}
     --project-path DIR          Project directory (required)
-    --design-queue DIR          Override design queue location (default: <project-path>/docs/design)
+    --design-queue DIR          Override design queue location (default: <project-path>/docs/spec)
     --max-iterations N          Maximum iterations per design (default: 3)
     --drop-db                   Drop database before starting
     --no-frontend               Skip frontend dashboard
@@ -280,7 +280,7 @@ ${BOLD}OPTIONS:${NC}
     --help                      Show this help
 
 ${BOLD}DESIGN QUEUE:${NC}
-    Drop .md or .txt files into <project-path>/docs/design/
+    Drop .md or .txt files into <project-path>/docs/spec/
     The pipeline watches this directory and processes designs in
     modification-time order (oldest first).
 
@@ -296,7 +296,7 @@ ${BOLD}LITELLM PROXY (Optional - for cost tracking):${NC}
     cost tracking. Costs are displayed in the HTML feature report.
 
 ${BOLD}EXAMPLES:${NC}
-    # Start continuous pipeline (design queue at ./project/docs/design/)
+    # Start continuous pipeline (design queue at ./project/docs/spec/)
     $0 --project-path ./project
 
     # With more iterations per design
@@ -306,7 +306,7 @@ ${BOLD}EXAMPLES:${NC}
     $0 --project-path ./project --design-queue ./my-designs
 
     # Check what's in the queue
-    ls ./project/docs/design/
+    ls ./project/docs/spec/
 
     # Check status
     $0 --status
@@ -366,9 +366,9 @@ validate_inputs() {
         exit 1
     fi
 
-    # Default design queue to <project-path>/docs/design
+    # Default design queue to <project-path>/docs/spec
     if [ -z "$DESIGN_QUEUE" ]; then
-        DESIGN_QUEUE="$PROJECT_PATH/docs/design"
+        DESIGN_QUEUE="$PROJECT_PATH/docs/spec"
     fi
 
     mkdir -p "$PROJECT_PATH"
