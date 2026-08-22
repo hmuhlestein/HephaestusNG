@@ -445,6 +445,14 @@ class AutopilotConfig(_ConfigSection):
         self.sdk_start_timeout_seconds = autopilot.get(
             "sdk_start_timeout_seconds", 60
         )  # how long sdk.start() waits for the backend's /health check
+        self.independent_test_timeout_seconds = autopilot.get(
+            "independent_test_timeout_seconds", 300
+        )  # how long the QA gate's own pytest re-run (spec.py's
+        # run_independent_test_verification) may block phase advancement
+        # before giving up and falling back to the agent's self-reported
+        # result. Observed live: a target project whose suite runs close
+        # to this ceiling stalled the qa_validation->product_validation
+        # transition for the full timeout every run.
 
     def apply_env_overrides(self):
         if os.getenv("WORKFLOW_TIMEOUT_SECONDS"):
@@ -453,6 +461,10 @@ class AutopilotConfig(_ConfigSection):
             self.phase0_timeout_seconds = int(os.getenv("PHASE0_TIMEOUT_SECONDS"))
         if os.getenv("SDK_START_TIMEOUT_SECONDS"):
             self.sdk_start_timeout_seconds = int(os.getenv("SDK_START_TIMEOUT_SECONDS"))
+        if os.getenv("INDEPENDENT_TEST_TIMEOUT_SECONDS"):
+            self.independent_test_timeout_seconds = int(
+                os.getenv("INDEPENDENT_TEST_TIMEOUT_SECONDS")
+            )
 
 
 class TicketTrackingConfig(_ConfigSection):

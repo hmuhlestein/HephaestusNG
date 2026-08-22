@@ -165,6 +165,11 @@ autopilot:
   # How long sdk.start() waits for the backend's /health check when
   # launching the autopilot pipeline
   sdk_start_timeout_seconds: 60
+  # How long the QA gate's own independent pytest re-run may block phase
+  # advancement before giving up and falling back to the agent's
+  # self-reported result. Raise this if the target project's test suite
+  # routinely runs close to the ceiling.
+  independent_test_timeout_seconds: 300
 ticket_tracking:
   enabled: true
   default_human_review: false
