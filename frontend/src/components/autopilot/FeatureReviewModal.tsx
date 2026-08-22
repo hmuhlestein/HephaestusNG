@@ -268,7 +268,7 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
               </div>
 
               {/* Action buttons */}
-              <div className="p-5 border-t border-gray-100 flex flex-col gap-3">
+              <div className="px-5 pb-5 flex flex-col gap-3">
                 <button
                   onClick={() => reviewMutation.mutate({ action: 'approve' })}
                   disabled={reviewMutation.isPending}
