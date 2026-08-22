@@ -23,13 +23,13 @@ WORKTREES_SUBDIR = ".worktrees"
 DIAGNOSTIC_TASK_PREFIX = "DIAGNOSTIC:"
 
 # Design document queue/inbox (relative to project root)
-DESIGN_SUBDIR = "docs/design"
+DESIGN_SUBDIR = "docs/spec"
 # Default destination folder for the "Report Bug" flow's uploads -- see
 # add_project_design's destination handling and DESIGN_SUBDIR's identical
 # role for the "New Feature" flow.
 BUGFIX_SUBDIR = "docs/bugfix"
 DESIGN_CONTEXT_SUBDIR = ".hephaestus/designs"
-DESIGN_QUEUE_FALLBACK_DIR = "docs/design-queue"
+DESIGN_QUEUE_FALLBACK_DIR = "docs/spec-queue"
 
 # Pipeline metrics filename
 PIPELINE_METRICS_FILE = "pipeline_metrics.json"

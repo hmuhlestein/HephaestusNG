@@ -921,7 +921,7 @@ Template file: `src/autopilot/templates/design_report.html`
 
 ### 7.1 `add_to_queue` — store file_path in DB, do not copy
 
-**Current behavior:** copies file to `<project>/docs/design-queue/` and that copy
+**Current behavior:** copies file to `<project>/docs/spec-queue/` and that copy
 is what gets processed.
 
 **New behavior:** resolve the absolute path, create an `AutopilotDesign` DB record

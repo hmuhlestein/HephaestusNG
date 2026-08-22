@@ -23,7 +23,7 @@ router = APIRouter()
 def _get_queue_order_path(project_id: Optional[str] = None) -> Optional[Path]:
     try:
         # Write alongside other server state under .hephaestus/, not inside
-        # the tracked docs/design/ directory (which would pollute git status).
+        # the tracked docs/spec/ directory (which would pollute git status).
         effective_dir = _get_effective_queue_dir(project_id)
         hephaestus_dir = Path(effective_dir).parent.parent / CONTEXT_DIR_NAME
         hephaestus_dir.mkdir(parents=True, exist_ok=True)

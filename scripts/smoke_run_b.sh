@@ -68,9 +68,9 @@ cd - >/dev/null
 rm -f "$PROJECT_PATH/tests/test_compute.py"
 
 # Write canonical design doc and seeded failing test (overwrite each run)
-mkdir -p "$PROJECT_PATH/docs/design" "$PROJECT_PATH/tests"
+mkdir -p "$PROJECT_PATH/docs/spec" "$PROJECT_PATH/tests"
 
-cat > "$PROJECT_PATH/docs/design/add_calculator.md" << 'DESIGN'
+cat > "$PROJECT_PATH/docs/spec/add_calculator.md" << 'DESIGN'
 # Feature: add()
 
 Add an `add(a, b)` function that returns the sum of two numbers, with
@@ -233,7 +233,7 @@ TESTING
 # "PRE-SEEDED" test file didn't exist in any branch, because it never was
 # committed anywhere.
 cd "$PROJECT_PATH"
-git add -A docs/design tests/test_calculator.py TESTING.md
+git add -A docs/spec tests/test_calculator.py TESTING.md
 git commit -q -m "smoke: seed design doc + pre-seeded test + testing guide" --allow-empty
 cd - >/dev/null
 

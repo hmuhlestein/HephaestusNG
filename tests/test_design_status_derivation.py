@@ -80,7 +80,7 @@ def _make_workflow(
         status=status,
         definition_id=definition_id,
         design_id=design_id,
-        launch_params={"design_document": f"docs/design/{filename}"},
+        launch_params={"design_document": f"docs/spec/{filename}"},
         **overrides,
     )
     session.add(wf)
