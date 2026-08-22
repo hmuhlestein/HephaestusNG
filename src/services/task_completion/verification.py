@@ -335,7 +335,8 @@ def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]
     resolved" is actually required, not just requested.
 
     Also applies to git_expert -- the literal last phase before a
-    feature ships. security_review's own gate covers only what it failed
+    feature ships -- and doc_review, which sits between them and is
+    equally unable to fix code. security_review's own gate covers only what it failed
     to FIX (security.md's unresolved_count, scored by
     score_security_review): the medium/low findings it deliberately
     tickets instead of fixing are by design NOT gate input, so they have
@@ -361,7 +362,7 @@ def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]
 
     if phase is None:
         phase = session.query(Phase).filter_by(id=task.phase_id).first()
-    if not phase or phase.name not in ("development", "git_expert"):
+    if not phase or phase.name not in ("development", "git_expert", "doc_review"):
         return None
     if not task.workflow_id:
         return None
@@ -407,7 +408,7 @@ def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]
     fix_instruction = (
         "Fix the underlying issue for each, then call update_ticket_status(new_status='shipped') before retrying update_task_status(done)."
         if phase.name == "development"
-        else ("This phase cannot fix code itself — the workflow needs to route back to development to resolve these before git_expert can proceed.")
+        else (f"This phase cannot fix code itself — the workflow needs to route back to development to resolve these before {phase.name} can proceed.")
     )
     return {
         "status": "failed",
