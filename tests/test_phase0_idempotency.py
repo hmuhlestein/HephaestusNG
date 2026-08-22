@@ -492,6 +492,82 @@ class TestRunPhase0Tiers:
             "# Feature Review Report\n\nClean pass."
         )
 
+    def test_suffixed_feature_review_report_copied_and_archived_under_bare_name(
+        self, db_manager, design, tmp_path
+    ):
+        """Agents now write feature_review-<task_id[:8]>.md, not the bare
+        name -- the copy-out step must find it via the same newest-match
+        fallback scoring uses, and archive it in designs_folder under the
+        bare name (a one-time final copy has none of the collision risk
+        the suffix exists for, and every reader of the archival copy
+        -- get_workflow_decomposition_review's designs_folder fallback --
+        expects the bare name)."""
+        from src.autopilot.orchestrator import run_phase0
+
+        design_entry = self._make_design_entry(design, tmp_path)
+        worktree = tmp_path / "worktree"
+        (worktree / ".hephaestus" / "features").mkdir(parents=True)
+        features_json_content = {
+            "design_name": "Test Design",
+            "features": [
+                {
+                    "id": "auth",
+                    "name": "Auth",
+                    "scope": "s",
+                    "files": ["src/auth.py"],
+                    "depends_on": [],
+                    "execution": "parallel",
+                }
+            ],
+        }
+        (worktree / ".hephaestus" / "features.json").write_text(
+            json.dumps(features_json_content)
+        )
+        (worktree / ".hephaestus" / "feature_review").mkdir(parents=True)
+        (worktree / ".hephaestus" / "feature_review" / "feature_review-a1b2c3d4.md").write_text(
+            "---\ntype: feature_review_result\nblocker_count: 0\nfix_count: 0\ndefer_count: 0\n---\n\n"
+            "# Feature Review Report\n\nClean pass, suffixed filename."
+        )
+
+        def fake_run_single_workflow(*args, **kwargs):
+            session = db_manager.get_session()
+            session.add(
+                Workflow(
+                    id=f"wf-{uuid.uuid4().hex[:8]}",
+                    name="Phase 0",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    definition_id="feature_architect",
+                    design_id=design,
+                )
+            )
+            session.commit()
+            session.close()
+            return FeatureRunStatus.COMPLETED
+
+        with patch(
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
+            return_value=worktree,
+        ), patch(
+            "src.autopilot.orchestrator.pipeline.run_single_workflow",
+            side_effect=fake_run_single_workflow,
+        ), patch(
+            "src.autopilot.orchestrator.worktree_integration._cleanup_worktree"
+        ):
+            features_json, designs_folder = run_phase0(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                project_path=tmp_path,
+                logger=MagicMock(),
+            )
+
+        assert (designs_folder / "feature_review.md").read_text() == (
+            "---\ntype: feature_review_result\nblocker_count: 0\nfix_count: 0\ndefer_count: 0\n---\n\n"
+            "# Feature Review Report\n\nClean pass, suffixed filename."
+        )
+        # The suffixed name itself is not what readers expect archived.
+        assert not (designs_folder / "feature_review-a1b2c3d4.md").exists()
+
     def test_feature_report_synopsis_copied_to_designs_folder(
         self, db_manager, design, tmp_path
     ):
