@@ -3799,3 +3799,87 @@ class TestDetectZombieAgent:
 
         assert result is False
         mock_agent_manager.terminate_agent.assert_not_called()
+
+
+class TestCleanupStaleWorktrees:
+    """Regression: nothing called cleanup_all_stale_branches periodically --
+    only a manual POST /cleanup-branches or a design's own Rerun action, so
+    a worktree whose *creation* was interrupted (e.g. a backend restart
+    between `git worktree add` succeeding and its AgentBranch row
+    committing) had no DB record for terminate_agent's own cleanup_worktree
+    call to ever find, and just accumulated under .worktrees/ indefinitely.
+    """
+
+    @pytest.mark.asyncio
+    async def test_sweeps_every_active_project_with_its_own_worktree_manager(
+        self, make_monitoring_loop, mock_db
+    ):
+        """Each active project must get its own fresh WorktreeManager
+        (reload()ed to that project's base_dir), not the shared long-lived
+        instance -- reload()ing a shared instance would race a concurrent
+        request relying on it pointing at a different project."""
+        fake_session = MagicMock()
+        proj1 = MagicMock(id="proj-1", base_dir="/path/one")
+        proj2 = MagicMock(id="proj-2", base_dir="/path/two")
+        fake_session.query.return_value.filter_by.return_value.all.return_value = [proj1, proj2]
+        mock_db.session_scope.return_value.__enter__.return_value = fake_session
+
+        instances = []
+
+        def _make_instance(*a, **kw):
+            inst = MagicMock()
+            inst.cleanup_all_stale_branches.return_value = {
+                "worktrees_cleaned": 0, "cleaned": 0, "merged": 0, "failed": 0,
+            }
+            instances.append(inst)
+            return inst
+
+        with patch("src.core.worktree_manager.WorktreeManager", side_effect=_make_instance):
+            await make_monitoring_loop._cleanup_stale_worktrees()
+
+        assert len(instances) == 2
+        instances[0].reload.assert_called_once_with("/path/one")
+        instances[1].reload.assert_called_once_with("/path/two")
+        instances[0].cleanup_all_stale_branches.assert_called_once()
+        instances[1].cleanup_all_stale_branches.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_skips_projects_with_no_base_dir(self, make_monitoring_loop, mock_db):
+        fake_session = MagicMock()
+        proj_no_dir = MagicMock(id="proj-empty", base_dir=None)
+        fake_session.query.return_value.filter_by.return_value.all.return_value = [proj_no_dir]
+        mock_db.session_scope.return_value.__enter__.return_value = fake_session
+
+        with patch("src.core.worktree_manager.WorktreeManager") as MockWTM:
+            await make_monitoring_loop._cleanup_stale_worktrees()
+
+        MockWTM.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_failure_in_one_project_does_not_block_the_others(
+        self, make_monitoring_loop, mock_db
+    ):
+        fake_session = MagicMock()
+        proj1 = MagicMock(id="proj-fails", base_dir="/path/fails")
+        proj2 = MagicMock(id="proj-ok", base_dir="/path/ok")
+        fake_session.query.return_value.filter_by.return_value.all.return_value = [proj1, proj2]
+        mock_db.session_scope.return_value.__enter__.return_value = fake_session
+
+        calls = []
+
+        def _make_instance(*a, **kw):
+            inst = MagicMock()
+
+            def _reload(base_dir):
+                calls.append(base_dir)
+                if base_dir == "/path/fails":
+                    raise ValueError("not a git repository")
+
+            inst.reload.side_effect = _reload
+            inst.cleanup_all_stale_branches.return_value = {"worktrees_cleaned": 0}
+            return inst
+
+        with patch("src.core.worktree_manager.WorktreeManager", side_effect=_make_instance):
+            await make_monitoring_loop._cleanup_stale_worktrees()
+
+        assert calls == ["/path/fails", "/path/ok"]

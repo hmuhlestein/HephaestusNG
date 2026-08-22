@@ -1664,6 +1664,37 @@ class TestTerminateAgent:
         mock_agent_manager.tmux_server.has_session.return_value = False
 
     @pytest.mark.asyncio
+    async def test_terminate_agent_cleans_up_its_legacy_worktree_checkout(
+        self, mock_agent_manager, db_manager
+    ):
+        """Regression: nothing on the normal termination path ever removed
+        a legacy isolated-per-agent worktree's on-disk checkout -- the
+        WIP-commit above only preserves work, it doesn't clean anything up,
+        and cleanup_worktree's only other caller (discard_agent) fires
+        exclusively from a CLI-fallback error path during agent *creation*,
+        never on completion. Observed live: validator/diagnostic agents'
+        worktrees accumulating under .worktrees/ indefinitely. The branch
+        must be preserved (delete_branch=False) -- only the checkout goes."""
+        with db_manager.session_scope() as session:
+            agent = Agent(
+                id="agent-term-worktree-cleanup",
+                system_prompt="Test",
+                status="working",
+                cli_type="pi",
+                tmux_session_name="test-session-term-wt",
+            )
+            session.add(agent)
+
+        mock_agent_manager.branch_manager.cleanup_worktree = MagicMock(return_value={"status": "cleaned"})
+
+        with patch("src.agents.terminator.time.sleep"):
+            await mock_agent_manager.terminate_agent("agent-term-worktree-cleanup")
+
+        mock_agent_manager.branch_manager.cleanup_worktree.assert_called_once_with(
+            "agent-term-worktree-cleanup", delete_branch=False
+        )
+
+    @pytest.mark.asyncio
     async def test_terminate_agent_waits_for_pane_idle_before_capturing(
         self, mock_agent_manager, db_manager
     ):

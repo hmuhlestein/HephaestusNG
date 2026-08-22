@@ -212,6 +212,24 @@ class Terminator:
                 )
                 self._commit_wip_in_shared_worktree(agent_id, agent.current_task_id)
 
+            # Remove the legacy isolated-per-agent worktree's checkout, if
+            # this agent has one (AgentBranch record) -- a no-op for the
+            # common shared-feature-worktree case (cleanup_worktree returns
+            # "not_found" when no record exists, so this is safe to call
+            # unconditionally). Branch preserved (delete_branch=False) for
+            # history/audit; only the on-disk checkout is removed. Without
+            # this, nothing on the normal termination path ever cleans up
+            # this worktree class -- the WIP-commit above only preserves
+            # the work, it doesn't merge or remove anything, and
+            # discard_agent's only other caller is a CLI-fallback error
+            # path during agent *creation*, not completion. Observed live:
+            # validator/diagnostic agents' worktrees accumulating under
+            # .worktrees/ indefinitely, each one a full checkout of the repo.
+            try:
+                self.branch_manager.cleanup_worktree(agent_id, delete_branch=False)
+            except Exception as e:
+                logger.debug(f"[TERMINATE] Worktree cleanup skipped for {agent_id[:8]}: {e}")
+
             # Capture pane PIDs and final output BEFORE killing the tmux session.
             # Termination fires the instant complete_my_task's HTTP handler
             # returns (spawn_background_task, no delay), but the agent's own
