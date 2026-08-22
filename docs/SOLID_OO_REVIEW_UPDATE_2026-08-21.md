@@ -262,6 +262,12 @@ retirement.
 
 ## 3. Updated priorities
 
+**All 6 items below are closed as of 2026-08-22** — this list is left in its
+original, as-written form for the historical record; do not read it as
+currently-open work. Items 1-3 and 5 (the `_find_tmux_session` half): §5.
+Item 4 (the except-block backlog): §6. Item 3's `feature_routes.py` half: §7.
+Item 5's `StatusBadge` half: §5. Item 6 (doc hygiene): commit `bc7e803`.
+
 1. **New, highest leverage.** Fold today's 16 `process_queue` race-family commits
    into `AUTOPILOT_REFACTOR_PLAN.md` (or a dedicated note) before the plan doc's
    account of this bug class falls further out of sync with the actual fix
@@ -441,6 +447,21 @@ grace-period feature) was fixed as part of verifying this work — the
 suite is green except 4 `test_agent_output_capture.py` failures that
 reproduce identically without these changes and belong to the in-flight
 grace-period feature's behavior change.
+
+**Independently re-verified, 2026-08-22 — one more real site found in the
+6 nested handlers this section reported as "all legitimate."**
+`worktree_manager.py:542`'s `git stash pop` failure, inside
+`merge_to_main`'s `except Exception` handler, was silently swallowed —
+if a merge fails AND the stash restore that follows it also fails, the
+changes sit in the stash list with zero trace anywhere, including the
+merge-failure log two lines above (which only describes the merge
+error, not that recovery also failed). Fixed with a `logger.error`,
+commit `584aeb9`. The other 5 (two `asyncio.CancelledError` passes after
+an explicit `.cancel()`, one `git merge --abort` idempotent guard, one
+best-effort trace-file write with the real failure already logged
+above it, one fallback-file-read-after-fallback) hold up as genuinely
+legitimate on direct re-reading. Pass-only count: **145** (146 minus this
+fix).
 
 ---
 
