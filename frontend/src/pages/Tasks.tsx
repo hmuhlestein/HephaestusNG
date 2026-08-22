@@ -16,6 +16,7 @@ import { formatDistanceToNow } from 'date-fns';
 import TaskFilterBar, { TaskFilters } from '@/components/TaskFilterBar';
 import { useDebounce } from '@/hooks/useDebounce';
 import BlockedTasksView from '@/components/BlockedTasksView';
+import { useTheme } from '@/context/ThemeContext';
 
 const TaskRow: React.FC<{
   task: Task;
@@ -23,11 +24,13 @@ const TaskRow: React.FC<{
   onViewDetails?: (taskId: string) => void;
 }> = ({ task, isNew, onViewDetails }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const { theme } = useTheme();
+  const highlightColor = theme === 'dark' ? '#1e3a5f' : '#DBEAFE';
 
   return (
     <motion.div
-      initial={isNew ? { opacity: 0, backgroundColor: '#DBEAFE' } : false}
-      animate={{ opacity: 1, backgroundColor: isNew ? '#DBEAFE' : undefined }}
+      initial={isNew ? { opacity: 0, backgroundColor: highlightColor } : false}
+      animate={{ opacity: 1, backgroundColor: isNew ? highlightColor : undefined }}
       transition={{ duration: 0.5, backgroundColor: { duration: 2 } }}
       className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
     >

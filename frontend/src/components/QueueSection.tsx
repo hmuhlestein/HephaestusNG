@@ -159,7 +159,7 @@ const QueueSection: React.FC<QueueSectionProps> = ({
           className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors rounded-lg"
         >
           <div className="flex items-center space-x-3 flex-1 min-w-0">
-            <Loader2 className="w-4 h-4 text-blue-600 flex-shrink-0" />
+            <Loader2 className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
 
             <div className="flex items-center space-x-2 flex-1 min-w-0">
               {/* Utilization bar */}
@@ -172,7 +172,7 @@ const QueueSection: React.FC<QueueSectionProps> = ({
                     style={{ width: `${utilizationPercentage}%` }}
                   />
                 </div>
-                <span className={`text-xs font-medium ${atCapacity ? 'text-orange-600' : 'text-blue-600'}`}>
+                <span className={`text-xs font-medium ${atCapacity ? 'text-orange-600 dark:text-orange-400' : 'text-blue-600 dark:text-blue-400'}`}>
                   {queueStatus?.active_agents}/{queueStatus?.max_concurrent_agents}
                 </span>
               </div>
@@ -180,7 +180,7 @@ const QueueSection: React.FC<QueueSectionProps> = ({
               {/* Next up preview */}
               {nextUpTask && (
                 <>
-                  <span className="text-gray-400">·</span>
+                  <span className="text-gray-400 dark:text-gray-500">·</span>
                   <span className="text-sm text-gray-600 dark:text-gray-400 truncate">
                     Next: <span className="font-medium text-gray-900 dark:text-gray-200">{nextUpTask.description}</span>
                   </span>
@@ -190,8 +190,8 @@ const QueueSection: React.FC<QueueSectionProps> = ({
               {/* Waiting count */}
               {hasQueue && (
                 <>
-                  <span className="text-gray-400">·</span>
-                  <span className="text-xs font-medium text-orange-600">
+                  <span className="text-gray-400 dark:text-gray-500">·</span>
+                  <span className="text-xs font-medium text-orange-600 dark:text-orange-400">
                     {queueStatus?.queued_tasks_count} waiting
                   </span>
                 </>
@@ -200,9 +200,9 @@ const QueueSection: React.FC<QueueSectionProps> = ({
           </div>
 
           {isExpanded ? (
-            <ChevronUp className="w-4 h-4 text-gray-500 flex-shrink-0" />
+            <ChevronUp className="w-4 h-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
           ) : (
-            <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />
+            <ChevronDown className="w-4 h-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
           )}
         </button>
 
@@ -231,7 +231,7 @@ const QueueSection: React.FC<QueueSectionProps> = ({
                         >
                           <div className="flex items-center space-x-2 flex-1 min-w-0">
                             <StatusBadge status={agent.status} size="sm" />
-                            <span className="text-xs text-gray-500 font-mono">
+                            <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
                               {agent.id.substring(0, 6)}
                             </span>
                             {agent.current_task ? (
@@ -239,7 +239,7 @@ const QueueSection: React.FC<QueueSectionProps> = ({
                                 <span className="text-sm text-gray-700 dark:text-gray-300 truncate">
                                   {agent.current_task.description}
                                 </span>
-                                <span className="text-xs text-gray-500 flex-shrink-0">
+                                <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
                                   {agent.current_task.runtime_seconds > 0
                                     ? `${Math.floor(agent.current_task.runtime_seconds / 60)}m`
                                     : '<1m'
@@ -247,7 +247,7 @@ const QueueSection: React.FC<QueueSectionProps> = ({
                                 </span>
                               </>
                             ) : (
-                              <span className="text-sm text-gray-400 italic">No task</span>
+                              <span className="text-sm text-gray-400 dark:text-gray-500 italic">No task</span>
                             )}
                           </div>
                           <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -311,7 +311,7 @@ const QueueSection: React.FC<QueueSectionProps> = ({
                             }`}>
                               {task.priority}
                             </span>
-                            <span className="text-xs text-gray-500 flex-shrink-0">
+                            <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
                               {task.queued_at ? formatDistanceToNow(new Date(task.queued_at), { addSuffix: true }) : 'now'}
                             </span>
                           </div>
