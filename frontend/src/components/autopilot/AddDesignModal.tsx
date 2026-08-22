@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Plus, Upload } from 'lucide-react';
+import { X, Upload, Sparkles, Bug } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import toast from 'react-hot-toast';
@@ -9,29 +9,66 @@ import toast from 'react-hot-toast';
 interface AddDesignModalProps {
   open: boolean;
   projectId: string | null;
+  defaultType: 'feature' | 'bugfix';
   onClose: () => void;
 }
 
-const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, projectId, onClose }) => {
+const TYPE_COPY = {
+  feature: {
+    icon: Sparkles,
+    title: 'New Feature',
+    subtitle: 'Describe what to build — runs the full pipeline (requirements, architecture, review).',
+    namePlaceholder: 'e.g. User Authentication System',
+    contentPlaceholder: '# Design: {name}\n\n## Overview\nDescribe the feature...\n\n## Requirements\n- Requirement 1\n- Requirement 2\n\n## Constraints\n- ...\n\n## Acceptance Criteria\n- [ ] Criteria 1\n- [ ] Criteria 2',
+    accent: 'blue',
+  },
+  bugfix: {
+    icon: Bug,
+    title: 'Report Bug',
+    subtitle: 'Describe what’s broken — skips straight to a fix + review + validation, no architecture phase.',
+    namePlaceholder: 'e.g. Login fails with valid credentials',
+    contentPlaceholder: '# Bug: {name}\n\n## Expected Behavior\n...\n\n## Actual Behavior\n...\n\n## Reproduction Steps\n1. ...\n2. ...\n\n## Environment\n- ...',
+    accent: 'amber',
+  },
+} as const;
+
+const ACCENT_CLASSES = {
+  blue: {
+    iconBg: 'bg-blue-100',
+    iconText: 'text-blue-600',
+    ring: 'focus:ring-blue-500',
+    button: 'bg-blue-600 hover:bg-blue-700 text-white',
+  },
+  amber: {
+    iconBg: 'bg-amber-100',
+    iconText: 'text-amber-600',
+    ring: 'focus:ring-amber-500',
+    button: 'bg-amber-600 hover:bg-amber-700 text-white',
+  },
+} as const;
+
+const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, projectId, defaultType, onClose }) => {
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [content, setContent] = useState('');
   const [extension, setExtension] = useState('.md');
-  const [workflowType, setWorkflowType] = useState<'' | 'feature' | 'bugfix'>('');
+
+  const copy = TYPE_COPY[defaultType];
+  const accent = ACCENT_CLASSES[copy.accent];
+  const Icon = copy.icon;
 
   useEffect(() => {
     if (!open) {
       setName('');
       setContent('');
       setExtension('.md');
-      setWorkflowType('');
     }
   }, [open]);
 
   const addMutation = useMutation({
     mutationFn: () => {
       if (!projectId) throw new Error('No project selected');
-      return apiService.addAutopilotProjectDesign(projectId, name, content, extension, 'queue', workflowType || null);
+      return apiService.addAutopilotProjectDesign(projectId, name, content, extension, 'queue', defaultType);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
@@ -75,12 +112,12 @@ const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, projectId, onClos
             {/* Header */}
             <div className="px-6 py-4 border-b flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-violet-100 rounded-lg">
-                  <Plus className="w-5 h-5 text-violet-600" />
+                <div className={`p-2 rounded-lg ${accent.iconBg}`}>
+                  <Icon className={`w-5 h-5 ${accent.iconText}`} />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-gray-800">Add Design to Queue</h2>
-                  <p className="text-xs text-gray-500">Paste or type your design document</p>
+                  <h2 className="text-lg font-bold text-gray-800">{copy.title}</h2>
+                  <p className="text-xs text-gray-500">{copy.subtitle}</p>
                 </div>
               </div>
               <button
@@ -95,13 +132,15 @@ const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, projectId, onClos
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div className="grid grid-cols-3 gap-4">
                 <div className="col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Design Name</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    {defaultType === 'bugfix' ? 'Bug Title' : 'Design Name'}
+                  </label>
                   <input
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. User Authentication System"
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    placeholder={copy.namePlaceholder}
+                    className={`w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 ${accent.ring}`}
                     autoFocus
                   />
                 </div>
@@ -110,7 +149,7 @@ const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, projectId, onClos
                   <select
                     value={extension}
                     onChange={(e) => setExtension(e.target.value)}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
+                    className={`w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 ${accent.ring} bg-white`}
                   >
                     <option value=".md">Markdown (.md)</option>
                     <option value=".txt">Text (.txt)</option>
@@ -119,30 +158,14 @@ const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, projectId, onClos
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Workflow Type</label>
-                <select
-                  value={workflowType}
-                  onChange={(e) => setWorkflowType(e.target.value as '' | 'feature' | 'bugfix')}
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
-                >
-                  <option value="">Auto-detect</option>
-                  <option value="feature">Feature</option>
-                  <option value="bugfix">Bug Fix</option>
-                </select>
-                <p className="text-xs text-gray-400 mt-1">
-                  Feature runs the full pipeline (requirements, architecture, review). Bug Fix
-                  skips straight to a fix + review + validation. Auto-detect guesses from the
-                  name/content — you can always override it here.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Design Document</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {defaultType === 'bugfix' ? 'Bug Report' : 'Design Document'}
+                </label>
                 <textarea
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
-                  placeholder={`# Design: ${name || 'Your Feature Name'}\n\n## Overview\nDescribe the feature...\n\n## Requirements\n- Requirement 1\n- Requirement 2\n\n## Constraints\n- ...\n\n## Acceptance Criteria\n- [ ] Criteria 1\n- [ ] Criteria 2`}
-                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm font-mono leading-relaxed focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none"
+                  placeholder={copy.contentPlaceholder.replace('{name}', name || (defaultType === 'bugfix' ? 'Your Bug Title' : 'Your Feature Name'))}
+                  className={`w-full px-4 py-3 border border-gray-200 rounded-xl text-sm font-mono leading-relaxed focus:outline-none focus:ring-2 ${accent.ring} resize-none`}
                   rows={16}
                 />
                 <p className="text-xs text-gray-400 mt-1">
@@ -157,7 +180,7 @@ const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, projectId, onClos
                 </Button>
                 <Button
                   type="submit"
-                  className="bg-violet-600 hover:bg-violet-700 text-white"
+                  className={accent.button}
                   disabled={addMutation.isPending || !name.trim() || !content.trim()}
                 >
                   {addMutation.isPending ? (
@@ -165,7 +188,7 @@ const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, projectId, onClos
                   ) : (
                     <Upload className="w-4 h-4 mr-1" />
                   )}
-                  Add to Queue
+                  {defaultType === 'bugfix' ? 'Report Bug' : 'Add Feature'}
                 </Button>
               </div>
             </form>
