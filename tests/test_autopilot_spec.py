@@ -630,6 +630,45 @@ class TestReviewFindingsHistory:
         history = S.get_review_findings_history("wf-history-4", "architectural_review")
         assert len(history[0]["summary"]) == 500
 
+    def test_duplicate_call_for_same_run_is_not_appended(self, db_manager):
+        """Regression (ticket-6de20f94): fire_spec_gate_if_ready's
+        documented race can call record_review_finding twice for one
+        physical goto -- a second call carrying the identical
+        (blocker_count, summary) as the last entry must be a no-op, or
+        history grows faster than the Task-row-based run_count that
+        capped_after_runs is stamped from, desyncing the two."""
+        S.record_review_finding("wf-history-5", "product_validation", 2, "same finding")
+        S.record_review_finding("wf-history-5", "product_validation", 2, "same finding")
+        history = S.get_review_findings_history("wf-history-5", "product_validation")
+        assert len(history) == 1
+
+    def test_different_finding_after_duplicate_still_appends(self, db_manager):
+        S.record_review_finding("wf-history-6", "product_validation", 2, "finding A")
+        S.record_review_finding("wf-history-6", "product_validation", 2, "finding A")
+        S.record_review_finding("wf-history-6", "product_validation", 0, "finding B")
+        history = S.get_review_findings_history("wf-history-6", "product_validation")
+        assert [h["run_number"] for h in history] == [1, 2]
+        assert history[1]["summary"] == "finding B"
+
+
+class TestFormatReviewFindingLine:
+    def test_short_summary_not_truncated(self):
+        line = S.format_review_finding_line(
+            {"run_number": 1, "blocker_count": 2, "summary": "short"}
+        )
+        assert line == "- Run 1: 2 unresolved finding(s) -- short"
+
+    def test_long_summary_gets_ellipsis(self):
+        """Regression (ticket-6de20f94): a bare [:200] slice cut findings
+        off mid-sentence with no indication of truncation."""
+        long_summary = "a" * 250
+        line = S.format_review_finding_line(
+            {"run_number": 3, "blocker_count": 2, "summary": long_summary}
+        )
+        assert line.endswith("...")
+        assert "a" * 200 in line
+        assert "a" * 201 not in line
+
 
 class TestResolveDeclaredOutputPath:
     """Phase 2 §4.9: resolve_declared_output_path is the single search
