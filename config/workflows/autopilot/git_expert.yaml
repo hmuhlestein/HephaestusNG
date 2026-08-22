@@ -9,16 +9,19 @@ description: |
   This phase runs inside the shared feature worktree. The worktree is already on
   the correct feature branch. Steps:
   1. Stage and commit all remaining changes
-  2. Push the feature branch to remote
-  3. Merge to main (or, in review_mode, create a pull request and stop —
+  2. Merge main into the feature branch and resolve any conflicts (mandatory,
+     first thing after committing -- do not skip, do not defer to the push step)
+  3. Push the feature branch to remote
+  4. Merge to main (or, in review_mode, create a pull request and stop —
      a human approves and merges later via the dashboard's review flow)
-  4. Record commit hash and PR URL
+  5. Record commit hash and PR URL
 done_definitions:
   - "Current branch and remote confirmed (or no-remote noted)"
   - "No open bug tickets blocking the merge"
   - "All eligible changes staged (git add -A or explicit file list)"
   - "Descriptive commit message created (or nothing to commit confirmed)"
   - "Commit created on feature branch (or confirmed already committed)"
+  - "Main merged into the feature branch and any conflicts resolved, BEFORE pushing"
   - "Feature merged into main (via PR if remote available, or local merge) OR PR created in review mode"
   - "Commit hash recorded in task summary"
   - "Task marked as done"
@@ -92,9 +95,13 @@ additional_notes: |
   If there is nothing to commit (all changes were already committed per-task),
   skip to STEP 3.
   
-  ## STEP 3: PUSH FEATURE BRANCH
+  ## STEP 3: MERGE MAIN IN AND CHECK FOR CONFLICTS — MANDATORY, DO THIS NOW
 
-  Before pushing, merge main into the feature branch to catch conflicts early:
+  Do this immediately after committing, before anything else in this phase.
+  Do NOT skip this and do NOT leave it for later — main may have moved since
+  your feature branch was created, and any conflicts need to surface here,
+  not silently at the final merge-to-main step below.
+
   ```bash
   REMOTE=$(git remote | head -1)
   DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/$REMOTE/HEAD 2>/dev/null | sed "s@refs/remotes/$REMOTE/@@" || echo "main")
@@ -103,11 +110,12 @@ additional_notes: |
   # Fetch latest main
   git fetch $REMOTE $DEFAULT_BRANCH
 
-  # Merge main into feature branch to resolve conflicts here
+  # Merge main into feature branch to resolve conflicts here, not later
   git merge $REMOTE/$DEFAULT_BRANCH -m "Merge $DEFAULT_BRANCH into $FEATURE_BRANCH to stay current"
   ```
 
-  If merge conflicts occur:
+  If merge conflicts occur, resolve them now — do not defer to the push or
+  final-merge steps:
   ```bash
   # Resolve conflicts in each file
   git status  # see conflicted files
@@ -116,12 +124,21 @@ additional_notes: |
   git commit --no-verify -m "Resolve merge conflicts with $DEFAULT_BRANCH"
   ```
 
-  Now push:
+  Confirm the merge actually completed (no lingering conflict markers, no
+  merge in progress) before moving on:
   ```bash
+  git status  # must show a clean working tree, no "You have unmerged paths"
+  ```
+
+  ## STEP 4: PUSH FEATURE BRANCH
+
+  ```bash
+  REMOTE=$(git remote | head -1)
+  FEATURE_BRANCH=$(git branch --show-current)
   git push $REMOTE $FEATURE_BRANCH
   ```
-  
-  ## STEP 4: MERGE TO MAIN (or CREATE PR if in review mode)
+
+  ## STEP 5: MERGE TO MAIN (or CREATE PR if in review mode)
 
   Check your task description for "REVIEW_MODE: true". If present, the
   project is in review mode — create a PR but do NOT merge to main.
@@ -137,7 +154,7 @@ additional_notes: |
       echo "PR already exists: $PR_URL"
     fi
     ```
-    Skip to STEP 5 — do NOT merge locally.
+    Skip to STEP 6 — do NOT merge locally.
 
   If REVIEW_MODE is NOT set:
     Merge locally into main (the primary path):
@@ -185,7 +202,7 @@ additional_notes: |
   fi
   ```
   
-  ## STEP 5: RECORD AND SAVE TO MEMORY
+  ## STEP 6: RECORD AND SAVE TO MEMORY
   
   Record the merge commit hash:
   ```bash
@@ -198,6 +215,8 @@ additional_notes: |
   
   DO:
   - Stage and commit all un-committed changes
+  - Merge main into the feature branch and resolve conflicts BEFORE pushing —
+    mandatory, not optional, not deferred to the final merge-to-main step
   - Push the feature branch before merging
   - Merge into main locally (gh PR is optional, not a substitute)
   - Use --no-verify for automated pipeline commits
