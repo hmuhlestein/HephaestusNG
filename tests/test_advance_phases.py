@@ -2368,6 +2368,108 @@ class TestCaseCompletedWithSuccessor:
         assert result is True
         assert mock_create.call_args[0][:4] == ("wf-1", "phase-2", "implementation", "continue")
 
+    def test_picks_the_most_recently_completed_phase_not_the_highest_order(
+        self, db_manager, sample_workflow
+    ):
+        """Regression, observed live (workflow ca539a75): a long-running,
+        goto-heavy workflow can have a downstream, HIGH-order phase (e.g.
+        forensics_analysis, order 12) still sitting "completed" from many
+        hours/cycles ago, while an UPSTREAM, LOW-order phase (e.g.
+        development, order 5) just NOW re-completed via a goto loop and
+        recorded an explicit goto target. The old `completed.sort(key=
+        phase.order); last_completed = completed[-1]` picked the STALE
+        high-order phase every time -- its own unrelated "continue" action
+        bore no relation to the low-order phase's actual goto, so the real
+        successor was silently never found, even sitting right there in
+        `pending`. Must pick by recency (completed_at), not order."""
+        from src.autopilot.orchestrator.phase_transitions import (
+    _case_completed_with_successor,
+    _get_phase_statuses,
+)
+
+        with db_manager.session_scope() as session:
+            # phase-1 ("requirements", order 1) stands in for development:
+            # just completed NOW, with an explicit goto target.
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.status = "completed"
+            exec1.completed_at = datetime.utcnow()
+            session.add(
+                Task(
+                    id="task-1",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    action="goto",
+                    action_target_phase="git_expert",
+                    completion_notes="Ticket resolved.",
+                )
+            )
+            # phase-2 ("implementation", order 2) is a lower-order pending
+            # decoy -- must NOT be picked just because it's the lowest-order
+            # pending phase; the explicit goto target below must win.
+            #
+            # phase-4 (order 10) stands in for forensics_analysis: it
+            # "completed" long ago, via an unrelated "continue" -- stale,
+            # must be ignored despite its higher order.
+            session.add(
+                Phase(
+                    id="phase-4", workflow_id="wf-1", name="forensics_analysis",
+                    order=10, description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-4", phase_id="phase-4", workflow_execution_id="wf-1",
+                    status="completed",
+                    completed_at=datetime.utcnow() - timedelta(hours=7),
+                )
+            )
+            session.add(
+                Task(
+                    id="task-4",
+                    workflow_id="wf-1",
+                    phase_id="phase-4",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    action="continue",
+                    completed_at=datetime.utcnow() - timedelta(hours=7),
+                )
+            )
+            # phase-3 (order 3): the real, explicit goto target.
+            session.add(
+                Phase(
+                    id="phase-3", workflow_id="wf-1", name="git_expert",
+                    order=3, description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-3", phase_id="phase-3", workflow_execution_id="wf-1",
+                    status="pending",
+                )
+            )
+
+        with patch("src.autopilot.orchestrator.phase_transitions._create_phase_task") as mock_create:
+            mock_create.return_value = True
+            with db_manager.session_scope() as session:
+                phase_statuses = _get_phase_statuses(session, "wf-1")
+                completed = [p for p in phase_statuses if p["status"] == "completed"]
+                pending = [p for p in phase_statuses if p["status"] == "pending"]
+                in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+                assert len(completed) == 2, "both phase-1 and phase-4 must be 'completed' for this to test anything"
+                result = _case_completed_with_successor(
+                    session, "wf-1", completed, pending, in_progress, MagicMock()
+                )
+
+        assert result is True
+        args, kwargs = mock_create.call_args
+        assert args[:4] == ("wf-1", "phase-3", "git_expert", "goto")
+        assert kwargs["feedback"] == "Ticket resolved."
+        assert kwargs["source_phase_name"] == "requirements"
+
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
     def test_ignores_a_done_task_from_a_prior_cycle(self, mock_create, db_manager, sample_workflow):
         """Regression, observed live: phase-2 succeeded once weeks ago,

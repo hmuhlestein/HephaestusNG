@@ -1284,8 +1284,33 @@ def _case_completed_with_successor(db, workflow_id: str, completed: list, pendin
     Returns None if this case doesn't apply, True/False otherwise.
     """
     if completed and pending and not in_progress:
-        completed.sort(key=lambda p: p["phase"].order)
-        last_completed = completed[-1]
+        # Pick by MOST RECENT completion, not highest phase order. A
+        # long-running, multi-cycle (goto-heavy) workflow can have a
+        # downstream phase (e.g. forensics_analysis, order 12) still
+        # sitting "completed" from many hours/cycles ago, while an
+        # UPSTREAM phase (e.g. development, order 5) just NOW
+        # re-completed via a goto loop. Picking by order landed on the
+        # stale downstream phase's own action/action_target_phase
+        # instead of the one that actually just fired, silently
+        # dropping the real goto -- the workflow then stalls forever
+        # with no case ever recognizing it needs to advance. completed_at
+        # is only None for a completed execution that predates this
+        # column, or in a test that doesn't set it; order is used as a
+        # tiebreaker for that case, preserving the old behavior when
+        # recency genuinely can't be determined (and matching every
+        # existing test, which only ever has one completed phase at a
+        # time -- order-vs-recency is unobservable there). Observed
+        # live: workflow ca539a75's development phase (order 5) fixed a
+        # ticket-blocked git_expert failure and goto'd back to
+        # git_expert, but forensics_analysis (order 12, completed ~7
+        # hours earlier) was picked instead -- its own unrelated
+        # "continue" action bore no relation to development's goto, and
+        # git_expert (the real successor) was never found, even though
+        # it was sitting right there in `pending`.
+        last_completed = max(
+            completed,
+            key=lambda p: (p["execution"].completed_at or datetime.min, p["phase"].order),
+        )
 
         # If the phase that just completed recorded an explicit goto/retry
         # target, honor that instead of blindly picking the lowest-order
