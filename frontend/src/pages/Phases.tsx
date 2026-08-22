@@ -177,7 +177,7 @@ export default function Phases() {
                           {/* Description */}
                           <div>
                             <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Description</h4>
-                            <MarkdownRenderer content={phase.description || ''} className="text-sm prose prose-sm prose-violet max-w-none" />
+                            <MarkdownRenderer content={phase.description || ''} className="text-sm prose prose-sm dark:prose-invert prose-violet max-w-none dark:text-gray-300" />
                           </div>
 
                           {/* Done Definitions */}

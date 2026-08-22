@@ -323,7 +323,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                 {taskDetails?.status === 'queued' && (
                   <button
                     onClick={handleBumpPriority}
-                    className="flex items-center px-2.5 py-1.5 bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition-colors text-xs font-medium"
+                    className="flex items-center px-2.5 py-1.5 bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 rounded hover:bg-orange-200 dark:hover:bg-orange-900/60 transition-colors text-xs font-medium"
                     title="Start immediately (bypasses agent limit)"
                   >
                     <Zap className="w-3 h-3 mr-1" />
@@ -334,7 +334,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                 {(taskDetails?.status === 'done' || taskDetails?.status === 'failed') && (
                   <button
                     onClick={handleRestartTask}
-                    className="flex items-center px-2 py-1 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition-colors text-xs font-medium"
+                    className="flex items-center px-2 py-1 bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 rounded hover:bg-purple-200 dark:hover:bg-purple-900/60 transition-colors text-xs font-medium"
                     title="Restart this task from scratch"
                   >
                     <RotateCcw className="w-3 h-3 mr-1" />
@@ -346,7 +346,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                   <>
                     <button
                       onClick={() => setShowAgentOutput(true)}
-                      className="flex items-center px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors text-xs font-medium"
+                      className="flex items-center px-2 py-1 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded hover:bg-blue-200 dark:hover:bg-blue-900/60 transition-colors text-xs font-medium"
                       title="View live agent output"
                     >
                       <Eye className="w-3 h-3 mr-1" />
@@ -356,7 +356,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                     {taskDetails.agent_info.status !== 'terminated' && (
                       <button
                         onClick={handleTerminateAgent}
-                        className="flex items-center px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors text-xs font-medium"
+                        className="flex items-center px-2 py-1 bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 rounded hover:bg-red-200 dark:hover:bg-red-900/60 transition-colors text-xs font-medium"
                         title="Terminate this agent"
                       >
                         <XCircle className="w-3 h-3 mr-1" />
@@ -436,7 +436,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
 
                 <div className="flex items-center text-gray-600 dark:text-gray-400 col-span-4 gap-4">
                   <div className="flex items-center">
-                    <FileText className="w-4 h-4 mr-2 text-gray-500" />
+                    <FileText className="w-4 h-4 mr-2 text-gray-500 dark:text-gray-400" />
                     <span className="text-xs">Task: </span>
                     <button
                       onClick={() => copyToClipboard(taskDetails.id, 'Task ID')}
@@ -475,7 +475,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                       </button>
                       <button
                         onClick={() => copyToClipboard(taskDetails.workflow_id!, 'workflow ID')}
-                        className="ml-2 text-gray-400 hover:text-gray-600"
+                        className="ml-2 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
                         title="Copy workflow ID"
                       >
                         <Copy className="w-3 h-3" />
@@ -572,7 +572,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                                   <p className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">
                                     {originalTask.description || 'No description'}
                                   </p>
-                                  <div className="flex items-center space-x-3 text-xs text-gray-500">
+                                  <div className="flex items-center space-x-3 text-xs text-gray-500 dark:text-gray-400">
                                     <span>ID: {originalTask.id.slice(0, 8)}...</span>
                                     <span>Created {formatDistanceToNow(new Date(originalTask.created_at), { addSuffix: true })}</span>
                                     {originalTask.assigned_agent_id && (
@@ -770,7 +770,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                                       ) : (
                                         <AlertCircle className="w-4 h-4 text-red-600" />
                                       )}
-                                      <span className="text-xs text-gray-500">
+                                      <span className="text-xs text-gray-500 dark:text-gray-400">
                                         {formatDistanceToNow(new Date(analysis.timestamp), { addSuffix: true })}
                                       </span>
                                     </div>
@@ -778,9 +778,9 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                                       variant="outline"
                                       className={cn(
                                         "text-xs",
-                                        analysis.alignment_score > 0.8 ? "bg-green-100 text-green-700" :
-                                        analysis.alignment_score > 0.4 ? "bg-yellow-100 text-yellow-700" :
-                                        "bg-red-100 text-red-700"
+                                        analysis.alignment_score > 0.8 ? "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300" :
+                                        analysis.alignment_score > 0.4 ? "bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300" :
+                                        "bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300"
                                       )}
                                     >
                                       {Math.round((analysis.alignment_score || 0) * 100)}%
@@ -895,7 +895,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                                 <div className="flex items-start justify-between mb-2">
                                   <div className="flex items-center space-x-2">
                                     <Target className="w-4 h-4 text-blue-600" />
-                                    <span className="text-xs text-gray-500">
+                                    <span className="text-xs text-gray-500 dark:text-gray-400">
                                       {formatDistanceToNow(new Date(intervention.timestamp), { addSuffix: true })}
                                     </span>
                                   </div>
@@ -982,7 +982,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                                         )}
                                       </div>
                                     </div>
-                                    <ExternalLink className="w-4 h-4 text-gray-400 ml-2 mt-1" />
+                                    <ExternalLink className="w-4 h-4 text-gray-400 dark:text-gray-500 ml-2 mt-1" />
                                   </div>
                                 </div>
                               ))
@@ -998,7 +998,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                                       <span className="text-sm text-gray-800 dark:text-gray-200">
                                         Task ID: {relatedId.slice(0, 8)}...
                                       </span>
-                                      <ExternalLink className="w-4 h-4 text-gray-400" />
+                                      <ExternalLink className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                                     </div>
                                   </button>
                                 ))
@@ -1022,13 +1022,13 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                       <span>Task Hierarchy</span>
                       <div className="flex items-center space-x-2 ml-2">
                         {taskDetails.parent_task && (
-                          <span className="flex items-center text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
+                          <span className="flex items-center text-xs bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full">
                             <ArrowUp className="w-3 h-3 mr-1" />
                             1 parent
                           </span>
                         )}
                         {taskDetails.child_tasks.length > 0 && (
-                          <span className="flex items-center text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
+                          <span className="flex items-center text-xs bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 px-2 py-1 rounded-full">
                             <ArrowDown className="w-3 h-3 mr-1" />
                             {taskDetails.child_tasks.length} {taskDetails.child_tasks.length === 1 ? 'child' : 'children'}
                           </span>
@@ -1089,7 +1089,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                               <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center">
                                 <ArrowDown className="w-4 h-4 mr-2 text-green-600" />
                                 Child Tasks ({taskDetails.child_tasks.length})
-                                <span className="ml-2 text-xs text-gray-500 font-normal">
+                                <span className="ml-2 text-xs text-gray-500 dark:text-gray-400 font-normal">
                                   Tasks created by this agent
                                 </span>
                               </h4>
@@ -1112,9 +1112,9 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                                       </div>
                                       <div className="flex items-center space-x-2">
                                         <span className={`text-xs px-2 py-1 rounded ${
-                                          child.priority === 'high' ? 'bg-red-100 text-red-700' :
-                                          child.priority === 'medium' ? 'bg-yellow-100 text-yellow-700' :
-                                          'bg-gray-100 text-gray-700'
+                                          child.priority === 'high' ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' :
+                                          child.priority === 'medium' ? 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300' :
+                                          'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
                                         }`}>
                                           {child.priority}
                                         </span>
@@ -1184,7 +1184,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                                       <p className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">
                                         {dupTask.description}
                                       </p>
-                                      <div className="flex items-center space-x-3 text-xs text-gray-500">
+                                      <div className="flex items-center space-x-3 text-xs text-gray-500 dark:text-gray-400">
                                         <span>ID: {dupTask.id.slice(0, 8)}...</span>
                                         <span>Created {formatDistanceToNow(new Date(dupTask.created_at), { addSuffix: true })}</span>
                                         {dupTask.created_by_agent_id && (
