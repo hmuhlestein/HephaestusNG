@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from src.core.constants import CONTEXT_DIR_NAME, WORKTREES_SUBDIR
 from src.core.database import (
+    Agent,
     AgentBranch,
     DatabaseManager,
     Workflow,
@@ -825,6 +826,27 @@ class WorktreeManager:
                 .filter(Workflow.status.in_(["active", "paused"]))
                 .all()
                 if wf.working_directory
+            }
+            # Workflow.working_directory only covers the shared-feature-
+            # worktree model -- the legacy isolated-per-agent worktree
+            # (AgentBranch, create_agent_worktree) isn't tied to any
+            # Workflow row at all, so it had no protection here whatsoever.
+            # A worktree freshly created for a still-alive agent that
+            # hasn't written anything yet is genuinely clean (nothing
+            # dirty to trip _remove_worktree's require_clean guard), so
+            # without this it would be silently removed out from under an
+            # agent that's about to start working in it -- not a lost-work
+            # bug (nothing was written yet), but the agent's own tmux
+            # session then points at a directory that no longer exists.
+            # Same alive-status set _create_phase_task's own active-agent
+            # check uses elsewhere.
+            active_working_directories |= {
+                str(Path(ab.worktree_path).resolve())
+                for ab in session.query(AgentBranch)
+                .join(Agent, Agent.id == AgentBranch.agent_id)
+                .filter(Agent.status.in_(["working", "idle", "starting"]))
+                .all()
+                if ab.worktree_path
             }
             # Resolved, not raw: git worktree list --porcelain reports the
             # canonical path for EVERY entry, including the main repo's own.

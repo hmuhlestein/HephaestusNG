@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 from git import Repo
 
-from src.core.database import AgentBranch, DatabaseManager, Workflow
+from src.core.database import Agent, AgentBranch, DatabaseManager, Workflow
 from src.core.worktree_manager import WorktreeManager
 
 
@@ -260,6 +260,79 @@ class TestCleanupDoesNotRemoveActiveWorktree:
             "while its worktree belongs to an active workflow"
         )
         assert working_path.exists()
+
+
+class TestCleanupDoesNotRemoveActiveAgentWorktree:
+    """Workflow.working_directory only covers the shared-feature-worktree
+    model -- the legacy isolated-per-agent worktree (AgentBranch,
+    create_agent_worktree, used by validators/diagnostic agents) isn't
+    tied to any Workflow row at all, so it had zero protection here. A
+    worktree freshly created for a still-alive agent that hasn't written
+    anything yet is genuinely clean (nothing dirty to trip
+    _remove_worktree's require_clean guard), so without this it would be
+    silently removed out from under an agent about to start working in
+    it. Not a lost-work bug on its own (nothing was written yet), but the
+    agent's own tmux session then points at a directory that no longer
+    exists. This became materially more likely once cleanup_all_stale_
+    branches started running on a periodic sweep instead of only rare
+    manual/rerun triggers."""
+
+    def test_still_alive_agents_fresh_worktree_survives_cleanup(
+        self, test_db, temp_repo, worktree_manager
+    ):
+        import src.core.simple_config
+
+        base_path = src.core.simple_config.get_config().paths.worktree_base_path
+
+        # An old, genuinely-stale agent worktree -- its agent is terminated.
+        stale_path = _add_worktree(temp_repo, base_path, "agent-dead-agent")
+        # A brand-new, still-clean worktree for an agent that's still alive
+        # (working) -- the race this guard exists to fix.
+        fresh_path = _add_worktree(temp_repo, base_path, "agent-still-alive")
+
+        session = test_db.get_session()
+        session.add(
+            Agent(
+                id="dead-agent", system_prompt="p", status="terminated",
+                cli_type="pi", tmux_session_name="tmux-dead",
+            )
+        )
+        session.add(
+            AgentBranch(
+                agent_id="dead-agent", worktree_path=str(stale_path),
+                branch_name="agent-dead-agent", parent_commit_sha="abc123",
+                base_commit_sha="abc123", merge_status="active",
+            )
+        )
+        session.add(
+            Agent(
+                id="still-alive", system_prompt="p", status="working",
+                cli_type="pi", tmux_session_name="tmux-alive",
+            )
+        )
+        session.add(
+            AgentBranch(
+                agent_id="still-alive", worktree_path=str(fresh_path),
+                branch_name="agent-still-alive", parent_commit_sha="abc123",
+                base_commit_sha="abc123", merge_status="active",
+            )
+        )
+        session.commit()
+        session.close()
+
+        result = worktree_manager.cleanup_all_stale_branches()
+
+        assert not stale_path.exists(), "a dead agent's worktree should still be cleaned up"
+        assert fresh_path.exists(), "a still-alive agent's worktree must survive cleanup"
+        assert result["worktrees_cleaned"] >= 1
+
+        branch_names = Repo(temp_repo.working_dir).git.branch(
+            "--format=%(refname:short)"
+        ).split("\n")
+        assert "agent-still-alive" in branch_names, (
+            "an alive agent's branch must survive cleanup while its worktree "
+            "is protected"
+        )
 
 
 class TestCleanupHandlesLegacyBranchPrefix:

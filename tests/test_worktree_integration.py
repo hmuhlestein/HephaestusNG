@@ -300,6 +300,10 @@ async def test_agent_termination_with_merge(agent_manager, test_db, worktree_man
     worktree_repo.index.commit("Feature implemented")
     session.close()
 
+    # Capture the commit before termination -- the checkout goes away, but
+    # the work it holds must not.
+    committed_sha = worktree_repo.head.commit.hexsha
+
     # Terminate with merge
     await agent_manager.terminate_agent(agent.id)
 
@@ -314,9 +318,14 @@ async def test_agent_termination_with_merge(agent_manager, test_db, worktree_man
     # The worktree should be cleaned even if merge failed
     session.close()
 
-    # Verify worktree was NOT cleaned (terminate_agent doesn't remove worktrees)
-    # Worktree cleanup is a separate operation via worktree_manager.cleanup_worktree()
-    assert worktree_path.exists()
+    # terminate_agent now cleans up this legacy per-agent worktree's
+    # checkout on every normal termination (see terminator.py) -- the
+    # WIP-commit above already preserved the work, so cleanup_worktree's
+    # delete_branch=False removes only the on-disk checkout, not the
+    # branch or its history. Assert both halves: the checkout is gone,
+    # and the commit it held is still reachable.
+    assert not worktree_path.exists()
+    assert Repo(worktree_manager.main_repo.working_dir).commit(committed_sha).hexsha == committed_sha
 
 
 def test_merge_conflict_resolution(worktree_manager, test_db):
