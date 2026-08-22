@@ -1814,6 +1814,52 @@ class TestRetryFailedTasks:
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_ticket_blocked_git_expert_resets_its_own_phase_execution_to_pending(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        """Regression: marking the source task "duplicated" and routing to
+        development is not enough -- git_expert's own PhaseExecution was
+        left "in_progress" from the run that just failed. When development
+        eventually goto's back to "git_expert" (its explicit
+        action_target_phase), _case_completed_with_successor only matches
+        a target against phases in the workflow's `pending` list --
+        "in_progress" doesn't qualify, so the goto is silently swallowed
+        and the workflow stalls forever with a "duplicated" task that
+        none of the three phase-advancement cases treat as "needs a fresh
+        task." Observed live: workflow ca539a75's git_expert phase sat
+        in_progress for 12+ hours after this exact branch fired."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_failed_tasks
+        from src.core.database import Phase, PhaseExecution, Task
+
+        with orch_db_env.session_scope() as session:
+            session.add(Phase(
+                id="phase-git-expert", workflow_id="wf-1", name="git_expert",
+                order=10, description="d", done_definitions=["x"],
+            ))
+            session.add(Phase(
+                id="phase-dev", workflow_id="wf-1", name="development",
+                order=4, description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-git-expert", phase_id="phase-git-expert",
+                status="in_progress", started_at=datetime.utcnow(),
+            ))
+        self._make_workflow_and_failed_task(orch_db_env, phase_id="phase-git-expert")
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            task.failure_reason = "Cannot mark done: 1 open bug ticket(s) still unresolved — ticket-abc: some finding."
+
+        _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        with orch_db_env.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-git-expert").first()
+            assert execution.status == "pending"
+            assert execution.started_at is None
+            assert execution.task_creation_claimed_at is None
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     def test_ticket_blocked_git_expert_does_not_get_re_routed_on_a_second_sweep(
         self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
     ):
@@ -2092,6 +2138,33 @@ class TestMaybeRetryFailedTasksRoutesTicketBlockedToDevelopment:
             # place.
             assert task.status == "duplicated"
             assert task.retry_count == 0
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_ticket_blocked_git_expert_resets_its_own_phase_execution_to_pending(
+        self, mock_create_agent, mock_create_phase_task, orch_db_env, tmp_path
+    ):
+        """Regression: see the identical test in TestRetryFailedTasks --
+        this is the sibling code path (fires when a phase's tasks are all
+        failed but the phase is still "in_progress", as opposed to that
+        one's "every failed task individually" sweep). Both must reset
+        git_expert's own PhaseExecution to "pending", or development's
+        later goto back to "git_expert" is silently swallowed by
+        _case_completed_with_successor's pending-list-only target search."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _maybe_retry_failed_tasks
+        from src.core.database import Phase, PhaseExecution
+
+        self._seed(orch_db_env, phase_name="git_expert")
+        with orch_db_env.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-under-test").first()
+            _maybe_retry_failed_tasks(session, phase, OrchestratorLogger(tmp_path))
+
+        with orch_db_env.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-under-test").first()
+            assert execution.status == "pending"
+            assert execution.started_at is None
+            assert execution.task_creation_claimed_at is None
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
     @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
