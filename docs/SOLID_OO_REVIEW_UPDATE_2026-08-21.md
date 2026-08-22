@@ -385,3 +385,105 @@ each of its 5 statuses and diffing the emitted HTML/class strings against
 the original component's output — byte-identical, confirming the
 override-based design works for the one path production data couldn't
 reach live.
+
+---
+
+## 6. Follow-up: priority 4 (the pass-only `except Exception` backlog) triaged to completion, 2026-08-21
+
+The ~157 untriaged sites from §3.4 got the full per-file pass. Method:
+AST sweep for every `except` handler whose body is a bare `pass` (159
+sites in the first pass, plus 7 more the first pass's walker missed —
+see housekeeping note (1) below; every one read in context, each classified as either
+*legitimate* (idempotent git/migration guards with the why in a comment,
+`ProcessLookupError`/`CancelledError`/`TimeoutError` passes where the
+exception IS the expected outcome, retry-loop ticks, best-effort
+display-value fallbacks with documented degradation) or *genuinely silent*
+(a state-changing operation whose failure has a real consequence and zero
+failure trace). 15 sites in 9 files were the latter — all state-changing
+ops, all now logged:
+
+| Site | What was silently swallowed |
+|---|---|
+| `terminator.py` ×3 | pane-PID collection (orphan child-kill skipped on failure); SIGINT/SIGKILL delivery failures (orphans outlive the session). The `ProcessLookupError` "already dead" case stays silently passing — it's the normal outcome; the real failures now warn. |
+| `workflow_execution_routes.py` `_kill_tmux_session` | Stop/Cancel's `tmux kill-session` failing (nonzero exit or exception) — agents kept running with no trace. |
+| `design_file_routes.py` `remove_project_design` | same, on the delete-design path. |
+| `launch_pipeline.py` ×5 | restart-path `kill_session` (stale agent survives a restart); restart-phase-name resolution (output dir silently misnamed); the CLI-fallback cleanup triple — session kill, `terminate_agent` (task not returned to pending, so the fallback can't claim it), and worktree discard (leak). |
+| `orchestrator/pipeline.py` | `current_project_id` resolution in `run_continuous_pipeline` — the stop/pause signals keyed by project_id never reach the pipeline, with no trace. |
+| `prompt_builder.py` | `TaskPromptOverride` load failure — the user's explicit review feedback silently dropped from the agent's prompt. |
+| `task_completion/verification.py` | the git-history check in `verify_output_survived_commit` — its failure makes a lost-output verdict unverifiable. |
+| `workflow_result_service.py` | extra result files dropped on any per-file exception — including the 10MB `validate_file_size` rejection, which is the common case (a caller attaching an oversized file sees it vanish with no error). |
+| `orchestrator/pipeline_logger.py` | not a fix but a dead `try: pass` / `except OSError: pass` no-op in `log()` — the real write is the lock-guarded block below; removed. |
+
+The remaining pass-only sites (146 in the current tree) are all the legitimate
+classes above — the 49 in `schema_migrations.py` (every one inside an
+outer `except … logger.warning`), the idempotent `git merge --abort` /
+`ADD COLUMN` guards, signal-on-dead-process passes, `asyncio` timeout/
+cancel passes, and the best-effort context reads. No mechanical rule
+distinguishes them from the real ones — confirming the original
+assessment that this is per-file judgment, not a sweep. The pass-only
+handler count in the tree is now 146, and every one of them is one of
+the legitimate classes above (two of the 15 fixes deliberately keep a
+silent `except ProcessLookupError: pass` for the "process already dead"
+outcome — that IS the expected result there; the real kill failures warn
+in the sibling handler). Two housekeeping notes: (1) the initial
+sweep's AST walker missed except handlers *nested inside another
+handler's body* — a full `ast.walk` re-sweep found 7 such sites
+(`service.py` ×2, `worktree_manager.py` ×2, `worktree_integration.py` ×1,
+`worktree_conflict_resolution.py` ×1, and `feature_routes.py`'s
+merge-abort, since moved to `feature_record_routes.py`); all 7 were
+reviewed, and 3 of them (the CLI-fallback cleanup block in
+`launch_pipeline.py`'s primary-CLI-failure path — session kill,
+`terminate_agent`, worktree discard) were among the 15 fixed. (2) A
+pre-existing test-fixture desync in
+`tests/test_restart_agent_characterization.py` (its hand-rolled
+`CREATE TABLE agents` was missing `pending_message_sent_at`, added by the
+grace-period feature) was fixed as part of verifying this work — the
+suite is green except 4 `test_agent_output_capture.py` failures that
+reproduce identically without these changes and belong to the in-flight
+grace-period feature's behavior change.
+
+---
+
+## 7. Follow-up: feature_routes.py size-budget regression, 2026-08-21
+
+The last open §1 gap — `feature_routes.py` over the ~800-line budget — is
+closed. It was deferred twice because the concurrent bugfix-workflow-type
+session (`948a9e3` + uncommitted follow-on work) had live edits there;
+when this pass ran that session was idle for 4+ hours, so the split went
+ahead. It needed a three-way cut, not a two-way one: the 515-line review
+block (review-mode toggle, `_review_phase0_decomposition`, the 308-line
+`review_feature`) is its own concern, distinct from both the
+pause/resume/delete lifecycle and the read-only report/record/docs/logs
+surface.
+
+- `feature_routes.py` — 1498 → **559 lines**: `_scan_features`, list,
+  pause/resume, delete, detail, `_spawn_agent_for_task` (kept here — it's
+  the lifecycle's spawn primitive; the review module imports it from
+  here). Imports `_feature_record_cost`/`_find_archived_feature_report`
+  back from the record module for `get_feature_detail`.
+- `feature_review_routes.py` — **538 lines** (new): the review block, verbatim.
+- `feature_record_routes.py` — **459 lines** (new): per-workflow
+  feature_report/decomposition_review HTML, feature-records docs/report,
+  per-feature report/docs/download/logs, verbatim.
+
+All three under budget; no circular imports (record ← routes ← review,
+one direction). Verified: all 16 feature endpoints present on the mounted
+router with no shadowed duplicates, `py_compile` clean, and the full
+dependent test set green — `test_autopilot_api.py` (120/121),
+`test_pause_workflow_primitive.py` (52), `test_feature_record_cost.py`,
+`test_blocking_calls_offloaded.py`, `test_phase0_idempotency.py` (24),
+`test_phase_manager.py` (74). Same test-patch entanglement the
+`project_routes.py` split hit: four test files referenced the moved names
+by module path — `test_autopilot_api.py` (3×
+`_spawn_agent_for_task` monkeypatch now targets the review module, since
+`review_feature` resolves it from its own namespace),
+`test_pause_workflow_primitive.py` (review-flow imports/patches → review
+module; the two `resume_feature` tests correctly left on
+`feature_routes`), `test_blocking_calls_offloaded.py`, and
+`test_feature_record_cost.py`. One `test_autopilot_api.py` failure
+(`TestFeatures::test_list_features`) reproduces identically on the
+pre-split file at HEAD — it belongs to the in-flight workflow-type
+feature, not the split. Note for whoever's session continues the
+bugfix-workflow feature: `feature_routes.py` no longer holds the review
+or report endpoints; new feature work touching those paths lands in
+`feature_review_routes.py`/`feature_record_routes.py`.
