@@ -10,8 +10,8 @@ interface PhaseTaskListProps {
 export default function PhaseTaskList({ tasks, onTerminateAgent }: PhaseTaskListProps) {
   if (!tasks || tasks.length === 0) {
     return (
-      <div className="text-center py-6 text-gray-500 text-sm">
-        <ListTodo className="w-6 h-6 mx-auto mb-2 text-gray-300" />
+      <div className="text-center py-6 text-gray-500 dark:text-gray-400 text-sm">
+        <ListTodo className="w-6 h-6 mx-auto mb-2 text-gray-300 dark:text-gray-600" />
         No tasks in this phase yet.
       </div>
     );

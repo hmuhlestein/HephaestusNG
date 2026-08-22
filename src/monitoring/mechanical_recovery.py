@@ -58,6 +58,7 @@ class MechanicalRecoveryDetector:
 
     UNCONFIRMED_COMPLETION_ESCALATE_AFTER = 3
     NEVER_STARTED_GRACE_SECONDS = 240
+    RESUME_REPLAY_GRACE_SECONDS = 90
 
     def __init__(self, db_manager, agent_manager, config, auto_restart):
         self.db_manager = db_manager
@@ -1167,6 +1168,11 @@ class MechanicalRecoveryDetector:
                 return
             if not _MAX_TOKEN_LIMIT_RE.search(_strip_sgr(out)):
                 return
+            if self._within_resume_replay_grace(self._current_task_started_at(agent)):
+                # See _within_resume_replay_grace's docstring -- this could
+                # be a resumed session replaying a prior task's own
+                # token-limit error, not a current one.
+                return
 
             # Cooldown, not a permanent one-shot flag -- same reasoning as
             # _detect_dangerous_command_confirmation: if this keeps
@@ -1190,6 +1196,49 @@ class MechanicalRecoveryDetector:
             logger.warning(f"[MAX-TOKEN-LIMIT] check failed for {agent.id[:8]}: {e}")
         return False
 
+
+    def _current_task_started_at(self, agent):
+        """Task.started_at for agent.current_task_id, or None.
+
+        Convenience for detectors below that don't otherwise need a DB
+        session before their regex match -- see _within_resume_replay_grace.
+        """
+        if not agent.current_task_id:
+            return None
+        with self.db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id=agent.current_task_id).first()
+            return task.started_at if task else None
+
+    def _within_resume_replay_grace(self, started_at) -> bool:
+        """True if `started_at` (a Task.started_at) is too recent to trust
+        a single regex match against the agent's tmux pane.
+
+        Phases that share a session role (workflow.yaml's session_roles,
+        e.g. product_validation resuming product_requirements' session,
+        or architectural_review resuming architecture_design's) --resume a
+        CLI session with real prior conversation in it, and the tool
+        briefly replays that history's tail into the pane on startup.
+        Every detector in this class that fires off ONE pattern match in
+        raw pane output -- with no task_id or turn boundary to check the
+        match against -- can misread that replayed tail as current state:
+        an old complete_my_task call, a since-resolved connection error, a
+        model rejection from a prior phase, even a 402 credit-exhaustion
+        message from a task that already failed and moved on. The highest-
+        blast-radius case (detect_credit_exhausted) pauses the whole
+        workflow on a single match, so this isn't just wasted nudges.
+        Observed live: detect_unconfirmed_task_completion nudged/restarted
+        an agent over exactly this kind of replay (task 67e58db5), costing
+        ~6 minutes before a second agent actually started the work.
+        task.started_at is stamped once the initial prompt has fully
+        finished sending (_create_phase_task), so skipping until this
+        grace period elapses lets the replay scroll out before any of
+        these detectors starts trusting the pane.
+        """
+        if not started_at:
+            return False
+        return (
+            datetime.utcnow() - started_at
+        ).total_seconds() < self.RESUME_REPLAY_GRACE_SECONDS
 
     async def detect_unconfirmed_task_completion(self, agent) -> bool:
         """Detect an agent whose own transcript shows a complete_my_task/
@@ -1215,6 +1264,22 @@ class MechanicalRecoveryDetector:
         same task -- if the transport is persistently broken rather than a
         one-off blip, no amount of re-nudging the same broken connection
         helps.
+
+        _within_resume_replay_grace guards a false-positive this regex
+        can't otherwise avoid: phases that share a session role (see
+        workflow.yaml's session_roles, e.g. product_validation resuming
+        product_requirements' session) --resume a CLI session with real
+        prior conversation in it, and the tool briefly replays that
+        history's tail into the tmux pane on startup -- including the
+        PRIOR task's own successful complete_my_task/update_task_status
+        call. _COMPLETION_ATTEMPT_RE has no task_id to check that call
+        against, so right after launch it reads as THIS task confirming
+        completion. Observed live: task 67e58db5's agent got nudged/
+        restarted over a resumed-session replay of a completely different,
+        already-finished task, costing ~6 minutes before a second agent
+        actually started the work. See _within_resume_replay_grace's own
+        docstring for why every other single-match text detector in this
+        class shares the same exposure.
         """
         if agent.status != "working" or not agent.current_task_id:
             return False
@@ -1246,6 +1311,11 @@ class MechanicalRecoveryDetector:
                     # Already terminal, under_review (validation spawned),
                     # etc. -- the call landed, or the task moved on for an
                     # unrelated reason. Nothing to do.
+                    return False
+                if self._within_resume_replay_grace(task.started_at):
+                    # Still inside the resumed-session replay window --
+                    # see _within_resume_replay_grace's docstring. Too
+                    # early to trust a completion match.
                     return False
                 if task.self_review_started_at is not None:
                     # The call DID land -- it correctly triggered the
@@ -1437,6 +1507,11 @@ class MechanicalRecoveryDetector:
                 return False
             stripped = _strip_sgr(out)
             if not _CONNECTION_ERROR_RE.search(stripped):
+                return False
+            if self._within_resume_replay_grace(self._current_task_started_at(agent)):
+                # See _within_resume_replay_grace's docstring -- this could
+                # be a resumed session replaying a prior, already-resolved
+                # task's connection errors, not current ones.
                 return False
 
             # Check if we've already warned about this agent recently
@@ -1644,6 +1719,11 @@ class MechanicalRecoveryDetector:
                 return False
             if not _BAD_MODEL_ERROR_RE.search(_strip_sgr(out)):
                 return False
+            if self._within_resume_replay_grace(self._current_task_started_at(agent)):
+                # See _within_resume_replay_grace's docstring -- this could
+                # be a resumed session replaying a prior task's model
+                # rejection, not a current one.
+                return False
             self._fixed_bad_model.add(agent.id)
 
             # config.cli_model is paired with agents.default_cli_tool (pi)
@@ -1796,6 +1876,13 @@ class MechanicalRecoveryDetector:
             if not out:
                 return False
             if not _CREDIT_EXHAUSTED_RE.search(_strip_sgr(out)):
+                return False
+            if self._within_resume_replay_grace(self._current_task_started_at(agent)):
+                # See _within_resume_replay_grace's docstring -- this could
+                # be a resumed session replaying a prior task's own
+                # credit-exhaustion error. The highest-blast-radius case
+                # here (pauses the whole workflow), so this guard matters
+                # most for this detector.
                 return False
             self._paused_credit_exhausted.add(agent.id)
 

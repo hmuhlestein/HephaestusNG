@@ -198,7 +198,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
             type="text"
             value={value || ''}
             onChange={(e) => handleFormValueChange(param.name, e.target.value)}
-            className="w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
             placeholder={param.description || `Enter ${param.label.toLowerCase()}`}
           />
         );
@@ -209,7 +209,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
             value={value || ''}
             onChange={(e) => handleFormValueChange(param.name, e.target.value)}
             rows={4}
-            className="w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+            className="w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
             placeholder={param.description || `Enter ${param.label.toLowerCase()}`}
           />
         );
@@ -220,7 +220,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
             type="number"
             value={value || ''}
             onChange={(e) => handleFormValueChange(param.name, e.target.valueAsNumber || '')}
-            className="w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
             placeholder={param.description || `Enter ${param.label.toLowerCase()}`}
           />
         );
@@ -232,7 +232,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
               type="checkbox"
               checked={value || false}
               onChange={(e) => handleFormValueChange(param.name, e.target.checked)}
-              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
             />
             <span className="text-sm text-gray-600 dark:text-gray-400">
               {param.description || 'Enable'}
@@ -246,7 +246,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
           <select
             value={value || ''}
             onChange={(e) => handleFormValueChange(param.name, e.target.value)}
-            className="w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="">Select {param.label.toLowerCase()}</option>
             {param.options?.map((option) => (
@@ -276,7 +276,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
               </div>
             ) : definitions.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
+              <div className="text-center py-8 text-gray-500 dark:text-gray-400">
                 No workflow definitions available.
               </div>
             ) : (
@@ -286,7 +286,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
                     <button
                       key={def.id}
                       onClick={() => handleSelectDefinition(def)}
-                      className="w-full p-4 text-left border rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                      className="w-full p-4 text-left border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
@@ -294,7 +294,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
                             {def.name}
                           </h3>
                           {def.description && (
-                            <p className="text-sm text-gray-500 mt-1">{def.description}</p>
+                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{def.description}</p>
                           )}
                           <div className="flex items-center gap-2 mt-2">
                             <Badge variant="outline">{def.phases_count} phases</Badge>
@@ -304,13 +304,13 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
                               </Badge>
                             )}
                             {def.has_result && (
-                              <Badge className="bg-green-100 text-green-800">
+                              <Badge className="bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-300">
                                 Produces result
                               </Badge>
                             )}
                           </div>
                         </div>
-                        <ChevronRight className="w-5 h-5 text-gray-400" />
+                        <ChevronRight className="w-5 h-5 text-gray-400 dark:text-gray-500" />
                       </div>
                     </button>
                   ))}
@@ -332,16 +332,16 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
                 {/* Execution Name - Always Required */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Execution Name <span className="text-red-500">*</span>
+                    Execution Name <span className="text-red-500 dark:text-red-400">*</span>
                   </label>
                   <input
                     type="text"
                     value={executionName}
                     onChange={(e) => setExecutionName(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     placeholder="e.g., My URL Shortener Project"
                   />
-                  <p className="text-xs text-gray-500 mt-1">
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     A unique name to identify this workflow execution
                   </p>
                 </div>
@@ -351,11 +351,11 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
                   <div key={param.name}>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                       {param.label}
-                      {param.required && <span className="text-red-500"> *</span>}
+                      {param.required && <span className="text-red-500 dark:text-red-400"> *</span>}
                     </label>
                     {renderParameterInput(param)}
                     {param.description && param.type !== 'boolean' && (
-                      <p className="text-xs text-gray-500 mt-1">{param.description}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{param.description}</p>
                     )}
                   </div>
                 ))}
@@ -363,7 +363,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
             </ScrollArea>
 
             {error && (
-              <div className="flex items-center gap-2 text-red-500 text-sm">
+              <div className="flex items-center gap-2 text-red-500 dark:text-red-400 text-sm">
                 <AlertCircle className="w-4 h-4" />
                 {error}
               </div>
@@ -387,16 +387,16 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
                   </h4>
                   <dl className="space-y-2 text-sm">
                     <div className="flex justify-between">
-                      <dt className="text-gray-500">Workflow:</dt>
-                      <dd className="font-medium">{selectedDefinition?.name}</dd>
+                      <dt className="text-gray-500 dark:text-gray-400">Workflow:</dt>
+                      <dd className="font-medium text-gray-900 dark:text-gray-100">{selectedDefinition?.name}</dd>
                     </div>
                     <div className="flex justify-between">
-                      <dt className="text-gray-500">Execution Name:</dt>
-                      <dd className="font-medium">{executionName}</dd>
+                      <dt className="text-gray-500 dark:text-gray-400">Execution Name:</dt>
+                      <dd className="font-medium text-gray-900 dark:text-gray-100">{executionName}</dd>
                     </div>
                     <div className="flex justify-between">
-                      <dt className="text-gray-500">Phases:</dt>
-                      <dd className="font-medium">{selectedDefinition?.phases_count}</dd>
+                      <dt className="text-gray-500 dark:text-gray-400">Phases:</dt>
+                      <dd className="font-medium text-gray-900 dark:text-gray-100">{selectedDefinition?.phases_count}</dd>
                     </div>
                   </dl>
                 </div>
@@ -410,11 +410,11 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
                     <dl className="space-y-2 text-sm">
                       {selectedDefinition.launch_template.parameters.map((param) => (
                         <div key={param.name}>
-                          <dt className="text-gray-500">{param.label}:</dt>
-                          <dd className="font-medium mt-1 pl-2 border-l-2 border-blue-300">
+                          <dt className="text-gray-500 dark:text-gray-400">{param.label}:</dt>
+                          <dd className="font-medium text-gray-900 dark:text-gray-100 mt-1 pl-2 border-l-2 border-blue-300 dark:border-blue-700">
                             {param.type === 'boolean'
                               ? (formValues[param.name] ? 'Yes' : 'No')
-                              : (formValues[param.name] || <span className="text-gray-400 italic">Not provided</span>)
+                              : (formValues[param.name] || <span className="text-gray-400 dark:text-gray-500 italic">Not provided</span>)
                             }
                           </dd>
                         </div>
@@ -439,7 +439,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
             </ScrollArea>
 
             {error && (
-              <div className="flex items-center gap-2 text-red-500 text-sm">
+              <div className="flex items-center gap-2 text-red-500 dark:text-red-400 text-sm">
                 <AlertCircle className="w-4 h-4" />
                 {error}
               </div>
@@ -506,7 +506,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Rocket className="w-5 h-5 text-blue-500" />
+            <Rocket className="w-5 h-5 text-blue-500 dark:text-blue-400" />
             {step === 'select' && 'Launch New Workflow'}
             {step === 'form' && 'Launch Workflow'}
             {step === 'preview' && 'Review & Launch'}

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Layers, FileCode, ChevronRight, ChevronDown, Edit2 } from 'lucide-react';
@@ -10,8 +11,19 @@ import PhaseDetailPanel from '@/components/workflow/PhaseDetailPanel';
 
 export default function Phases() {
   const { definitions } = useWorkflow();
-  const [selectedDefinitionId, setSelectedDefinitionId] = useState<string | null>(null);
+  const [searchParams] = useSearchParams();
+  const [selectedDefinitionId, setSelectedDefinitionId] = useState<string | null>(
+    searchParams.get('definition')
+  );
   const [expandedPhaseIndex, setExpandedPhaseIndex] = useState<number | null>(null);
+
+  // Deep link from elsewhere (e.g. a workflow card's "N phases" link) --
+  // definitions load asynchronously via context, so the query param alone
+  // isn't enough at mount if it arrives before `definitions` is populated.
+  useEffect(() => {
+    const def = searchParams.get('definition');
+    if (def) setSelectedDefinitionId(def);
+  }, [searchParams]);
 
   // Fetch phases for selected definition
   const { data: phasesRaw, isLoading: phasesLoading } = useQuery({
@@ -36,7 +48,7 @@ export default function Phases() {
     <div className="container mx-auto p-6 space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold flex items-center gap-2">
+        <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
           <Layers className="h-8 w-8" />
           Phases
         </h1>
@@ -47,7 +59,7 @@ export default function Phases() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <FileCode className="h-5 w-5 text-purple-600" />
+            <FileCode className="h-5 w-5 text-purple-600 dark:text-purple-400" />
             Workflow Definitions
           </CardTitle>
           <CardDescription>Select a workflow to view and edit its phases</CardDescription>
@@ -86,7 +98,7 @@ export default function Phases() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Layers className="h-5 w-5 text-blue-600" />
+              <Layers className="h-5 w-5 text-blue-600 dark:text-blue-400" />
               {selectedDefinition?.name} — Phases
             </CardTitle>
             <CardDescription>
@@ -187,14 +199,14 @@ export default function Phases() {
                           {phase.additional_notes && (
                             <div>
                               <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Additional Notes</h4>
-                              <div className="text-sm text-gray-600 bg-blue-50 dark:bg-blue-900/20 dark:bg-blue-900/20 p-2 rounded prose prose-sm prose-violet max-w-none">
+                              <div className="text-sm text-gray-600 dark:text-gray-300 bg-blue-50 dark:bg-blue-900/20 p-2 rounded prose prose-sm prose-violet max-w-none">
                                 <MarkdownRenderer content={phase.additional_notes} />
                               </div>
                             </div>
                           )}
 
                           {/* Config */}
-                          <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">
+                          <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400">
                             {phase.cli_tool && (
                               <span>Tool: <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{phase.cli_tool}</code></span>
                             )}

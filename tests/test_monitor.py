@@ -459,6 +459,33 @@ class TestDetectMaxTokenLimitError:
         await make_monitoring_loop._detect_max_token_limit_error(agent)
         assert mock_agent_manager.send_message_to_agent.call_count == 2
 
+    @pytest.mark.asyncio
+    async def test_ignores_match_within_resumed_session_grace_period(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """A phase resuming another phase's CLI session (shared
+        session_roles entry) can replay a prior task's own token-limit
+        error into the pane on startup -- must not be treated as current
+        within the grace window."""
+        from contextlib import contextmanager
+
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.TOKEN_LIMIT_OUTPUT
+        task = Mock(started_at=datetime.utcnow() - timedelta(seconds=10))
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = task
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+
+        result = await make_monitoring_loop._detect_max_token_limit_error(agent)
+
+        assert result is None or result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
 
 # ── _detect_unconfirmed_task_completion ────────────────────────────
 
@@ -471,12 +498,17 @@ class TestDetectUnconfirmedTaskCompletion:
     )
 
     def _mock_session_with_task(
-        self, mock_db, task_status, self_review_started_at=None, task_id="t1"
+        self, mock_db, task_status, self_review_started_at=None, task_id="t1", started_at=None
     ):
         from contextlib import contextmanager
 
         session = Mock()
-        task = Mock(id=task_id, status=task_status, self_review_started_at=self_review_started_at)
+        task = Mock(
+            id=task_id,
+            status=task_status,
+            self_review_started_at=self_review_started_at,
+            started_at=started_at or (datetime.utcnow() - timedelta(minutes=10)),
+        )
         session.query.return_value.filter_by.return_value.first.return_value = task
 
         @contextmanager
@@ -555,6 +587,26 @@ class TestDetectUnconfirmedTaskCompletion:
         nudge = mock_agent_manager.send_message_to_agent.call_args[0][1]
         assert "t1" in nudge
         assert "complete_my_task" in nudge
+
+    @pytest.mark.asyncio
+    async def test_ignores_match_within_resumed_session_grace_period(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """A phase that resumes another phase's CLI session (shared
+        session_roles entry, e.g. product_validation/product_requirements)
+        can briefly replay the prior task's own completion call into the
+        tmux pane on startup. Within the grace period after task.started_at,
+        that must not be treated as THIS task confirming completion."""
+        agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
+        self._mock_session_with_task(
+            mock_db, "in_progress", started_at=datetime.utcnow() - timedelta(seconds=10)
+        )
+
+        result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_does_not_nudge_when_task_already_done(
@@ -837,6 +889,15 @@ class TestDetectCreditExhausted:
 
         session = Mock()
 
+        if task is not None and not isinstance(
+            getattr(task, "started_at", None), datetime
+        ):
+            # _within_resume_replay_grace needs a real, comparable
+            # started_at -- well past the grace window, matching every
+            # real Task row (always stamped by _create_phase_task) unless
+            # a test overrides it to exercise the grace window itself.
+            task.started_at = datetime.utcnow() - timedelta(minutes=10)
+
         def query_side_effect(model):
             m = Mock()
             if model.__name__ == "Task":
@@ -944,6 +1005,33 @@ class TestDetectCreditExhausted:
         await make_monitoring_loop._detect_credit_exhausted(agent)
 
         mock_agent_manager.terminate_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ignores_match_within_resumed_session_grace_period(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """This is the highest-blast-radius detector (pauses the whole
+        workflow on a single match), so a resumed session replaying a
+        prior, already-failed task's own 402 error must not fire it."""
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.CREDIT_ERROR_OUTPUT
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        task = Mock(
+            workflow_id="wf1",
+            status="in_progress",
+            failure_reason=None,
+            started_at=datetime.utcnow() - timedelta(seconds=10),
+        )
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        session, mock_session_scope = self._make_session(task=task, workflow=workflow)
+        mock_db.session_scope = mock_session_scope
+
+        result = await make_monitoring_loop._detect_credit_exhausted(agent)
+
+        assert result is False
+        mock_agent_manager.terminate_agent.assert_not_called()
+        assert task.status == "in_progress"
 
 
 # ── _detect_agent_never_started ─────────────────────────────────────
@@ -1104,6 +1192,23 @@ class TestDetectBadModelError:
         "different model.\n"
     )
 
+    def _session_with_started_task(self, mock_db, started_at=None):
+        """_within_resume_replay_grace (via _current_task_started_at) now
+        needs a real Task.started_at -- configure the DB mock with one
+        well past the grace window, matching every real Task row."""
+        from contextlib import contextmanager
+
+        task = Mock(started_at=started_at or (datetime.utcnow() - timedelta(minutes=10)))
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = task
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        return task
+
     @pytest.mark.asyncio
     async def test_no_output(self, make_monitoring_loop, mock_agent_manager, mock_db):
         agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
@@ -1144,6 +1249,7 @@ class TestDetectBadModelError:
         agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
         make_monitoring_loop.config.agents.secondary_cli_model_fallback = "opus"
+        self._session_with_started_task(mock_db)
 
         result = await make_monitoring_loop._detect_bad_model_error(agent)
 
@@ -1157,6 +1263,7 @@ class TestDetectBadModelError:
         agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
         make_monitoring_loop.config.agents.secondary_cli_model_fallback = None
+        self._session_with_started_task(mock_db)
 
         result = await make_monitoring_loop._detect_bad_model_error(agent)
 
@@ -1173,11 +1280,33 @@ class TestDetectBadModelError:
         agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
         mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
         make_monitoring_loop.config.agents.secondary_cli_model_fallback = "opus"
+        self._session_with_started_task(mock_db)
 
         await make_monitoring_loop._detect_bad_model_error(agent)
         await make_monitoring_loop._detect_bad_model_error(agent)
 
         mock_agent_manager.send_message_to_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ignores_match_within_resumed_session_grace_period(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """A resumed session (e.g. architectural_review resuming
+        architecture_design's session -- both role 'architect') can
+        replay a prior task's own model rejection into the pane on
+        startup -- must not be treated as current within the grace
+        window."""
+        agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
+        make_monitoring_loop.config.agents.secondary_cli_model_fallback = "opus"
+        self._session_with_started_task(
+            mock_db, started_at=datetime.utcnow() - timedelta(seconds=10)
+        )
+
+        result = await make_monitoring_loop._detect_bad_model_error(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
 
 
 class TestDetectCliModelFallback:
@@ -2745,6 +2874,14 @@ class TestDetectConnectionErrors:
 
         session = Mock()
 
+        if task is not None and not isinstance(
+            getattr(task, "started_at", None), datetime
+        ):
+            # _within_resume_replay_grace (via _current_task_started_at)
+            # needs a real, comparable started_at -- well past the grace
+            # window, matching every real Task row.
+            task.started_at = datetime.utcnow() - timedelta(minutes=10)
+
         def query_side_effect(model):
             m = Mock()
             name = model.__name__ if hasattr(model, "__name__") else str(model)
@@ -2753,6 +2890,9 @@ class TestDetectConnectionErrors:
                 # terminate_agent's own stray-task sweep: this task was
                 # already reset above, so nothing still points at the agent.
                 m.filter_by.return_value.filter.return_value.all.return_value = []
+                # _current_task_started_at's own lookup shape (filter_by(id=...)
+                # with no further .filter()) -- same task, different chain.
+                m.filter_by.return_value.first.return_value = task
             elif name == "Phase":
                 m.filter_by.return_value.first.return_value = phase
             elif name == "Workflow":
@@ -2777,6 +2917,32 @@ class TestDetectConnectionErrors:
 
         assert result is False
         mock_agent_manager.terminate_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ignores_match_within_resumed_session_grace_period(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """A resumed session can replay a prior, already-resolved task's
+        own persistent connection errors into the pane on startup --
+        must not be treated as current within the grace window."""
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = (
+            "Error: Connection error.\nError: Connection error.\nError: Connection error."
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        task = Mock(
+            id="t1", status="in_progress", assigned_agent_id="a1",
+            failure_reason=None, phase_id=None,
+            started_at=datetime.utcnow() - timedelta(seconds=10),
+        )
+        mock_session_scope, session = self._session_with(task, phase=None)
+        mock_db.session_scope = mock_session_scope
+
+        result = await make_monitoring_loop._detect_connection_errors(agent)
+
+        assert result is False
+        mock_agent_manager.terminate_agent.assert_not_called()
+        assert task.status == "in_progress"
 
     @pytest.mark.asyncio
     async def test_terminates_agent_only_after_task_status_already_updated(

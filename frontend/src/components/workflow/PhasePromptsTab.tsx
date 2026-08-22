@@ -113,9 +113,9 @@ export default function PhasePromptsTab({
     <div className="space-y-4">
       {/* Active agent warning */}
       {hasActiveAgents && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 flex items-start gap-2">
-          <AlertTriangle className="w-4 h-4 text-yellow-600 mt-0.5 flex-shrink-0" />
-          <div className="text-sm text-yellow-700">
+        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 mt-0.5 flex-shrink-0" />
+          <div className="text-sm text-yellow-700 dark:text-yellow-300">
             <strong>{activeAgents.length} active agent(s)</strong> will NOT receive these changes.
             Your edits apply to queued and future tasks only.
           </div>
@@ -159,19 +159,19 @@ export default function PhasePromptsTab({
       {/* Change summary */}
       {isDirty && (
         <div>
-          <label className="text-xs text-gray-500 mb-1 block">Change summary (optional):</label>
+          <label className="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Change summary (optional):</label>
           <input
             type="text"
             value={changeSummary}
             onChange={(e) => setChangeSummary(e.target.value)}
             placeholder="Describe what changed..."
-            className="w-full text-sm border border-gray-200 rounded-md px-3 py-1.5"
+            className="w-full text-sm border border-gray-200 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
           />
         </div>
       )}
 
       {/* Actions */}
-      <div className="flex items-center gap-2 pt-2 border-t">
+      <div className="flex items-center gap-2 pt-2 border-t border-gray-200 dark:border-gray-700">
         <Button variant="outline" size="sm" onClick={handleDiscard} disabled={!isDirty}>
           Discard
         </Button>
@@ -191,14 +191,14 @@ export default function PhasePromptsTab({
           Save & Publish
         </Button>
         {saveMutation.isError && (
-          <span className="text-xs text-red-500 ml-2">Save failed</span>
+          <span className="text-xs text-red-500 dark:text-red-400 ml-2">Save failed</span>
         )}
       </div>
 
       {/* Version history */}
       {versions.length > 0 && (
-        <div className="pt-2 border-t">
-          <h4 className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1">
+        <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+          <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 flex items-center gap-1">
             <History className="w-3 h-3" />
             Version History
           </h4>

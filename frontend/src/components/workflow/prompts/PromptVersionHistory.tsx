@@ -12,9 +12,9 @@ interface PromptVersionHistoryProps {
 }
 
 const statusBadge: Record<string, { color: string; label: string }> = {
-  active: { color: 'bg-green-100 text-green-700', label: 'active' },
-  draft: { color: 'bg-yellow-100 text-yellow-700', label: 'draft' },
-  archived: { color: 'bg-gray-100 text-gray-500', label: 'archived' },
+  active: { color: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300', label: 'active' },
+  draft: { color: 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300', label: 'draft' },
+  archived: { color: 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400', label: 'archived' },
 };
 
 export default function PromptVersionHistory({
@@ -53,24 +53,24 @@ export default function PromptVersionHistory({
         return (
           <div
             key={v.version}
-            className="flex items-center gap-2 text-xs py-1 px-2 rounded hover:bg-gray-50"
+            className="flex items-center gap-2 text-xs py-1 px-2 rounded hover:bg-gray-50 dark:hover:bg-gray-800"
           >
             <Badge variant="outline" className={`text-[10px] ${badge.color}`}>
               v{v.version}
             </Badge>
             {v.status === 'active' && (
-              <Check className="w-3 h-3 text-green-500" />
+              <Check className="w-3 h-3 text-green-500 dark:text-green-400" />
             )}
-            <span className="text-gray-500 flex-1">
-              {v.created_by && <span className="text-gray-600">{v.created_by}</span>}
+            <span className="text-gray-500 dark:text-gray-400 flex-1">
+              {v.created_by && <span className="text-gray-600 dark:text-gray-300">{v.created_by}</span>}
               {v.created_at && (
-                <span className="ml-1 text-gray-400">
+                <span className="ml-1 text-gray-400 dark:text-gray-500">
                   {new Date(v.created_at).toLocaleString()}
                 </span>
               )}
             </span>
             {v.change_summary && (
-              <span className="text-gray-400 truncate max-w-[150px]">
+              <span className="text-gray-400 dark:text-gray-500 truncate max-w-[150px]">
                 {v.change_summary}
               </span>
             )}

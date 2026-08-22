@@ -15,7 +15,7 @@ interface PromptEditorProps {
 export default function PromptEditor({ prompt, onChange, disabled }: PromptEditorProps) {
   if (!prompt) {
     return (
-      <div className="text-center py-8 text-gray-500 text-sm">
+      <div className="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">
         No prompt data available.
       </div>
     );
@@ -25,7 +25,7 @@ export default function PromptEditor({ prompt, onChange, disabled }: PromptEdito
     <div className="space-y-4">
       {/* Description */}
       <div>
-        <label className="text-xs font-semibold text-gray-500 mb-1 block">
+        <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1 block">
           Description (Phase System Prompt Root)
         </label>
         <textarea
@@ -33,13 +33,13 @@ export default function PromptEditor({ prompt, onChange, disabled }: PromptEdito
           onChange={(e) => onChange({ ...prompt, description: e.target.value })}
           disabled={disabled}
           rows={4}
-          className="w-full text-sm border border-gray-200 rounded-md px-3 py-2 font-mono resize-y focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-50"
+          className="w-full text-sm border border-gray-200 dark:border-gray-600 rounded-md px-3 py-2 font-mono resize-y bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-800 disabled:opacity-50"
         />
       </div>
 
       {/* Done Definitions */}
       <div>
-        <label className="text-xs font-semibold text-gray-500 mb-1 block">
+        <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1 block">
           Completion Criteria
         </label>
         <PromptFieldList
@@ -51,7 +51,7 @@ export default function PromptEditor({ prompt, onChange, disabled }: PromptEdito
 
       {/* Additional Notes */}
       <div>
-        <label className="text-xs font-semibold text-gray-500 mb-1 block">
+        <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1 block">
           Additional Notes
         </label>
         <textarea
@@ -59,13 +59,13 @@ export default function PromptEditor({ prompt, onChange, disabled }: PromptEdito
           onChange={(e) => onChange({ ...prompt, additional_notes: e.target.value || null })}
           disabled={disabled}
           rows={3}
-          className="w-full text-sm border border-gray-200 rounded-md px-3 py-2 resize-y focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-50"
+          className="w-full text-sm border border-gray-200 dark:border-gray-600 rounded-md px-3 py-2 resize-y bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-800 disabled:opacity-50"
         />
       </div>
 
       {/* Expected Outputs */}
       <div>
-        <label className="text-xs font-semibold text-gray-500 mb-1 block">
+        <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1 block">
           Expected Outputs
         </label>
         <textarea
@@ -73,13 +73,13 @@ export default function PromptEditor({ prompt, onChange, disabled }: PromptEdito
           onChange={(e) => onChange({ ...prompt, outputs: e.target.value || null })}
           disabled={disabled}
           rows={2}
-          className="w-full text-sm border border-gray-200 rounded-md px-3 py-2 resize-y focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-50"
+          className="w-full text-sm border border-gray-200 dark:border-gray-600 rounded-md px-3 py-2 resize-y bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-800 disabled:opacity-50"
         />
       </div>
 
       {/* Next Steps */}
       <div>
-        <label className="text-xs font-semibold text-gray-500 mb-1 block">
+        <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1 block">
           Next Steps
         </label>
         <textarea
@@ -87,7 +87,7 @@ export default function PromptEditor({ prompt, onChange, disabled }: PromptEdito
           onChange={(e) => onChange({ ...prompt, next_steps: e.target.value || null })}
           disabled={disabled}
           rows={2}
-          className="w-full text-sm border border-gray-200 rounded-md px-3 py-2 resize-y focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-50"
+          className="w-full text-sm border border-gray-200 dark:border-gray-600 rounded-md px-3 py-2 resize-y bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-800 disabled:opacity-50"
         />
       </div>
     </div>
