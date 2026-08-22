@@ -5,6 +5,7 @@
 @layer base {
   :root {
     --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;
     --card-foreground: 222.2 84% 4.9%;
     --popover: 0 0% 100%;
@@ -26,6 +27,7 @@
 
   .dark {
     --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
     --card: 222.2 84% 4.9%;
     --card-foreground: 210 40% 98%;
     --popover: 222.2 84% 4.9%;
@@ -88,6 +90,10 @@
     overflow-wrap: break-word;
   }
 
+  .dark .markdown-body {
+    color: theme('colors.gray.100');
+  }
+
   .markdown-body * {
     max-width: 100%;
   }
@@ -145,6 +151,11 @@
     word-break: break-word;
   }
 
+  .dark .markdown-body code {
+    background-color: theme('colors.gray.700');
+    color: theme('colors.gray.100');
+  }
+
   .markdown-body pre code {
     background-color: transparent;
     color: theme('colors.gray.50');
@@ -172,11 +183,21 @@
     overflow-wrap: break-word;
   }
 
+  .dark .markdown-body th,
+  .dark .markdown-body td {
+    border-color: theme('colors.gray.700');
+  }
+
   .markdown-body blockquote {
     border-left: 4px solid theme('colors.blue.200');
     padding-left: 1rem;
     color: theme('colors.gray.600');
     margin: 1rem 0;
+  }
+
+  .dark .markdown-body blockquote {
+    border-left-color: theme('colors.blue.800');
+    color: theme('colors.gray.400');
   }
 
   /* Syntax highlighting fixes */

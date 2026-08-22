@@ -95,7 +95,7 @@ export default function SendMessageDialog({
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle className="flex items-center">
-            <MessageCircle className="w-5 h-5 mr-2 text-blue-600" />
+            <MessageCircle className="w-5 h-5 mr-2 text-blue-600 dark:text-blue-400" />
             Send Message to Agent
           </DialogTitle>
           <DialogDescription>
@@ -106,28 +106,28 @@ export default function SendMessageDialog({
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
             {/* Agent Info */}
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+            <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
               <div className="flex items-start justify-between mb-2">
                 <div className="flex items-center">
-                  <Bot className="w-5 h-5 text-gray-600 mr-2" />
+                  <Bot className="w-5 h-5 text-gray-600 dark:text-gray-400 mr-2" />
                   <div>
-                    <p className="font-semibold text-gray-800">
+                    <p className="font-semibold text-gray-800 dark:text-gray-200">
                       Agent {agent.id.substring(0, 8)}
                     </p>
-                    <p className="text-xs text-gray-500">{agent.cli_type}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">{agent.cli_type}</p>
                   </div>
                 </div>
                 <StatusBadge status={agent.status} size="sm" />
               </div>
 
               {agent.current_task && (
-                <div className="mt-3 pt-3 border-t border-gray-200">
-                  <p className="text-xs text-gray-500 mb-1">Current Task:</p>
-                  <p className="text-sm text-gray-700 line-clamp-2">
+                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Current Task:</p>
+                  <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-2">
                     {agent.current_task.description}
                   </p>
                   {agent.current_task.phase_info && (
-                    <p className="text-xs text-gray-500 mt-1">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                       Phase {agent.current_task.phase_info.order}:{' '}
                       {agent.current_task.phase_info.name}
                     </p>
@@ -138,7 +138,7 @@ export default function SendMessageDialog({
 
             {/* Message Input */}
             <div className="space-y-2">
-              <label htmlFor="message" className="text-sm font-medium text-gray-700">
+              <label htmlFor="message" className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 Message
               </label>
               <textarea
@@ -151,10 +151,10 @@ export default function SendMessageDialog({
                 }}
                 placeholder="Type your message here..."
                 rows={6}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
                 disabled={isLoading}
               />
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-gray-500 dark:text-gray-400">
                 {message.length} characters
               </p>
             </div>
@@ -164,8 +164,8 @@ export default function SendMessageDialog({
               <div
                 className={`flex items-center p-3 rounded-lg ${
                   status === 'success'
-                    ? 'bg-green-50 border border-green-200 text-green-800'
-                    : 'bg-red-50 border border-red-200 text-red-800'
+                    ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-300'
+                    : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-300'
                 }`}
               >
                 {status === 'success' ? (

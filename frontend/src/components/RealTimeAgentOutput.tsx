@@ -434,7 +434,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
             <div className="flex items-center space-x-2">
               {/* Search */}
               <div className="relative">
-                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
                 <input
                   ref={searchInputRef}
                   type="text"
@@ -470,7 +470,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
 
               <button
                 onClick={copyToClipboard}
-                className="p-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 transition-colors"
+                className="p-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 transition-colors"
                 title="Copy output (Ctrl+C)"
               >
                 <Copy className="w-4 h-4" />
@@ -478,7 +478,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
 
               <button
                 onClick={() => setIsFullscreen(!isFullscreen)}
-                className="p-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 transition-colors"
+                className="p-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 transition-colors"
                 title="Toggle fullscreen"
               >
                 {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
@@ -554,7 +554,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
           {currentStatus !== 'terminated' && (
             <div className="px-6 py-3 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
               <div className="flex items-start space-x-3">
-                <MessageCircle className="w-5 h-5 text-gray-400 mt-2 flex-shrink-0" />
+                <MessageCircle className="w-5 h-5 text-gray-400 dark:text-gray-500 mt-2 flex-shrink-0" />
                 <div className="flex-1">
                   <textarea
                     ref={messageInputRef}
