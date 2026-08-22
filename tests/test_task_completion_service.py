@@ -964,6 +964,36 @@ class TestVerifyNoOpenTickets:
         )
         assert result is None
 
+    def test_rejects_at_doc_review_too(self):
+        """doc_review sits between development and git_expert and is
+        equally unable to fix code -- same hard floor, same "route back
+        to development" message as git_expert."""
+        phase = Mock(name="doc_review", id="phase-1")
+        phase.name = "doc_review"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1")
+        mock_ticket = Mock(id="ticket-abc123def", title="SQL injection in search")
+        mock_session = Mock()
+        mock_session.query.return_value.filter.return_value.all.return_value = [mock_ticket]
+
+        result = TaskCompletionService.verify_no_open_tickets(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "1 open bug ticket" in result["message"]
+        assert "route back to development" in result["message"]
+
+    def test_returns_none_for_doc_review_with_no_open_tickets(self):
+        phase = Mock(name="doc_review", id="phase-1")
+        task = Mock(phase_id="phase-1", workflow_id="wf-1")
+        mock_session = Mock()
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+
+        result = TaskCompletionService.verify_no_open_tickets(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+
 
 class TestRecordLearnings:
     """Tests for record_learnings method."""
