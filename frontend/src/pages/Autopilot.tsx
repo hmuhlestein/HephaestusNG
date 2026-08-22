@@ -34,6 +34,7 @@ const Autopilot: React.FC = () => {
   );
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [showAddDesign, setShowAddDesign] = useState(false);
+  const [addDesignType, setAddDesignType] = useState<'feature' | 'bugfix'>('feature');
   const [showLoadDesign, setShowLoadDesign] = useState(false);
   const [featureStatusFilter, setFeatureStatusFilter] = useState<'all' | 'validated' | 'needs_review' | 'failed'>('all');
   const { selectedProject } = useProject();
@@ -408,7 +409,7 @@ const Autopilot: React.FC = () => {
           {activeTab === 'queue' && (
             <DesignQueuePanel 
               projectId={projectId} 
-              onAddDesign={() => setShowAddDesign(true)}
+              onAddDesign={(type) => { setAddDesignType(type); setShowAddDesign(true); }}
               onLoadDesign={() => setShowLoadDesign(true)}
               currentDesign={status?.current_design}
               onReviewFeature={handleReviewFeature}
@@ -438,6 +439,7 @@ const Autopilot: React.FC = () => {
       <AddDesignModal
         open={showAddDesign}
         projectId={projectId}
+        defaultType={addDesignType}
         onClose={() => setShowAddDesign(false)}
       />
       <LoadDesignModal

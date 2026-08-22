@@ -19,9 +19,9 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import {
-  Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
+  Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
   Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, Layers,
-  Square, RotateCcw, FileBarChart2, Eye
+  Square, RotateCcw, FileBarChart2, Eye, Sparkles, Bug
 } from 'lucide-react';
 import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -39,7 +39,7 @@ import BaseStatusBadge from '../StatusBadge';
 
 interface DesignQueuePanelProps {
   projectId: string | null;
-  onAddDesign: () => void;
+  onAddDesign: (type: 'feature' | 'bugfix') => void;
   onLoadDesign: () => void;
   currentDesign?: string | null;
   onReviewFeature?: (featureId: string, feature: any) => void;
@@ -338,9 +338,13 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <Upload className="w-4 h-4 mr-1" />
           Load Design
         </Button>
-        <Button onClick={onAddDesign} variant="outline" className="text-violet-600 dark:text-violet-400 border-violet-200 dark:border-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/30">
-          <Plus className="w-4 h-4 mr-1" />
-          Add Design
+        <Button onClick={() => onAddDesign('feature')} className="bg-blue-600 hover:bg-blue-700 text-white">
+          <Sparkles className="w-4 h-4 mr-1" />
+          New Feature
+        </Button>
+        <Button onClick={() => onAddDesign('bugfix')} className="bg-amber-600 hover:bg-amber-700 text-white">
+          <Bug className="w-4 h-4 mr-1" />
+          Report Bug
         </Button>
       </div>
       <p className="text-xs text-gray-400">
@@ -422,9 +426,13 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
             <Upload className="w-4 h-4 mr-1" />
             Load Design
           </Button>
-          <Button onClick={onAddDesign} variant="outline" className="text-violet-600 dark:text-violet-400 border-violet-200 dark:border-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/30">
-            <Plus className="w-4 h-4 mr-1" />
-            Add Design
+          <Button onClick={() => onAddDesign('feature')} className="bg-blue-600 hover:bg-blue-700 text-white">
+            <Sparkles className="w-4 h-4 mr-1" />
+            New Feature
+          </Button>
+          <Button onClick={() => onAddDesign('bugfix')} className="bg-amber-600 hover:bg-amber-700 text-white">
+            <Bug className="w-4 h-4 mr-1" />
+            Report Bug
           </Button>
         </div>
       )}
