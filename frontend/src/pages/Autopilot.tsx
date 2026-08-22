@@ -34,7 +34,6 @@ const Autopilot: React.FC = () => {
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [showAddDesign, setShowAddDesign] = useState(false);
   const [addDesignType, setAddDesignType] = useState<'feature' | 'bugfix'>('feature');
-  const [showLoadDesign, setShowLoadDesign] = useState(false);
   const [featureStatusFilter, setFeatureStatusFilter] = useState<'all' | 'validated' | 'needs_review' | 'failed'>('all');
   const { selectedProject } = useProject();
   const projectId = selectedProject?.id || null;
@@ -406,10 +405,9 @@ const Autopilot: React.FC = () => {
           transition={{ duration: 0.2 }}
         >
           {activeTab === 'queue' && (
-            <DesignQueuePanel 
-              projectId={projectId} 
+            <DesignQueuePanel
+              projectId={projectId}
               onAddDesign={(type) => { setAddDesignType(type); setShowAddDesign(true); }}
-              onLoadDesign={() => setShowLoadDesign(true)}
               currentDesign={status?.current_design}
               onReviewFeature={handleReviewFeature}
               onRefreshStatus={refetchStatus}
@@ -440,11 +438,6 @@ const Autopilot: React.FC = () => {
         projectId={projectId}
         workflowType={addDesignType}
         onClose={() => setShowAddDesign(false)}
-      />
-      <LoadDesignModal
-        open={showLoadDesign}
-        projectId={projectId}
-        onClose={() => setShowLoadDesign(false)}
       />
       <ProjectSettingsModal
         isOpen={showProjectSettings}

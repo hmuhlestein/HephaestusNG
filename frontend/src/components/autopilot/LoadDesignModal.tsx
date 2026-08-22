@@ -52,15 +52,15 @@ const TYPE_COPY = {
 
 const ACCENT_CLASSES = {
   violet: {
-    iconBg: 'bg-violet-100', iconText: 'text-violet-600',
+    iconBg: 'bg-violet-100 dark:bg-violet-800/50', iconText: 'text-violet-600 dark:text-violet-400',
     ring: 'focus:ring-violet-500', button: 'bg-violet-600 hover:bg-violet-700 text-white',
   },
   blue: {
-    iconBg: 'bg-blue-100', iconText: 'text-blue-600',
+    iconBg: 'bg-blue-100 dark:bg-blue-800/50', iconText: 'text-blue-600 dark:text-blue-400',
     ring: 'focus:ring-blue-500', button: 'bg-blue-600 hover:bg-blue-700 text-white',
   },
   amber: {
-    iconBg: 'bg-amber-100', iconText: 'text-amber-600',
+    iconBg: 'bg-amber-100 dark:bg-amber-800/50', iconText: 'text-amber-600 dark:text-amber-400',
     ring: 'focus:ring-amber-500', button: 'bg-amber-600 hover:bg-amber-700 text-white',
   },
 } as const;
@@ -97,7 +97,18 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
       setAddedRemotePaths(new Set());
       setBrowsingForFolder(false);
     } else {
-      setDestinationFolder(copy?.defaultFolder ?? '');
+      const defaultFolder = copy?.defaultFolder ?? '';
+      setDestinationFolder(defaultFolder);
+      if (defaultFolder && projectId) {
+        apiService.ensureAutopilotProjectFolder(projectId, defaultFolder).catch(() => {});
+      }
+      // Expanded by default -- these flows exist specifically to pull in
+      // an already-written doc, so the remote browser (not the local
+      // drop zone) is the primary path, not a secondary one behind a
+      // click.
+      setBrowsingForFolder(false);
+      setRemoteOpen(true);
+      loadRemoteDir('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, workflowType]);
@@ -149,8 +160,14 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
     }
   };
 
+  const ensureFolder = (path: string) => {
+    if (!projectId || !path.trim()) return;
+    apiService.ensureAutopilotProjectFolder(projectId, path).catch(() => {});
+  };
+
   const useCurrentFolderAsDestination = () => {
     setDestinationFolder(remotePath);
+    ensureFolder(remotePath);
     setRemoteOpen(false);
     setBrowsingForFolder(false);
   };
@@ -276,22 +293,22 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
             initial={{ scale: 0.95, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.95, opacity: 0 }}
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden"
+            className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden"
           >
             {/* Header */}
-            <div className="px-6 py-4 border-b flex items-center justify-between">
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className={`p-2 rounded-lg ${accent.iconBg}`}>
                   <Icon className={`w-5 h-5 ${accent.iconText}`} />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-gray-800">{copy?.title ?? 'Load Design Files'}</h2>
-                  <p className="text-xs text-gray-500">{copy?.subtitle ?? 'Select or drag & drop design documents from anywhere'}</p>
+                  <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">{copy?.title ?? 'Load Design Files'}</h2>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">{copy?.subtitle ?? 'Select or drag & drop design documents from anywhere'}</p>
                 </div>
               </div>
               <button
                 onClick={onClose}
-                className="p-2 rounded-lg hover:bg-gray-100 text-gray-500"
+                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -302,25 +319,26 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
               {/* Destination Folder (New Feature / Report Bug flows only) */}
               {workflowType && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Destination Folder</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Destination Folder</label>
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
                       value={destinationFolder}
                       onChange={(e) => setDestinationFolder(e.target.value)}
+                      onBlur={() => ensureFolder(destinationFolder)}
                       placeholder={copy?.defaultFolder}
-                      className={`flex-1 px-4 py-2 border border-gray-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 ${accent.ring}`}
+                      className={`flex-1 px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm font-mono bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 ${accent.ring}`}
                     />
                     <button
                       type="button"
                       onClick={openFolderBrowser}
-                      className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 flex-shrink-0"
+                      className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 flex-shrink-0"
                     >
                       <FolderInput className="w-3.5 h-3.5" />
                       Browse…
                     </button>
                   </div>
-                  <p className="text-xs text-gray-400 mt-1">
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                     Every file below is stored here, whether uploaded from your machine or picked from the project.
                   </p>
                 </div>
@@ -334,15 +352,15 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                 onClick={() => fileInputRef.current?.click()}
                 className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
                   isDragOver
-                    ? 'border-violet-500 bg-violet-50'
-                    : 'border-gray-200 hover:border-violet-300 hover:bg-gray-50'
+                    ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20'
+                    : 'border-gray-200 dark:border-gray-600 hover:border-violet-300 dark:hover:border-violet-500 hover:bg-gray-50 dark:hover:bg-gray-700/50'
                 }`}
               >
-                <FileText className={`w-12 h-12 mx-auto mb-3 ${isDragOver ? 'text-violet-500' : 'text-gray-300'}`} />
-                <p className="text-sm font-medium text-gray-600 mb-1">
+                <FileText className={`w-12 h-12 mx-auto mb-3 ${isDragOver ? 'text-violet-500 dark:text-violet-400' : 'text-gray-300 dark:text-gray-600'}`} />
+                <p className="text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">
                   {isDragOver ? 'Drop files here' : 'Click to select files or drag & drop'}
                 </p>
-                <p className="text-xs text-gray-400">
+                <p className="text-xs text-gray-400 dark:text-gray-500">
                   Supports .md and .txt files &middot; stored in{' '}
                   <code className="font-mono">{workflowType ? destinationFolder || copy?.defaultFolder : 'docs/'}</code>
                 </p>
@@ -361,7 +379,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                 <button
                   type="button"
                   onClick={openRemoteBrowser}
-                  className="flex items-center gap-1.5 text-xs font-medium text-violet-600 hover:text-violet-700"
+                  className="flex items-center gap-1.5 text-xs font-medium text-violet-600 dark:text-violet-400 hover:text-violet-700 dark:hover:text-violet-300"
                 >
                   <FolderOpen className="w-3.5 h-3.5" />
                   Load from Remote
@@ -370,18 +388,18 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
 
               {/* Remote File Browser */}
               {remoteOpen && (
-                <div className="border border-gray-200 rounded-xl overflow-hidden">
-                  <div className="flex items-center justify-between px-3 py-2 border-b bg-gray-50">
+                <div className="border border-gray-200 dark:border-gray-600 rounded-xl overflow-hidden">
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50">
                     <div className="flex items-center gap-2 min-w-0">
                       <button
                         type="button"
                         onClick={() => remoteParent !== null && loadRemoteDir(remoteParent)}
                         disabled={remoteParent === null || remoteLoading}
-                        className="p-1 rounded hover:bg-gray-200 text-gray-500 disabled:opacity-30 disabled:cursor-not-allowed"
+                        className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500 dark:text-gray-400 disabled:opacity-30 disabled:cursor-not-allowed"
                       >
                         <ArrowLeft className="w-3.5 h-3.5" />
                       </button>
-                      <span className="text-xs text-gray-500 truncate">/{remotePath}</span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400 truncate">/{remotePath}</span>
                     </div>
                     {browsingForFolder ? (
                       <Button
@@ -395,19 +413,19 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                       <button
                         type="button"
                         onClick={() => setRemoteOpen(false)}
-                        className="text-xs font-medium text-gray-500 hover:text-gray-700"
+                        className="text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
                       >
                         Done
                       </button>
                     )}
                   </div>
-                  <div className="max-h-64 overflow-y-auto divide-y divide-gray-100">
+                  <div className="max-h-64 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700">
                     {remoteLoading ? (
-                      <div className="p-4 text-center text-xs text-gray-400">Loading…</div>
+                      <div className="p-4 text-center text-xs text-gray-400 dark:text-gray-500">Loading…</div>
                     ) : remoteError ? (
-                      <div className="p-4 text-center text-xs text-red-500">{remoteError}</div>
+                      <div className="p-4 text-center text-xs text-red-500 dark:text-red-400">{remoteError}</div>
                     ) : remoteEntries.length === 0 ? (
-                      <div className="p-4 text-center text-xs text-gray-400">
+                      <div className="p-4 text-center text-xs text-gray-400 dark:text-gray-500">
                         {browsingForFolder ? 'No subfolders here' : 'No folders or .md/.txt files here'}
                       </div>
                     ) : (
@@ -421,18 +439,18 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                             type="button"
                             onClick={() => (entry.type === 'dir' ? loadRemoteDir(entry.path) : handleSelectRemoteFile(entry))}
                             disabled={addingRemotePath === entry.path || isAdded}
-                            className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50 disabled:opacity-50"
+                            className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
                           >
                             {entry.type === 'dir' ? (
-                              <Folder className="w-4 h-4 text-violet-400 flex-shrink-0" />
+                              <Folder className="w-4 h-4 text-violet-400 dark:text-violet-500 flex-shrink-0" />
                             ) : (
-                              <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                              <FileText className="w-4 h-4 text-gray-400 dark:text-gray-500 flex-shrink-0" />
                             )}
-                            <span className="text-sm text-gray-700 truncate flex-1">{entry.name}</span>
+                            <span className="text-sm text-gray-700 dark:text-gray-300 truncate flex-1">{entry.name}</span>
                             {addingRemotePath === entry.path ? (
                               <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-violet-500 flex-shrink-0" />
                             ) : isAdded ? (
-                              <Check className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                              <Check className="w-3.5 h-3.5 text-green-500 dark:text-green-400 flex-shrink-0" />
                             ) : null}
                           </button>
                         );
@@ -445,23 +463,23 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
               {/* Loaded Files List */}
               {loadedFiles.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-sm font-medium text-gray-700">
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
                     {loadedFiles.length} file(s) selected
                   </p>
                   <div className="max-h-64 overflow-y-auto space-y-2">
                     {loadedFiles.map((file, index) => (
                       <div
                         key={index}
-                        className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg"
+                        className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg"
                       >
-                        <FileText className="w-4 h-4 text-violet-500 flex-shrink-0" />
+                        <FileText className="w-4 h-4 text-violet-500 dark:text-violet-400 flex-shrink-0" />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-700 truncate">{file.name}</p>
-                          <p className="text-xs text-gray-400">{formatBytes(file.size)}</p>
+                          <p className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate">{file.name}</p>
+                          <p className="text-xs text-gray-400 dark:text-gray-500">{formatBytes(file.size)}</p>
                         </div>
                         <button
                           onClick={() => removeFile(index)}
-                          className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-red-500"
+                          className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400"
                         >
                           <X className="w-3 h-3" />
                         </button>

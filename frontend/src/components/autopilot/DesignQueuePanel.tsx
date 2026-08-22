@@ -20,7 +20,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
-  Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, Layers,
+  Loader2, Pause, Play, ChevronRight, ChevronDown, Layers,
   Square, RotateCcw, FileBarChart2, Eye, Sparkles, Bug
 } from 'lucide-react';
 import { apiService, api } from '@/services/api';
@@ -40,13 +40,12 @@ import BaseStatusBadge from '../StatusBadge';
 interface DesignQueuePanelProps {
   projectId: string | null;
   onAddDesign: (type: 'feature' | 'bugfix') => void;
-  onLoadDesign: () => void;
   currentDesign?: string | null;
   onReviewFeature?: (featureId: string, feature: any) => void;
   onRefreshStatus?: () => void;
 }
 
-const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, onLoadDesign, currentDesign, onReviewFeature, onRefreshStatus }) => {
+const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, currentDesign, onReviewFeature, onRefreshStatus }) => {
   const queryClient = useQueryClient();
   // Whether the project LIST itself is still loading -- projectId is
   // null both while that's in flight (too early to say "no project
@@ -334,10 +333,6 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <RefreshCw className={`w-4 h-4 mr-1 ${reloadMutation.isPending ? 'animate-spin' : ''}`} />
           Reload
         </Button>
-        <Button onClick={onLoadDesign} className="bg-violet-600 hover:bg-violet-700 text-white">
-          <Upload className="w-4 h-4 mr-1" />
-          Load Design
-        </Button>
         <Button onClick={() => onAddDesign('feature')} className="bg-blue-600 hover:bg-blue-700 text-white">
           <Sparkles className="w-4 h-4 mr-1" />
           New Feature
@@ -422,10 +417,6 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <p className="text-sm text-gray-400 dark:text-gray-500 mb-4">
             Drop design documents into the queue to start processing
           </p>
-          <Button onClick={onLoadDesign} className="bg-violet-600 hover:bg-violet-700 text-white">
-            <Upload className="w-4 h-4 mr-1" />
-            Load Design
-          </Button>
           <Button onClick={() => onAddDesign('feature')} className="bg-blue-600 hover:bg-blue-700 text-white">
             <Sparkles className="w-4 h-4 mr-1" />
             New Feature
