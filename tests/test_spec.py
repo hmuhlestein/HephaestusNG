@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from src.autopilot.spec import (
     DEFAULT_SPEC,
@@ -9,10 +10,12 @@ from src.autopilot.spec import (
     PHASE_OUTPUT_ARTIFACTS,
     _clamp01,
     _pass_with_subjective,
+    _select_relevant_test_files,
     build_phase_output,
     gate_finding_count,
     load_spec,
     read_okf_report,
+    run_independent_test_verification,
     score_adversarial_review,
     score_architectural_review,
     score_design_review,
@@ -341,6 +344,46 @@ class TestScoreQA:
         assert meta["failed_tests"] == 3
         assert meta["pass_rate"] == 70.0
 
+    def test_independent_verification_timeout_comes_from_config(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression: the independent-verification timeout used to be a
+        hardcoded 300s default with no way to raise it for a target project
+        whose test suite runs close to that ceiling -- violates this
+        project's no-hardcoded-timeouts convention (CLAUDE.md). It must now
+        come from hephaestus_config.yaml's autopilot.
+        independent_test_timeout_seconds, not the function's own default."""
+        from unittest.mock import MagicMock
+
+        from src.autopilot import spec as spec_module
+
+        received = {}
+
+        def fake_verification(working_directory, timeout_seconds=300):
+            received["timeout_seconds"] = timeout_seconds
+            return None
+
+        monkeypatch.setattr(
+            spec_module, "run_independent_test_verification", fake_verification
+        )
+        fake_config = MagicMock()
+        fake_config.autopilot.independent_test_timeout_seconds = 900
+        monkeypatch.setattr(
+            "src.core.simple_config.get_config", lambda: fake_config
+        )
+
+        result = {
+            "failed_tests": 0,
+            "passed_tests": 10,
+            "total_tests": 10,
+            "pass_rate": 100.0,
+            "critical_issues": 0,
+            "agent_score": 1.0,
+        }
+        score_qa(result, DEFAULT_SPEC, working_directory=str(tmp_path))
+
+        assert received["timeout_seconds"] == 900
+
 
 class TestScoreProductValidation:
     def test_none_result(self):
@@ -541,6 +584,139 @@ class TestBuildPhaseOutput:
         result = build_phase_output("feature_review", tmp_path)
         assert result["score"] < 0.3
         assert "Ownership overlap" in result["spec_gate"]["reason"]
+
+
+class TestSelectRelevantTestFiles:
+    """Regression: run_independent_test_verification used to run pytest
+    with no path restriction at all -- this project's own TESTING.md says
+    "Do not run the full test suite... it's slow" and "may take several
+    minutes" (222 files). Every qa_validation completion hit that full run
+    unconditionally; when the target project IS this repo, that routinely
+    exceeded the gate's own timeout and stalled phase advancement for the
+    full window. _select_relevant_test_files scopes to what the feature
+    branch actually changed instead."""
+
+    def _run(self, repo, *args):
+        import subprocess
+
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    def _init_repo(self, tmp_path):
+        repo = tmp_path
+        self._run(repo, "init", "-b", "main")
+        self._run(repo, "config", "user.email", "test@test.com")
+        self._run(repo, "config", "user.name", "Test")
+        return repo
+
+    def test_maps_changed_source_file_to_its_test(self, tmp_path, monkeypatch):
+        repo = self._init_repo(tmp_path)
+        (repo / "src").mkdir()
+        (repo / "src" / "foo.py").write_text("def foo(): return 1\n")
+        tests_dir = repo / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_foo.py").write_text("def test_foo(): assert True\n")
+        self._run(repo, "add", "-A")
+        self._run(repo, "commit", "-m", "base")
+        self._run(repo, "checkout", "-b", "feature")
+        (repo / "src" / "foo.py").write_text("def foo(): return 2\n")
+        self._run(repo, "add", "-A")
+        self._run(repo, "commit", "-m", "change foo")
+
+        fake_config = MagicMock()
+        fake_config.git.base_branch = "main"
+        monkeypatch.setattr("src.core.simple_config.get_config", lambda: fake_config)
+
+        result = _select_relevant_test_files(str(repo))
+
+        assert result == ["tests/test_foo.py"]
+
+    def test_includes_changed_test_file_directly(self, tmp_path, monkeypatch):
+        repo = self._init_repo(tmp_path)
+        tests_dir = repo / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_bar.py").write_text("def test_bar(): assert True\n")
+        self._run(repo, "add", "-A")
+        self._run(repo, "commit", "-m", "base")
+        self._run(repo, "checkout", "-b", "feature")
+        (tests_dir / "test_bar.py").write_text("def test_bar(): assert 1 == 1\n")
+        self._run(repo, "add", "-A")
+        self._run(repo, "commit", "-m", "change test_bar")
+
+        fake_config = MagicMock()
+        fake_config.git.base_branch = "main"
+        monkeypatch.setattr("src.core.simple_config.get_config", lambda: fake_config)
+
+        result = _select_relevant_test_files(str(repo))
+
+        assert result == ["tests/test_bar.py"]
+
+    def test_returns_none_when_no_changed_file_maps_to_a_test(
+        self, tmp_path, monkeypatch
+    ):
+        repo = self._init_repo(tmp_path)
+        (repo / "README.md").write_text("hello\n")
+        self._run(repo, "add", "-A")
+        self._run(repo, "commit", "-m", "base")
+        self._run(repo, "checkout", "-b", "feature")
+        (repo / "README.md").write_text("hello world\n")
+        self._run(repo, "add", "-A")
+        self._run(repo, "commit", "-m", "change readme")
+
+        fake_config = MagicMock()
+        fake_config.git.base_branch = "main"
+        monkeypatch.setattr("src.core.simple_config.get_config", lambda: fake_config)
+
+        assert _select_relevant_test_files(str(repo)) is None
+
+    def test_returns_none_outside_a_git_repo(self, tmp_path):
+        assert _select_relevant_test_files(str(tmp_path)) is None
+
+
+class TestRunIndependentTestVerificationScoping:
+    def test_skips_pytest_entirely_when_nothing_maps(self, tmp_path, monkeypatch):
+        """The whole point of scoping: when no changed file maps to a
+        test, don't fall back to running the entire suite -- skip
+        verification and let the caller fall back to the agent's report."""
+        from src.autopilot import spec as spec_module
+
+        monkeypatch.setattr(
+            spec_module, "_select_relevant_test_files", lambda wd: None
+        )
+
+        def fail_if_called(*a, **k):
+            raise AssertionError("pytest should not have been invoked")
+
+        monkeypatch.setattr("subprocess.run", fail_if_called)
+
+        result = run_independent_test_verification(str(tmp_path))
+
+        assert result is None
+
+    def test_runs_pytest_scoped_to_the_resolved_files_only(
+        self, tmp_path, monkeypatch
+    ):
+        from src.autopilot import spec as spec_module
+
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_scoped.py").write_text(
+            "def test_a(): assert True\ndef test_b(): assert True\n"
+        )
+        # An unrelated test file that must NOT run -- if pytest were
+        # invoked unscoped, this failure would show up in the summary.
+        (tmp_path / "tests" / "test_unrelated.py").write_text(
+            "def test_fails(): assert False\n"
+        )
+        monkeypatch.setattr(
+            spec_module,
+            "_select_relevant_test_files",
+            lambda wd: ["tests/test_scoped.py"],
+        )
+
+        result = run_independent_test_verification(str(tmp_path))
+
+        assert result is not None
+        assert result["failed"] == 0
+        assert result["passed"] == 2
 
 
 class TestScoreAdversarialReview:

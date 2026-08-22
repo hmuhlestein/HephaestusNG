@@ -934,11 +934,90 @@ def _parse_pytest_summary(output: str) -> Optional[Dict[str, int]]:
     return None
 
 
+def _select_relevant_test_files(working_directory: str) -> Optional[list]:
+    """Map files changed on this feature branch to the test files that
+    actually need to run, instead of the project's entire suite.
+
+    Root cause this replaces: run_independent_test_verification used to
+    invoke pytest with no path restriction at all -- the project's own
+    TESTING.md says outright "Do not run the full test suite... it's slow"
+    and "may take several minutes" (222 files). Every qa_validation
+    completion hit that full run unconditionally, and when the target
+    project IS this repo (self-hosted feature work), that "several
+    minutes" routinely exceeded the gate's own timeout, stalling phase
+    advancement for the full window. Observed live: workflow ca539a75's
+    qa_validation->product_validation transition sat blocked for 300s.
+
+    Diffs against config.git.base_branch (same ref _shared.py's git_expert
+    checks already use) plus uncommitted/untracked changes, so this covers
+    everything introduced by the feature so far regardless of commit
+    state. A changed test_*.py file is used directly; a changed source
+    file maps to tests/test_<basename>.py by this project's own
+    established one-to-one naming convention (spec.py -> test_spec.py,
+    monitor.py -> test_monitor.py, etc.) -- a heuristic, not a true
+    import-graph traversal, so a source file whose only coverage lives in
+    a differently-named test module won't be picked up.
+
+    Returns None (not a hard failure -- caller already treats None as
+    "couldn't run, fall back to agent report") when there's no git repo,
+    no changes, or no changed file maps to an existing test -- silently
+    running the full suite in that case would defeat the entire point of
+    scoping it down.
+    """
+    import subprocess
+
+    try:
+        from src.core.simple_config import get_config
+
+        base_branch = get_config().git.base_branch
+        diffs = [
+            subprocess.run(
+                ["git", "diff", "--name-only", f"{base_branch}...HEAD"],
+                cwd=working_directory, capture_output=True, text=True, timeout=10,
+            ),
+            subprocess.run(
+                ["git", "diff", "--name-only", "HEAD"],
+                cwd=working_directory, capture_output=True, text=True, timeout=10,
+            ),
+            subprocess.run(
+                ["git", "ls-files", "--others", "--exclude-standard"],
+                cwd=working_directory, capture_output=True, text=True, timeout=10,
+            ),
+        ]
+        changed = set()
+        for d in diffs:
+            if d.returncode == 0:
+                changed.update(line for line in d.stdout.splitlines() if line)
+    except Exception as e:
+        logger.debug(f"[INDEPENDENT_TEST] Could not compute changed files: {e}")
+        return None
+
+    if not changed:
+        return None
+
+    wd = Path(working_directory)
+    test_files = set()
+    for f in changed:
+        p = Path(f)
+        if p.suffix != ".py":
+            continue
+        if p.parts and p.parts[0] == "tests" and p.name.startswith("test_"):
+            if (wd / p).exists():
+                test_files.add(f)
+            continue
+        candidate = Path("tests") / f"test_{p.name}"
+        if (wd / candidate).exists():
+            test_files.add(str(candidate))
+
+    return sorted(test_files) if test_files else None
+
+
 def run_independent_test_verification(
     working_directory: str,
     timeout_seconds: int = 300,
 ) -> Optional[Dict[str, Any]]:
-    """Run the test suite independently to verify agent-reported QA metrics.
+    """Run this feature's changed test files independently to verify
+    agent-reported QA metrics -- not the project's entire suite.
 
     Enhancement 1 (from docs/LOOP_ENGINEERING_EVALUATION.md):
     Turns the QA gate from 'trust the JSON format' into 'verify against
@@ -950,11 +1029,24 @@ def run_independent_test_verification(
     verification actually runs for any project with vanilla pytest instead
     of silently no-op'ing whenever the plugin is absent.
 
+    Scoped via _select_relevant_test_files to the test files this feature
+    actually changed, rather than the whole suite — see that function's
+    docstring for why an unscoped run was the real root cause of gate
+    stalls, not merely a too-short timeout.
+
     Returns:
         Dict with 'failed', 'passed', 'total', 'pass_rate' keys, or None
         if tests couldn't be run (caller should fall back to agent report).
     """
     import subprocess
+
+    test_files = _select_relevant_test_files(working_directory)
+    if not test_files:
+        logger.info(
+            "[INDEPENDENT_TEST] No changed test files resolved -- skipping "
+            "independent verification, falling back to agent report"
+        )
+        return None
 
     try:
         result = subprocess.run(
@@ -970,6 +1062,7 @@ def run_independent_test_verification(
                 # Disabling it here only affects auto-loaded Hephaestus-side
                 # plugins, not anything the target project installed itself.
                 "-p", "no:libtmux",
+                *test_files,
             ],
             cwd=working_directory,
             capture_output=True,
@@ -1206,7 +1299,12 @@ def score_qa(
     independent_verification = None
     verification_discrepancy = ""
     if working_directory:
-        independent_result = run_independent_test_verification(working_directory)
+        from src.core.simple_config import get_config
+
+        independent_result = run_independent_test_verification(
+            working_directory,
+            timeout_seconds=get_config().autopilot.independent_test_timeout_seconds,
+        )
         if independent_result:
             independent_verification = independent_result
             is_consistent, discrepancy = verify_qa_against_independent(
