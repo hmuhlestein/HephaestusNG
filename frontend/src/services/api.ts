@@ -847,6 +847,11 @@ export const apiService = {
     return data;
   },
 
+  ensureAutopilotProjectFolder: async (projectId: string, path: string): Promise<{ path: string }> => {
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/ensure-folder`, { path });
+    return data;
+  },
+
   browseAutopilotProjectFiles: async (projectId: string, path: string = ''): Promise<{ path: string; parent: string | null; entries: { name: string; path: string; type: 'dir' | 'file' }[] }> => {
     const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/browse`, { params: { path } });
     return data;

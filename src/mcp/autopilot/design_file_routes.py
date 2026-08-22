@@ -239,6 +239,35 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
     )
 
 
+class EnsureFolderRequest(BaseModel):
+    path: str
+
+
+@router.post("/projects/{project_id}/ensure-folder")
+async def ensure_project_folder(project_id: str, req: EnsureFolderRequest):
+    """Create a folder (and any missing parents) under the project root if
+    it doesn't already exist yet.
+
+    Used by the New Feature/Report Bug destination-folder picker so the
+    chosen folder (often a not-yet-existing default like docs/bugfix on a
+    project that's never had one) is real the moment it's selected, not
+    only once a design is actually submitted (add_project_design's own
+    mkdir already handles that case, but leaves the folder invisible to
+    a browse/select round-trip in between).
+    """
+    from src.core.database import AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        base_dir = proj.base_dir
+
+    folder = _safe_path(base_dir, req.path)
+    folder.mkdir(parents=True, exist_ok=True)
+    return {"path": req.path}
+
+
 class BrowseEntry(BaseModel):
     name: str
     path: str

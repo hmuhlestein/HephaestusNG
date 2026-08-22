@@ -1770,6 +1770,35 @@ class TestProjectDesigns:
         )
         assert resp.status_code == 400
 
+    def test_ensure_folder_creates_a_not_yet_existing_destination(self, project_client):
+        """The New Feature/Report Bug destination-folder field defaults to
+        docs/design or docs/bugfix, which may not exist yet on a project
+        that's never had one -- ensure-folder makes it real immediately
+        (rather than only once a design is actually submitted), so a
+        browse/select round-trip against it works right away."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        target = dirs["project_dir"] / "docs" / "bugfix"
+        assert not target.exists()
+
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/ensure-folder",
+            json={"path": "docs/bugfix"},
+        )
+        assert resp.status_code == 200
+        assert target.is_dir()
+
+    def test_ensure_folder_rejects_a_path_that_escapes_the_project_root(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/ensure-folder",
+            json={"path": "../../etc"},
+        )
+        assert resp.status_code == 400
+
     def test_get_design_content_resolves_docs_destination(self, project_client):
         """content/status/delete all resolved unconditionally against
         .hephaestus/designs/ (_get_design_queue_dir), ignoring
