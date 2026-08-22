@@ -539,8 +539,12 @@ class WorktreeManager:
             if stashed:
                 try:
                     self.main_repo.git.stash("pop")
-                except GitCommandError:
-                    pass
+                except GitCommandError as stash_err:
+                    logger.error(
+                        f"[WORKTREE:{agent_id}] Failed to restore stashed changes "
+                        f"after the merge failure above -- they remain in the "
+                        f"stash list, not the working tree: {stash_err}"
+                    )
             raise
         finally:
             if lock_file:
