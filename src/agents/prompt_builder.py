@@ -262,8 +262,11 @@ class AgentPromptBuilder:
                 _override = _db.query(TaskPromptOverride).filter_by(task_id=task.id).first()
                 if _override and _override.user_prompt:
                     override_text = _override.user_prompt
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                f"Failed to load TaskPromptOverride for task {task.id}; agent will "
+                f"start without the user's override prompt: {e}"
+            )
 
         base_message += f"""
 

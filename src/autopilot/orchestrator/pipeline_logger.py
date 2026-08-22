@@ -30,10 +30,6 @@ class OrchestratorLogger:
     def log(self, message: str, level: str = "INFO"):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] [{level}] {message}"
-        try:
-            pass
-        except OSError:
-            pass  # Broken pipe when running as subprocess with DEVNULL
         with self._lock:
             with open(self.log_file, "a") as f:
                 f.write(line + "\n")

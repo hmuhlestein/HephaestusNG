@@ -250,8 +250,10 @@ class Terminator:
                             for p in result.stdout.strip().split("\n")
                             if p.strip()
                         ]
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Without pane PIDs the orphan-kill below is skipped --
+                    # child processes (opencode/claude/pi) can outlive the session.
+                    logger.warning(f"Failed to collect pane PIDs for {agent.tmux_session_name}: {e}")
 
                 try:
                     if self.tmux_server.has_session(agent.tmux_session_name):
@@ -362,8 +364,10 @@ class Terminator:
                 for pane_pid in pane_pids:
                     try:
                         subprocess.run(["kill", "-2", "--", "-" + pane_pid], timeout=3)
-                    except Exception:
-                        pass
+                    except ProcessLookupError:
+                        pass  # Process already gone
+                    except Exception as e:
+                        logger.warning(f"Failed to SIGINT pane pid {pane_pid}: {e}")
                 if pane_pids:
                     time.sleep(1)
                 for pane_pid in pane_pids:
@@ -378,8 +382,10 @@ class Terminator:
                             subprocess.run(
                                 ["kill", "-9", "--", "-" + pane_pid], timeout=3
                             )
-                    except Exception:
-                        pass
+                    except ProcessLookupError:
+                        pass  # Process already gone
+                    except Exception as e:
+                        logger.warning(f"Failed to SIGKILL pane pid {pane_pid}: {e}")
 
             # Collect cost data before clearing agent references.
             # Once current_task_id and assigned_agent_id are cleared,

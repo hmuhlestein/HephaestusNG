@@ -35,13 +35,18 @@ def _kill_tmux_session(tmux_session_name: Optional[str]) -> None:
     import subprocess
 
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["tmux", "kill-session", "-t", tmux_session_name],
             capture_output=True,
             timeout=5,
         )
-    except Exception:
-        pass
+        if result.returncode != 0:
+            logger.warning(
+                f"tmux kill-session failed for {tmux_session_name} (stop/cancel "
+                f"may not have taken effect): {(result.stderr or b'').decode(errors='replace').strip()}"
+            )
+    except Exception as e:
+        logger.warning(f"tmux kill-session failed for {tmux_session_name}: {e}")
 
 async def _terminate_workflow_agents(session, workflow_id: str):
     """Find every actively-working agent assigned to this workflow's

@@ -2571,8 +2571,11 @@ def run_continuous_pipeline(args) -> None:
                 _proj = _pdb.query(_AutopilotProject).filter_by(base_dir=str(project_path.resolve())).first()
                 if _proj:
                     current_project_id = _proj.id
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                f"Could not resolve current_project_id for {project_path}; stop/pause "
+                f"signals keyed by project_id won't reach this pipeline: {e}"
+            )
 
     processed_file = log_dir / "processed.json"
 

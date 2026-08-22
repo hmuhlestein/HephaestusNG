@@ -1,5 +1,6 @@
 """Service layer for managing workflow-level results."""
 
+import logging
 import os
 import uuid
 from datetime import datetime
@@ -11,6 +12,8 @@ from src.services.validation_helpers import (
     validate_file_size,
     validate_markdown_format,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowResultService:
@@ -81,9 +84,9 @@ class WorkflowResultService:
 
                     validated_extra_files.append(abs_path)
 
-                except Exception:
-                    pass
+                except Exception as e:
                     # Continue processing other files
+                    logger.warning(f"Skipping extra result file {file_path}: {e}")
 
         # Read markdown content
         with open(markdown_file_path, "r", encoding="utf-8") as f:
