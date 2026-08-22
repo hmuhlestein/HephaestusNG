@@ -38,6 +38,14 @@ additional_notes: |
   Technical terms exact. No pleasantries (sure/certainly/happy to).
   Not: "I'll now proceed to review security." Yes: "Review auth and input validation."
 
+  security.md, every time it's mentioned anywhere in these instructions
+  (including immediately below), means security-<your Task ID's first 8
+  hex characters>.md (find your Task ID in "Task ID:" in your task
+  description) -- written to .hephaestus/security_review/. Not optional:
+  a duplicate/concurrent dispatch for this same phase then writes to a
+  DIFFERENT suffixed file instead of racing yours, and the gate reads
+  your own task's suffixed file specifically, not a bare security.md.
+
   Start security.md with this frontmatter block, then the report
   immediately after:
   ```

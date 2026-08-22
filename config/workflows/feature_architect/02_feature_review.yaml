@@ -53,6 +53,13 @@ additional_notes: |
   the report and result files. Your task description contains the exact paths
   — copy them exactly.
 
+  feature_review.md, wherever mentioned below, means feature_review-<your
+  Task ID's first 8 hex characters>.md (find your Task ID in "Task ID:"
+  above) -- written to .hephaestus/feature_review/. Not optional: a
+  duplicate/concurrent dispatch for this same phase then writes to a
+  DIFFERENT suffixed file instead of racing yours, and the gate reads your
+  own task's suffixed file specifically, not a bare feature_review.md.
+
   Read:
   - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
   - ./.hephaestus/features.json — the proposed decomposition

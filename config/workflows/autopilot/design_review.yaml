@@ -21,6 +21,12 @@ description: |
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - challenge.md, wherever mentioned below, means challenge-<your Task
+    ID's first 8 hex characters>.md (find your Task ID in "Task ID:"
+    above) -- written to .hephaestus/design_review/. Not optional: a
+    duplicate/concurrent dispatch for this same phase then writes to a
+    DIFFERENT suffixed file instead of racing yours, and the gate reads
+    your own task's suffixed file specifically, not a bare challenge.md.
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
   - Write ONE file, challenge.md, to ./.hephaestus/design_review/ —
     a YAML frontmatter block (blocker_count/warning_count/nit_count, the

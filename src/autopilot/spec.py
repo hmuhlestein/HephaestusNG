@@ -173,8 +173,55 @@ OUTPUT_NAME_ALIASES: Dict[str, str] = {
 }
 
 
+def suffixed_output_name(base_name: str, task_id: str) -> str:
+    """security.md + a task id -> security-a1b2c3d4.md.
+
+    Every gated phase's report/result file is written under a filename
+    suffixed with the dispatching task's own first 8 hex chars, not the
+    bare declared name -- so a duplicate/concurrent dispatch for what
+    should be one job (a scheduling bug, not hypothetical: this fixes the
+    exact failure mode behind feature_review's session-resume incident,
+    where a second agent for "the same" review ran alongside the first)
+    writes to two DIFFERENT files instead of racing on one, and both
+    attempts survive on disk for debugging instead of one silently
+    overwriting the other.
+    """
+    p = Path(base_name)
+    return f"{p.stem}-{task_id[:8]}{p.suffix}"
+
+
+def _output_glob_pattern(base_name: str) -> str:
+    """security.md -> security-*.md -- for "find the current one" lookups
+    that have no specific task id to pin to (e.g. build_phase_output's
+    callers, which score a phase's CURRENT state in a worktree after it
+    advances, not one particular task's own output)."""
+    p = Path(base_name)
+    return f"{p.stem}-*{p.suffix}"
+
+
+def _newest_glob_match(directory: Path, base_name: str) -> Optional[Path]:
+    """The most-recently-modified file matching base_name's suffixed
+    pattern in `directory`, or None.
+
+    Explicit mtime comparison, not directory-iteration order -- iteration
+    order is NOT guaranteed to be recency (see read_okf_report's own
+    docstring on this exact hazard for the pre-suffix design), so it's the
+    one safe way to pick "the current one" when more than one suffixed
+    file exists -- the exact duplicate-dispatch scenario this suffix
+    scheme exists to survive without one attempt silently clobbering the
+    other's result.
+    """
+    if not directory.is_dir():
+        return None
+    matches = list(directory.glob(_output_glob_pattern(base_name)))
+    if not matches:
+        return None
+    return max(matches, key=lambda p: p.stat().st_mtime)
+
+
 def resolve_declared_output_path(
-    working_directory: str, phase_name: str, declared_output: str
+    working_directory: str, phase_name: str, declared_output: str,
+    task_id: Optional[str] = None,
 ) -> Optional[Path]:
     """Find where a phase's declared output file actually landed in its
     worktree, trying every sanctioned location and old-name alias in the
@@ -221,10 +268,21 @@ def resolve_declared_output_path(
     (see verify_output_artifact's feature_dir search and
     verify_output_survived_commit's git-history search respectively);
     kept out of this shared function rather than forced to fit both.
+
+    task_id: when given, the dispatching task's own suffixed filename
+    (suffixed_output_name) is checked FIRST, ahead of the bare declared
+    name -- agents now write <stem>-<task_id[:8]><ext>, not the bare name,
+    so this is the precise, correct check for "did THIS task produce its
+    own declared output." The bare-name checks below still run afterward
+    (unsuffixed fixtures/older behavior stay found, no test/caller without
+    a task_id regresses), and a newest-suffixed-file fallback runs last
+    for a caller that has no task_id to pin to.
     """
     base = Path(working_directory)
     old_name = OUTPUT_NAME_ALIASES.get(declared_output)
     names_to_check = [declared_output] + ([old_name] if old_name else [])
+    if task_id:
+        names_to_check = [suffixed_output_name(declared_output, task_id)] + names_to_check
     # See candidate 3's docstring paragraph above -- flat .hephaestus/ is
     # only a real scoring-time location for a non-gated phase, or a gated
     # phase whose GATE_RESULT_SUBDIR override IS that flat location (none
@@ -270,6 +328,30 @@ def resolve_declared_output_path(
         legacy = base / CONTEXT_DIR_NAME / "review.md"
         if legacy.exists():
             return legacy
+    # Last resort: no exact name (suffixed or bare) found anywhere -- try
+    # the newest file matching the suffixed pattern, but ONLY under
+    # .hephaestus/<phase_name>/ -- never the bare working_directory. The
+    # exact-name checks above may reasonably include the worktree root (a
+    # narrow, specific filename, matching pre-existing behavior), but a
+    # WILDCARD glob there is a different risk entirely: the worktree root
+    # is the actual project source tree, which can easily contain a
+    # genuine, unrelated file matching a pattern like "qa-*.md" or
+    # "review-*.md" (a real project doc, nothing to do with this gate).
+    # Only .hephaestus/<phase_name>/ is exclusively Hephaestus's own
+    # output -- every suffix-writing agent is instructed to write there,
+    # never to the worktree root, so this alone is sufficient.
+    # Only when task_id was NOT given: a caller that named a specific task
+    # wants to know THAT task's own output exists, not "some file matching
+    # this phase's pattern" -- falling back to another task's leftover
+    # suffixed file here would let it satisfy the wrong task's existence
+    # check, exactly the cross-task confusion this suffix scheme exists to
+    # prevent.
+    if not task_id:
+        search_dirs = [base / CONTEXT_DIR_NAME / phase_name]
+        for d in search_dirs:
+            newest = _newest_glob_match(d, declared_output)
+            if newest:
+                return newest
     return None
 
 
@@ -1659,6 +1741,7 @@ def read_okf_report(
     filename: str,
     subdir: Optional[str] = None,
     phase_name: Optional[str] = None,
+    task_id: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Read a phase's OKF report (frontmatter + body) an agent wrote.
 
@@ -1690,10 +1773,20 @@ def read_okf_report(
 
     Returns (frontmatter, body) -- either or both None if the file is
     missing or has no parseable frontmatter block (see okf_markdown.read_okf).
+
+    task_id: when given, `filename`'s suffixed name (suffixed_output_name)
+    is checked FIRST, ahead of the bare name -- agents now write
+    <stem>-<task_id[:8]><ext>, not the bare declared name. Without a
+    task_id (most callers here score a phase's CURRENT state after it
+    advances, not one specific task's own output), a newest-suffixed-file
+    fallback runs last, mtime-compared rather than trusting directory-
+    iteration order (see this docstring's own note above on that hazard).
     """
     base = Path(working_directory)
     old_name = OUTPUT_NAME_ALIASES.get(filename)
     names = [filename] + ([old_name] if old_name else [])
+    if task_id:
+        names = [suffixed_output_name(filename, task_id)] + names
     if subdir is not None:
         candidates = [base / subdir / name for name in names]
     else:
@@ -1706,6 +1799,28 @@ def read_okf_report(
         if candidate.exists():
             parsed = read_okf(candidate)
             return parsed if parsed else (None, None)
+    # Same reasoning as resolve_declared_output_path's own matching guard:
+    # a caller that named a specific task_id wants THAT task's own report,
+    # not "whatever else matches this phase's pattern" -- skip this
+    # fallback entirely when task_id was given and its exact file wasn't
+    # found, rather than silently reading a different task's leftover.
+    #
+    # Never includes the bare working_directory here (unlike the exact-name
+    # candidates above, which reasonably may) -- a WILDCARD glob at the
+    # worktree root risks matching a genuine, unrelated project file (a
+    # real "qa-notes.md" or "review-draft.md" with nothing to do with this
+    # gate), not just this phase's own output. Every suffix-writing agent
+    # is instructed to write under .hephaestus/<phase_name>/ specifically,
+    # so restricting the glob there is sufficient, not a coverage gap.
+    if not task_id:
+        search_dirs = [base / subdir] if subdir is not None else (
+            [base / ".hephaestus" / phase_name] if phase_name else []
+        )
+        for d in search_dirs:
+            newest = _newest_glob_match(d, filename)
+            if newest:
+                parsed = read_okf(newest)
+                return parsed if parsed else (None, None)
     return None, None
 
 
@@ -1839,6 +1954,30 @@ def consume_gate_artifacts(phase_name: str, working_directory: Any) -> list:
             # exact goto-loop bug this function exists to prevent, across
             # every retry of an in-flight run still writing to it.
             candidates.append(base / CONTEXT_DIR_NAME / "review.md")
+        # Suffixed matches (<stem>-<task_id[:8]><ext>) under
+        # .hephaestus/<phase_name>/ (or subdir) specifically -- must be
+        # swept too, or a leftover from an earlier attempt (a duplicate
+        # dispatch, a task whose retry wrote a second suffixed file before
+        # the first was consumed) survives this cleanup and
+        # read_okf_report's own newest-match fallback picks it right back
+        # up next run, resurrecting the exact stale-result loop this
+        # function exists to prevent -- just via a different filename than
+        # the bare one this function used to only ever check.
+        #
+        # Deliberately NEVER globs the bare working_directory, even though
+        # the exact-name candidates above may include it (a narrow,
+        # specific filename, matching pre-existing behavior) -- the
+        # worktree root is the actual project source tree, and a WILDCARD
+        # delete there risks matching (and unlinking) a genuine, unrelated
+        # committed project file that happens to share the naming pattern
+        # (a real "qa-notes.md", nothing to do with this gate). Every
+        # suffix-writing agent is instructed to write under
+        # .hephaestus/<phase_name>/, so restricting the sweep there is
+        # sufficient, not a coverage gap.
+        glob_dirs = {base / subdir} if subdir else {base / ".hephaestus" / phase_name}
+        for d in glob_dirs:
+            if d.is_dir():
+                candidates += list(d.glob(_output_glob_pattern(filename)))
         for candidate in candidates:
             if candidate.exists():
                 try:
