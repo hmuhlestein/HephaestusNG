@@ -4,13 +4,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-
-
-from src.core.database import (
-    Workflow,
-    get_db,
-)
+from typing import TYPE_CHECKING, Dict, List, Tuple
 
 from src.autopilot.orchestrator.engine_client import (
     get_agents,
@@ -20,8 +14,10 @@ from src.autopilot.orchestrator.engine_client import (
 from src.autopilot.orchestrator.phase_transitions import (
     _retry_failed_tasks,
 )
-
-from typing import TYPE_CHECKING
+from src.core.database import (
+    Workflow,
+    get_db,
+)
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -89,6 +85,7 @@ def _workflow_appears_abandoned(workflow_id: str) -> bool:
         # the "all tasks done ≠ all phases done" mistake has recurred
         # independently at least four times in this codebase's history.
         from src.core.status_derivation import derive_workflow_status
+
         with get_db() as db:
             derived = derive_workflow_status(db, workflow_id, write_back=False)
             if derived == "completed":
@@ -231,16 +228,33 @@ def _fail_tasks_with_terminated_agents(workflow_id: str, logger: "OrchestratorLo
     return recovered
 
 
-def _resolve_recovery_project_path(workflow_id: str) -> Optional[str]:
-    """The workflow's working directory, falling back to $PROJECT_PATH."""
+def _resolve_recovery_project_paths(workflow_id: str) -> List[str]:
+    """Resolve all project repo paths for recovery.
+
+    Returns a list of paths -- one per ProjectRepo for the workflow's
+    project. Falls back to Workflow.working_directory or $PROJECT_PATH
+    when no ProjectRepos exist (backward compat).
+    """
+    paths = []
     try:
+        from src.core.database import ProjectRepo
+
         with get_db() as _db:
             _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
-            if _wf and _wf.working_directory and Path(_wf.working_directory).exists():
-                return _wf.working_directory
+            if _wf and _wf.project_id:
+                repos = _db.query(ProjectRepo).filter_by(project_id=_wf.project_id).all()
+                for repo in repos:
+                    if Path(repo.path).exists():
+                        paths.append(repo.path)
+            if not paths and _wf and _wf.working_directory and Path(_wf.working_directory).exists():
+                paths.append(_wf.working_directory)
     except Exception:
         pass
-    return os.getenv("PROJECT_PATH")
+    if not paths:
+        env_path = os.getenv("PROJECT_PATH")
+        if env_path:
+            paths.append(env_path)
+    return paths
 
 
 def _clean_stale_repo_state(workflow_id: str, logger: "OrchestratorLogger") -> List[str]:
@@ -250,59 +264,57 @@ def _clean_stale_repo_state(workflow_id: str, logger: "OrchestratorLogger") -> L
     update_task_status. A raw git merge here corrupts the repo, because this
     runs on the orchestrator's thread rather than in the agent's worktree
     context.
+
+    Iterates all ProjectRepos for the project (REQ-16).
     """
     recovered: List[str] = []
     try:
-        project_path = _resolve_recovery_project_path(workflow_id)
-        if not project_path:
-            # Nothing this strategy can do. Returning (rather than the
-            # `return` out of attempt_recovery this used to be) is the point:
-            # the strategies that follow don't need a project path and must
-            # still run.
+        project_paths = _resolve_recovery_project_paths(workflow_id)
+        if not project_paths:
             return recovered
 
-        status_result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=project_path,
-        )
-        is_dirty = bool(status_result.stdout.strip())
-        merge_in_progress = Path(project_path, ".git", "MERGE_HEAD").exists()
+        for project_path in project_paths:
+            try:
+                status_result = subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    cwd=project_path,
+                )
+                is_dirty = bool(status_result.stdout.strip())
+                merge_in_progress = Path(project_path, ".git", "MERGE_HEAD").exists()
 
-        if is_dirty or merge_in_progress:
-            # Abort any in-progress merge that's blocking the repo
-            subprocess.run(
-                ["git", "merge", "--abort"],
-                capture_output=True,
-                timeout=10,
-                cwd=project_path,
-            )
-            # Ensure we're on main
-            subprocess.run(
-                ["git", "checkout", "main"],
-                capture_output=True,
-                timeout=10,
-                cwd=project_path,
-            )
-            # Clean untracked files that accumulate from failed merges
-            subprocess.run(
-                ["git", "clean", "-fd"],
-                capture_output=True,
-                timeout=10,
-                cwd=project_path,
-            )
-            # Reset any staged but uncommitted changes
-            subprocess.run(
-                ["git", "reset", "--hard", "HEAD"],
-                capture_output=True,
-                timeout=10,
-                cwd=project_path,
-            )
-            recovered.append("cleaned repo state")
+                if is_dirty or merge_in_progress:
+                    subprocess.run(
+                        ["git", "merge", "--abort"],
+                        capture_output=True,
+                        timeout=10,
+                        cwd=project_path,
+                    )
+                    subprocess.run(
+                        ["git", "checkout", "main"],
+                        capture_output=True,
+                        timeout=10,
+                        cwd=project_path,
+                    )
+                    subprocess.run(
+                        ["git", "clean", "-fd"],
+                        capture_output=True,
+                        timeout=10,
+                        cwd=project_path,
+                    )
+                    subprocess.run(
+                        ["git", "reset", "--hard", "HEAD"],
+                        capture_output=True,
+                        timeout=10,
+                        cwd=project_path,
+                    )
+                    recovered.append(f"cleaned repo state at {project_path}")
+            except Exception as e:
+                logger.warning(f"  Failed to clean repo state at {project_path}: {e}")
     except Exception as e:
-        logger.warning(f"  Failed to clean repo state: {e}")
+        logger.warning(f"  Failed to resolve recovery paths: {e}")
     return recovered
 
 
