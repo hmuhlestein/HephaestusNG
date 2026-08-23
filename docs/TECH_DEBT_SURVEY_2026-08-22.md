@@ -7,6 +7,12 @@ frontend god-components, and residual items from earlier passes that were tracke
 but never closed. Evidence-based — every number below came from actually running
 the tool, not estimating.
 
+**Re-verified 2026-08-22, after 11 more commits landed.** mypy 1003→1005 and the
+pass-only except count ~145→148 — both within normal noise, findings unchanged.
+`phase_transitions.py`'s two deferred functions and `DesignQueuePanel.tsx`'s size
+are byte-for-byte unchanged (neither file was touched by the 11 commits). One
+real drift: §3 below.
+
 ---
 
 ## 1. mypy: 1003 errors across 118 files — configured but not enforced
@@ -75,11 +81,13 @@ bug-risk category + a long tail of annotation noise) rather than the whole list.
 ## 2. TODO cluster: `auth_service.py`'s audit log never got IP/user-agent/roles wired up
 
 ```
-src/auth/auth_service.py:278-319  ip_address="", user_agent="" (×4)
-src/auth/auth_service.py:302,386  roles=[] (×2)
+src/auth/auth_service.py:278,279,291,292,318,319  ip_address="", user_agent="" (×6)
+src/auth/auth_service.py:302,386                  roles=[] (×2)
 ```
 
-Six `# TODO` markers, all in the same file, all the same shape: `AuthService`'s
+Eight `# TODO` markers (corrected count, re-verified 2026-08-22 — the
+original pass under-counted this by 2), all in the same file, all the same
+shape: `AuthService`'s
 login/session functions construct audit-log entries with `ip_address`/
 `user_agent` hardcoded to empty strings and `roles` hardcoded to an empty list,
 rather than reading them from the actual request/user. If these audit log rows
@@ -104,13 +112,19 @@ Both were found in `docs/SOLID_OO_REVIEW.md`'s original pass, marked
 "partially fixed" in a later session (dark-mode/hook extraction landed; the
 size itself didn't), and are unchanged as of this survey:
 
-- **`TaskDetailModal.tsx` — 1305 lines.** Still has 3 `window.confirm`/`alert`
-  calls (native browser dialogs, not this app's own modal system — visually
-  inconsistent, and the original finding's own note says this "deliberately
-  not fixed (real UX change, unverifiable without a browser)". **That
-  blocker is gone now** — `TESTING.md`'s Playwright recipe (added this
-  session, §5) makes this verifiable in a real browser without installing
-  anything new. JSX-splitting into smaller components also never happened.
+- **`TaskDetailModal.tsx` — 1305 → 1425 lines as of 2026-08-22, and still
+  growing.** Grew via 3 commits since this doc was first written (most
+  recently `192f389`, dark-mode theme-token work), and there's a further
+  131-line uncommitted diff sitting in the working tree right now from an
+  active concurrent session doing more dark-mode work on this same file —
+  re-check the line count before acting on it, it's a moving target. Still
+  has `window.confirm`/`alert` calls (native browser dialogs, not this
+  app's own modal system — visually inconsistent, and the original
+  finding's own note says this "deliberately not fixed (real UX change,
+  unverifiable without a browser)". **That blocker is gone now** —
+  `TESTING.md`'s Playwright recipe (added this session, §5) makes this
+  verifiable in a real browser without installing anything new.
+  JSX-splitting into smaller components also never happened.
 - **`DesignQueuePanel.tsx` — 1266 lines.** Not previously flagged for size on
   its own (the original finding was about per-row polling and duplicated
   status-config maps, both since fixed) — but it's the second-largest
