@@ -5,6 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.database import (
@@ -1507,14 +1508,22 @@ class TicketService:
         # process-wide singleton currently points at (only one project
         # could ever be active before multi-project concurrency).
         main_repo_path = None
+        project_id = None
+        commit_repo_id = None
         if ticket.workflow_id:
             wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
             if wf and wf.project_id:
-                from src.core.database import AutopilotProject
+                project_id = wf.project_id
+                if ticket.task_id:
+                    task = db.query(Task).filter_by(id=ticket.task_id).first()
+                    if task:
+                        commit_repo_id = task.repo_id
+                from src.core.repo_resolution import RepoNotFoundError, resolve_repo_path
 
-                proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
-                if proj and proj.base_dir:
-                    main_repo_path = proj.base_dir
+                try:
+                    main_repo_path = str(resolve_repo_path(db, project_id, commit_repo_id))
+                except (RepoNotFoundError, ValueError):
+                    main_repo_path = None
         if main_repo_path is None:
             config = get_config()
             main_repo_path = str(config.git.main_repo_path)
@@ -1525,12 +1534,31 @@ class TicketService:
             None, TicketService._get_commit_stats, commit_sha, main_repo_path
         )
 
+        # REQ-10 (soft enforcement): a commit whose changed files fall
+        # outside its task's assigned repo is logged, never rejected --
+        # the commit already happened in the agent's worktree by the time
+        # this code runs (REQ-11 defers hard pre-commit enforcement).
+        if project_id and commit_repo_id:
+            from src.core.repo_resolution import repo_id_for_path
+
+            offending = [
+                f
+                for f in commit_stats["files_list"] or []
+                if repo_id_for_path(db, project_id, str(Path(main_repo_path) / f)) not in (None, commit_repo_id)
+            ]
+            if offending:
+                logger.warning(
+                    f"[REPO-SCOPE] commit {commit_sha} on ticket {ticket_id} touches files "
+                    f"outside its assigned repo {commit_repo_id}: {offending}"
+                )
+
         # Create commit link with real stats
         commit_id = f"tc-{uuid.uuid4()}"
         ticket_commit = TicketCommit(
             id=commit_id,
             ticket_id=ticket_id,
             agent_id=agent_id,
+            repo_id=commit_repo_id,
             commit_sha=commit_sha,
             commit_message=commit_message,
             commit_timestamp=datetime.utcnow(),
