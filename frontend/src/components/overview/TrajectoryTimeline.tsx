@@ -26,7 +26,7 @@ export default function TrajectoryTimeline({ alignments }: TrajectoryTimelinePro
       <Card className="h-full">
         <CardHeader>
           <CardTitle className="flex items-center">
-            <Activity className="w-5 h-5 mr-2 text-blue-600" />
+            <Activity className="w-5 h-5 mr-2 text-blue-600 dark:text-blue-400" />
             Trajectory Alignment Timeline
           </CardTitle>
           <CardDescription>
@@ -34,7 +34,7 @@ export default function TrajectoryTimeline({ alignments }: TrajectoryTimelinePro
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="text-gray-500 text-center py-8">
+          <div className="text-gray-500 dark:text-gray-400 text-center py-8">
             No trajectory data available
           </div>
         </CardContent>
@@ -48,9 +48,9 @@ export default function TrajectoryTimeline({ alignments }: TrajectoryTimelinePro
   const needSteering = alignments.filter(a => a.needs_steering).length;
 
   const getTrendIcon = () => {
-    if (avgAlignment > 0.8) return { icon: TrendingUp, color: 'text-green-600' };
-    if (avgAlignment > 0.5) return { icon: Minus, color: 'text-yellow-600' };
-    return { icon: TrendingDown, color: 'text-red-600' };
+    if (avgAlignment > 0.8) return { icon: TrendingUp, color: 'text-green-600 dark:text-green-400' };
+    if (avgAlignment > 0.5) return { icon: Minus, color: 'text-yellow-600 dark:text-yellow-400' };
+    return { icon: TrendingDown, color: 'text-red-600 dark:text-red-400' };
   };
 
   const trend = getTrendIcon();
@@ -65,7 +65,7 @@ export default function TrajectoryTimeline({ alignments }: TrajectoryTimelinePro
         <div className="flex items-start justify-between">
           <div>
             <CardTitle className="flex items-center">
-              <Activity className="w-5 h-5 mr-2 text-blue-600" />
+              <Activity className="w-5 h-5 mr-2 text-blue-600 dark:text-blue-400" />
               Trajectory Alignment Timeline
             </CardTitle>
             <CardDescription>
@@ -79,7 +79,7 @@ export default function TrajectoryTimeline({ alignments }: TrajectoryTimelinePro
                 {Math.round(avgAlignment * 100)}%
               </span>
             </div>
-            <div className="text-xs text-gray-500 mt-1">
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               Average Alignment
             </div>
           </div>
@@ -89,23 +89,23 @@ export default function TrajectoryTimeline({ alignments }: TrajectoryTimelinePro
         <div className="space-y-4">
           {/* Stats Summary */}
           <div className="grid grid-cols-3 gap-4 text-center">
-            <div className="bg-green-50 rounded-lg p-3">
-              <div className="text-2xl font-bold text-green-600">{highAligned}</div>
-              <div className="text-xs text-green-700">Well Aligned</div>
+            <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3">
+              <div className="text-2xl font-bold text-green-600 dark:text-green-400">{highAligned}</div>
+              <div className="text-xs text-green-700 dark:text-green-400">Well Aligned</div>
             </div>
-            <div className="bg-yellow-50 rounded-lg p-3">
-              <div className="text-2xl font-bold text-yellow-600">{needSteering}</div>
-              <div className="text-xs text-yellow-700">Need Steering</div>
+            <div className="bg-yellow-50 dark:bg-yellow-900/20 rounded-lg p-3">
+              <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{needSteering}</div>
+              <div className="text-xs text-yellow-700 dark:text-yellow-400">Need Steering</div>
             </div>
-            <div className="bg-blue-50 rounded-lg p-3">
-              <div className="text-2xl font-bold text-blue-600">{alignments.length}</div>
-              <div className="text-xs text-blue-700">Total Agents</div>
+            <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3">
+              <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{alignments.length}</div>
+              <div className="text-xs text-blue-700 dark:text-blue-400">Total Agents</div>
             </div>
           </div>
 
           {/* Bar Chart Visualization */}
           <div className="space-y-1">
-            <div className="text-xs text-gray-500 mb-2">Individual Agent Alignments</div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">Individual Agent Alignments</div>
             <div className="flex items-end justify-between space-x-1" style={{ height: `${maxBarHeight}px` }}>
               {alignments.map((agent, _idx) => {
                 const score = (agent.alignment_score || 0) * 100;
@@ -154,7 +154,7 @@ export default function TrajectoryTimeline({ alignments }: TrajectoryTimelinePro
                 );
               })}
             </div>
-            <div className="flex justify-between text-xs text-gray-400 mt-2">
+            <div className="flex justify-between text-xs text-gray-400 dark:text-gray-500 mt-2">
               <span>0%</span>
               <span>50%</span>
               <span>100%</span>
@@ -165,15 +165,15 @@ export default function TrajectoryTimeline({ alignments }: TrajectoryTimelinePro
           <div className="flex items-center justify-center space-x-4 text-xs">
             <div className="flex items-center">
               <div className="w-3 h-3 bg-green-500 rounded mr-1"></div>
-              <span className="text-gray-600 dark:text-gray-400 dark:text-gray-500">Aligned (&gt;80%)</span>
+              <span className="text-gray-600 dark:text-gray-400">Aligned (&gt;80%)</span>
             </div>
             <div className="flex items-center">
               <div className="w-3 h-3 bg-yellow-500 rounded mr-1"></div>
-              <span className="text-gray-600 dark:text-gray-400 dark:text-gray-500">Partial (40-80%)</span>
+              <span className="text-gray-600 dark:text-gray-400">Partial (40-80%)</span>
             </div>
             <div className="flex items-center">
               <div className="w-3 h-3 bg-red-500 rounded mr-1"></div>
-              <span className="text-gray-600 dark:text-gray-400 dark:text-gray-500">Misaligned (&lt;40%)</span>
+              <span className="text-gray-600 dark:text-gray-400">Misaligned (&lt;40%)</span>
             </div>
           </div>
         </div>

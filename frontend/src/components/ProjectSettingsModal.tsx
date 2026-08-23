@@ -270,7 +270,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                 {editingDefaultBudget ? (
                   <div className="flex items-center gap-2 shrink-0">
                     <div className="relative">
-                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 text-sm">$</span>
                       <input
                         type="number"
                         min="0"
@@ -374,7 +374,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                             </div>
                             {project.cost_limit_usd != null && project.cost_total_usd >= project.cost_limit_usd && (
                               <div className="flex items-center gap-1 mt-0.5">
-                                <AlertTriangle className="w-3 h-3 text-red-500" />
+                                <AlertTriangle className="w-3 h-3 text-red-500 dark:text-red-400" />
                                 <span className="text-xs text-red-600 dark:text-red-400">Over budget</span>
                               </div>
                             )}

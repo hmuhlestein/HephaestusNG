@@ -19,12 +19,12 @@ export default function SystemHealthCard({ systemHealth }: SystemHealthProps) {
       <Card className="h-full">
         <CardHeader>
           <CardTitle className="flex items-center">
-            <Activity className="w-5 h-5 mr-2 text-blue-600" />
+            <Activity className="w-5 h-5 mr-2 text-blue-600 dark:text-blue-400" />
             System Health
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="text-gray-500 text-center py-8">
+          <div className="text-gray-500 dark:text-gray-400 text-center py-8">
             No data available
           </div>
         </CardContent>
@@ -37,11 +37,11 @@ export default function SystemHealthCard({ systemHealth }: SystemHealthProps) {
 
   const getHealthStatus = () => {
     if (coherencePercent >= 80 && alignmentPercent >= 80) {
-      return { icon: CheckCircle, text: "All systems nominal", color: "text-green-600" };
+      return { icon: CheckCircle, text: "All systems nominal", color: "text-green-600 dark:text-green-400" };
     } else if (coherencePercent >= 50 && alignmentPercent >= 50) {
-      return { icon: AlertCircle, text: "Minor issues detected", color: "text-yellow-600" };
+      return { icon: AlertCircle, text: "Minor issues detected", color: "text-yellow-600 dark:text-yellow-400" };
     }
-    return { icon: AlertCircle, text: "Attention required", color: "text-red-600" };
+    return { icon: AlertCircle, text: "Attention required", color: "text-red-600 dark:text-red-400" };
   };
 
   const healthStatus = getHealthStatus();
@@ -62,12 +62,12 @@ export default function SystemHealthCard({ systemHealth }: SystemHealthProps) {
         {/* Coherence Score */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">Coherence Score</span>
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Coherence Score</span>
             <span className={cn(
               "text-lg font-bold",
-              coherencePercent >= 80 ? "text-green-600" :
-              coherencePercent >= 50 ? "text-yellow-600" :
-              "text-red-600"
+              coherencePercent >= 80 ? "text-green-600 dark:text-green-400" :
+              coherencePercent >= 50 ? "text-yellow-600 dark:text-yellow-400" :
+              "text-red-600 dark:text-red-400"
             )}>
               {coherencePercent}%
             </span>
@@ -86,12 +86,12 @@ export default function SystemHealthCard({ systemHealth }: SystemHealthProps) {
         {/* Average Alignment */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">Average Alignment</span>
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Average Alignment</span>
             <span className={cn(
               "text-lg font-bold",
-              alignmentPercent >= 80 ? "text-green-600" :
-              alignmentPercent >= 50 ? "text-yellow-600" :
-              "text-red-600"
+              alignmentPercent >= 80 ? "text-green-600 dark:text-green-400" :
+              alignmentPercent >= 50 ? "text-yellow-600 dark:text-yellow-400" :
+              "text-red-600 dark:text-red-400"
             )}>
               {alignmentPercent}%
             </span>
@@ -109,19 +109,19 @@ export default function SystemHealthCard({ systemHealth }: SystemHealthProps) {
 
         {/* Stats */}
         <div className="grid grid-cols-2 gap-4 mt-4">
-          <div className="text-center p-3 bg-gray-50 rounded-lg">
+          <div className="text-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
             <div className="flex items-center justify-center mb-1">
-              <Bot className="w-4 h-4 text-blue-600 mr-1" />
-              <span className="text-2xl font-bold">{systemHealth.active_agents}</span>
+              <Bot className="w-4 h-4 text-blue-600 dark:text-blue-400 mr-1" />
+              <span className="text-2xl font-bold text-gray-900 dark:text-gray-100">{systemHealth.active_agents}</span>
             </div>
-            <div className="text-xs text-gray-600 dark:text-gray-400 dark:text-gray-500">Active Agents</div>
+            <div className="text-xs text-gray-600 dark:text-gray-400">Active Agents</div>
           </div>
-          <div className="text-center p-3 bg-gray-50 rounded-lg">
+          <div className="text-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
             <div className="flex items-center justify-center mb-1">
-              <TrendingUp className="w-4 h-4 text-blue-600 mr-1" />
-              <span className="text-2xl font-bold">{systemHealth.running_tasks}</span>
+              <TrendingUp className="w-4 h-4 text-blue-600 dark:text-blue-400 mr-1" />
+              <span className="text-2xl font-bold text-gray-900 dark:text-gray-100">{systemHealth.running_tasks}</span>
             </div>
-            <div className="text-xs text-gray-600 dark:text-gray-400 dark:text-gray-500">Running Tasks</div>
+            <div className="text-xs text-gray-600 dark:text-gray-400">Running Tasks</div>
           </div>
         </div>
 

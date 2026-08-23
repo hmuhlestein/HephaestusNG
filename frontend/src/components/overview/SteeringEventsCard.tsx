@@ -42,16 +42,16 @@ const getSteeringTypeBadge = (type: string) => {
   switch (baseType) {
     case 'focus_redirect':
     case 'redirect':
-      return { label: 'Focus Redirect', className: 'bg-blue-100 text-blue-700' };
+      return { label: 'Focus Redirect', className: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' };
     case 'correction':
     case 'course_correction':
-      return { label: 'Course Correction', className: 'bg-yellow-100 text-yellow-700' };
+      return { label: 'Course Correction', className: 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300' };
     case 'stuck':
-      return { label: 'Unstuck', className: 'bg-orange-100 text-orange-700' };
+      return { label: 'Unstuck', className: 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300' };
     case 'constraint_violation':
-      return { label: 'Constraint Fix', className: 'bg-red-100 text-red-700' };
+      return { label: 'Constraint Fix', className: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' };
     default:
-      return { label: type || 'Steering', className: 'bg-gray-100 text-gray-700' };
+      return { label: type || 'Steering', className: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300' };
   }
 };
 
@@ -64,7 +64,7 @@ export default function SteeringEventsCard({ events }: SteeringEventsCardProps) 
       <Card className="h-full">
         <CardHeader>
           <CardTitle className="flex items-center">
-            <Target className="w-5 h-5 mr-2 text-blue-600" />
+            <Target className="w-5 h-5 mr-2 text-blue-600 dark:text-blue-400" />
             Recent Steering Events
           </CardTitle>
           <CardDescription>
@@ -72,10 +72,10 @@ export default function SteeringEventsCard({ events }: SteeringEventsCardProps) 
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="text-gray-500 text-center py-8">
+          <div className="text-gray-500 dark:text-gray-400 text-center py-8">
             <Navigation className="w-8 h-8 mx-auto mb-2 text-gray-400 dark:text-gray-500" />
             <p className="text-sm">No steering events recently</p>
-            <p className="text-xs text-gray-400 mt-1">Agents are on track</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Agents are on track</p>
           </div>
         </CardContent>
       </Card>
@@ -105,21 +105,21 @@ export default function SteeringEventsCard({ events }: SteeringEventsCardProps) 
                   key={event.id}
                   className={cn(
                     "border rounded-lg p-3 transition-colors",
-                    event.was_successful === false ? "border-red-200 bg-red-50" : "border-gray-200 dark:border-gray-700"
+                    event.was_successful === false ? "border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20" : "border-gray-200 dark:border-gray-700"
                   )}
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center">
-                      <TypeIcon className="w-4 h-4 mr-2 text-blue-600" />
-                      <span className="text-xs text-gray-500 dark:text-gray-400 dark:text-gray-500">
+                      <TypeIcon className="w-4 h-4 mr-2 text-blue-600 dark:text-blue-400" />
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
                         {formatDistanceToNow(new Date(event.timestamp), { addSuffix: true })}
                       </span>
                     </div>
                     {event.was_successful !== undefined && (
                       event.was_successful ? (
-                        <span title="Successful"><CheckCircle className="w-4 h-4 text-green-600" /></span>
+                        <span title="Successful"><CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" /></span>
                       ) : (
-                        <span title="Failed"><XCircle className="w-4 h-4 text-red-600" /></span>
+                        <span title="Failed"><XCircle className="w-4 h-4 text-red-600 dark:text-red-400" /></span>
                       )
                     )}
                   </div>
@@ -139,7 +139,7 @@ export default function SteeringEventsCard({ events }: SteeringEventsCardProps) 
                     </Badge>
                   </div>
 
-                  <div className="text-xs text-gray-600 leading-relaxed line-clamp-2">
+                  <div className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed line-clamp-2">
                     {event.message}
                   </div>
                 </div>
