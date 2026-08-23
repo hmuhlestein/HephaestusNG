@@ -321,12 +321,10 @@ def sweep_completed_workflow_worktrees(logger: "OrchestratorLogger") -> int:
     except Exception as e:
         logger.warning(f"[SWEEP] Failed to sweep completed-workflow worktrees: {e}")
     finally:
-        session = getattr(db, "_session", None) or getattr(db, "session", None)
-        if session is not None:
-            try:
-                session.close()
-            except Exception:
-                pass
+        try:
+            db.close()
+        except Exception:
+            pass
     return removed
 
 
