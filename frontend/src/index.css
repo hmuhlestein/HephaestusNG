@@ -266,6 +266,23 @@
   filter: brightness(1.1);
 }
 
+/* Controls' zoom/fit/lock buttons are plain white by default (no className
+   override point for the button chrome itself, only the wrapper) -- always
+   light regardless of theme without this. */
+.dark .react-flow__controls-button {
+  background: #374151;
+  border-bottom: 1px solid #4b5563;
+  fill: #e5e7eb;
+}
+
+.dark .react-flow__controls-button:hover {
+  background: #4b5563;
+}
+
+.dark .react-flow__controls-button svg {
+  fill: #e5e7eb;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
