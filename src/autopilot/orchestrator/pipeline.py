@@ -2097,6 +2097,53 @@ def _run_one_feature(
         return FeatureRunStatus.FAILED
 
 
+def _resolve_feature_project_path(
+    design_project_path: Path,
+    project_id: Optional[str],
+    design_id: Optional[str],
+    feature_key: str,
+    logger: "OrchestratorLogger",
+) -> Path:
+    """Resolve the project path for a specific feature based on its repo_id.
+
+    REQ-07/08: each feature's work happens against its own Feature.repo_id's
+    path, not the design-level project path.  Falls back to
+    design_project_path on any failure (REQ-06).
+    """
+    if not project_id or not design_id:
+        return design_project_path
+
+    try:
+        from src.core.database import Feature, get_db
+        from src.core.repo_resolution import resolve_repo
+
+        with get_db() as db:
+            feat_record = (
+                db.query(Feature)
+                .filter_by(design_id=design_id, feature_key=feature_key)
+                .first()
+            )
+            if feat_record is None:
+                logger.warning(
+                    "Feature %s not found for design %s, using design project path",
+                    feature_key,
+                    design_id,
+                )
+                return design_project_path
+
+            repo = resolve_repo(db, project_id, feat_record.repo_id)
+            if repo is not None:
+                return Path(repo.path)
+            return design_project_path
+    except Exception as e:
+        logger.warning(
+            "Failed to resolve feature project path for %s: %s, using design project path",
+            feature_key,
+            e,
+        )
+        return design_project_path
+
+
 def run_feature_pipelines(
     sdk,
     design_entry: DesignEntry,
@@ -2182,12 +2229,16 @@ def run_feature_pipelines(
             # Single feature - run directly
             feat = features_to_run[0]
             feature_key = feat.get("id", "unknown")
+            # REQ-07/08: resolve per-feature project path from repo_id
+            feature_project_path = _resolve_feature_project_path(
+                project_path, project_id, design_entry.db_id, feature_key, logger
+            )
             status = _run_one_feature(
                 sdk,
                 design_entry,
                 feat,
                 designs_folder,
-                project_path,
+                feature_project_path,
                 logger,
                 state,
                 max_iterations,
@@ -2208,7 +2259,11 @@ def run_feature_pipelines(
                         design_entry,
                         feat,
                         designs_folder,
-                        project_path,
+                        # REQ-07/08: resolve per-feature project path
+                        _resolve_feature_project_path(
+                            project_path, project_id, design_entry.db_id,
+                            feat.get("id", "unknown"), logger
+                        ),
                         logger,
                         state,
                         max_iterations,
