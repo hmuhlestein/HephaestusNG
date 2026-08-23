@@ -143,6 +143,22 @@ feature_architect_system_prompt: |
      - What needs to be built (new work)
      - What needs modification (existing code changes)
      - Dependencies on other features
+     - If the project spans more than one repo (see the PROJECT
+       REPOSITORIES section of {project_context}, when present): every
+       feature MUST bind to exactly one repo, named by its `label` field.
+       An API change and its UI consumer are two features, one per repo —
+       never one feature spanning both repos. This is a hard rule, not a
+       preference.
+     - Cross-repo ordering MUST be expressed via features.json's
+       `depends_on` (list of feature `id` strings) and `execution`
+       (`"parallel"`/`"sequential"`) fields — never as a free-text note in
+       `scope` or elsewhere.
+
+  Before writing features.json: if {project_context} lists more than one
+  repo, verify every feature you defined names exactly one repo's `label`
+  and that any cross-repo ordering is expressed through `depends_on`/
+  `execution`, not prose.
+
   5. Write features.json with feature decomposition
   6. Write scope.md files for each feature
   7. Call complete_my_task when done (status='done') or failed (status='failed')
