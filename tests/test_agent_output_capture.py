@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -399,6 +400,64 @@ class TestAgentOutputCapture:
 
         # Verify database commit
         mock_db_session.commit.assert_called_once()
+
+
+class TestResolveTmuxTranscriptDirSurvivesTermination:
+    """Regression: termination clears agent.current_task_id AND
+    task.assigned_agent_id (the documented Agent.current_task_id
+    invariant), which used to make _resolve_tmux_transcript_dir unable to
+    find ANY task for a terminated agent -- it had no other way back to
+    workflow.working_directory. The tmux viewer showed nothing for every
+    terminated agent as a result. The fix falls back to the AgentLog
+    "created" record's details["task_id"], which termination never
+    touches (see database.py's Agent.current_task_id comment)."""
+
+    @pytest.fixture
+    def db_manager(self, tmp_path, monkeypatch):
+        db_path = tmp_path / "test.db"
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+        db = DatabaseManager(str(db_path))
+        db.create_tables()
+        return db
+
+    def test_falls_back_to_agent_log_created_task_id(self, db_manager, tmp_path):
+        from src.agents.output_capture import AgentOutputCapture
+        from src.core.database import Workflow
+
+        agent_id = str(uuid.uuid4())
+        task_id = str(uuid.uuid4())
+        workflow_id = str(uuid.uuid4())
+        working_directory = str(tmp_path / "worktree")
+
+        session = db_manager.get_session()
+        session.add(Workflow(
+            id=workflow_id, name="wf", phases_folder_path="phases",
+            working_directory=working_directory, status="active",
+        ))
+        session.add(Task(
+            id=task_id, raw_description="do it", done_definition="done",
+            status="failed", workflow_id=workflow_id,
+            assigned_agent_id=None,  # cleared, as termination does
+        ))
+        session.add(Agent(
+            id=agent_id, system_prompt="p", status="terminated",
+            cli_type="pi", tmux_session_name="agent_test",
+            current_task_id=None,  # cleared, as termination does
+        ))
+        session.add(AgentLog(
+            agent_id=agent_id, log_type="created",
+            message="Agent created for task: do it",
+            details={"cli_type": "pi", "task_id": task_id},
+        ))
+        session.commit()
+        session.close()
+
+        capture = AgentOutputCapture(db_manager, tmux_server=Mock())
+        agent = db_manager.get_session().query(Agent).filter_by(id=agent_id).first()
+
+        transcript_dir = capture._resolve_tmux_transcript_dir(agent)
+
+        assert transcript_dir == Path(working_directory) / ".hephaestus" / "tmux"
 
 
 if __name__ == "__main__":
