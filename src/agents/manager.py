@@ -701,9 +701,12 @@ class AgentManager:
                     context += f"- {(task.enriched_description or task.raw_description)[:100]}...\n"
 
             # Append repo context for multi-repo projects (REQ-17/18)
-            repo_context = self._build_repo_context(session, project_id, repo_id)
-            if repo_context:
-                context += repo_context
+            try:
+                repo_context = AgentManager._build_repo_context(session, project_id, repo_id)
+                if repo_context:
+                    context += repo_context
+            except Exception as e:
+                logger.warning(f"Failed to build repo context (degrading to no-repo output): {e}")
 
             return context
 
@@ -713,8 +716,8 @@ class AgentManager:
         finally:
             session.close()
 
+    @staticmethod
     def _build_repo_context(
-        self,
         session,
         project_id: Optional[str],
         repo_id: Optional[str],
