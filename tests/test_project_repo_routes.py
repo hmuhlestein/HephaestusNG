@@ -118,6 +118,23 @@ class TestAddProjectRepo:
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
+    async def test_duplicate_path_surfaces_as_409(self, db_manager, tmp_path):
+        """NIT: duplicate-path collision (as opposed to duplicate-label) must
+        also surface as 409 via the same IntegrityError handler."""
+        from src.mcp.autopilot.project_repo_routes import ProjectRepoCreate, add_project_repo
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+        backend = tmp_path / "backend"
+        backend.mkdir()
+        (backend / ".git").mkdir()
+
+        await add_project_repo("proj-1", ProjectRepoCreate(label="backend", path=str(backend)))
+        with pytest.raises(HTTPException) as exc_info:
+            await add_project_repo("proj-1", ProjectRepoCreate(label="backend-dup", path=str(backend)))
+        assert exc_info.value.status_code == 409
+
+    @pytest.mark.asyncio
     async def test_unauthenticated_request_401s(self, db_manager, tmp_path, monkeypatch):
         from src.mcp.autopilot import project_repo_routes as routes
 

@@ -121,11 +121,7 @@ def _create_feature_records(
                     def _abs(f: str) -> str:
                         return f if Path(f).is_absolute() or not project_base_dir else str(Path(project_base_dir) / f)
 
-                    file_repo_pairs = [
-                        (f, rid)
-                        for f in feat.get("files", [])
-                        if (rid := repo_id_for_path(db, project_id, _abs(f))) is not None
-                    ]
+                    file_repo_pairs = [(f, rid) for f in feat.get("files", []) if (rid := repo_id_for_path(db, project_id, _abs(f))) is not None]
                     distinct_repo_ids = {rid for _, rid in file_repo_pairs}
                     if len(distinct_repo_ids) > 1:
                         # feat["files"] genuinely spans >1 repo -- the
@@ -266,13 +262,7 @@ def _sync_stale_feature_statuses(logger: "OrchestratorLogger") -> int:
     # live: a feature's workflow reached "completed" but Feature.workflow_id
     # was never set, leaving Feature.status stuck "active" across restarts.
     with get_db() as db:
-        orphaned_design_ids = {
-            design_id
-            for (design_id,) in db.query(Feature.design_id)
-            .filter(Feature.workflow_id.is_(None))
-            .distinct()
-            .all()
-        }
+        orphaned_design_ids = {design_id for (design_id,) in db.query(Feature.design_id).filter(Feature.workflow_id.is_(None)).distinct().all()}
     for design_id in orphaned_design_ids:
         _relink_features_to_workflows(design_id, logger)
 
@@ -413,9 +403,7 @@ def _relink_features_to_workflows(design_id: str, logger: "OrchestratorLogger") 
         # feature) could link a feature to the WRONG design's workflow.
         # Matters more now that this runs after every single feature
         # completes, not just once per design reprocessing.
-        workflows = db.query(Workflow).filter(
-            Workflow.definition_id == "autopilot", Workflow.design_id == design_id
-        ).order_by(Workflow.created_at.desc()).all()
+        workflows = db.query(Workflow).filter(Workflow.definition_id == "autopilot", Workflow.design_id == design_id).order_by(Workflow.created_at.desc()).all()
 
         for feat in unlinked:
             for wf in workflows:
@@ -523,10 +511,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
             .all()
         )
         for task in stranded:
-            logger.info(
-                f"[STRANDED-TASK] Task {task.id[:8]} assigned with no agent since "
-                f"{task.queued_at} (>{grace_seconds}s) — returning to queue"
-            )
+            logger.info(f"[STRANDED-TASK] Task {task.id[:8]} assigned with no agent since {task.queued_at} (>{grace_seconds}s) — returning to queue")
             task.status = "queued"
             task.queue_position = None
         if stranded:
@@ -573,10 +558,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
             .all()
         )
         for task in stale_in_completed_phase:
-            logger.info(
-                f"[STALE-TASK] Task {task.id[:8]} pending with no agent in an "
-                "already-completed phase — marking duplicated"
-            )
+            logger.info(f"[STALE-TASK] Task {task.id[:8]} pending with no agent in an already-completed phase — marking duplicated")
             task.status = "duplicated"
             task.failure_reason = "Orphaned: never dispatched, and its phase already completed via another task"
         if stale_in_completed_phase:

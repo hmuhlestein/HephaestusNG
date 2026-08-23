@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 class PhaseConfig(NamedTuple):
     """Resolved phase configuration for agent creation."""
+
     cli_type: str
     phase_cli_tool: Optional[str]
     cli_model: Optional[str]
@@ -49,6 +50,7 @@ class PhaseConfig(NamedTuple):
 
 class WorktreeResolution(NamedTuple):
     """Result of worktree resolution."""
+
     branch_path: str
     branch_name: Optional[str]
     context_files: Dict[str, str]
@@ -121,14 +123,10 @@ class LaunchPipeline:
 
         import os
 
-        token_env_var = glm_token_env or getattr(
-            self.config.agents, "glm_api_token_env", "GLM_API_TOKEN"
-        )
+        token_env_var = glm_token_env or getattr(self.config.agents, "glm_api_token_env", "GLM_API_TOKEN")
         token = os.getenv(token_env_var)
         if not token:
-            logger.warning(
-                f"GLM model configured but {token_env_var} not found, using standard Claude"
-            )
+            logger.warning(f"GLM model configured but {token_env_var} not found, using standard Claude")
             return None
 
         logger.info(f"Setting up GLM-4.6 environment variables for {label} {agent_id}")
@@ -162,17 +160,11 @@ class LaunchPipeline:
             workflow_id = None
             if task_workflow_id:
                 workflow_id = task_workflow_id
-            elif (
-                hasattr(self, "phase_manager")
-                and self.phase_manager
-                and hasattr(self.phase_manager, "workflow_id")
-            ):
+            elif hasattr(self, "phase_manager") and self.phase_manager and hasattr(self.phase_manager, "workflow_id"):
                 workflow_id = self.phase_manager.workflow_id
             else:
                 with get_db() as db:
-                    board_config = (
-                        db.query(BoardConfig).filter_by(ticket_human_review=True).first()
-                    )
+                    board_config = db.query(BoardConfig).filter_by(ticket_human_review=True).first()
                     if board_config:
                         workflow_id = board_config.workflow_id
 
@@ -180,21 +172,14 @@ class LaunchPipeline:
                 return None
 
             with get_db() as db:
-                board_config = (
-                    db.query(BoardConfig).filter_by(workflow_id=workflow_id).first()
-                )
+                board_config = db.query(BoardConfig).filter_by(workflow_id=workflow_id).first()
                 if board_config and board_config.ticket_human_review:
                     timeout_seconds = board_config.approval_timeout_seconds or 1800
                     timeout_ms = timeout_seconds * 1000
-                    logger.info(
-                        f"Human approval enabled for workflow {workflow_id}: "
-                        f"Setting MCP_TOOL_TIMEOUT={timeout_ms}ms ({timeout_seconds}s) for {label}"
-                    )
+                    logger.info(f"Human approval enabled for workflow {workflow_id}: Setting MCP_TOOL_TIMEOUT={timeout_ms}ms ({timeout_seconds}s) for {label}")
                     return timeout_ms
         except Exception as e:
-            logger.warning(
-                f"Failed to check board config for MCP_TOOL_TIMEOUT ({label}): {e}"
-            )
+            logger.warning(f"Failed to check board config for MCP_TOOL_TIMEOUT ({label}): {e}")
         return None
 
     def _resolve_project_base_dir(self, workflow_id: Optional[str]) -> Optional[Path]:
@@ -236,9 +221,7 @@ class LaunchPipeline:
                     # distinguish it from the None/"no project" fallback.
                     raise
                 except ValueError as e:
-                    logger.warning(
-                        f"[WORKTREE] Could not resolve repo path for workflow {workflow_id}: {e}"
-                    )
+                    logger.warning(f"[WORKTREE] Could not resolve repo path for workflow {workflow_id}: {e}")
                     return None
             finally:
                 session.close()
@@ -246,9 +229,7 @@ class LaunchPipeline:
             # Propagate -- _scoped_worktree_manager catches this specifically.
             raise
         except Exception as e:
-            logger.warning(
-                f"[WORKTREE] Could not resolve project for workflow {workflow_id}: {e}"
-            )
+            logger.warning(f"[WORKTREE] Could not resolve project for workflow {workflow_id}: {e}")
             return None
 
     def _scoped_worktree_manager(self, workflow_id: Optional[str]) -> WorktreeManager:
@@ -304,7 +285,8 @@ class LaunchPipeline:
         try:
             result = subprocess.run(
                 ["which", "codegraph"],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
             )
             if result.returncode != 0:
                 return  # codegraph not installed, skip
@@ -320,7 +302,11 @@ class LaunchPipeline:
             logger.warning(f"[CODEGRAPH] Pre-warm failed (non-fatal): {e}")
 
     async def _check_termination_race(
-        self, agent_id: str, task_id: str, session_name: str, agent_id_to_return: str,
+        self,
+        agent_id: str,
+        task_id: str,
+        session_name: str,
+        agent_id_to_return: str,
         task: Optional[Task] = None,
     ) -> Optional[object]:
         """Check whether the agent or task was terminated/cancelled during
@@ -354,29 +340,11 @@ class LaunchPipeline:
             _agent_terminated = bool(_current and _current.status == "terminated")
 
             _fresh_task = _term_check.query(Task).filter_by(id=task_id).first()
-            _task_cancelled = bool(
-                _fresh_task
-                and (
-                    _fresh_task.status in TaskStatus.TERMINAL
-                    or (
-                        _fresh_task.assigned_agent_id
-                        and _fresh_task.assigned_agent_id != agent_id
-                    )
-                )
-            )
+            _task_cancelled = bool(_fresh_task and (_fresh_task.status in TaskStatus.TERMINAL or (_fresh_task.assigned_agent_id and _fresh_task.assigned_agent_id != agent_id)))
 
             if _agent_terminated or _task_cancelled:
-                reason = (
-                    "was terminated"
-                    if _agent_terminated
-                    else f"its task {task_id} was reassigned/cancelled "
-                    f"(status={_fresh_task.status}, assigned_agent_id="
-                    f"{_fresh_task.assigned_agent_id})"
-                )
-                logger.warning(
-                    f"Agent {agent_id} {reason} while its CLI was still "
-                    "initializing -- aborting launch, not delivering initial prompt"
-                )
+                reason = "was terminated" if _agent_terminated else f"its task {task_id} was reassigned/cancelled (status={_fresh_task.status}, assigned_agent_id={_fresh_task.assigned_agent_id})"
+                logger.warning(f"Agent {agent_id} {reason} while its CLI was still initializing -- aborting launch, not delivering initial prompt")
                 if self.tmux_server.has_session(session_name):
                     self.tmux_server.kill_session(session_name)
 
@@ -412,9 +380,7 @@ class LaunchPipeline:
                 return AgentInfo(agent_id_to_return)
         return None
 
-    def _detect_launch_failure(
-        self, pane, cli_agent, cli_type: str, session_name: str
-    ) -> None:
+    def _detect_launch_failure(self, pane, cli_agent, cli_type: str, session_name: str) -> None:
         """Detect whether the CLI's launch command was rejected by the
         shell or by the CLI itself, leaving a dead pane.  Uses
         cli_agent.get_launch_rejection_patterns() — the base generic
@@ -439,21 +405,10 @@ class LaunchPipeline:
                 # pattern (base shell rejections and pi's model-not-found)
                 # raised the generic shell-rejection message.
                 if pattern == self._CLAUDE_CODE_CONFIRMATION_PATTERN:
-                    logger.error(
-                        f"{cli_type} launch command is stuck on an unhandled confirmation "
-                        f"dialog in tmux session {session_name}: "
-                        f"{launch_check_text.strip()[-300:]}")
-                    raise Exception(
-                        f"{cli_type} CLI is stuck on an unhandled first-run confirmation "
-                        "dialog"
-                    )
-                logger.error(
-                    f"{cli_type} launch command failed in tmux session {session_name}: "
-                    f"{launch_check_text.strip()[-300:]}")
-                raise Exception(
-                    f"{cli_type} CLI failed to start -- shell reported the launch "
-                    "command was not found"
-                )
+                    logger.error(f"{cli_type} launch command is stuck on an unhandled confirmation dialog in tmux session {session_name}: {launch_check_text.strip()[-300:]}")
+                    raise Exception(f"{cli_type} CLI is stuck on an unhandled first-run confirmation dialog")
+                logger.error(f"{cli_type} launch command failed in tmux session {session_name}: {launch_check_text.strip()[-300:]}")
+                raise Exception(f"{cli_type} CLI failed to start -- shell reported the launch command was not found")
 
     async def _wait_for_cli_ready(
         self,
@@ -503,9 +458,7 @@ class LaunchPipeline:
         max_polls = max(1, int((timeout - floor) / poll_interval))
         for _ in range(max_polls):
             try:
-                captured = await loop.run_in_executor(
-                    None, pane.cmd, "capture-pane", "-p", "-S", "-10"
-                )
+                captured = await loop.run_in_executor(None, pane.cmd, "capture-pane", "-p", "-S", "-10")
                 text = "\n".join(captured.stdout) if captured.stdout else ""
             except Exception:
                 text = ""
@@ -514,10 +467,7 @@ class LaunchPipeline:
                 return
             await asyncio.sleep(poll_interval)
 
-        logger.warning(
-            f"{cli_type} agent {agent_id} did not match its ready pattern within {timeout:.0f}s -- "
-            "proceeding anyway (same ceiling as the previous flat wait)"
-        )
+        logger.warning(f"{cli_type} agent {agent_id} did not match its ready pattern within {timeout:.0f}s -- proceeding anyway (same ceiling as the previous flat wait)")
 
     def _check_duplicate_active_agent(self, task: Task) -> Optional[Agent]:
         """Guard: don't create a second agent for a task that already has one.
@@ -527,6 +477,7 @@ class LaunchPipeline:
         """
         with self.db_manager.get_session() as session:
             from src.core.database import Agent as _GuardAgent
+
             existing = (
                 session.query(_GuardAgent)
                 .filter(
@@ -536,10 +487,7 @@ class LaunchPipeline:
                 .first()
             )
             if existing:
-                logger.warning(
-                    f"Agent {existing.id[:8]} already active for task "
-                    f"{task.id[:8]} — skipping duplicate creation"
-                )
+                logger.warning(f"Agent {existing.id[:8]} already active for task {task.id[:8]} — skipping duplicate creation")
                 return existing
         return None
 
@@ -558,21 +506,17 @@ class LaunchPipeline:
         """
         fallback_cli_tool = None
         fallback_cli_model = None
-        if task.phase_id and (
-            phase_cli_tool is None
-            and phase_cli_model is None
-            and phase_glm_token_env is None
-            and phase_thinking_level is None
-        ):
+        if task.phase_id and (phase_cli_tool is None and phase_cli_model is None and phase_glm_token_env is None and phase_thinking_level is None):
             try:
                 from src.core.database import Phase
+
                 with self.db_manager.get_session() as _ps:
                     _ph = _ps.query(Phase).filter_by(id=task.phase_id).first()
                     if _ph:
                         phase_cli_tool = _ph.cli_tool
                         phase_cli_model = _ph.cli_model
-                        fallback_cli_tool = getattr(_ph, 'fallback_cli_tool', None)
-                        fallback_cli_model = getattr(_ph, 'fallback_cli_model', None)
+                        fallback_cli_tool = getattr(_ph, "fallback_cli_tool", None)
+                        fallback_cli_model = getattr(_ph, "fallback_cli_model", None)
                         phase_glm_token_env = _ph.glm_api_token_env
                         phase_thinking_level = _ph.thinking_level
             except Exception as e:
@@ -616,6 +560,7 @@ class LaunchPipeline:
 
         if task.workflow_id:
             from src.core.database import Workflow
+
             with self.db_manager.get_session() as session:
                 wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
                 if wf and wf.working_directory:
@@ -644,10 +589,7 @@ class LaunchPipeline:
                                 from src.core.worktree_manager import WorktreeManager
 
                                 WorktreeManager(db_manager=self.db_manager).reload(wt_path)
-                            logger.info(
-                                f"Using shared worktree for agent {agent_id[:8]} "
-                                f"at {branch_path}"
-                            )
+                            logger.info(f"Using shared worktree for agent {agent_id[:8]} at {branch_path}")
                     elif not create_if_missing and Path(wf.working_directory).exists():
                         # Restart-only: non-worktrees working directory (e.g.
                         # legacy or direct path) — use it if it exists on disk.
@@ -656,10 +598,7 @@ class LaunchPipeline:
                         # non-shared workflows (pre-split behavior).
                         branch_path = wf.working_directory
                         branch_name = f"shared-{task.workflow_id[:8]}"
-                        logger.info(
-                            f"Using workflow working directory for agent {agent_id[:8]} "
-                            f"at {branch_path}"
-                        )
+                        logger.info(f"Using workflow working directory for agent {agent_id[:8]} at {branch_path}")
 
         if branch_path is None and create_if_missing and context_files is not None:
             branch_info = wt_mgr.create_agent_worktree(
@@ -670,10 +609,7 @@ class LaunchPipeline:
             branch_path = branch_info["working_directory"]
             branch_name = branch_info["branch_name"]
             wt_mgr.switch_to_branch(branch_name)
-            logger.info(
-                f"Created worktree {branch_name} for agent {agent_id[:8]} "
-                f"at {branch_path}"
-            )
+            logger.info(f"Created worktree {branch_name} for agent {agent_id[:8]} at {branch_path}")
         elif branch_path is None and not create_if_missing:
             # restart fallback: agent's own tracked worktree
             try:
@@ -681,10 +617,7 @@ class LaunchPipeline:
                 if candidate and Path(candidate).exists():
                     branch_path = candidate
             except Exception as e:
-                logger.debug(
-                    f"[RESTART] Could not resolve agent branch path for "
-                    f"{agent_id[:8]}: {e}"
-                )
+                logger.debug(f"[RESTART] Could not resolve agent branch path for {agent_id[:8]}: {e}")
 
         return WorktreeResolution(
             branch_path=branch_path,
@@ -711,11 +644,7 @@ class LaunchPipeline:
         Returns (env_vars, model, cli_agent).
         """
         cli_agent = get_cli_agent(cli_type)
-        global_model = (
-            getattr(self.config.agents, "cli_model", None)
-            if cli_type == self.config.agents.default_cli_tool
-            else None
-        )
+        global_model = getattr(self.config.agents, "cli_model", None) if cli_type == self.config.agents.default_cli_tool else None
         if agent_cli_model is not None:
             # restart path: prefer agent's frozen model
             model = agent_cli_model or global_model or cli_agent.default_model
@@ -726,9 +655,7 @@ class LaunchPipeline:
         glm_token = phase_glm_token_env if phase_glm_token_env else None
         env_vars = self._build_glm_env_vars(model, glm_token, agent_id, label=label)
 
-        timeout_ms = self._resolve_mcp_timeout_ms(
-            cli_type, task.workflow_id, label=label
-        )
+        timeout_ms = self._resolve_mcp_timeout_ms(cli_type, task.workflow_id, label=label)
         if timeout_ms is not None:
             env_vars = env_vars or {}
             env_vars["MCP_TOOL_TIMEOUT"] = str(timeout_ms)
@@ -741,6 +668,7 @@ class LaunchPipeline:
         if task.phase_id:
             env_vars["HEPHAESTUS_PHASE_ID"] = task.phase_id
         import os
+
         _api_port = os.environ.get("HEPHAESTUS_PORT") or str(getattr(self.config.server, "mcp_port", 8300))
         env_vars["HEPHAESTUS_API_URL"] = f"http://localhost:{_api_port}"
 
@@ -767,9 +695,7 @@ class LaunchPipeline:
             finally:
                 session.close()
 
-        thinking_level = phase_thinking_override or getattr(
-            self.config.agents, "cli_thinking_level", "medium"
-        )
+        thinking_level = phase_thinking_override or getattr(self.config.agents, "cli_thinking_level", "medium")
         return phase_name, phase_order, thinking_level
 
     def _resolve_session_id(
@@ -801,30 +727,20 @@ class LaunchPipeline:
         keep resuming -- excluded_phases is empty there.
         """
         session_id = ""
-        if (
-            task.workflow_id
-            and agent_type not in excluded_types
-            and phase_name not in excluded_phases
-        ):
+        if task.workflow_id and agent_type not in excluded_types and phase_name not in excluded_phases:
             try:
                 _s = self.db_manager.get_session()
                 try:
                     from src.core.database import Workflow
+
                     _wf = _s.query(Workflow).filter_by(id=task.workflow_id).first()
                     if _wf and _wf.launch_params:
-                        _lp = (
-                            _wf.launch_params
-                            if isinstance(_wf.launch_params, dict)
-                            else {}
-                        )
+                        _lp = _wf.launch_params if isinstance(_wf.launch_params, dict) else {}
                         _pid = _lp.get("project_id") or _lp.get("project_path", "")
-                        _dsl = (
-                            _lp.get("design_slug")
-                            or _lp.get("design_id")
-                            or _lp.get("feature_id", "")
-                        )
+                        _dsl = _lp.get("design_slug") or _lp.get("design_id") or _lp.get("feature_id", "")
                         if _pid and _dsl and phase_name:
                             from src.autopilot.phases import get_session_id
+
                             session_id = get_session_id(_pid, _dsl, phase_name, model=model)
                 finally:
                     _s.close()
@@ -875,12 +791,11 @@ class LaunchPipeline:
 
         if task.phase_id and working_directory:
             from pathlib import Path as _Path
+
             phase_output_dir = _Path(working_directory) / ".hephaestus" / (phase_name or task.phase_id)
             phase_output_dir.mkdir(parents=True, exist_ok=True)
 
-        return self._create_tmux_session(
-            session_name, working_directory=working_directory, env_vars=env_vars
-        )
+        return self._create_tmux_session(session_name, working_directory=working_directory, env_vars=env_vars)
 
     async def _build_and_send_launch_command(
         self,
@@ -921,13 +836,8 @@ class LaunchPipeline:
         pane = tmux_session.attached_window.attached_pane
 
         if env_vars:
-            logger.info(
-                f"Exporting {len(env_vars)} environment variables for {label}: "
-                f"{', '.join(env_vars.keys())}"
-            )
-            await self._export_env_vars_and_verify(
-                tmux_session, pane, env_vars, label=label
-            )
+            logger.info(f"Exporting {len(env_vars)} environment variables for {label}: {', '.join(env_vars.keys())}")
+            await self._export_env_vars_and_verify(tmux_session, pane, env_vars, label=label)
 
         cli_launch_started_at = datetime.utcnow().timestamp()
         return launch_result, pane, cli_launch_started_at
@@ -964,9 +874,7 @@ class LaunchPipeline:
             max_retries=3,
         )
 
-    def _wait_for_shell_ready(
-        self, pane, timeout: float = 2.0, poll_interval: float = 0.1
-    ) -> None:
+    def _wait_for_shell_ready(self, pane, timeout: float = 2.0, poll_interval: float = 0.1) -> None:
         """Block until a freshly-created tmux pane's shell has actually
         started accepting input, not just until new_session() returns.
 
@@ -1027,15 +935,13 @@ class LaunchPipeline:
             "window_name": "agent",
             "attach": False,
             "x": 150,  # Initial width in columns
-            "y": 50,   # Initial height in rows
+            "y": 50,  # Initial height in rows
         }
         # Use provided working directory (which should be a worktree path)
         # Fallback to project root from config if not provided
         if not working_directory:
             working_directory = str(self.config.paths.project_root)
-            logger.warning(
-                f"No working directory provided, using project root: {working_directory}"
-            )
+            logger.warning(f"No working directory provided, using project root: {working_directory}")
         session_kwargs["start_directory"] = working_directory
 
         session = self.tmux_server.new_session(**session_kwargs)
@@ -1053,8 +959,7 @@ class LaunchPipeline:
             pane0 = session.attached_window.attached_pane
             self._wait_for_shell_ready(pane0)
             pane0.send_keys(
-                "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID "
-                "CLAUDE_CODE_CHILD_SESSION CLAUDE_AGENT_SDK_VERSION",
+                "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_AGENT_SDK_VERSION",
                 enter=True,
             )
         except Exception:
@@ -1169,9 +1074,7 @@ class LaunchPipeline:
         logger.debug(f"Created tmux session: {session_name}")
         return session
 
-    async def _export_env_vars_and_verify(
-        self, tmux_session, pane, env_vars: Optional[Dict[str, str]], label: str
-    ) -> None:
+    async def _export_env_vars_and_verify(self, tmux_session, pane, env_vars: Optional[Dict[str, str]], label: str) -> None:
         """Export env_vars into a pane's shell, then verify one of them
         actually landed before the caller proceeds to launch the CLI in
         that same shell.
@@ -1187,11 +1090,7 @@ class LaunchPipeline:
         if not env_vars:
             return
 
-        check_key = (
-            "HEPHAESTUS_AGENT_ID"
-            if "HEPHAESTUS_AGENT_ID" in env_vars
-            else next(iter(env_vars))
-        )
+        check_key = "HEPHAESTUS_AGENT_ID" if "HEPHAESTUS_AGENT_ID" in env_vars else next(iter(env_vars))
         expected = env_vars[check_key]
 
         for attempt in range(2):
@@ -1212,15 +1111,9 @@ class LaunchPipeline:
                 output = ""
             if f"{sentinel}:{expected}" in output:
                 return
-            logger.warning(
-                f"[ENV-EXPORT] {label}: readback for {check_key} didn't match "
-                f"on attempt {attempt + 1} -- "
-                f"{'retrying' if attempt == 0 else 'giving up, launching anyway'}"
-            )
+            logger.warning(f"[ENV-EXPORT] {label}: readback for {check_key} didn't match on attempt {attempt + 1} -- {'retrying' if attempt == 0 else 'giving up, launching anyway'}")
 
-    def _write_task_instructions(
-        self, worktree_path: str, task_id: str, content: str
-    ) -> str:
+    def _write_task_instructions(self, worktree_path: str, task_id: str, content: str) -> str:
         """Persist an agent's full initial instructions as a markdown file in
         its worktree, so every phase agent -- the first in a workflow
         included -- receives its task the same way later phases already
@@ -1240,7 +1133,9 @@ class LaunchPipeline:
 
     @staticmethod
     def _build_instructions_pointer(
-        task_id: str, instructions_rel_path: str, restarted: bool = False,
+        task_id: str,
+        instructions_rel_path: str,
+        restarted: bool = False,
         agent_name: str = None,
     ) -> str:
         """Short, constant-size message pointing an agent at its full
@@ -1258,15 +1153,9 @@ class LaunchPipeline:
         detail = " (including the restart note)" if restarted else ""
         verb = "continue" if restarted else "begin"
         agent_tag = f"[{agent_name}] " if agent_name else ""
-        return (
-            f"Task ID: {task_id}\n\n"
-            f"{agent_tag}Your full task instructions{detail} are in {instructions_rel_path} "
-            f"-- read that file now, then {verb}."
-        )
+        return f"Task ID: {task_id}\n\n{agent_tag}Your full task instructions{detail} are in {instructions_rel_path} -- read that file now, then {verb}."
 
-    async def _send_goal_command(
-        self, pane, cli_agent, task: Task, agent_type: str
-    ) -> None:
+    async def _send_goal_command(self, pane, cli_agent, task: Task, agent_type: str) -> None:
         """Set a self-checked completion condition (e.g. Claude Code's
         `/goal <condition>`, via cli_agent.format_goal_command -- a no-op
         empty string for CLIs with no such mechanism) so the agent keeps
@@ -1329,14 +1218,10 @@ class LaunchPipeline:
             pane.send_keys("", enter=True)
         else:
             pane.send_keys(goal_command, enter=True)
-        logger.info(
-            f"[GOAL] Set /goal for task {task.id[:8]} ({len(condition)} chars)"
-        )
+        logger.info(f"[GOAL] Set /goal for task {task.id[:8]} ({len(condition)} chars)")
         await asyncio.sleep(3)
 
-    async def _verify_instructions_file_read(
-        self, pane, instructions_rel_path: str, agent_id: str
-    ) -> None:
+    async def _verify_instructions_file_read(self, pane, instructions_rel_path: str, agent_id: str) -> None:
         """Best-effort signal that the agent actually opened its
         instructions file, not just that the pointer text was delivered.
         Most CLIs echo the path of a file they Read/cat as part of their
@@ -1355,9 +1240,7 @@ class LaunchPipeline:
         filename = instructions_rel_path.rsplit("/", 1)[-1]
         if filename not in output and instructions_rel_path not in output:
             logger.warning(
-                f"[INSTRUCTIONS-CHECK] Agent {agent_id[:8]} shows no sign of "
-                f"having opened {instructions_rel_path} within 15s of the "
-                "pointer being sent -- it may be idle instead of working."
+                f"[INSTRUCTIONS-CHECK] Agent {agent_id[:8]} shows no sign of having opened {instructions_rel_path} within 15s of the pointer being sent -- it may be idle instead of working."
             )
 
     def _gather_worktree_context(self, task: Task) -> Dict[str, str]:
@@ -1380,11 +1263,7 @@ class LaunchPipeline:
                 try:
                     wf = session.query(Workflow).filter_by(id=workflow_id).first()
                     if wf and wf.launch_params:
-                        launch_params = (
-                            wf.launch_params
-                            if isinstance(wf.launch_params, dict)
-                            else {}
-                        )
+                        launch_params = wf.launch_params if isinstance(wf.launch_params, dict) else {}
                 finally:
                     session.close()
 
@@ -1433,17 +1312,13 @@ class LaunchPipeline:
                             req_path = worktree_docs / "requirements.md"
                             if req_path.exists():
                                 try:
-                                    context["requirements.md"] = (
-                                        req_path.read_text()
-                                    )
+                                    context["requirements.md"] = req_path.read_text()
                                 except Exception:
                                     pass
                 finally:
                     session2.close()
         except Exception as e:
-            logger.warning(
-                f"Failed to gather worktree context for task {getattr(task, 'id', '?')}: {e}"
-            )
+            logger.warning(f"Failed to gather worktree context for task {getattr(task, 'id', '?')}: {e}")
 
         return context
 
@@ -1471,9 +1346,7 @@ class LaunchPipeline:
             enriched_data=enriched_data,
         )
 
-    async def _verify_prompt_delivery(
-        self, pane, verification_string: str, wait_seconds: int = 10
-    ) -> bool:
+    async def _verify_prompt_delivery(self, pane, verification_string: str, wait_seconds: int = 10) -> bool:
         """Verify that a prompt was delivered to the agent.
 
         Args:
@@ -1489,9 +1362,7 @@ class LaunchPipeline:
         output_text = "\n".join(output) if output else ""
         return verification_string in output_text
 
-    async def _record_cli_session(
-        self, cli_agent, session_id: str, working_directory: Optional[str], launched_at: float
-    ) -> None:
+    async def _record_cli_session(self, cli_agent, session_id: str, working_directory: Optional[str], launched_at: float) -> None:
         """Persist a CLI session after its transcript has been flushed."""
         if not session_id or not working_directory:
             return
@@ -1544,25 +1415,19 @@ class LaunchPipeline:
         if not verify_delivery:
             if is_opencode:
                 # OpenCode: Prompt already loaded via -p flag, just send Enter after 5 seconds
-                logger.info(
-                    "OpenCode agent: Prompt loaded via -p flag, waiting 5 seconds then sending Enter"
-                )
+                logger.info("OpenCode agent: Prompt loaded via -p flag, waiting 5 seconds then sending Enter")
                 await asyncio.sleep(5)
                 pane.send_keys("", enter=True)  # Send Enter to submit the prompt
                 logger.info(f"OpenCode: Enter sent to agent {agent_id}")
             elif cli_agent.needs_chunked_delivery:
                 # Send in chunks to avoid tmux buffer issues with large prompts
                 agent_name = cli_agent.display_name
-                logger.info(
-                    f"Sending initial prompt to {agent_name} agent {agent_id} (verification disabled)"
-                )
+                logger.info(f"Sending initial prompt to {agent_name} agent {agent_id} (verification disabled)")
                 formatted_message = cli_agent.format_message(initial_message)
 
                 chunk_size = 2500  # characters per chunk
                 num_chunks = (len(formatted_message) + chunk_size - 1) // chunk_size
-                logger.info(
-                    f"{agent_name} agent: Sending prompt in {num_chunks} chunks ({len(formatted_message)} total chars)"
-                )
+                logger.info(f"{agent_name} agent: Sending prompt in {num_chunks} chunks ({len(formatted_message)} total chars)")
 
                 for i in range(0, len(formatted_message), chunk_size):
                     chunk = formatted_message[i : i + chunk_size]
@@ -1573,9 +1438,7 @@ class LaunchPipeline:
                     # arrived mid-run and queued up as a garbled mid-word
                     # "Steering:" message.
                     pane.send_keys(chunk, enter=False)
-                    await asyncio.sleep(
-                        0.2
-                    )  # Delay between chunks to avoid overwhelming tmux
+                    await asyncio.sleep(0.2)  # Delay between chunks to avoid overwhelming tmux
 
                 # Now send Enter to submit the entire message
                 logger.info("All chunks sent, submitting message with Enter")
@@ -1584,13 +1447,9 @@ class LaunchPipeline:
                 logger.info(f"Initial prompt sent to {agent_name} agent {agent_id}")
             else:
                 # Other agents: Send entire prompt in one go
-                logger.info(
-                    f"Sending initial prompt to agent {agent_id} (verification disabled)"
-                )
+                logger.info(f"Sending initial prompt to agent {agent_id} (verification disabled)")
                 formatted_message = cli_agent.format_message(initial_message)
-                logger.info(
-                    f"Non-Claude agent: Sending entire prompt in one message ({len(formatted_message)} chars)"
-                )
+                logger.info(f"Non-Claude agent: Sending entire prompt in one message ({len(formatted_message)} chars)")
                 pane.send_keys(formatted_message, enter=True)
                 logger.info(f"Initial prompt sent to agent {agent_id}")
 
@@ -1626,9 +1485,7 @@ class LaunchPipeline:
                     "too many requests, please slow down",
                 ):
                     if indicator in output_lower:
-                        raise Exception(
-                            f"CLI session limit detected: '{indicator}' found in output"
-                        )
+                        raise Exception(f"CLI session limit detected: '{indicator}' found in output")
             except Exception as check_err:
                 if "CLI session limit detected" in str(check_err):
                     raise
@@ -1639,15 +1496,11 @@ class LaunchPipeline:
 
         # Verification enabled - retry loop
         for attempt in range(1, max_retries + 1):
-            logger.info(
-                f"Sending initial prompt to agent {agent_id} (attempt {attempt}/{max_retries})"
-            )
+            logger.info(f"Sending initial prompt to agent {agent_id} (attempt {attempt}/{max_retries})")
 
             if is_opencode:
                 # OpenCode: Prompt already loaded via -p flag, just send Enter after 5 seconds
-                logger.info(
-                    "OpenCode agent: Prompt loaded via -p flag, waiting 5 seconds then sending Enter"
-                )
+                logger.info("OpenCode agent: Prompt loaded via -p flag, waiting 5 seconds then sending Enter")
                 await asyncio.sleep(5)
                 pane.send_keys("", enter=True)  # Send Enter to submit the prompt
             elif cli_agent.needs_chunked_delivery:
@@ -1656,9 +1509,7 @@ class LaunchPipeline:
                 formatted_message = cli_agent.format_message(initial_message)
                 chunk_size = 2000  # characters per chunk
                 num_chunks = (len(formatted_message) + chunk_size - 1) // chunk_size
-                logger.info(
-                    f"{agent_name} agent: Sending prompt in {num_chunks} chunks ({len(formatted_message)} total chars)"
-                )
+                logger.info(f"{agent_name} agent: Sending prompt in {num_chunks} chunks ({len(formatted_message)} total chars)")
 
                 for i in range(0, len(formatted_message), chunk_size):
                     chunk = formatted_message[i : i + chunk_size]
@@ -1666,9 +1517,7 @@ class LaunchPipeline:
                     # libtmux defaults enter=True, which submits each chunk as
                     # its own message instead of accumulating one prompt.
                     pane.send_keys(chunk, enter=False)
-                    await asyncio.sleep(
-                        0.1
-                    )  # Delay between chunks to avoid overwhelming tmux
+                    await asyncio.sleep(0.1)  # Delay between chunks to avoid overwhelming tmux
 
                 # Now send Enter to submit the entire message
                 logger.info("All chunks sent, submitting message with Enter")
@@ -1677,23 +1526,15 @@ class LaunchPipeline:
             else:
                 # Other agents: Send entire prompt in one go
                 formatted_message = cli_agent.format_message(initial_message)
-                logger.info(
-                    f"Non-Claude agent: Sending entire prompt in one message ({len(formatted_message)} chars)"
-                )
+                logger.info(f"Non-Claude agent: Sending entire prompt in one message ({len(formatted_message)} chars)")
                 pane.send_keys(formatted_message, enter=True)
 
             # Verify delivery
-            if await self._verify_prompt_delivery(
-                pane, verification_string, wait_seconds=10
-            ):
-                logger.info(
-                    f"✓ Initial prompt verified for agent {agent_id} on attempt {attempt}"
-                )
+            if await self._verify_prompt_delivery(pane, verification_string, wait_seconds=10):
+                logger.info(f"✓ Initial prompt verified for agent {agent_id} on attempt {attempt}")
                 return
 
-            logger.warning(
-                f"✗ Initial prompt NOT verified for agent {agent_id} on attempt {attempt}"
-            )
+            logger.warning(f"✗ Initial prompt NOT verified for agent {agent_id} on attempt {attempt}")
 
             if attempt < max_retries:
                 logger.info(f"Retrying prompt delivery for agent {agent_id}...")
@@ -1757,9 +1598,7 @@ class LaunchPipeline:
             ValueError: If task is None
         """
         if task is None:
-            raise ValueError(
-                "task is REQUIRED for create_agent_for_task \u2014 cannot create agent without a task"
-            )
+            raise ValueError("task is REQUIRED for create_agent_for_task \u2014 cannot create agent without a task")
 
         # git_expert dispatches like any other phase, in review mode
         # or not -- the agent-safe-bin/git wrapper on every agent's PATH
@@ -1786,12 +1625,11 @@ class LaunchPipeline:
 
         agent_id = str(uuid.uuid4())
         wt_mgr = self._scoped_worktree_manager(task.workflow_id)
-        phase_config = self._resolve_phase_config(
-            task, cli_type, phase_cli_tool, phase_cli_model, phase_glm_token_env, phase_thinking_level
-        )
+        phase_config = self._resolve_phase_config(task, cli_type, phase_cli_tool, phase_cli_model, phase_glm_token_env, phase_thinking_level)
         cli_type = phase_config.cli_type
 
         from src.core.log_context import set_log_context
+
         set_log_context(agent=agent_id, task=task.id, workflow=task.workflow_id or "")
         logger.info(f"Creating {cli_type} agent {agent_id} for task {task.id}")
 
@@ -1800,8 +1638,12 @@ class LaunchPipeline:
         # for the assign_to_task same-commit race it closes and the
         # try/except/finally connection-leak history).
         agent = _insert_stub_agent_row(
-            self, agent_id=agent_id, cli_type=cli_type, agent_type=agent_type,
-            task=task, assign_to_task=assign_to_task,
+            self,
+            agent_id=agent_id,
+            cli_type=cli_type,
+            agent_type=agent_type,
+            task=task,
+            assign_to_task=assign_to_task,
         )
 
         try:
@@ -1810,19 +1652,28 @@ class LaunchPipeline:
             # complexity classification (a second, conditional LLM
             # round-trip) -- run concurrently (see
             # _run_launch_preparations for the live 42s-stall evidence).
-            wt_resolution, system_prompt, thinking_level, phase_name, phase_order = (
-                await _run_launch_preparations(
-                    self, task=task, wt_mgr=wt_mgr,
-                    working_directory=working_directory, enriched_data=enriched_data,
-                    memories=memories, project_context=project_context,
-                    phase_config=phase_config, agent_id=agent_id,
-                )
+            wt_resolution, system_prompt, thinking_level, phase_name, phase_order = await _run_launch_preparations(
+                self,
+                task=task,
+                wt_mgr=wt_mgr,
+                working_directory=working_directory,
+                enriched_data=enriched_data,
+                memories=memories,
+                project_context=project_context,
+                phase_config=phase_config,
+                agent_id=agent_id,
             )
             prep = await _prepare_tmux_and_prompt(
-                self, cli_type=cli_type, task=task, agent_id=agent_id,
-                agent_type=agent_type, phase_config=phase_config,
-                wt_resolution=wt_resolution, system_prompt=system_prompt,
-                enriched_data=enriched_data, phase_name=phase_name,
+                self,
+                cli_type=cli_type,
+                task=task,
+                agent_id=agent_id,
+                agent_type=agent_type,
+                phase_config=phase_config,
+                wt_resolution=wt_resolution,
+                system_prompt=system_prompt,
+                enriched_data=enriched_data,
+                phase_name=phase_name,
             )
             # Bound in THIS scope: the except block below's
             # `"tmux_session" in locals()` / session_name references depend
@@ -1830,14 +1681,24 @@ class LaunchPipeline:
             tmux_session = prep.tmux_session
             session_name = prep.session_name
             launch = await _send_launch_command_and_record_agent(
-                self, prep=prep, task=task, agent_id=agent_id,
-                system_prompt=system_prompt, cli_type=cli_type,
-                thinking_level=thinking_level, phase_name=phase_name,
+                self,
+                prep=prep,
+                task=task,
+                agent_id=agent_id,
+                system_prompt=system_prompt,
+                cli_type=cli_type,
+                thinking_level=thinking_level,
+                phase_name=phase_name,
                 phase_order=phase_order,
             )
             term_race_result = await _deliver_initial_prompt_flow(
-                self, prep=prep, launch=launch, task=task,
-                agent_id=agent_id, system_prompt=system_prompt, cli_type=cli_type,
+                self,
+                prep=prep,
+                launch=launch,
+                task=task,
+                agent_id=agent_id,
+                system_prompt=system_prompt,
+                cli_type=cli_type,
             )
             if term_race_result is not None:
                 return term_race_result
@@ -1845,24 +1706,19 @@ class LaunchPipeline:
             class AgentInfo:
                 def __init__(self, id):
                     self.id = id
+
             return AgentInfo(launch.agent_id_to_return)
 
         except Exception as e:
             logger.error(f"Failed to create agent with {cli_type}: {e}")
             if phase_config.fallback_cli_tool and phase_config.fallback_cli_tool != cli_type:
-                logger.warning(
-                    f"Primary CLI tool '{cli_type}' failed, trying fallback: "
-                    f"{phase_config.fallback_cli_tool}/{phase_config.fallback_cli_model or 'default'}"
-                )
+                logger.warning(f"Primary CLI tool '{cli_type}' failed, trying fallback: {phase_config.fallback_cli_tool}/{phase_config.fallback_cli_model or 'default'}")
                 try:
                     if "tmux_session" in locals():
                         try:
                             tmux_session.kill_session()
                         except Exception as e:
-                            logger.warning(
-                                f"Failed to kill stale tmux session before CLI "
-                                f"fallback; it may linger: {e}"
-                            )
+                            logger.warning(f"Failed to kill stale tmux session before CLI fallback; it may linger: {e}")
                     if "agent_id" in locals():
                         try:
                             from src.autopilot.orchestrator.engine_client import (
@@ -1877,22 +1733,21 @@ class LaunchPipeline:
                                 terminate_agent(agent_id, session=_cs)
                                 _cs.commit()
                         except Exception as e:
-                            logger.warning(
-                                f"Failed to terminate agent {agent_id} before CLI "
-                                f"fallback; its task may not be claimable: {e}"
-                            )
+                            logger.warning(f"Failed to terminate agent {agent_id} before CLI fallback; its task may not be claimable: {e}")
                         try:
                             wt_mgr.discard_agent(agent_id)
                         except Exception as e:
-                            logger.warning(
-                                f"Failed to discard worktree for agent {agent_id} "
-                                f"before CLI fallback: {e}"
-                            )
+                            logger.warning(f"Failed to discard worktree for agent {agent_id} before CLI fallback: {e}")
                     return await self.create_agent_for_task(
-                        task=task, enriched_data=enriched_data, memories=memories,
-                        project_context=project_context, cli_type=phase_config.fallback_cli_tool,
-                        working_directory=working_directory, agent_type=agent_type,
-                        use_existing_worktree=use_existing_worktree, commit_sha=commit_sha,
+                        task=task,
+                        enriched_data=enriched_data,
+                        memories=memories,
+                        project_context=project_context,
+                        cli_type=phase_config.fallback_cli_tool,
+                        working_directory=working_directory,
+                        agent_type=agent_type,
+                        use_existing_worktree=use_existing_worktree,
+                        commit_sha=commit_sha,
                         phase_cli_tool=phase_config.fallback_cli_tool,
                         phase_cli_model=phase_config.fallback_cli_model,
                         phase_glm_token_env=phase_config.glm_token_env,
@@ -1927,24 +1782,18 @@ class LaunchPipeline:
                         logger.info(f"Marked task {task.id} as failed")
                         if "CLI session limit detected" in str(e) and task_record.workflow_id:
                             from src.core.database import Workflow as _Workflow
+
                             workflow_record = cleanup_session.query(_Workflow).filter_by(id=task_record.workflow_id).first()
                             if workflow_record and workflow_record.status != "paused":
                                 from src.autopilot.orchestrator.engine_client import pause_workflow
+
                                 pause_workflow(
                                     task_record.workflow_id,
                                     reason="system",
-                                    status_reason=(
-                                        f"CLI session limit hit ({cli_type}), no working "
-                                        "fallback -- will auto-resume on its own retry "
-                                        "cooldown once the limit resets"
-                                    ),
+                                    status_reason=(f"CLI session limit hit ({cli_type}), no working fallback -- will auto-resume on its own retry cooldown once the limit resets"),
                                     session=cleanup_session,
                                 )
-                                logger.warning(
-                                    f"[SESSION-LIMIT] Pausing workflow "
-                                    f"{task_record.workflow_id[:8]} -- {cli_type} "
-                                    "session limit hit with no working fallback"
-                                )
+                                logger.warning(f"[SESSION-LIMIT] Pausing workflow {task_record.workflow_id[:8]} -- {cli_type} session limit hit with no working fallback")
                     cleanup_session.commit()
                 except Exception as db_error:
                     logger.error(f"Failed to update database during cleanup: {db_error}")
@@ -1973,9 +1822,7 @@ class LaunchPipeline:
 
             # Restart loop protection: max 3 restarts per agent
             if agent.restart_count >= 3:
-                logger.warning(
-                    f"Agent {agent_id[:8]} exceeded max restarts ({agent.restart_count}), terminating"
-                )
+                logger.warning(f"Agent {agent_id[:8]} exceeded max restarts ({agent.restart_count}), terminating")
                 # Capture the task before terminating -- the primitive
                 # clears current_task_id as part of the invariant.
                 task_id = agent.current_task_id
@@ -1986,9 +1833,7 @@ class LaunchPipeline:
                 task = session.query(Task).filter_by(id=task_id).first()
                 if task and task.status not in ("done", "failed"):
                     task.status = "failed"
-                    task.failure_reason = (
-                        f"Agent exceeded max restarts ({agent.restart_count})"
-                    )
+                    task.failure_reason = f"Agent exceeded max restarts ({agent.restart_count})"
                     session.commit()
                 return
 
@@ -2018,14 +1863,14 @@ class LaunchPipeline:
                     if tmux_session:
                         tmux_session.kill_session()
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to kill tmux session {agent.tmux_session_name} "
-                        f"before restart; the old agent may still be running: {e}"
-                    )
+                    logger.warning(f"Failed to kill tmux session {agent.tmux_session_name} before restart; the old agent may still be running: {e}")
 
             # Resolve env vars and model (restart path: uses agent's frozen values)
             env_vars, model, cli_agent = self._resolve_env_and_model(
-                agent.cli_type, task, agent_id, label="restarted agent",
+                agent.cli_type,
+                task,
+                agent_id,
+                label="restarted agent",
                 agent_cli_model=agent.cli_model,
             )
 
@@ -2035,7 +1880,10 @@ class LaunchPipeline:
                 None,
                 functools.partial(
                     self._resolve_worktree,
-                    task, self.branch_manager, create_if_missing=False, agent_id=agent_id,
+                    task,
+                    self.branch_manager,
+                    create_if_missing=False,
+                    agent_id=agent_id,
                 ),
             )
             restart_wd = wt_resolution.branch_path
@@ -2053,10 +1901,7 @@ class LaunchPipeline:
                     if restart_phase:
                         restart_phase_name = restart_phase.name
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to resolve phase name for restarted agent {agent_id}; "
-                        f"output dir will be named by phase_id: {e}"
-                    )
+                    logger.warning(f"Failed to resolve phase name for restarted agent {agent_id}; output dir will be named by phase_id: {e}")
                 finally:
                     restart_session.close()
 
@@ -2067,8 +1912,13 @@ class LaunchPipeline:
                 None,
                 functools.partial(
                     self._prepare_launch_environment,
-                    new_session_name, restart_wd, env_vars, task, restart_phase_name,
-                    cli_agent=cli_agent, prewarm_codegraph=False,
+                    new_session_name,
+                    restart_wd,
+                    env_vars,
+                    task,
+                    restart_phase_name,
+                    cli_agent=cli_agent,
+                    prewarm_codegraph=False,
                 ),
             )
 
@@ -2081,25 +1931,25 @@ class LaunchPipeline:
 
             # Session ID for restart (excludes validator/result_validator/diagnostic, NOT arbitration)
             session_id = self._resolve_session_id(
-                task, agent.agent_type or "phase", restart_phase_name, model,
+                task,
+                agent.agent_type or "phase",
+                restart_phase_name,
+                model,
                 excluded_types=("validator", "result_validator", "diagnostic"),
             )
 
             restart_message = (
                 f"\u26a0\ufe0f You were restarted ({reason}). Your prior work is committed in this "
                 f"worktree \u2014 do NOT redo it; run `git log` / `git status` and inspect existing "
-                f"files first, then continue toward completion.\n\n"
-                + self._format_initial_message(
-                    task, agent_id, agent_type=(agent.agent_type or "phase")
-                )
+                f"files first, then continue toward completion.\n\n" + self._format_initial_message(task, agent_id, agent_type=(agent.agent_type or "phase"))
             )
             instructions_pointer = ""
             if restart_wd:
-                instructions_rel_path = self._write_task_instructions(
-                    restart_wd, task.id, restart_message
-                )
+                instructions_rel_path = self._write_task_instructions(restart_wd, task.id, restart_message)
                 instructions_pointer = self._build_instructions_pointer(
-                    task.id, instructions_rel_path, restarted=True,
+                    task.id,
+                    instructions_rel_path,
+                    restarted=True,
                     agent_name=f"hephaestus-{restart_phase_name.replace('_', '-')}" if restart_phase_name else None,
                 )
                 if agent.cli_type == "codex" and session_id:
@@ -2107,21 +1957,33 @@ class LaunchPipeline:
 
             # Build and send launch command
             launch_result, pane, cli_launch_started_at = await self._build_and_send_launch_command(
-                cli_agent, tmux_session,
-                system_prompt=restart_system_prompt, task=task, model=model,
-                thinking_level=None, phase_name=restart_phase_name,
-                agent_id=agent_id, session_id=session_id,
-                working_directory=restart_wd, instructions_pointer=instructions_pointer,
-                env_vars=env_vars, label=f"restarted agent {agent_id[:8]}",
+                cli_agent,
+                tmux_session,
+                system_prompt=restart_system_prompt,
+                task=task,
+                model=model,
+                thinking_level=None,
+                phase_name=restart_phase_name,
+                agent_id=agent_id,
+                session_id=session_id,
+                working_directory=restart_wd,
+                instructions_pointer=instructions_pointer,
+                env_vars=env_vars,
+                label=f"restarted agent {agent_id[:8]}",
             )
             pane.send_keys(launch_result.command, enter=True)
 
             restart_cli_type = agent.cli_type
             restart_task_id = task.id
 
-            if launch_result.prompt_delivery in (
-                LaunchResult.AGENT_FILE, LaunchResult.DEFERRED,
-            ) and restart_system_prompt:
+            if (
+                launch_result.prompt_delivery
+                in (
+                    LaunchResult.AGENT_FILE,
+                    LaunchResult.DEFERRED,
+                )
+                and restart_system_prompt
+            ):
                 restart_message = restart_system_prompt + "\n\n---\n\n" + restart_message
                 if restart_wd:
                     self._write_task_instructions(restart_wd, task.id, restart_message)
@@ -2133,7 +1995,8 @@ class LaunchPipeline:
             agent.launched_at = datetime.utcnow()
 
             log_entry = AgentLog(
-                agent_id=agent_id, log_type="restarted",
+                agent_id=agent_id,
+                log_type="restarted",
                 message=f"Agent restarted: {reason}",
                 details={"new_session": new_session_name},
             )
@@ -2143,7 +2006,9 @@ class LaunchPipeline:
             try:
                 await self._wait_for_cli_ready(pane, cli_agent, restart_cli_type, agent_id)
                 term_race_result = await self._check_termination_race(
-                    agent_id, restart_task_id, new_session_name,
+                    agent_id,
+                    restart_task_id,
+                    new_session_name,
                     agent_id_to_return=agent_id,
                 )
                 if term_race_result is not None:
@@ -2151,37 +2016,31 @@ class LaunchPipeline:
                 self._detect_launch_failure(pane, cli_agent, restart_cli_type, new_session_name)
                 if self.tmux_server.has_session(new_session_name):
                     await self._deliver_initial_prompt(
-                        pane, cli_agent, restart_cli_type,
+                        pane,
+                        cli_agent,
+                        restart_cli_type,
                         instructions_pointer if restart_wd else restart_message,
-                        agent_id, task, agent_type=agent.agent_type or "phase",
+                        agent_id,
+                        task,
+                        agent_type=agent.agent_type or "phase",
                     )
                     # See the create-path's identical comment: neither call
                     # reads the other's result, so run them concurrently
                     # when both apply (restart_wd gates whether there's an
                     # instructions file to check at all).
-                    record_coro = self._record_cli_session(
-                        cli_agent, session_id, restart_wd, cli_launch_started_at
-                    )
+                    record_coro = self._record_cli_session(cli_agent, session_id, restart_wd, cli_launch_started_at)
                     if restart_wd:
                         await asyncio.gather(
                             record_coro,
-                            self._verify_instructions_file_read(
-                                pane, instructions_rel_path, agent_id
-                            ),
+                            self._verify_instructions_file_read(pane, instructions_rel_path, agent_id),
                         )
                     else:
                         await record_coro
-                    logger.info(
-                        f"[RESTART] Delivered continue-prompt to agent {agent_id} ({restart_cli_type})"
-                    )
+                    logger.info(f"[RESTART] Delivered continue-prompt to agent {agent_id} ({restart_cli_type})")
                 else:
-                    logger.error(
-                        f"[RESTART] Session {new_session_name} died before prompt delivery"
-                    )
+                    logger.error(f"[RESTART] Session {new_session_name} died before prompt delivery")
             except Exception as e:
-                logger.error(
-                    f"[RESTART] Failed to deliver continue-prompt to agent {agent_id}: {e}"
-                )
+                logger.error(f"[RESTART] Failed to deliver continue-prompt to agent {agent_id}: {e}")
 
             logger.info(f"Agent {agent_id} restarted successfully")
 
@@ -2190,4 +2049,3 @@ class LaunchPipeline:
             session.rollback()
         finally:
             session.close()
-

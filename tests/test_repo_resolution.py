@@ -104,5 +104,28 @@ def test_repo_id_for_path_longest_prefix_wins_for_nested_repos(db_manager, tmp_p
         assert repo_id_for_path(session, "proj-nested", str(inner / "file.py")) == "repo-inner"
 
 
+def test_resolve_repo_path_zero_project_repos_falls_back_to_base_dir(db_manager, tmp_path):
+    """WARNING-4: the genuine zero-ProjectRepo-rows path (not just "exactly
+    one" -- the test_single_repo_project_resolves_identically_to_base_dir
+    test only covers the one-row case). The fallback to
+    AutopilotProject.base_dir must be exercised and the WARNING log
+    emitted."""
+    from pathlib import Path
+
+    base = tmp_path / "legacy_project"
+    base.mkdir()
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-zero-repos", name="zero", base_dir=str(base)))
+
+    # No ProjectRepo rows at all -- must fall back to base_dir
+    with db_manager.session_scope() as session:
+        path = resolve_repo_path(session, "proj-zero-repos", None)
+        assert path == Path(str(base))
+
+    # Verify zero ProjectRepo rows in the DB
+    with db_manager.session_scope() as session:
+        assert session.query(ProjectRepo).filter_by(project_id="proj-zero-repos").count() == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
