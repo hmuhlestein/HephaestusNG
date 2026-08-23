@@ -263,6 +263,71 @@ class TestRestartTaskEndpointCliModelConcurrency:
         finally:
             session.close()
 
+    @pytest.mark.asyncio
+    async def test_restarting_a_task_does_not_clear_a_review_pause(self, db_manager):
+        """Regression: unlike a "user"/"budget"/"system" pause, this endpoint
+        force-resumed a "review" pause too -- restarting one blocked/failed
+        task on a workflow awaiting human review silently cleared the review
+        gate itself, with no approve/request_changes decision ever recorded
+        on the feature. Only review_feature (POST /features/{id}/review) may
+        clear paused_by="review". Same bug class as resume_feature's and
+        _resume_interrupted_workflows' identical fixes. The task-level
+        restart must still work while under review -- only the pause itself
+        must survive."""
+        from src.core.database import Feature
+        from src.mcp.server.task_admin_routes import restart_task_endpoint
+
+        session = db_manager.get_session()
+        try:
+            session.add(
+                Workflow(
+                    id="wf-review", name="t", phases_folder_path="/tmp",
+                    status="paused", paused_by="review",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feat-review", design_id="des-1", feature_key="k",
+                    name="n", scope="s", workflow_id="wf-review",
+                    status="paused",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-review", raw_description="r", done_definition="d",
+                    status="blocked", workflow_id="wf-review",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        qs = _make_queue_service(db_manager)
+        server_state = _make_server_state(db_manager, qs)
+        dispatched_agent = Mock(id="new-agent")
+
+        with patch("src.mcp.server.task_admin_routes.server_state", server_state), \
+             patch(
+                 "src.services.agent_dispatch_service.AgentDispatchService.build_dispatch_context",
+                 new=AsyncMock(return_value={"phase_cli_tool": None, "phase_cli_model": None}),
+             ), \
+             patch(
+                 "src.services.agent_dispatch_service.AgentDispatchService.dispatch",
+                 new=AsyncMock(return_value=dispatched_agent),
+             ), \
+             patch("src.services.agent_dispatch_service.AgentDispatchService.mark_assigned"):
+            await restart_task_endpoint(task_id="task-review")
+
+        session = db_manager.get_session()
+        try:
+            wf = session.query(Workflow).filter_by(id="wf-review").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "review"
+            task = session.query(Task).filter_by(id="task-review").first()
+            assert task.status == "pending"
+        finally:
+            session.close()
+
 
 class TestBumpTaskPriorityEndpointCliModelConcurrency:
     @pytest.mark.asyncio

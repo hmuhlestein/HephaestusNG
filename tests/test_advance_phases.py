@@ -2633,6 +2633,38 @@ class TestCreatePhaseTaskResetsClaim:
             assert execution.task_creation_claimed_at is None
             assert _claim_phase_task_creation(session, "phase-1") is True
 
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_reopens_a_previously_skipped_phase(self, mock_create_agent, db_manager, sample_workflow):
+        """Regression: a phase whose PhaseExecution reads "skipped" (e.g. an
+        optional review phase the pipeline skipped on its first pass) must
+        also be reopened to "in_progress" when a later goto/redo cycle
+        creates a real task for it -- the reopen condition only checked
+        "pending"/"completed", so a "skipped" phase kept that status even
+        with a live task running against it. derive_workflow_status treats
+        "skipped" as terminal, same as "completed", so the whole workflow
+        got derived (and write-back committed) as "completed" while this
+        task was still actively in flight -- which then got the task itself
+        killed as a false "Orphaned: workflow already completed", and let
+        the design queue advance to the next feature before this redo cycle
+        (and its pending human review) ever finished. Confirmed live: task
+        860508ac (adversarial_review, workflow ca539a75)."""
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+
+        mock_create_agent.side_effect = _agent_row_side_effect("new-agent")
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.status = "skipped"
+            exec1.started_at = None
+
+        result = _create_phase_task("wf-1", "phase-1", "requirements", "goto", MagicMock())
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+            assert execution.started_at is not None
+
 
 class TestCreatePhaseTaskClaimsTargetPhase:
     """Regression: _fire_phase_transition and _resolve_arbitration_outcome

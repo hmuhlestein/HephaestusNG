@@ -689,7 +689,7 @@ async def restart_task_endpoint(
                 from src.core.database import PhaseExecution, Workflow
 
                 wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
-                if wf and wf.status == "paused":
+                if wf and wf.status == "paused" and wf.paused_by != "review":
                     # A restartable task can be "blocked" -- exactly what
                     # pause_feature sets on a paused workflow's in-flight
                     # tasks -- so this is reachable on a genuinely paused
@@ -697,9 +697,19 @@ async def restart_task_endpoint(
                     # wf.status = "active" here would leave paused_by/
                     # paused_at stale, the same bug class as this item's
                     # other resume-side fixes.
+                    #
+                    # paused_by == "review" is excluded from the force-
+                    # resume itself -- only review_feature (POST
+                    # /features/{id}/review) may clear that pause, since
+                    # it's the only endpoint that records feature.
+                    # review_status/reviewed_at. The task-level reopen
+                    # below still runs regardless, so restarting a task
+                    # still works while under review; it just no longer
+                    # silently clears the review gate as a side effect.
+                    # Same bug class as resume_feature's identical fix.
                     from src.autopilot.orchestrator.engine_client import resume_workflow
                     resume_workflow(task.workflow_id, force=True, session=session)
-                elif wf and wf.status != "active":
+                elif wf and wf.status != "active" and wf.paused_by != "review":
                     wf.status = "active"
                 if task.phase_id:
                     execution = session.query(PhaseExecution).filter_by(phase_id=task.phase_id).first()

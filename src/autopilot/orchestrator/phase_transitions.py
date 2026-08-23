@@ -116,7 +116,7 @@ def _clear_stale_task_creation_claim(db, phase_id: str, *, repair_status: bool =
     )
     if cleared and repair_status:
         execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
-        if execution and execution.status in ("pending", "completed"):
+        if execution and execution.status in ("pending", "completed", "skipped"):
             latest_task = (
                 db.query(Task)
                 .filter_by(phase_id=phase_id)
@@ -1213,7 +1213,7 @@ def _release_phase_task_creation_claim(db, phase_id: str) -> None:
     execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).populate_existing().first()
     if not execution:
         return
-    if execution.status in ("pending", "completed"):
+    if execution.status in ("pending", "completed", "skipped"):
         execution.status = "in_progress"
         earliest_task = (
             db.query(Task)
@@ -2492,10 +2492,23 @@ def _create_phase_task(
             task_id = task.id
 
 
-            # Update phase execution to in_progress
+            # Update phase execution to in_progress. "skipped" is included
+            # alongside "pending"/"completed" -- a phase the pipeline
+            # originally skipped (e.g. adversarial_review under some
+            # workflow.yaml configs) can still be the target of a real task
+            # later (a goto/redo cycle sending work back through it). Left
+            # at "skipped", derive_workflow_status's phase-completeness
+            # check (which treats "skipped" as terminal, same as
+            # "completed") sees nothing incomplete and marks the whole
+            # workflow "completed" while this task is still actively
+            # running -- which then gets the task itself killed as a false
+            # "Orphaned: workflow already completed", and lets the design
+            # queue advance to the next feature before this redo cycle (and
+            # any pending human review of it) ever finished. Confirmed
+            # live: task 860508ac (adversarial_review, workflow ca539a75).
             execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
             if execution:
-                if execution.status in ("pending", "completed"):
+                if execution.status in ("pending", "completed", "skipped"):
                     reopen_phase_execution(execution, status="in_progress", started_at="now")
                 else:
                     # Always release the claim once the task it was guarding

@@ -1023,6 +1023,41 @@ class TestReviewAndResumeReuseOldPendingTasks:
 
         spawn_mock.assert_called_once_with("task-needs-work", "wf-1-dev")
 
+    @pytest.mark.asyncio
+    async def test_resume_feature_does_not_clear_a_review_pause(self, orch_db_env, monkeypatch):
+        """Regression: resume_feature used to force-resume ANY paused
+        workflow (force=True, matching every other pause reason), including
+        one paused_by="review" -- clicking the generic Resume button (e.g.
+        to recover this needs_work/dead-agent task) silently cleared the
+        review gate itself, with no approve/request_changes decision ever
+        recorded on the feature. The workflow then ran to completion again
+        and derive_workflow_status's own completeness self-heal marked it
+        "completed" directly, bypassing PhaseManager._complete_workflow's
+        review-mode pause -- letting the design queue start the next
+        feature with the human review never actually resolved. Confirmed
+        live: feature feat-f47c93ba on workflow ca539a75.
+
+        The task recovery itself must still work while paused for review --
+        only the review_feature endpoint (approve/request_changes) may
+        clear paused_by="review"."""
+        self._seed_review_mode_project_and_workflow(orch_db_env)
+        self._seed_needs_work_task_with_terminated_agent(orch_db_env)
+
+        from src.mcp.autopilot import feature_routes
+        spawn_mock = AsyncMock()
+        monkeypatch.setattr(feature_routes, "_spawn_agent_for_task", spawn_mock)
+
+        from src.mcp.autopilot.feature_routes import resume_feature
+        result = await resume_feature("feat-1")
+        assert result["success"] is True
+        spawn_mock.assert_called_once_with("task-needs-work", "wf-1-dev")
+
+        from src.core.database import Workflow
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "review"
+
 
 class TestReviewFeatureApproveLocalMergeFallback:
     """When git_expert couldn't create a PR (gh not installed/
