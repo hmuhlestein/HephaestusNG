@@ -291,6 +291,36 @@ class TestCreateFeatureRecordsRepoId:
             feat = db.query(Feature).filter_by(id=records[0]["id"]).first()
             assert feat.repo_id == "repo-backend"
 
+    def test_inferred_from_relative_files_against_project_base_dir(self, designs_folder, mock_logger, tmp_path, monkeypatch):
+        """The architect prompt's schema shows files like "src/auth/" --
+        relative to the project root, not absolute. repo_id_for_path needs
+        an absolute path to prefix-match a ProjectRepo.path, so relative
+        entries must be resolved against the project's base_dir first (not
+        left to resolve() against the process's own cwd, which would
+        silently never match any repo)."""
+        from src.core.database import Feature, get_db
+
+        self._seed_multi_repo_project(tmp_path, monkeypatch)
+        features_json = {
+            "design_name": "d",
+            "features": [
+                {
+                    "id": "be-feat-rel",
+                    "name": "BE",
+                    "scope": "s",
+                    "files": ["backend/a.py", "backend/sub/b.py"],
+                    "depends_on": [],
+                    "execution": "parallel",
+                }
+            ],
+        }
+
+        records = _create_feature_records("des-multi", features_json, designs_folder, mock_logger)
+
+        with get_db() as db:
+            feat = db.query(Feature).filter_by(id=records[0]["id"]).first()
+            assert feat.repo_id == "repo-backend"
+
     def test_no_majority_leaves_repo_id_none(self, designs_folder, mock_logger, tmp_path, monkeypatch):
         from src.core.database import Feature, get_db
 

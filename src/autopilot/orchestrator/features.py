@@ -40,7 +40,7 @@ def _create_feature_records(
     """
     import uuid
 
-    from src.core.database import AutopilotDesign, Feature, ProjectRepo
+    from src.core.database import AutopilotDesign, AutopilotProject, Feature, ProjectRepo
     from src.core.repo_resolution import get_project_repos, repo_id_for_path
 
     feature_records = []
@@ -56,6 +56,10 @@ def _create_feature_records(
         # component doc) -- skip the query entirely rather than pay for it
         # when there's only one possible repo anyway.
         multi_repo = project_id is not None and len(get_project_repos(db, project_id)) > 1
+        project_base_dir = None
+        if multi_repo:
+            project = db.query(AutopilotProject).filter_by(id=project_id).first()
+            project_base_dir = project.base_dir if project else None
         # Idempotency guard: finalize_phase0_workflow can now call this from
         # two independent sites for the same design (run_phase0's own
         # synchronous tail, and the generic phase0-completion hook in
@@ -109,10 +113,19 @@ def _create_feature_records(
                     repo = db.query(ProjectRepo).filter_by(project_id=project_id, label=repo_label).first()
                     feature_repo_id = repo.id if repo else None
                 else:
+                    # feat["files"] entries are typically relative to the
+                    # project root (the architect prompt's schema shows
+                    # "src/auth/", not an absolute path) -- repo_id_for_path
+                    # needs an absolute path to prefix-match against each
+                    # ProjectRepo.path, so resolve against project_base_dir
+                    # first. An already-absolute entry is left as-is.
+                    def _abs(f: str) -> str:
+                        return f if Path(f).is_absolute() or not project_base_dir else str(Path(project_base_dir) / f)
+
                     matches = [
                         rid
                         for f in feat.get("files", [])
-                        if (rid := repo_id_for_path(db, project_id, f)) is not None
+                        if (rid := repo_id_for_path(db, project_id, _abs(f))) is not None
                     ]
                     if matches:
                         feature_repo_id = max(set(matches), key=matches.count)
