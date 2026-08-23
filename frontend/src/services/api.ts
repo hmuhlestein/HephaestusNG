@@ -365,7 +365,7 @@ export const apiService = {
   ): Promise<{ success: boolean; message: string; agent_id: string }> => {
     const { data } = await api.post('/bump_task_priority', {
       task_id: taskId,
-    });
+    }, { headers: { 'X-Agent-ID': 'ui-user' } });
     return data;
   },
 
@@ -374,7 +374,7 @@ export const apiService = {
   ): Promise<{ success: boolean; message: string }> => {
     const { data } = await api.post('/cancel_queued_task', {
       task_id: taskId,
-    });
+    }, { headers: { 'X-Agent-ID': 'ui-user' } });
     return data;
   },
 
@@ -383,22 +383,22 @@ export const apiService = {
   ): Promise<{ success: boolean; message: string; agent_id?: string; status: string }> => {
     const { data } = await api.post('/restart_task', {
       task_id: taskId,
-    });
+    }, { headers: { 'X-Agent-ID': 'ui-user' } });
     return data;
   },
 
   pauseTask: async (taskId: string): Promise<{ success: boolean; task_id: string; status: string }> => {
-    const { data } = await api.post(`/tasks/${encodeURIComponent(taskId)}/pause`);
+    const { data } = await api.post(`/tasks/${encodeURIComponent(taskId)}/pause`, null, { headers: { 'X-Agent-ID': 'ui-user' } });
     return data;
   },
 
   cancelTask: async (taskId: string): Promise<{ success: boolean; task_id: string }> => {
-    const { data } = await api.post(`/tasks/${encodeURIComponent(taskId)}/cancel`);
+    const { data } = await api.post(`/tasks/${encodeURIComponent(taskId)}/cancel`, null, { headers: { 'X-Agent-ID': 'ui-user' } });
     return data;
   },
 
   deleteTask: async (taskId: string): Promise<{ success: boolean; task_id: string }> => {
-    const { data } = await api.delete(`/tasks/${encodeURIComponent(taskId)}`);
+    const { data } = await api.delete(`/tasks/${encodeURIComponent(taskId)}`, { headers: { 'X-Agent-ID': 'ui-user' } });
     return data;
   },
 
