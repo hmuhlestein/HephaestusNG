@@ -308,14 +308,32 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   };
 
   // Send a literal Escape keypress -- unlike handleSendMessage, no text is
-  // typed and no Enter follows.
+  // typed and no Enter follows. Reuses sendStatus/sendErrorMessage (shared
+  // with the message form below) so a failure -- e.g. the agent's tmux
+  // session is already gone -- is visible instead of silently doing
+  // nothing, same as a failed message send.
   const handleSendEscape = async () => {
     if (!agent || isSendingEscape || currentStatus === 'terminated') return;
     setIsSendingEscape(true);
+    setSendStatus('idle');
     try {
-      await apiService.sendAgentKey(agent.id, 'Escape');
+      const response = await apiService.sendAgentKey(agent.id, 'Escape');
+      if (!response.sent) {
+        setSendStatus('error');
+        setSendErrorMessage('Failed to send Escape key');
+        setTimeout(() => {
+          setSendStatus('idle');
+          setSendErrorMessage('');
+        }, 3000);
+      }
     } catch (error) {
       console.error('Failed to send Escape key:', error);
+      setSendStatus('error');
+      setSendErrorMessage('Failed to send Escape key');
+      setTimeout(() => {
+        setSendStatus('idle');
+        setSendErrorMessage('');
+      }, 3000);
     } finally {
       setIsSendingEscape(false);
     }
