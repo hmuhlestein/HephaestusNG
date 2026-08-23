@@ -947,6 +947,21 @@ export const apiService = {
     return data;
   },
 
+  // Project repos (multi-repo projects) — add/list only, no update/delete in v1.
+  getProjectRepos: async (projectId: string): Promise<any[]> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/repos`);
+    return data;
+  },
+
+  addProjectRepo: async (projectId: string, label: string, path: string): Promise<any> => {
+    const { data } = await api.post(
+      `/autopilot/projects/${encodeURIComponent(projectId)}/repos`,
+      { label, path },
+      { headers: { 'X-Agent-ID': 'ui-user' } }
+    );
+    return data;
+  },
+
   // ── Cost Endpoints ──────────────────────────────────────────────────────
 
   getProjectCosts: async (projectId: string): Promise<any> => {

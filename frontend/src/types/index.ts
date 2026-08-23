@@ -428,6 +428,8 @@ export interface CommitDiff {
   total_insertions: number;
   total_deletions: number;
   total_files: number;
+  repo_id?: string | null;
+  repo_label?: string | null;
 }
 
 export interface TicketSearchResult {
