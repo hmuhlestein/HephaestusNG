@@ -570,6 +570,7 @@ async def _dispatch_ready_dependents(completed_task_id: str, workflow_id: Option
                     "done_definition": t.done_definition,
                     "phase_id": t.phase_id,
                     "workflow_id": t.workflow_id,
+                    "repo_id": t.repo_id,
                     "created_by_agent_id": t.created_by_agent_id,
                 }
             )
@@ -623,6 +624,7 @@ async def _dispatch_or_queue_promoted_task(task_data: dict) -> None:
         raw_description=task_data["raw_description"],
         requesting_agent_id=agent_id,
         workflow_id=task_data.get("workflow_id"),
+        repo_id=task_data.get("repo_id"),
     )
 
     enriched_task = {"enriched_description": task_data["enriched_description"]}
@@ -673,6 +675,7 @@ async def _dispatch_agent_for_task(
         done_definition=task_data["done_definition"],
         phase_id=task_data["phase_id"],
         workflow_id=task_data["workflow_id"],
+        repo_id=task_data.get("repo_id"),
         created_by_agent_id=agent_id,
     )
 

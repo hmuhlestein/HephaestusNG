@@ -179,6 +179,7 @@ async def process_queue(project_id: Optional[str] = None):
                         phase_id=resolved_phase_id or refreshed_task.phase_id,
                         created_by_agent_id=refreshed_task.created_by_agent_id,
                         workflow_id=refreshed_task.workflow_id,
+                        repo_id=refreshed_task.repo_id,
                     )
                     rag_description = refreshed_task.enriched_description or refreshed_task.raw_description
                 else:
