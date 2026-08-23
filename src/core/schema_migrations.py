@@ -23,6 +23,7 @@ on the next startup of every deployed instance.
 import logging
 
 from sqlalchemy import exc as sqlalchemy_exc, text
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -727,6 +728,67 @@ def migrate_workflow_type_columns(engine):
         logger.warning(f"workflow_type columns migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_project_repos_table(engine):
+    """Create project_repos table, backfill one row per existing project,
+    and add nullable repo_id columns to 6 tables.
+
+    Idempotent - safe to call on every startup.
+    """
+    from src.core.database import AutopilotProject, Base, ProjectRepo
+    from src.core.repo_resolution import ensure_primary_repo
+
+    # Step 1: CREATE TABLE (idempotent)
+    try:
+        Base.metadata.create_all(engine, tables=[ProjectRepo.__table__], checkfirst=True)
+        logger.info("Ensured project_repos table exists")
+    except Exception as e:
+        logger.warning(f"project_repos table creation failed (not just 'already exists'): {e}")
+
+    # Step 2: Backfill one primary ProjectRepo per existing project.
+    # This step MUST re-raise on failure so the migration runner retries
+    # on next startup (Gotcha 4).  A partial backfill leaves some projects
+    # with zero ProjectRepo rows, permanently breaking resolve_primary_repo.
+    try:
+        with Session(engine) as session:
+            projects = session.query(AutopilotProject).all()
+            for project in projects:
+                has_repo = session.query(ProjectRepo).filter_by(
+                    project_id=project.id
+                ).first() is not None
+                if not has_repo:
+                    ensure_primary_repo(session, project)
+            session.commit()
+            logger.info(
+                "Backfilled primary ProjectRepo for %d existing projects",
+                len(projects),
+            )
+    except Exception as e:
+        logger.error(f"ProjectRepo backfill failed (will retry next startup): {e}")
+        raise  # re-raise so migration runner retries
+
+    # Step 3: ADD COLUMN repo_id to 6 tables (swallow-and-log per column)
+    columns_to_add = [
+        ("tasks", "repo_id"),
+        ("tickets", "repo_id"),
+        ("ticket_commits", "repo_id"),
+        ("agent_worktrees", "repo_id"),
+        ("features", "repo_id"),
+    ]
+    try:
+        with engine.connect() as conn:
+            for table, col in columns_to_add:
+                try:
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {col} TEXT REFERENCES project_repos(id)")
+                    )
+                    logger.info(f"Migrated {table}.{col} column")
+                except Exception:
+                    pass  # Column already exists
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"repo_id column migration failed (not just 'already exists'): {e}")
+
+
 def migrate_autopilot_pipeline_events_table(engine):
     """Create autopilot_pipeline_events for existing databases -- replaces
     the old per-run events.jsonl file (OrchestratorLogger.event()).
@@ -781,4 +843,5 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_agent_working_directory_column", migrate_agent_working_directory_column),
     ("_migrate_workflow_type_columns", migrate_workflow_type_columns),
     ("_migrate_autopilot_pipeline_events_table", migrate_autopilot_pipeline_events_table),
+    ("_migrate_project_repos_table", migrate_project_repos_table),
 ]

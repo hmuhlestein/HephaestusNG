@@ -358,6 +358,10 @@ async def create_project(
         db.add(proj)
         db.flush()
 
+        # Create primary ProjectRepo for multi-repo support (REQ-04)
+        from src.core.repo_resolution import ensure_primary_repo
+        ensure_primary_repo(db, proj)
+
         # Sync designs in the SAME session — no nested get_db()
         designs = _sync_project_designs(proj.id, resolved, db)
 

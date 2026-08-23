@@ -306,6 +306,9 @@ class Task(Base):
     ticket_id = Column(String, ForeignKey("tickets.id"))  # Associated ticket (required when ticket tracking enabled)
     related_ticket_ids = Column(JSON)  # List of related ticket IDs for context
 
+    # Multi-repo: which ProjectRepo this task writes to (nullable for single-repo backward compat)
+    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
+
     # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
     cost_total_usd = Column(Float, default=0.0, nullable=False)
 
@@ -634,6 +637,9 @@ class AgentWorktree(Base):
     )
     merge_commit_sha = Column(String)
     disk_usage_mb = Column(Integer)
+
+    # Multi-repo: which ProjectRepo this worktree is in
+    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
 
     # Relationships
     agent = relationship("Agent", foreign_keys=[agent_id], backref="worktree")
@@ -970,6 +976,9 @@ class Ticket(Base):
     is_resolved = Column(Boolean, default=False)  # Whether this ticket is resolved
     resolved_at = Column(DateTime)  # When ticket was resolved
 
+    # Multi-repo: which ProjectRepo this ticket is scoped to
+    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
+
     # Human Approval
     approval_status = Column(String(20), default="auto_approved", nullable=False)  # auto_approved, pending_review, approved, rejected
     approval_requested_at = Column(DateTime)  # When approval was requested
@@ -1062,6 +1071,9 @@ class TicketCommit(Base):
     ticket_id = Column(String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
     agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
 
+    # Multi-repo: which ProjectRepo this commit was made in
+    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
+
     # Commit Information
     commit_sha = Column(String(40), nullable=False)
     commit_message = Column(Text, nullable=False)
@@ -1143,6 +1155,35 @@ class AutopilotProject(Base):
     review_mode = Column(Boolean, default=False, nullable=False)
 
     designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
+    repos = relationship("ProjectRepo", back_populates="project", cascade="all, delete-orphan")
+
+
+class ProjectRepo(Base):
+    """A single git repo belonging to an AutopilotProject.
+
+    Every project has >=1 after migration; exactly one is_primary=True.
+    path is absolute -- a child repo is not required to live under base_dir.
+    """
+
+    __tablename__ = "project_repos"
+
+    id = Column(String, primary_key=True)  # repo-{uuid4().hex[:12]}
+    project_id = Column(
+        String,
+        ForeignKey("autopilot_projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    label = Column(String(100), nullable=False)  # e.g. "backend", "frontend"
+    path = Column(Text, nullable=False)  # absolute; need not be under base_dir
+    is_primary = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    project = relationship("AutopilotProject", back_populates="repos")
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "path", name="uq_project_repo_path"),
+        UniqueConstraint("project_id", "label", name="uq_project_repo_label"),
+    )
 
 
 class PromptProposal(Base):
@@ -1257,6 +1298,9 @@ class Feature(Base):
     # irrelevant. Selects which workflow definition_id _run_one_feature
     # launches (see docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md).
     workflow_type = Column(String(20), nullable=False, default="feature")
+
+    # Multi-repo: which ProjectRepo this feature writes to
+    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
 
     # Relationships
     design = relationship("AutopilotDesign", back_populates="features")
