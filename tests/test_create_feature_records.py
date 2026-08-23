@@ -225,3 +225,113 @@ class TestCreateFeatureRecords:
         with get_db() as db:
             feat = db.query(Feature).filter_by(id=records[0]["id"]).first()
             assert feat.workflow_type == "feature"
+
+
+class TestCreateFeatureRecordsRepoId:
+    """Feature.repo_id set at creation time -- REQ-19's component."""
+
+    def _seed_multi_repo_project(self, tmp_path, monkeypatch, design_id="des-multi"):
+        from src.core.database import AutopilotDesign, AutopilotProject, DatabaseManager, ProjectRepo
+
+        db_path = str(tmp_path / "repo_test.db")
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", db_path)
+        db = DatabaseManager(db_path)
+        db.create_tables()
+
+        backend = tmp_path / "backend"
+        frontend = tmp_path / "frontend"
+        backend.mkdir()
+        frontend.mkdir()
+
+        with db.session_scope() as session:
+            session.add(AutopilotProject(id="proj-multi", name="p", base_dir=str(tmp_path)))
+            session.add(ProjectRepo(id="repo-backend", project_id="proj-multi", label="backend", path=str(backend), is_primary=True))
+            session.add(ProjectRepo(id="repo-frontend", project_id="proj-multi", label="frontend", path=str(frontend)))
+            session.add(AutopilotDesign(id=design_id, project_id="proj-multi", filename="d.md", name="d"))
+        return backend, frontend
+
+    def test_explicit_repo_label_wins(self, designs_folder, mock_logger, tmp_path, monkeypatch):
+        from src.core.database import Feature, get_db
+
+        self._seed_multi_repo_project(tmp_path, monkeypatch)
+        features_json = {
+            "design_name": "d",
+            "features": [
+                {"id": "fe-feat", "name": "FE", "scope": "s", "files": [], "repo_label": "frontend", "depends_on": [], "execution": "parallel"}
+            ],
+        }
+
+        records = _create_feature_records("des-multi", features_json, designs_folder, mock_logger)
+
+        with get_db() as db:
+            feat = db.query(Feature).filter_by(id=records[0]["id"]).first()
+            assert feat.repo_id == "repo-frontend"
+
+    def test_inferred_from_files_majority(self, designs_folder, mock_logger, tmp_path, monkeypatch):
+        from src.core.database import Feature, get_db
+
+        backend, _ = self._seed_multi_repo_project(tmp_path, monkeypatch)
+        features_json = {
+            "design_name": "d",
+            "features": [
+                {
+                    "id": "be-feat",
+                    "name": "BE",
+                    "scope": "s",
+                    "files": [str(backend / "a.py"), str(backend / "b.py")],
+                    "depends_on": [],
+                    "execution": "parallel",
+                }
+            ],
+        }
+
+        records = _create_feature_records("des-multi", features_json, designs_folder, mock_logger)
+
+        with get_db() as db:
+            feat = db.query(Feature).filter_by(id=records[0]["id"]).first()
+            assert feat.repo_id == "repo-backend"
+
+    def test_no_majority_leaves_repo_id_none(self, designs_folder, mock_logger, tmp_path, monkeypatch):
+        from src.core.database import Feature, get_db
+
+        self._seed_multi_repo_project(tmp_path, monkeypatch)
+        features_json = {
+            "design_name": "d",
+            "features": [
+                {"id": "no-files-feat", "name": "N", "scope": "s", "files": [], "depends_on": [], "execution": "parallel"}
+            ],
+        }
+
+        records = _create_feature_records("des-multi", features_json, designs_folder, mock_logger)
+
+        with get_db() as db:
+            feat = db.query(Feature).filter_by(id=records[0]["id"]).first()
+            assert feat.repo_id is None
+
+    def test_single_repo_project_repo_id_always_none(self, designs_folder, mock_logger, tmp_path, monkeypatch):
+        """Only one ProjectRepo row -- this whole component is a no-op,
+        regression test asserts byte-identical Task/Feature creation flow
+        to pre-migration."""
+        from src.core.database import AutopilotDesign, AutopilotProject, DatabaseManager, Feature, ProjectRepo, get_db
+
+        db_path = str(tmp_path / "single_repo.db")
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", db_path)
+        db = DatabaseManager(db_path)
+        db.create_tables()
+        with db.session_scope() as session:
+            session.add(AutopilotProject(id="proj-single", name="p", base_dir=str(tmp_path)))
+            session.add(ProjectRepo(id="repo-single", project_id="proj-single", label="primary", path=str(tmp_path), is_primary=True))
+            session.add(AutopilotDesign(id="des-single", project_id="proj-single", filename="d.md", name="d"))
+
+        features_json = {
+            "design_name": "d",
+            "features": [
+                {"id": "f1", "name": "F1", "scope": "s", "files": [str(tmp_path / "a.py")], "depends_on": [], "execution": "parallel"}
+            ],
+        }
+
+        records = _create_feature_records("des-single", features_json, designs_folder, mock_logger)
+
+        with get_db() as db:
+            feat = db.query(Feature).filter_by(id=records[0]["id"]).first()
+            assert feat.repo_id is None

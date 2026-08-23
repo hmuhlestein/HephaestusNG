@@ -43,7 +43,8 @@ def _create_feature_records(
     """
     import uuid
 
-    from src.core.database import AutopilotDesign, Feature
+    from src.core.database import AutopilotDesign, Feature, ProjectRepo
+    from src.core.repo_resolution import get_project_repos, repo_id_for_path
 
     feature_records = []
 
@@ -53,6 +54,11 @@ def _create_feature_records(
         # in database.py and docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md.
         parent_design = db.query(AutopilotDesign).filter_by(id=design_id).first()
         design_workflow_type = parent_design.workflow_type if parent_design else "feature"
+        project_id = parent_design.project_id if parent_design else None
+        # Single-repo projects: this whole resolution is a no-op (REQ-19's
+        # component doc) -- skip the query entirely rather than pay for it
+        # when there's only one possible repo anyway.
+        multi_repo = bool(project_id) and len(get_project_repos(db, project_id)) > 1
         # Idempotency guard: finalize_phase0_workflow can now call this from
         # two independent sites for the same design (run_phase0's own
         # synchronous tail, and the generic phase0-completion hook in
@@ -93,10 +99,31 @@ def _create_feature_records(
             scope_doc_path = feature_record_path / "scope.md"
             scope_doc_path_str = str(scope_doc_path) if scope_doc_path.exists() else None
 
+            # REQ-19: resolve which repo this feature is bound to. An
+            # explicit "repo_label" in the architect's features.json entry
+            # wins; otherwise infer from files' majority repo. Unresolved
+            # (or a single-repo project) leaves repo_id None -- falls back
+            # to the primary repo everywhere downstream (REQ-06).
+            feature_repo_id = None
+            if multi_repo:
+                repo_label = feat.get("repo_label")
+                if repo_label:
+                    repo = db.query(ProjectRepo).filter_by(project_id=project_id, label=repo_label).first()
+                    feature_repo_id = repo.id if repo else None
+                else:
+                    matches = [
+                        rid
+                        for f in feat.get("files", [])
+                        if (rid := repo_id_for_path(db, project_id, f)) is not None
+                    ]
+                    if matches:
+                        feature_repo_id = max(set(matches), key=matches.count)
+
             feature = Feature(
                 id=feature_id,
                 design_id=design_id,
                 feature_key=feature_key,
+                repo_id=feature_repo_id,
                 name=feat.get("name", feature_key),
                 scope=feat.get("scope", ""),
                 files=feat.get("files", []),
