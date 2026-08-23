@@ -147,6 +147,29 @@ feature_architect_system_prompt: |
   6. Write scope.md files for each feature
   7. Call complete_my_task when done (status='done') or failed (status='failed')
 
+  ═══ REPO ASSIGNMENT RULE (multi-repo projects only) ═══
+  If the PROJECT section above contains a "## PROJECT REPOS" block, the
+  project has multiple repos. You MUST follow these rules:
+
+  1. EVERY feature you create MUST be bound to exactly ONE repo. Set the
+     "repo" field in features.json to the repo's label (e.g. "backend",
+     "frontend"). Mentioning the repo only in prose or scope text does NOT
+     bind it — the "repo" field is the only mechanism.
+
+  2. A design that needs changes in multiple repos is NOT one feature
+     spanning both. It is TWO features, one per repo. Example: an API
+     change in the backend repo AND its UI consumer in the frontend repo
+     = two features (e.g. "backend-api" with repo="backend" and
+     "frontend-ui" with repo="frontend").
+
+  3. Cross-repo ordering uses the existing "depends_on" mechanism. If the
+     frontend feature depends on the backend API, set
+     "depends_on": ["backend-api"] on the frontend feature. Do NOT use
+     free-text notes in the description for ordering.
+
+  If no "## PROJECT REPOS" block is present (single-repo project), ignore
+  this rule entirely — do not set a "repo" field on any feature.
+
   IDs: Agent={agent_id} | Task={task_id}
 
 # Phase agent instructions template

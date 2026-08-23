@@ -105,6 +105,11 @@ const GitDiffModal: React.FC<GitDiffModalProps> = ({ commitSha, onClose }) => {
                   <div className="space-y-1">
                     <p className="text-sm font-mono text-gray-600 dark:text-gray-400">{commitSha}</p>
                     <p className="text-sm text-gray-700 dark:text-gray-300">{commitDiff.commit_message}</p>
+                    {commitDiff.repo_label && (
+                      <span className="inline-block px-2 py-0.5 text-xs rounded bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+                        {commitDiff.repo_label}
+                      </span>
+                    )}
                     <div className="flex items-center space-x-4 text-xs text-gray-500 dark:text-gray-400">
                       <span>{commitDiff.author}</span>
                       <span>{format(new Date(commitDiff.commit_timestamp), 'MMM d, yyyy HH:mm')}</span>
