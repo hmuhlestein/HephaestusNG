@@ -29,9 +29,7 @@ def ensure_primary_repo(
     """
     from src.core.database import ProjectRepo
 
-    existing = session.query(ProjectRepo).filter_by(
-        project_id=project.id, is_primary=True
-    ).first()
+    existing = session.query(ProjectRepo).filter_by(project_id=project.id, is_primary=True).first()
     if existing is not None:
         return existing
 
@@ -60,11 +58,7 @@ def resolve_primary_repo(
     """Return the project's is_primary=True ProjectRepo, or None."""
     from src.core.database import ProjectRepo
 
-    return (
-        session.query(ProjectRepo)
-        .filter_by(project_id=project_id, is_primary=True)
-        .first()
-    )
+    return session.query(ProjectRepo).filter_by(project_id=project_id, is_primary=True).first()
 
 
 def resolve_repo(
@@ -81,11 +75,7 @@ def resolve_repo(
     from src.core.database import ProjectRepo
 
     if repo_id is not None:
-        repo = (
-            session.query(ProjectRepo)
-            .filter_by(id=repo_id, project_id=project_id)
-            .first()
-        )
+        repo = session.query(ProjectRepo).filter_by(id=repo_id, project_id=project_id).first()
         if repo is not None:
             return repo
         logger.warning(
@@ -104,9 +94,4 @@ def list_repos(
     """All ProjectRepos for a project, primary first then alphabetical."""
     from src.core.database import ProjectRepo
 
-    return (
-        session.query(ProjectRepo)
-        .filter_by(project_id=project_id)
-        .order_by(ProjectRepo.is_primary.desc(), ProjectRepo.label.asc())
-        .all()
-    )
+    return session.query(ProjectRepo).filter_by(project_id=project_id).order_by(ProjectRepo.is_primary.desc(), ProjectRepo.label.asc()).all()

@@ -23,13 +23,9 @@ from sqlalchemy import (
     create_engine,
     event,
 )
-from sqlalchemy import (
-    exc as sqlalchemy_exc,
-)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import backref, relationship, sessionmaker
 from sqlalchemy.pool import QueuePool, StaticPool
-from sqlalchemy.sql import text
 
 Base = declarative_base()
 logger = logging.getLogger(__name__)
@@ -1285,7 +1281,7 @@ class Feature(Base):
         nullable=True,
         default=None,
     )
-    review_feedback = Column(Text, nullable=True)   # user's change-request text
+    review_feedback = Column(Text, nullable=True)  # user's change-request text
     reviewed_at = Column(DateTime, nullable=True)
     reviewed_by = Column(String(100), nullable=True, default=None)
 
@@ -1657,9 +1653,7 @@ class DatabaseManager:
                 if session.query(SchemaMigration).filter_by(id=migration_id).first():
                     return
         except Exception as e:
-            logger.warning(
-                f"Could not check schema_migrations for {migration_id}, running it anyway: {e}"
-            )
+            logger.warning(f"Could not check schema_migrations for {migration_id}, running it anyway: {e}")
 
         try:
             fn()

@@ -466,15 +466,9 @@ async def remove_project_design(project_id: str, filename: str):
                                 ),
                             )
                             if kill_result.returncode != 0:
-                                logger.warning(
-                                    f"tmux kill-session failed for agent {agent.id} "
-                                    f"({agent.tmux_session_name}); it may still be running"
-                                )
+                                logger.warning(f"tmux kill-session failed for agent {agent.id} ({agent.tmux_session_name}); it may still be running")
                         except Exception as e:
-                            logger.warning(
-                                f"tmux kill-session failed for agent {agent.id} "
-                                f"({agent.tmux_session_name}): {e}"
-                            )
+                            logger.warning(f"tmux kill-session failed for agent {agent.id} ({agent.tmux_session_name}): {e}")
                         terminate_agent(agent.id, session=db)
 
                 # Delete dependent records (order matters for FK constraints)
@@ -550,10 +544,7 @@ async def remove_project_design(project_id: str, filename: str):
                 continue
             project_path_str = launch_params.get("project_path")
             if not project_path_str:
-                logger.warning(
-                    f"[DELETE-DESIGN] {wt_path} has no launch_params.project_path "
-                    "to scope cleanup to -- left in place"
-                )
+                logger.warning(f"[DELETE-DESIGN] {wt_path} has no launch_params.project_path to scope cleanup to -- left in place")
                 continue
             import git as _git
 
@@ -567,16 +558,12 @@ async def remove_project_design(project_id: str, filename: str):
             # (git worktree remove, dirty-check, archiving) -- offloaded
             # so it doesn't block the event loop.
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None, _cleanup_worktree, wt_path, branch, Path(project_path_str), logger
-            )
+            await loop.run_in_executor(None, _cleanup_worktree, wt_path, branch, Path(project_path_str), logger)
         except Exception as e:
             logger.warning(f"[DELETE-DESIGN] Failed to clean up worktree {working_directory}: {e}")
 
     design_dir = _get_design_queue_dir(base_dir)
-    filepath = _resolve_design_filepath(
-        d.file_path if d else None, _safe_path(str(design_dir), filename)
-    )
+    filepath = _resolve_design_filepath(d.file_path if d else None, _safe_path(str(design_dir), filename))
     if filepath.exists():
         filepath.unlink()
         found = True
@@ -654,4 +641,3 @@ async def get_project_design_status(project_id: str, filename: str):
     design_name = filepath.stem.replace("_", " ").replace("-", " ")
 
     return await get_design_status(project_id, filename, base_dir, design_content, design_name)
-

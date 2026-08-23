@@ -101,12 +101,8 @@ async def _broadcast_update(data: dict, workflow_id: Optional[str] = None):
 class CreateTicketRequest(BaseModel):
     """Request model for creating a ticket."""
 
-    workflow_id: str = Field(
-        ..., description="ID of the workflow this ticket belongs to"
-    )
-    title: str = Field(
-        ..., min_length=3, max_length=500, description="Short, descriptive title"
-    )
+    workflow_id: str = Field(..., description="ID of the workflow this ticket belongs to")
+    title: str = Field(..., min_length=3, max_length=500, description="Short, descriptive title")
     description: str = Field(..., min_length=10, description="Detailed description")
     ticket_type: str = Field(
         default="task",
@@ -121,30 +117,14 @@ class CreateTicketRequest(BaseModel):
         default=None,
         description="Initial status (if None, uses board_config.initial_status)",
     )
-    assigned_agent_id: Optional[str] = Field(
-        default=None, description="Optional agent to assign to"
-    )
-    agent_id: Optional[str] = Field(
-        default=None, description="Agent ID creating this ticket (overrides header)"
-    )
-    parent_ticket_id: Optional[str] = Field(
-        default=None, description="Parent ticket ID for sub-tickets"
-    )
-    blocked_by_ticket_ids: List[str] = Field(
-        default_factory=list, description="List of ticket IDs blocking this ticket"
-    )
-    tags: List[str] = Field(
-        default_factory=list, description="List of tags for categorization"
-    )
-    related_task_ids: List[str] = Field(
-        default_factory=list, description="List of related task IDs"
-    )
-    task_id: Optional[str] = Field(
-        default=None, description="Task ID this ticket relates to"
-    )
-    phase_id: Optional[Union[str, int]] = Field(
-        default=None, description="Phase ID where this ticket was created"
-    )
+    assigned_agent_id: Optional[str] = Field(default=None, description="Optional agent to assign to")
+    agent_id: Optional[str] = Field(default=None, description="Agent ID creating this ticket (overrides header)")
+    parent_ticket_id: Optional[str] = Field(default=None, description="Parent ticket ID for sub-tickets")
+    blocked_by_ticket_ids: List[str] = Field(default_factory=list, description="List of ticket IDs blocking this ticket")
+    tags: List[str] = Field(default_factory=list, description="List of tags for categorization")
+    related_task_ids: List[str] = Field(default_factory=list, description="List of related task IDs")
+    task_id: Optional[str] = Field(default=None, description="Task ID this ticket relates to")
+    phase_id: Optional[Union[str, int]] = Field(default=None, description="Phase ID where this ticket was created")
 
 
 class CreateTicketResponse(BaseModel):
@@ -163,9 +143,7 @@ class UpdateTicketRequest(BaseModel):
 
     ticket_id: str = Field(..., description="ID of the ticket to update")
     updates: Dict[str, Any] = Field(..., description="Fields to update")
-    update_comment: Optional[str] = Field(
-        default=None, description="Optional comment explaining changes"
-    )
+    update_comment: Optional[str] = Field(default=None, description="Optional comment explaining changes")
 
 
 class UpdateTicketResponse(BaseModel):
@@ -183,14 +161,13 @@ class ChangeTicketStatusRequest(BaseModel):
 
     ticket_id: str = Field(..., description="ID of the ticket")
     new_status: str = Field(..., description="New status to move to")
-    comment: str = Field(
-        ..., min_length=10, description="Required comment explaining status change"
-    )
+    comment: str = Field(..., min_length=10, description="Required comment explaining status change")
     # See LinkCommitRequest.commit_sha for why this is hex-only -- this
     # value reaches the same git-subprocess argument-injection surface
     # via TicketService.change_status -> link_commit.
     commit_sha: Optional[str] = Field(
-        default=None, description="Optional commit SHA to link",
+        default=None,
+        description="Optional commit SHA to link",
         pattern=r"^[0-9a-f]{4,40}$",
     )
 
@@ -216,12 +193,8 @@ class AddCommentRequest(BaseModel):
         default="general",
         description="Type of comment (general, status_change, blocker, resolution)",
     )
-    mentions: List[str] = Field(
-        default_factory=list, description="List of mentioned agent/ticket IDs"
-    )
-    attachments: List[str] = Field(
-        default_factory=list, description="List of file paths"
-    )
+    mentions: List[str] = Field(default_factory=list, description="List of mentioned agent/ticket IDs")
+    attachments: List[str] = Field(default_factory=list, description="List of file paths")
 
 
 class AddCommentResponse(BaseModel):
@@ -311,17 +284,11 @@ class GetTicketsRequest(BaseModel):
     status: Optional[str] = Field(default=None, description="Filter by status")
     ticket_type: Optional[str] = Field(default=None, description="Filter by type")
     priority: Optional[str] = Field(default=None, description="Filter by priority")
-    assigned_agent_id: Optional[str] = Field(
-        default=None, description="Filter by assigned agent"
-    )
-    include_completed: bool = Field(
-        default=True, description="Include completed tickets"
-    )
+    assigned_agent_id: Optional[str] = Field(default=None, description="Filter by assigned agent")
+    include_completed: bool = Field(default=True, description="Include completed tickets")
     limit: int = Field(default=50, ge=1, le=200, description="Max number of results")
     offset: int = Field(default=0, ge=0, description="Offset for pagination")
-    sort_by: str = Field(
-        default="created_at", pattern="^(created_at|updated_at|priority|status)$"
-    )
+    sort_by: str = Field(default="created_at", pattern="^(created_at|updated_at|priority|status)$")
     sort_order: str = Field(default="desc", pattern="^(asc|desc)$")
 
 
@@ -364,14 +331,13 @@ class ResolveTicketRequest(BaseModel):
     """Request model for resolving a ticket."""
 
     ticket_id: str = Field(..., description="ID of the ticket to resolve")
-    resolution_comment: str = Field(
-        ..., min_length=10, description="Comment explaining resolution"
-    )
+    resolution_comment: str = Field(..., min_length=10, description="Comment explaining resolution")
     # See LinkCommitRequest.commit_sha for why this is hex-only -- this
     # value reaches the same git-subprocess argument-injection surface
     # via TicketService.resolve_ticket -> link_commit.
     commit_sha: Optional[str] = Field(
-        default=None, description="Commit that resolved the ticket",
+        default=None,
+        description="Commit that resolved the ticket",
         pattern=r"^[0-9a-f]{4,40}$",
     )
 
@@ -395,12 +361,8 @@ class LinkCommitRequest(BaseModel):
     # as an option, writing arbitrary content to a path the server
     # process can create). Rejecting anything that isn't plain hex closes
     # that argument-injection route before it ever reaches subprocess.
-    commit_sha: str = Field(
-        ..., description="Git commit SHA", pattern=r"^[0-9a-f]{4,40}$"
-    )
-    commit_message: Optional[str] = Field(
-        default=None, description="Commit message (auto-fetched if not provided)"
-    )
+    commit_sha: str = Field(..., description="Git commit SHA", pattern=r"^[0-9a-f]{4,40}$")
+    commit_message: Optional[str] = Field(default=None, description="Commit message (auto-fetched if not provided)")
 
 
 class LinkCommitResponse(BaseModel):
@@ -438,9 +400,7 @@ async def create_ticket_endpoint(
     logger.info("[TICKET_CREATE] ========== START ==========")
     logger.info(f"[TICKET_CREATE] Agent: {created_by_agent_id}")
     logger.info(f"[TICKET_CREATE] Title: {request.title}")
-    logger.info(
-        f"[TICKET_CREATE] Type: {request.ticket_type}, Priority: {request.priority}"
-    )
+    logger.info(f"[TICKET_CREATE] Type: {request.ticket_type}, Priority: {request.priority}")
     logger.info(f"[TICKET_CREATE] Workflow_ID provided: {request.workflow_id}")
     logger.info(f"[TICKET_CREATE] Task_ID: {request.task_id}")
     logger.info(f"[TICKET_CREATE] Phase_ID: {request.phase_id}")
@@ -451,9 +411,7 @@ async def create_ticket_endpoint(
         workflow_id = request.workflow_id
         logger.info(f"[TICKET_CREATE] Using workflow_id: {workflow_id}")
 
-        logger.info(
-            f"[TICKET_CREATE] Calling TicketService.create_ticket with workflow_id={workflow_id}"
-        )
+        logger.info(f"[TICKET_CREATE] Calling TicketService.create_ticket with workflow_id={workflow_id}")
         result = await TicketService.create_ticket(
             workflow_id=workflow_id,
             agent_id=created_by_agent_id,
@@ -471,9 +429,7 @@ async def create_ticket_endpoint(
             phase_id=str(request.phase_id) if request.phase_id is not None else None,
         )
 
-        logger.info(
-            "[TICKET_CREATE] ✅ TicketService.create_ticket returned successfully"
-        )
+        logger.info("[TICKET_CREATE] ✅ TicketService.create_ticket returned successfully")
         logger.info(f"[TICKET_CREATE] Result: {result}")
         logger.info(f"[TICKET_CREATE] Ticket ID: {result.get('ticket_id')}")
 
@@ -569,9 +525,7 @@ async def change_ticket_status_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Move ticket to a different status column."""
-    logger.info(
-        f"Agent {agent_id} changing status of ticket {request.ticket_id} to {request.new_status}"
-    )
+    logger.info(f"Agent {agent_id} changing status of ticket {request.ticket_id} to {request.new_status}")
 
     try:
         result = await TicketService.change_status(
@@ -681,9 +635,7 @@ async def get_ticket_stats_endpoint(
         # Offloaded -- ~10 sequential blocking DB round-trips (several
         # group-by counts plus a full ticket-list scan), all in one
         # request, ran directly on the event loop otherwise.
-        return await asyncio.to_thread(
-            _compute_ticket_stats, workflow_id, project_id
-        )
+        return await asyncio.to_thread(_compute_ticket_stats, workflow_id, project_id)
 
     except HTTPException:
         raise
@@ -692,9 +644,7 @@ async def get_ticket_stats_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _compute_ticket_stats(
-    workflow_id: Optional[str], project_id: Optional[str]
-) -> Dict[str, Any]:
+def _compute_ticket_stats(workflow_id: Optional[str], project_id: Optional[str]) -> Dict[str, Any]:
     """Sync body of get_ticket_stats_endpoint -- run via asyncio.to_thread."""
     from sqlalchemy import func
 
@@ -711,9 +661,7 @@ def _compute_ticket_stats(
         if workflow_id:
             workflow_ids = [workflow_id]
         elif project_id:
-            workflow_ids = [
-                wf.id for wf in session.query(Workflow).filter_by(project_id=project_id).all()
-            ]
+            workflow_ids = [wf.id for wf in session.query(Workflow).filter_by(project_id=project_id).all()]
         else:
             return {
                 "success": True,
@@ -723,9 +671,7 @@ def _compute_ticket_stats(
             }
 
         # Get board config for this workflow
-        board_config = (
-            session.query(BoardConfig).filter(BoardConfig.workflow_id.in_(workflow_ids)).first()
-        )
+        board_config = session.query(BoardConfig).filter(BoardConfig.workflow_id.in_(workflow_ids)).first()
 
         # If no board config found, use a default one
         if not board_config:
@@ -761,47 +707,26 @@ def _compute_ticket_stats(
                 },
             }
 
-        logger.info(
-            f"BoardConfig found: {board_config is not None}, workflow_ids: {workflow_ids}"
-        )
+        logger.info(f"BoardConfig found: {board_config is not None}, workflow_ids: {workflow_ids}")
 
         # Total tickets
-        total_tickets = (
-            session.query(func.count(Ticket.id))
-            .filter(Ticket.workflow_id.in_(workflow_ids))
-            .scalar()
-        )
+        total_tickets = session.query(func.count(Ticket.id)).filter(Ticket.workflow_id.in_(workflow_ids)).scalar()
 
         # By status
         by_status = {}
-        status_counts = (
-            session.query(Ticket.status, func.count(Ticket.id))
-            .filter(Ticket.workflow_id.in_(workflow_ids))
-            .group_by(Ticket.status)
-            .all()
-        )
+        status_counts = session.query(Ticket.status, func.count(Ticket.id)).filter(Ticket.workflow_id.in_(workflow_ids)).group_by(Ticket.status).all()
         for status, count in status_counts:
             by_status[status] = count
 
         # By type
         by_type = {}
-        type_counts = (
-            session.query(Ticket.ticket_type, func.count(Ticket.id))
-            .filter(Ticket.workflow_id.in_(workflow_ids))
-            .group_by(Ticket.ticket_type)
-            .all()
-        )
+        type_counts = session.query(Ticket.ticket_type, func.count(Ticket.id)).filter(Ticket.workflow_id.in_(workflow_ids)).group_by(Ticket.ticket_type).all()
         for ticket_type, count in type_counts:
             by_type[ticket_type] = count
 
         # By priority
         by_priority = {}
-        priority_counts = (
-            session.query(Ticket.priority, func.count(Ticket.id))
-            .filter(Ticket.workflow_id.in_(workflow_ids))
-            .group_by(Ticket.priority)
-            .all()
-        )
+        priority_counts = session.query(Ticket.priority, func.count(Ticket.id)).filter(Ticket.workflow_id.in_(workflow_ids)).group_by(Ticket.priority).all()
         for priority, count in priority_counts:
             by_priority[priority] = count
 
@@ -818,38 +743,18 @@ def _compute_ticket_stats(
             by_agent[agent_id_val] = count
 
         # Blocked count
-        tickets_list = (
-            session.query(Ticket).filter(Ticket.workflow_id.in_(workflow_ids)).all()
-        )
-        blocked_count = sum(
-            1
-            for t in tickets_list
-            if t.blocked_by_ticket_ids and len(t.blocked_by_ticket_ids) > 0
-        )
+        tickets_list = session.query(Ticket).filter(Ticket.workflow_id.in_(workflow_ids)).all()
+        blocked_count = sum(1 for t in tickets_list if t.blocked_by_ticket_ids and len(t.blocked_by_ticket_ids) > 0)
 
         # Resolved count
-        resolved_count = (
-            session.query(func.count(Ticket.id))
-            .filter(Ticket.workflow_id.in_(workflow_ids), Ticket.is_resolved)
-            .scalar()
-        )
+        resolved_count = session.query(func.count(Ticket.id)).filter(Ticket.workflow_id.in_(workflow_ids), Ticket.is_resolved).scalar()
 
         # Average comments per ticket
-        total_comments = (
-            session.query(func.count(TicketComment.id))
-            .join(Ticket, TicketComment.ticket_id == Ticket.id)
-            .filter(Ticket.workflow_id.in_(workflow_ids))
-            .scalar()
-        )
+        total_comments = session.query(func.count(TicketComment.id)).join(Ticket, TicketComment.ticket_id == Ticket.id).filter(Ticket.workflow_id.in_(workflow_ids)).scalar()
         avg_comments = total_comments / total_tickets if total_tickets > 0 else 0.0
 
         # Average commits per ticket
-        total_commits = (
-            session.query(func.count(TicketCommit.id))
-            .join(Ticket, TicketCommit.ticket_id == Ticket.id)
-            .filter(Ticket.workflow_id.in_(workflow_ids))
-            .scalar()
-        )
+        total_commits = session.query(func.count(TicketCommit.id)).join(Ticket, TicketCommit.ticket_id == Ticket.id).filter(Ticket.workflow_id.in_(workflow_ids)).scalar()
         avg_commits = total_commits / total_tickets if total_tickets > 0 else 0.0
 
         stats = {
@@ -877,7 +782,9 @@ def _compute_ticket_stats(
                 "auto_assign": board_config.auto_assign,
                 "allow_reopen": board_config.allow_reopen,
                 "track_time": board_config.track_time,
-            } if board_config else None,
+            }
+            if board_config
+            else None,
         }
 
 
@@ -898,9 +805,7 @@ async def get_ticket_endpoint(
         ticket = await TicketService.get_ticket(ticket_id)
 
         if not ticket:
-            raise HTTPException(
-                status_code=404, detail=f"Ticket not found: {ticket_id}"
-            )
+            raise HTTPException(status_code=404, detail=f"Ticket not found: {ticket_id}")
 
         return ticket
 
@@ -924,9 +829,7 @@ async def search_tickets_endpoint(
     - "keyword": SQLite FTS5 only
     - "hybrid": Combined (70% semantic + 30% keyword) - DEFAULT
     """
-    logger.info(
-        f"Agent {agent_id} searching tickets: query='{request.query}', type={request.search_type}"
-    )
+    logger.info(f"Agent {agent_id} searching tickets: query='{request.query}', type={request.search_type}")
 
     try:
         # workflow_id is now required in the request
@@ -971,6 +874,8 @@ async def search_tickets_endpoint(
     except Exception as e:
         logger.error(f"Ticket search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("", response_model=GetTicketsResponse, include_in_schema=False)
 @router.get("/", response_model=GetTicketsResponse)
 async def get_tickets_endpoint(
@@ -1013,10 +918,9 @@ async def get_tickets_endpoint(
         elif project_id:
             # Get all workflows for this project, then get tickets for all of them
             from src.core.database import Workflow, get_db
+
             with get_db() as db:
-                workflow_ids = [
-                    wf.id for wf in db.query(Workflow).filter_by(project_id=project_id).all()
-                ]
+                workflow_ids = [wf.id for wf in db.query(Workflow).filter_by(project_id=project_id).all()]
             result = []
             for wf_id in workflow_ids:
                 wf_tickets = await TicketService.get_tickets_by_workflow(
@@ -1086,9 +990,7 @@ async def link_commit_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Manually link a git commit to a ticket."""
-    logger.info(
-        f"Agent {agent_id} linking commit {request.commit_sha} to ticket {request.ticket_id}"
-    )
+    logger.info(f"Agent {agent_id} linking commit {request.commit_sha} to ticket {request.ticket_id}")
 
     try:
         result = await TicketService.link_commit(
@@ -1198,9 +1100,7 @@ async def approve_ticket_endpoint(
         server_state = get_app_state()
         from src.core.database import resolve_project_for_workflow
 
-        bcast_project_id, bcast_project_name = resolve_project_for_workflow(
-            _get_workflow_id_for_ticket(ticket_id)
-        )
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(_get_workflow_id_for_ticket(ticket_id))
         await server_state.broadcast_update(
             {
                 "type": "ticket_approved",
@@ -1249,9 +1149,7 @@ async def reject_ticket_endpoint(
         if not rejection_reason:
             raise HTTPException(status_code=400, detail="rejection_reason required")
 
-        logger.info(
-            f"[REJECT_TICKET] Ticket ID: {ticket_id}, Reason: {rejection_reason}"
-        )
+        logger.info(f"[REJECT_TICKET] Ticket ID: {ticket_id}, Reason: {rejection_reason}")
 
         result = await TicketService.reject_ticket(
             ticket_id=ticket_id,
@@ -1263,9 +1161,7 @@ async def reject_ticket_endpoint(
         server_state = get_app_state()
         from src.core.database import resolve_project_for_workflow
 
-        bcast_project_id, bcast_project_name = resolve_project_for_workflow(
-            _get_workflow_id_for_ticket(ticket_id)
-        )
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(_get_workflow_id_for_ticket(ticket_id))
         await server_state.broadcast_update(
             {
                 "type": "ticket_rejected",
@@ -1356,16 +1252,11 @@ async def get_commit_diff_endpoint(
         cmd = ["git", "show", "--format=%H|%an|%at|%s", "-s", commit_sha]
         result = await loop.run_in_executor(
             None,
-            functools.partial(
-                subprocess.run,
-                cmd, cwd=main_repo_path, capture_output=True, text=True, check=True, timeout=10
-            ),
+            functools.partial(subprocess.run, cmd, cwd=main_repo_path, capture_output=True, text=True, check=True, timeout=10),
         )
 
         if result.returncode != 0:
-            raise HTTPException(
-                status_code=404, detail=f"Commit not found: {commit_sha}"
-            )
+            raise HTTPException(status_code=404, detail=f"Commit not found: {commit_sha}")
 
         parts = result.stdout.strip().split("|", 3)
         commit_hash = parts[0] if len(parts) > 0 else commit_sha
@@ -1373,20 +1264,13 @@ async def get_commit_diff_endpoint(
         timestamp_unix = int(parts[2]) if len(parts) > 2 else 0
         message = parts[3] if len(parts) > 3 else "No message"
 
-        timestamp = (
-            datetime.utcfromtimestamp(timestamp_unix).isoformat() + "Z"
-            if timestamp_unix > 0
-            else datetime.utcnow().isoformat() + "Z"
-        )
+        timestamp = datetime.utcfromtimestamp(timestamp_unix).isoformat() + "Z" if timestamp_unix > 0 else datetime.utcnow().isoformat() + "Z"
 
         # Get file stats from the correct repository
         cmd = ["git", "diff", "--numstat", f"{commit_sha}^", commit_sha]
         result = await loop.run_in_executor(
             None,
-            functools.partial(
-                subprocess.run,
-                cmd, cwd=main_repo_path, capture_output=True, text=True, check=True, timeout=10
-            ),
+            functools.partial(subprocess.run, cmd, cwd=main_repo_path, capture_output=True, text=True, check=True, timeout=10),
         )
 
         files_data = []
@@ -1411,10 +1295,7 @@ async def get_commit_diff_endpoint(
             cmd_diff = ["git", "diff", f"{commit_sha}^", commit_sha, "--", file_path]
             diff_result = await loop.run_in_executor(
                 None,
-                functools.partial(
-                    subprocess.run,
-                    cmd_diff, cwd=main_repo_path, capture_output=True, text=True, timeout=10
-                ),
+                functools.partial(subprocess.run, cmd_diff, cwd=main_repo_path, capture_output=True, text=True, timeout=10),
             )
 
             # Determine file status
@@ -1467,15 +1348,9 @@ class RequestTicketClarificationRequest(BaseModel):
     """Request model for ticket clarification."""
 
     ticket_id: str = Field(..., description="ID of the ticket needing clarification")
-    conflict_description: str = Field(
-        ..., min_length=20, description="Clear description of the conflict or issue"
-    )
-    context: str = Field(
-        default="", description="Additional context relevant to the clarification"
-    )
-    potential_solutions: List[str] = Field(
-        default_factory=list, description="List of potential solutions being considered"
-    )
+    conflict_description: str = Field(..., min_length=20, description="Clear description of the conflict or issue")
+    context: str = Field(default="", description="Additional context relevant to the clarification")
+    potential_solutions: List[str] = Field(default_factory=list, description="List of potential solutions being considered")
 
 
 class RequestTicketClarificationResponse(BaseModel):
@@ -1499,16 +1374,12 @@ def _gather_clarification_context(ticket_id: str):
         ticket = db.query(Ticket).filter_by(id=ticket_id).first()
         if not ticket:
             logger.error(f"[CLARIFICATION] Ticket not found: {ticket_id}")
-            raise HTTPException(
-                status_code=404, detail=f"Ticket not found: {ticket_id}"
-            )
+            raise HTTPException(status_code=404, detail=f"Ticket not found: {ticket_id}")
 
         logger.info(f"[CLARIFICATION] Ticket found: {ticket.title}")
 
         # 2. Gather context - Latest 60 tickets
-        recent_tickets = (
-            db.query(Ticket).order_by(Ticket.created_at.desc()).limit(60).all()
-        )
+        recent_tickets = db.query(Ticket).order_by(Ticket.created_at.desc()).limit(60).all()
         tickets_context = [
             {
                 "ticket_id": t.id,
@@ -1520,14 +1391,10 @@ def _gather_clarification_context(ticket_id: str):
             }
             for t in recent_tickets
         ]
-        logger.info(
-            f"[CLARIFICATION] Gathered {len(tickets_context)} recent tickets for context"
-        )
+        logger.info(f"[CLARIFICATION] Gathered {len(tickets_context)} recent tickets for context")
 
         # 3. Gather context - Latest 60 tasks
-        recent_tasks = (
-            db.query(Task).order_by(Task.created_at.desc()).limit(60).all()
-        )
+        recent_tasks = db.query(Task).order_by(Task.created_at.desc()).limit(60).all()
         tasks_context = [
             {
                 "id": t.id,
@@ -1571,10 +1438,7 @@ async def request_ticket_clarification_endpoint(
     4. Stores clarification as ticket comment for audit trail
     """
     logger.info("[CLARIFICATION] ========== START ==========")
-    logger.info(
-        f"[CLARIFICATION] Agent {agent_id[:8]} requesting clarification for ticket "
-        f"{request.ticket_id}"
-    )
+    logger.info(f"[CLARIFICATION] Agent {agent_id[:8]} requesting clarification for ticket {request.ticket_id}")
     logger.info(f"[CLARIFICATION] Conflict: {request.conflict_description[:100]}...")
 
     try:
@@ -1584,36 +1448,26 @@ async def request_ticket_clarification_endpoint(
         # 60 recent tickets, 60 recent tasks) ran directly on the event
         # loop otherwise, same class of issue fixed elsewhere in this
         # codebase.
-        ticket_workflow_id, ticket_details, tickets_context, tasks_context = (
-            await asyncio.to_thread(
-                _gather_clarification_context, request.ticket_id
-            )
-        )
+        ticket_workflow_id, ticket_details, tickets_context, tasks_context = await asyncio.to_thread(_gather_clarification_context, request.ticket_id)
 
         # 5. Call LLM for clarification
         logger.info("[CLARIFICATION] Calling LLM arbitrator with full context...")
-        logger.info(
-            f"[CLARIFICATION] Potential solutions provided: {len(request.potential_solutions)}"
-        )
+        logger.info(f"[CLARIFICATION] Potential solutions provided: {len(request.potential_solutions)}")
 
         from src.core.app_context import get_app_state
 
         server_state = get_app_state()
-        clarification_markdown = (
-            await server_state.llm_provider.resolve_ticket_clarification(
-                ticket_id=request.ticket_id,
-                conflict_description=request.conflict_description,
-                context=request.context,
-                potential_solutions=request.potential_solutions,
-                ticket_details=ticket_details,
-                related_tickets=tickets_context,
-                active_tasks=tasks_context,
-            )
+        clarification_markdown = await server_state.llm_provider.resolve_ticket_clarification(
+            ticket_id=request.ticket_id,
+            conflict_description=request.conflict_description,
+            context=request.context,
+            potential_solutions=request.potential_solutions,
+            ticket_details=ticket_details,
+            related_tickets=tickets_context,
+            active_tasks=tasks_context,
         )
 
-        logger.info(
-            f"[CLARIFICATION] LLM arbitration complete, {len(clarification_markdown)} chars"
-        )
+        logger.info(f"[CLARIFICATION] LLM arbitration complete, {len(clarification_markdown)} chars")
 
         # 6. Store clarification as ticket comment
         comment_text = f"""## AUTOMATED CLARIFICATION REQUEST
@@ -1639,17 +1493,13 @@ async def request_ticket_clarification_endpoint(
             attachments=[],
         )
 
-        logger.info(
-            f"[CLARIFICATION] Stored as comment {comment_result['comment_id']}"
-        )
+        logger.info(f"[CLARIFICATION] Stored as comment {comment_result['comment_id']}")
         logger.info("[CLARIFICATION] ========== SUCCESS ==========")
 
         # Broadcast update
         from src.core.database import resolve_project_for_workflow
 
-        bcast_project_id, bcast_project_name = resolve_project_for_workflow(
-            ticket_workflow_id
-        )
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(ticket_workflow_id)
         await server_state.broadcast_update(
             {
                 "type": "ticket_clarification_requested",
@@ -1674,7 +1524,4 @@ async def request_ticket_clarification_endpoint(
     except Exception as e:
         logger.error(f"[CLARIFICATION] Error: {e}", exc_info=True)
         logger.error("[CLARIFICATION] ========== FAILED ==========")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to generate clarification: {str(e)}"
-        )
-
+        raise HTTPException(status_code=500, detail=f"Failed to generate clarification: {str(e)}")

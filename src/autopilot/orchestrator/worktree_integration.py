@@ -5,10 +5,13 @@ import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import git as _git
 
+from src.autopilot.orchestrator.state import (
+    DesignEntry,
+)
 from src.core.constants import (
     CONTEXT_DIR_NAME,
 )
@@ -21,12 +24,6 @@ from src.core.database import (
     get_db,
 )
 from src.core.simple_config import get_config
-
-from src.autopilot.orchestrator.state import (
-    DesignEntry,
-)
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -189,9 +186,7 @@ def _cleanup_worktree(
             if worktree.exists():
                 wt_mgr._remove_worktree(str(worktree), require_clean=True)
                 if worktree.exists():
-                    logger.warning(
-                        f"Worktree not removed (uncommitted changes or removal error): {worktree}"
-                    )
+                    logger.warning(f"Worktree not removed (uncommitted changes or removal error): {worktree}")
                 else:
                     logger.info(f"Removed worktree: {worktree}")
 
@@ -305,11 +300,7 @@ def sweep_completed_workflow_worktrees(logger: "OrchestratorLogger") -> int:
                 }
                 for wf_id, _, _ in targets:
                     if wf_id in live_workflow_ids:
-                        logger.warning(
-                            f"[SWEEP] Skipping worktree removal for completed "
-                            f"workflow {wf_id[:8]} -- a live agent is still "
-                            "working an in-progress task under it"
-                        )
+                        logger.warning(f"[SWEEP] Skipping worktree removal for completed workflow {wf_id[:8]} -- a live agent is still working an in-progress task under it")
                 targets = [t for t in targets if t[0] not in live_workflow_ids]
 
         for wf_id, working_directory, launch_params in targets:
@@ -320,11 +311,7 @@ def sweep_completed_workflow_worktrees(logger: "OrchestratorLogger") -> int:
             lp = launch_params if isinstance(launch_params, dict) else {}
             project_path_str = lp.get("project_path")
             if not project_path_str:
-                logger.warning(
-                    f"[SWEEP] Workflow {wf_id[:8]} has an orphaned worktree "
-                    f"{worktree} but no launch_params.project_path to scope "
-                    "cleanup to -- skipping rather than guessing"
-                )
+                logger.warning(f"[SWEEP] Workflow {wf_id[:8]} has an orphaned worktree {worktree} but no launch_params.project_path to scope cleanup to -- skipping rather than guessing")
                 continue
 
             try:
@@ -332,10 +319,7 @@ def sweep_completed_workflow_worktrees(logger: "OrchestratorLogger") -> int:
             except Exception:
                 branch = ""
 
-            logger.info(
-                f"[SWEEP] Cleaning up orphaned worktree for completed "
-                f"workflow {wf_id[:8]}: {worktree}"
-            )
+            logger.info(f"[SWEEP] Cleaning up orphaned worktree for completed workflow {wf_id[:8]}: {worktree}")
             _cleanup_worktree(worktree, branch, Path(project_path_str), logger)
             removed += 1
     except Exception as e:
@@ -388,8 +372,8 @@ def heal_orphaned_agent_branches(logger: "OrchestratorLogger") -> int:
 
     Returns the number of branches auto-merged.
     """
-    from src.core.database import ProjectRepo
     from src.core.database import DatabaseManager as DbManager
+    from src.core.database import ProjectRepo
 
     cfg = get_config()
     db = DbManager(str(cfg.paths.database_path))
@@ -398,11 +382,7 @@ def heal_orphaned_agent_branches(logger: "OrchestratorLogger") -> int:
         with db.session_scope() as session:
             # C8: enumerate ProjectRepo paths instead of AutopilotProject.base_dir
             # (REQ-16: each repo gets its own scan)
-            repo_dirs = {
-                repo.path
-                for repo in session.query(ProjectRepo).all()
-                if repo.path and Path(repo.path).is_dir()
-            }
+            repo_dirs = {repo.path for repo in session.query(ProjectRepo).all() if repo.path and Path(repo.path).is_dir()}
 
         for repo_dir in repo_dirs:
             try:
@@ -441,7 +421,7 @@ def _heal_orphaned_branches_for_project(project_dir: Path, cfg, logger: "Orchest
     current_path = None
     for line in porcelain.splitlines():
         if line.startswith("worktree "):
-            current_path = line[len("worktree "):]
+            current_path = line[len("worktree ") :]
         elif line.startswith("branch ") and current_path:
             branch_name = line.split(" ", 1)[1].removeprefix("refs/heads/")
             checked_out_branches[branch_name] = current_path
@@ -499,10 +479,7 @@ def _heal_orphaned_branches_for_project(project_dir: Path, cfg, logger: "Orchest
                     )
                     continue
                 base_repo.git.merge(name, "--ff-only")
-                logger.info(
-                    f"[BRANCH-HEAL] Fast-forwarded {base_branch} to {branch_sha[:8]} "
-                    f"({ahead} commit(s) from orphaned branch {name}, project {project_dir})"
-                )
+                logger.info(f"[BRANCH-HEAL] Fast-forwarded {base_branch} to {branch_sha[:8]} ({ahead} commit(s) from orphaned branch {name}, project {project_dir})")
                 healed += 1
             except Exception as e:
                 logger.warning(f"[BRANCH-HEAL] FAILED to heal {name} in {project_dir}: {e}")
@@ -514,10 +491,7 @@ def _heal_orphaned_branches_for_project(project_dir: Path, cfg, logger: "Orchest
                 # still exactly base_sha, so this can't clobber a commit
                 # that landed on it between the read above and this write).
                 repo.git.update_ref(f"refs/heads/{base_branch}", branch_sha, base_sha)
-                logger.info(
-                    f"[BRANCH-HEAL] Fast-forwarded {base_branch} to {branch_sha[:8]} "
-                    f"({ahead} commit(s) from orphaned branch {name}, project {project_dir})"
-                )
+                logger.info(f"[BRANCH-HEAL] Fast-forwarded {base_branch} to {branch_sha[:8]} ({ahead} commit(s) from orphaned branch {name}, project {project_dir})")
                 healed += 1
             except Exception as e:
                 logger.warning(f"[BRANCH-HEAL] FAILED to heal {name} in {project_dir}: {e}")
@@ -707,11 +681,7 @@ def _recover_abandoned_workflows_with_completed_phase(logger: "OrchestratorLogge
         )
         for wf in candidates:
             in_progress_phase_ids = {
-                pid
-                for (pid,) in db.query(PhaseExecution.phase_id)
-                .join(Phase, PhaseExecution.phase_id == Phase.id)
-                .filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress")
-                .all()
+                pid for (pid,) in db.query(PhaseExecution.phase_id).join(Phase, PhaseExecution.phase_id == Phase.id).filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress").all()
             }
             if not in_progress_phase_ids:
                 continue  # nothing in_progress -- not this function's case
@@ -727,11 +697,7 @@ def _recover_abandoned_workflows_with_completed_phase(logger: "OrchestratorLogge
             if unfinished > 0:
                 continue  # something genuinely still active -- leave it alone
 
-            has_done = (
-                db.query(Task)
-                .filter(Task.phase_id.in_(in_progress_phase_ids), Task.status == "done")
-                .count()
-            )
+            has_done = db.query(Task).filter(Task.phase_id.in_(in_progress_phase_ids), Task.status == "done").count()
             if not has_done:
                 continue  # nothing completed yet either -- not evaluable
 

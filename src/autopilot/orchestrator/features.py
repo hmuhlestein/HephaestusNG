@@ -3,8 +3,7 @@
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional
-
+from typing import TYPE_CHECKING, List, Optional
 
 from src.core.database import (
     Agent,
@@ -15,8 +14,6 @@ from src.core.database import (
 )
 from src.core.simple_config import get_config
 from src.core.status_derivation import derive_feature_status
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -58,6 +55,7 @@ def _create_feature_records(
         label_to_repo_id: dict = {}
         if parent_design and parent_design.project_id:
             from src.core.repo_resolution import list_repos
+
             for r in list_repos(db, parent_design.project_id):
                 label_to_repo_id[r.label] = r.id
 
@@ -107,10 +105,7 @@ def _create_feature_records(
             if repo_label and label_to_repo_id:
                 feat_repo_id = label_to_repo_id.get(repo_label)
                 if feat_repo_id is None:
-                    logger.warning(
-                        f"Feature {feature_key} references unknown repo label '{repo_label}', "
-                        f"leaving repo_id=None (will fall back to primary repo)"
-                    )
+                    logger.warning(f"Feature {feature_key} references unknown repo label '{repo_label}', leaving repo_id=None (will fall back to primary repo)")
 
             feature = Feature(
                 id=feature_id,
@@ -231,13 +226,7 @@ def _sync_stale_feature_statuses(logger: "OrchestratorLogger") -> int:
     # live: a feature's workflow reached "completed" but Feature.workflow_id
     # was never set, leaving Feature.status stuck "active" across restarts.
     with get_db() as db:
-        orphaned_design_ids = {
-            design_id
-            for (design_id,) in db.query(Feature.design_id)
-            .filter(Feature.workflow_id.is_(None))
-            .distinct()
-            .all()
-        }
+        orphaned_design_ids = {design_id for (design_id,) in db.query(Feature.design_id).filter(Feature.workflow_id.is_(None)).distinct().all()}
     for design_id in orphaned_design_ids:
         _relink_features_to_workflows(design_id, logger)
 
@@ -378,9 +367,7 @@ def _relink_features_to_workflows(design_id: str, logger: "OrchestratorLogger") 
         # feature) could link a feature to the WRONG design's workflow.
         # Matters more now that this runs after every single feature
         # completes, not just once per design reprocessing.
-        workflows = db.query(Workflow).filter(
-            Workflow.definition_id == "autopilot", Workflow.design_id == design_id
-        ).order_by(Workflow.created_at.desc()).all()
+        workflows = db.query(Workflow).filter(Workflow.definition_id == "autopilot", Workflow.design_id == design_id).order_by(Workflow.created_at.desc()).all()
 
         for feat in unlinked:
             for wf in workflows:
@@ -488,10 +475,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
             .all()
         )
         for task in stranded:
-            logger.info(
-                f"[STRANDED-TASK] Task {task.id[:8]} assigned with no agent since "
-                f"{task.queued_at} (>{grace_seconds}s) — returning to queue"
-            )
+            logger.info(f"[STRANDED-TASK] Task {task.id[:8]} assigned with no agent since {task.queued_at} (>{grace_seconds}s) — returning to queue")
             task.status = "queued"
             task.queue_position = None
         if stranded:
@@ -538,10 +522,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
             .all()
         )
         for task in stale_in_completed_phase:
-            logger.info(
-                f"[STALE-TASK] Task {task.id[:8]} pending with no agent in an "
-                "already-completed phase — marking duplicated"
-            )
+            logger.info(f"[STALE-TASK] Task {task.id[:8]} pending with no agent in an already-completed phase — marking duplicated")
             task.status = "duplicated"
             task.failure_reason = "Orphaned: never dispatched, and its phase already completed via another task"
         if stale_in_completed_phase:

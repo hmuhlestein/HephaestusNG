@@ -43,13 +43,9 @@ def _apply_active_project(proj):
 
     # Validate path exists and is a git repo (fast check — just look for .git)
     if not new_path.exists() or not new_path.is_dir():
-        raise ValueError(
-            f"Cannot activate project — path does not exist: {new_path}"
-        )
+        raise ValueError(f"Cannot activate project — path does not exist: {new_path}")
     if not (new_path / ".git").exists():
-        raise ValueError(
-            f"Cannot activate project — not a git repository: {new_path}"
-        )
+        raise ValueError(f"Cannot activate project — not a git repository: {new_path}")
 
     # Update config immediately — no git reload here
     config.git.main_repo_path = new_path
@@ -60,6 +56,7 @@ def _design_id(project_id: str, filename: str) -> str:
     """Generate a stable, deterministic ID for a design document."""
     h = hashlib.sha256(f"{project_id}:{filename}".encode()).hexdigest()[:12]
     return f"des-{h}"
+
 
 class ProjectItem(BaseModel):
     id: str
@@ -73,10 +70,12 @@ class ProjectItem(BaseModel):
     cost_total_usd: float = 0.0
     cost_limit_usd: Optional[float] = None
 
+
 class ProjectCreate(BaseModel):
     name: str
     base_dir: str
     is_default: bool = False
+
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
@@ -104,19 +103,16 @@ class ProjectUpdate(BaseModel):
         return v
 
 
-
-
-
 _project_sync_locks: Dict[str, asyncio.Lock] = {}
 
 _project_lock_guard = asyncio.Lock()
+
 
 async def _get_project_lock(project_id: str) -> asyncio.Lock:
     async with _project_lock_guard:
         if project_id not in _project_sync_locks:
             _project_sync_locks[project_id] = asyncio.Lock()
         return _project_sync_locks[project_id]
-
 
 
 def _extract_ordinal(filename: str) -> Optional[int]:
@@ -128,6 +124,7 @@ def _extract_ordinal(filename: str) -> Optional[int]:
     stem = Path(filename).stem
     m = _ORDINAL_RE.match(stem)
     return int(m.group(1)) if m else None
+
 
 def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[str, Any]]:
     """Scan filesystem and sync designs with DB using the provided session.
@@ -252,6 +249,7 @@ def _detect_workflow_type_for_file(name: str, fpath: Path) -> str:
         content = ""
     return detect_workflow_type(name, content)
 
+
 def _validate_base_dir(base_dir: str) -> str:
     """Validate and resolve a project base directory. Returns resolved path or raises."""
     base = Path(base_dir).expanduser().resolve()
@@ -262,6 +260,7 @@ def _validate_base_dir(base_dir: str) -> str:
     if not os.access(base, os.R_OK | os.W_OK):
         raise HTTPException(403, f"Insufficient permissions: {base}")
     return str(base)
+
 
 @router.get("/projects", response_model=List[ProjectItem])
 async def list_projects():
@@ -287,6 +286,7 @@ async def list_projects():
                 )
             )
         return result
+
 
 def _init_codegraph_index(resolved: str, project_name: str) -> None:
     """`codegraph init` in a freshly-created project's directory, if
@@ -317,6 +317,7 @@ def _init_codegraph_index(resolved: str, project_name: str) -> None:
         logger.debug("codegraph not installed, skipping index initialization")
     except Exception as e:
         logger.debug(f"CodeGraph init skipped for {project_name}: {e}")
+
 
 @router.post("/projects", response_model=ProjectItem)
 async def create_project(
@@ -360,6 +361,7 @@ async def create_project(
 
         # Create primary ProjectRepo for multi-repo support (REQ-04)
         from src.core.repo_resolution import ensure_primary_repo
+
         ensure_primary_repo(db, proj)
 
         # Sync designs in the SAME session — no nested get_db()
@@ -376,15 +378,15 @@ async def create_project(
     await loop.run_in_executor(None, _init_codegraph_index, resolved, proj.name)
 
     return ProjectItem(
-            id=proj.id,
-            name=proj.name,
-            base_dir=proj.base_dir,
-            is_default=proj.is_default,
-            is_active=getattr(proj, "is_active", False),
-            design_count=len(designs),
-            created_at=proj.created_at.isoformat() if proj.created_at else "",
-            updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
-        )
+        id=proj.id,
+        name=proj.name,
+        base_dir=proj.base_dir,
+        is_default=proj.is_default,
+        is_active=getattr(proj, "is_active", False),
+        design_count=len(designs),
+        created_at=proj.created_at.isoformat() if proj.created_at else "",
+        updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+    )
 
 
 @router.get("/projects/active", response_model=List[ProjectItem])
@@ -433,22 +435,20 @@ async def activate_project(project_id: str):
         # "already occupies a slot" exemption (src/autopilot/service.py)
         # for re-activating an already-active project.
         if not proj.is_active:
-            active_projects = (
-                db.query(AutopilotProject).filter_by(is_active=True).all()
-            )
+            active_projects = db.query(AutopilotProject).filter_by(is_active=True).all()
             max_concurrent = get_config().autopilot.max_concurrent_projects
             if len(active_projects) >= max_concurrent:
                 names = ", ".join(p.name for p in active_projects)
                 raise HTTPException(
                     409,
-                    f"Max concurrent projects ({max_concurrent}) reached: "
-                    f"{names}. Stop one before starting another.",
+                    f"Max concurrent projects ({max_concurrent}) reached: {names}. Stop one before starting another.",
                 )
             proj.is_active = True
         db.flush()
 
         # Apply to runtime config
         from types import SimpleNamespace
+
         _apply_active_project(SimpleNamespace(base_dir=proj.base_dir))
 
         count = db.query(AutopilotDesign).filter_by(project_id=proj.id).count()
@@ -517,6 +517,7 @@ async def get_project(project_id: str):
             cost_limit_usd=proj.cost_limit_usd,
         )
 
+
 @router.put("/projects/{project_id}", response_model=ProjectItem)
 async def update_project(
     project_id: str,
@@ -569,6 +570,7 @@ async def update_project(
             )
             if budget_paused:
                 from src.autopilot.orchestrator.engine_client import resume_workflow
+
                 for wf in budget_paused:
                     # force=True: raising/clearing the cost limit is an
                     # explicit override of the budget pause, same as this
@@ -599,6 +601,7 @@ async def update_project(
             cost_total_usd=proj.cost_total_usd or 0.0,
             cost_limit_usd=proj.cost_limit_usd,
         )
+
 
 @router.delete("/projects/{project_id}")
 async def delete_project(
@@ -649,6 +652,7 @@ async def delete_project(
 
 # ── C10: Project Repo CRUD endpoints (REQ-24) ────────────────────────
 
+
 class ProjectRepoItem(BaseModel):
     id: str
     project_id: str
@@ -661,6 +665,20 @@ class ProjectRepoItem(BaseModel):
 class AddProjectRepoRequest(BaseModel):
     label: str
     path: str
+
+    @field_validator("label")
+    @classmethod
+    def validate_label(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Label must not be empty")
+        return v
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, v: str) -> str:
+        if not os.path.isabs(v):
+            raise ValueError("Path must be absolute")
+        return v
 
 
 @router.get("/projects/{project_id}/repos", response_model=List[ProjectRepoItem])
@@ -705,6 +723,7 @@ async def add_project_repo(
     # Validate path is a git repo
     try:
         import git as gitpython
+
         gitpython.Repo(req.path)
     except Exception:
         raise HTTPException(400, f"Path is not a valid git repository: {req.path}")
@@ -712,20 +731,17 @@ async def add_project_repo(
     with get_db() as db:
         # Verify project exists
         from src.core.database import AutopilotProject
+
         proj = db.query(AutopilotProject).get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
 
         # Pre-check uniqueness for specific error messages
-        existing_path = db.query(ProjectRepo).filter_by(
-            project_id=project_id, path=req.path
-        ).first()
+        existing_path = db.query(ProjectRepo).filter_by(project_id=project_id, path=req.path).first()
         if existing_path:
             raise HTTPException(409, f"Repo already exists for path: {req.path}")
 
-        existing_label = db.query(ProjectRepo).filter_by(
-            project_id=project_id, label=label
-        ).first()
+        existing_label = db.query(ProjectRepo).filter_by(project_id=project_id, label=label).first()
         if existing_label:
             raise HTTPException(409, f"Repo already exists with label: {label}")
 
@@ -754,33 +770,3 @@ async def add_project_repo(
             is_primary=repo.is_primary,
             created_at=repo.created_at.isoformat() if repo.created_at else "",
         )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
