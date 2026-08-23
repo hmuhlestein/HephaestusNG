@@ -5,9 +5,19 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, List, Optional, Set, Tuple
 
-
+from src.autopilot.orchestrator.engine_client import (
+    file_hash,
+    get_agents,
+    get_tasks,
+    get_workflow_status,
+)
+from src.autopilot.orchestrator.state import (
+    DesignEntry,
+    _get_project_context,
+    _set_project_context,
+)
 from src.core.constants import (
     CONTEXT_DIR_NAME,
     DESIGN_CONTEXT_SUBDIR,
@@ -20,20 +30,6 @@ from src.core.database import (
     Workflow,
     get_db,
 )
-
-from src.autopilot.orchestrator.state import (
-    DesignEntry,
-    _get_project_context,
-    _set_project_context,
-)
-from src.autopilot.orchestrator.engine_client import (
-    file_hash,
-    get_agents,
-    get_tasks,
-    get_workflow_status,
-)
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -66,8 +62,8 @@ def is_design_fully_complete(workflow_id: str, logger: "OrchestratorLogger") -> 
     # Use derive_workflow_status to check if the workflow is actually done.
     # This replaces a hand-rolled "all tasks done + all phases completed"
     # check that was missing the phase-completeness gate.
-    from src.core.status_derivation import derive_workflow_status
     from src.core.database import get_db
+    from src.core.status_derivation import derive_workflow_status
     with get_db() as db:
         derived = derive_workflow_status(db, workflow_id, write_back=False)
     if derived == "completed":
@@ -491,7 +487,14 @@ def pick_next_design(
 
                 if design_path is None:
                     # Fall back to filename-based path
-                    design_path = Path(project.base_dir) / DESIGN_CONTEXT_SUBDIR / design.filename
+                    # REQ-12: Resolve to primary ProjectRepo's path, not workspace root
+                    from src.core.database import resolve_project_repo
+                    try:
+                        primary_repo = resolve_project_repo(db, project.id, None)
+                        repo_path = Path(primary_repo.path)
+                    except Exception:
+                        repo_path = Path(project.base_dir)
+                    design_path = repo_path / DESIGN_CONTEXT_SUBDIR / design.filename
 
                 if design_path.exists():
                     entry = DesignEntry(
