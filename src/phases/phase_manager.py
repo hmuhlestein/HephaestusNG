@@ -1724,7 +1724,7 @@ class PhaseManager:
                 session.query(PhaseExecution).filter_by(phase_id=next_phase.id).first()
             )
 
-            if execution and execution.status in ("pending", "completed"):
+            if execution and execution.status in ("pending", "completed", "skipped"):
                 # Fresh start for this cycle: stamp started_at now, and
                 # reset the task-creation/evaluation claim (see
                 # orchestrator.py's _claim_phase_task_creation) -- it's a
@@ -1732,6 +1732,17 @@ class PhaseManager:
                 # this reset, a phase re-run after goto reconvergence
                 # would find its claim already set from the PREVIOUS
                 # cycle and never let a new task get created for it.
+                #
+                # "skipped" included alongside "pending"/"completed" --
+                # same gap already fixed in phase_transitions.py's
+                # _create_phase_task/_release_phase_task_creation_claim/
+                # _clear_stale_task_creation_claim: a phase previously
+                # skipped (e.g. an optional review phase) can still become
+                # next_phase later (a goto/retry targeting it directly).
+                # Left "skipped", derive_workflow_status's phase-
+                # completeness check treats it as terminal and can mark
+                # the whole workflow "completed" while this phase is
+                # actually about to start real work.
                 _reopen_phase_execution(execution, status="in_progress", started_at="now")
                 session.commit()
 

@@ -209,7 +209,21 @@ async def resume_feature(feature_id: str):
         # feature(s) share this workflow_id. "failed" isn't a pause state
         # at all, so it stays a direct write rather than going through a
         # pause-focused primitive.
-        if wf.status == "paused":
+        #
+        # paused_by="review" is excluded from the force-resume call itself
+        # (though the task-recovery below still runs) -- that pause means a
+        # human decision (approve/request changes) is outstanding, and
+        # review_feature (POST /features/{id}/review) is the only endpoint
+        # that's supposed to clear it, since it's also the only one that
+        # records feature.review_status/reviewed_at. Force-resuming through
+        # it here meant clicking the generic Resume button (e.g. to recover
+        # a stuck task while still under review) silently cleared the
+        # review gate itself and let the pipeline -- and eventually the
+        # design queue's next feature -- proceed with no approval ever
+        # recorded. Confirmed live: feature feat-f47c93ba on workflow
+        # ca539a75, resumed this way without review_status ever becoming
+        # "approved".
+        if wf.status == "paused" and wf.paused_by != "review":
             from src.autopilot.orchestrator.engine_client import resume_workflow as _resume_workflow_primitive
             _resume_workflow_primitive(workflow_id, force=True, cascade_to_feature=False, session=db)
         elif wf.status == "failed":

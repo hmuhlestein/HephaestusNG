@@ -1697,6 +1697,48 @@ class TestStartNextPhaseMarksJumpedOverPhasesSkipped:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-arch-review").first()
             assert execution.status == "completed"
 
+    def test_reopens_a_previously_skipped_target_phase(self, real_db):
+        """Regression: next_phase's own reopen only handled entry status
+        "pending"/"completed" -- if the target itself was already "skipped"
+        (e.g. an earlier jump skipped it, and a later goto/retry sends work
+        back through it directly), it stayed "skipped" while genuinely
+        becoming the phase this cycle is about to run. Every consumer that
+        treats "skipped" as terminal (derive_workflow_status's completeness
+        check chief among them) then sees nothing incomplete and can mark
+        the whole workflow "completed" while this phase is actually about
+        to start real work. Same bug class as this class's own
+        jumped-over-phases fix, just the mirror-image entry condition."""
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with real_db.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(
+                id="phase-dev", workflow_id="wf-1", order=4, name="development",
+                description="d", done_definitions=["x"],
+            ))
+            session.add(Phase(
+                id="phase-adversarial", workflow_id="wf-1", order=6, name="adversarial_review",
+                description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(id="exec-dev", phase_id="phase-dev", status="in_progress"))
+            session.add(PhaseExecution(id="exec-adv", phase_id="phase-adversarial", status="skipped"))
+            session.add(Task(
+                id="task-dev", raw_description="r", done_definition="d",
+                status="done", phase_id="phase-dev", workflow_id="wf-1",
+                action="goto", action_target_phase="adversarial_review",
+            ))
+        pm = PhaseManager(db_manager=real_db)
+
+        with real_db.session_scope() as session:
+            next_phase = pm._start_next_phase(session, "phase-dev")
+            assert next_phase.name == "adversarial_review"
+
+        with real_db.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-adversarial").first()
+            assert execution.status == "in_progress"
+            assert execution.started_at is not None
+
 
 class TestGetPhaseContextUsesLiveRequiredOutput:
     """Regression: get_phase_context built each phase's SdkPhase.outputs

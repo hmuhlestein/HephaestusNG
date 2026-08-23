@@ -99,6 +99,40 @@ class TestResumeInterruptedWorkflowsUnblocksTasks:
         assert result["resumed"] == 1
 
 
+class TestResumeInterruptedWorkflowsSkipsReviewPause:
+    """Regression: the reactivate=True path force-resumed any "paused"
+    workflow the same way regardless of paused_by, including "review" --
+    letting a design's Resume click (or the project Play button's already-
+    running fallback, which also calls this with reactivate=True) silently
+    clear a pending human-review gate with no approve/request_changes
+    decision ever recorded. Same bug class as resume_feature's identical
+    fix -- review_feature (POST /features/{id}/review) is the only
+    endpoint allowed to clear paused_by="review"."""
+
+    @pytest.mark.asyncio
+    async def test_review_paused_workflow_is_not_reactivated(self, test_db):
+        session = test_db.get_session()
+        session.add(
+            Workflow(
+                id="wf-review", name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", definition_id="autopilot",
+                total_gotos=5,
+            )
+        )
+        session.commit()
+        session.close()
+
+        result = await _run_resume(test_db, "wf-review")
+
+        session = test_db.get_session()
+        wf = session.query(Workflow).filter_by(id="wf-review").first()
+        assert wf.status == "paused"
+        assert wf.paused_by == "review"
+        assert wf.total_gotos == 5
+        session.close()
+        assert result["resumed"] == 0
+
+
 class TestResumeInterruptedWorkflowsResetsGotoBudget:
     """Regression: total_gotos is a persisted counter that never decreases
     on its own. A workflow that failed by exhausting max_total_gotos (or
