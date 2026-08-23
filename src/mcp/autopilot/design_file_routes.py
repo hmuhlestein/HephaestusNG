@@ -167,19 +167,34 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
 
     if req.destination == "queue":
         # Store in .hephaestus/designs/ (not git-tracked) so git commits
-        # don't delete design files.
+        # don't delete design files. Stays at the workspace-root (base_dir)
+        # level, unaffected by repo count (REQ-13) -- it has no
+        # git-tracking requirement to satisfy.
         design_dir = Path(base_dir) / DESIGN_CONTEXT_SUBDIR
     else:
-        # Any other destination is a real, git-tracked folder under the
-        # project root -- "docs" (legacy literal), DESIGN_SUBDIR/
-        # BUGFIX_SUBDIR (the New Feature/Report Bug flows' defaults), or
-        # an arbitrary folder the user picked via the destination-folder
-        # browser. Unlike "queue" above, this value can come from the
-        # client (typed or browsed), so it MUST be validated to stay
-        # within base_dir -- _safe_path does that (raises 400 on escape),
-        # the same check every other browse/content endpoint in this
-        # file already applies to user-supplied paths.
-        design_dir = _safe_path(base_dir, req.destination)
+        # Any other destination is a real, git-tracked folder -- "docs"
+        # (legacy literal), DESIGN_SUBDIR/BUGFIX_SUBDIR (the New Feature/
+        # Report Bug flows' defaults), or an arbitrary folder the user
+        # picked via the destination-folder browser. Resolves under the
+        # PRIMARY ProjectRepo's path (REQ-12), not the workspace root: a
+        # multi-repo project's base_dir need not itself be a git repo, so
+        # writing there wouldn't be tracked by anything; single-repo
+        # projects resolve to the same base_dir as before (byte-identical).
+        # Unlike "queue" above, this value can come from the client (typed
+        # or browsed), so it MUST be validated to stay within the resolved
+        # repo path -- _safe_path does that (raises 400 on escape), the
+        # same check every other browse/content endpoint in this file
+        # already applies to user-supplied paths. Resolve the repo path
+        # FIRST, then _safe_path against it -- the boundary must be the
+        # repo's, not the (wider) workspace root's.
+        from src.core.repo_resolution import RepoNotFoundError, resolve_repo_path
+
+        with get_db() as db:
+            try:
+                repo_path = resolve_repo_path(db, project_id, None)
+            except (RepoNotFoundError, ValueError) as e:
+                raise HTTPException(400, str(e))
+        design_dir = _safe_path(str(repo_path), req.destination)
     design_dir.mkdir(parents=True, exist_ok=True)
 
     ext = req.extension if req.extension in ALLOWED_EXTENSIONS else ".md"
