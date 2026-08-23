@@ -32,6 +32,8 @@ const STATUS_LABELS: Record<string, string> = {
   failed: 'Failed',
   blocked: 'Blocked',
   duplicated: 'Duplicate',
+  superseded: 'Superseded',
+  session_limit: 'Session Limit',
 
   // Workflow/design statuses
   active: 'Active',
@@ -119,7 +121,7 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md', icon, la
     }
 
     if (
-      ['stuck', 'warning', 'attention', 'needs_review'].includes(normalized)
+      ['stuck', 'warning', 'attention', 'needs_review', 'session_limit'].includes(normalized)
     ) {
       return 'bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-400';
     }
