@@ -12,6 +12,14 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 import libtmux
 
+from src.agents._create_agent_for_task_steps import (
+    _deliver_initial_prompt_flow,
+    _insert_stub_agent_row,
+    _phase_sibling_guard,
+    _prepare_tmux_and_prompt,
+    _run_launch_preparations,
+    _send_launch_command_and_record_agent,
+)
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME
 from src.core.database import (
     Agent,
@@ -24,14 +32,6 @@ from src.core.database import (
 from src.core.phase_lookup import resolve_task_phase
 from src.core.worktree_manager import WorktreeManager
 from src.interfaces import LaunchResult, get_cli_agent
-from src.agents._create_agent_for_task_steps import (
-    _deliver_initial_prompt_flow,
-    _insert_stub_agent_row,
-    _phase_sibling_guard,
-    _prepare_tmux_and_prompt,
-    _run_launch_preparations,
-    _send_launch_command_and_record_agent,
-)
 
 logger = logging.getLogger(__name__)
 

@@ -137,8 +137,8 @@ class TestHealOrphanedAgentBranches:
         Verified at the enumeration boundary (which paths get scanned),
         independent of the fast-forward-merge mechanics covered by the
         other tests in this file."""
-        from src.core.database import ProjectRepo
         import src.autopilot.orchestrator.worktree_integration as _wi
+        from src.core.database import ProjectRepo
 
         _register_project(test_db, temp_repo)
 

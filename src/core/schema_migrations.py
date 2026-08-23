@@ -22,7 +22,8 @@ on the next startup of every deployed instance.
 
 import logging
 
-from sqlalchemy import exc as sqlalchemy_exc, text
+from sqlalchemy import exc as sqlalchemy_exc
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 

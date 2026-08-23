@@ -3,8 +3,7 @@
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional
-
+from typing import TYPE_CHECKING, List, Optional
 
 from src.core.database import (
     Agent,
@@ -15,8 +14,6 @@ from src.core.database import (
 )
 from src.core.simple_config import get_config
 from src.core.status_derivation import derive_feature_status
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -54,11 +51,11 @@ def _create_feature_records(
         # in database.py and docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md.
         parent_design = db.query(AutopilotDesign).filter_by(id=design_id).first()
         design_workflow_type = parent_design.workflow_type if parent_design else "feature"
-        project_id = parent_design.project_id if parent_design else None
+        project_id: Optional[str] = parent_design.project_id if parent_design else None
         # Single-repo projects: this whole resolution is a no-op (REQ-19's
         # component doc) -- skip the query entirely rather than pay for it
         # when there's only one possible repo anyway.
-        multi_repo = bool(project_id) and len(get_project_repos(db, project_id)) > 1
+        multi_repo = project_id is not None and len(get_project_repos(db, project_id)) > 1
         # Idempotency guard: finalize_phase0_workflow can now call this from
         # two independent sites for the same design (run_phase0's own
         # synchronous tail, and the generic phase0-completion hook in
@@ -106,6 +103,7 @@ def _create_feature_records(
             # to the primary repo everywhere downstream (REQ-06).
             feature_repo_id = None
             if multi_repo:
+                assert project_id is not None  # multi_repo is only True when project_id resolved
                 repo_label = feat.get("repo_label")
                 if repo_label:
                     repo = db.query(ProjectRepo).filter_by(project_id=project_id, label=repo_label).first()

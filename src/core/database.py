@@ -23,13 +23,9 @@ from sqlalchemy import (
     create_engine,
     event,
 )
-from sqlalchemy import (
-    exc as sqlalchemy_exc,
-)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import backref, relationship, sessionmaker
 from sqlalchemy.pool import QueuePool, StaticPool
-from sqlalchemy.sql import text
 
 Base = declarative_base()
 logger = logging.getLogger(__name__)

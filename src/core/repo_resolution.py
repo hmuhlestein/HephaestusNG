@@ -8,9 +8,12 @@ decided in exactly one place (REQ-06).
 
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from src.core.database import ProjectRepo
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +62,7 @@ def resolve_repo_path(db: Session, project_id: str, repo_id: Optional[str]) -> P
     return Path(project.base_dir)
 
 
-def get_project_repos(db: Session, project_id: str) -> List["ProjectRepo"]:  # noqa: F821
+def get_project_repos(db: Session, project_id: str) -> List["ProjectRepo"]:
     """All ProjectRepo rows for a project, primary first. Empty list for
     malformed/missing project_id (never raises) -- callers use this for
     display (prompt injection, frontend), where a defensive empty list is
@@ -89,4 +92,4 @@ def repo_id_for_path(db: Session, project_id: str, file_path: str) -> Optional[s
 
     if not matches:
         return None
-    return max(matches, key=lambda r: len(r.path)).id
+    return str(max(matches, key=lambda r: len(r.path)).id)
