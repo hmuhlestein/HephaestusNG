@@ -723,6 +723,19 @@ def resolve_phase_input(
     phase wrote the file or whether that phase was gated, only where it is.
     Accepting the flat location here is therefore correct, not a loosening --
     nothing scores off this result.
+
+    Every producing phase now writes its report under a task-id-suffixed
+    filename (suffixed_output_name), never the bare declared name -- but
+    this consumer has no specific task_id to pin to (it's resolving for a
+    DIFFERENT task, the one about to read it), so an exact-name check alone
+    never finds anything real. Without the newest-suffixed-glob fallback
+    below, build_input_manifest's "INPUTS AVAILABLE TO YOU THIS RUN" block
+    silently reported every already-suffix-writing phase's declared input
+    (adversarial.md, qa.md, security.md, review.md, challenge.md,
+    validation.md, and now architecture.md/requirements.md/forensics.md/
+    docs.md too) as [MISSING], even when the producing phase completed
+    successfully moments earlier -- the exact-name checks never matched a
+    real file, so every downstream phase silently lost this context.
     """
     base = Path(working_directory)
     names = [filename]
@@ -737,6 +750,19 @@ def resolve_phase_input(
         for candidate in candidates:
             if candidate.exists():
                 return candidate
+    # Suffixed fallback -- never the worktree root, same reasoning as
+    # resolve_declared_output_path's own newest-glob fallback: only
+    # .hephaestus/ is exclusively Hephaestus's own output, so a wildcard
+    # glob there can't collide with an unrelated real project file the way
+    # one at the worktree root could.
+    for name in names:
+        for producer in producers:
+            newest = _newest_glob_match(base / CONTEXT_DIR_NAME / producer, name)
+            if newest:
+                return newest
+        newest = _newest_glob_match(base / CONTEXT_DIR_NAME, name)
+        if newest:
+            return newest
     return None
 
 

@@ -20,6 +20,12 @@ description: |
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Artifacts Path" = ./.hephaestus/ (create it if missing).
+  - deploy.md, wherever mentioned below, means deploy-<your Task ID's
+    first 8 hex characters>.md (find your Task ID in "Task ID:" above) --
+    written to .hephaestus/deploy/. Not optional: a duplicate/concurrent
+    dispatch for this same phase then writes to a DIFFERENT suffixed file
+    instead of racing yours, and the pipeline reads your own task's
+    suffixed file specifically, not a bare deploy.md.
   - Write ALL reports to "Artifacts Path" (.hephaestus/) — NOT the project root, NOT ./docs/.
   - Write ONE file, deploy.md, to ./.hephaestus/deploy/.
   - Use exactly that subdirectory name — the pipeline only looks for that exact name.

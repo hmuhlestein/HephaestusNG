@@ -202,7 +202,7 @@ class TestVerifyOutputArtifact:
 
         sub = tmp_path / ".hephaestus" / "qa_validation"
         sub.mkdir(parents=True)
-        (sub / "qa.md").write_text("---\ntype: qa_validation_result\n---\n\n# QA Report")
+        (sub / "qa-task-1.md").write_text("---\ntype: qa_validation_result\n---\n\n# QA Report")
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
@@ -216,6 +216,132 @@ class TestVerifyOutputArtifact:
                 session=mock_session, task=task, phase=phase
             )
             assert result is None
+
+    def test_rejects_a_bare_filename_and_names_the_correct_suffixed_one(self, tmp_path):
+        """Regression: every gated/reporting phase's prompt instructs
+        writing a task-id-suffixed filename (qa-<task_id[:8]>.md), never
+        the bare declared name -- so a duplicate/concurrent dispatch for
+        the same phase writes to a DIFFERENT file instead of racing on one
+        shared path. An agent that ignores this and writes the bare name
+        anyway used to pass verification silently (resolve_declared_output_
+        path's bare-name fallback exists for backward compat, not to
+        excuse a live agent skipping its own prompt's instruction). This
+        floor must reject it and tell the agent the exact correct name.
+        Confirmed live: task b08abd39 (adversarial_review) reported
+        success having written the bare adversarial.md its own prompt
+        explicitly told it not to."""
+        phase = Mock(name="qa_validation", id="phase-1")
+        phase.name = "qa_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        sub = tmp_path / ".hephaestus" / "qa_validation"
+        sub.mkdir(parents=True)
+        (sub / "qa.md").write_text("---\ntype: qa_validation_result\n---\n\n# QA Report")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path), project_id=None)
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files", return_value=["qa.md"]
+        ), patch("src.autopilot.spec.load_optional_phases", return_value=[]):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "qa-task-1.md" in result["message"]
+
+    def test_passes_when_the_correctly_suffixed_filename_is_used(self, tmp_path):
+        phase = Mock(name="qa_validation", id="phase-1")
+        phase.name = "qa_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        sub = tmp_path / ".hephaestus" / "qa_validation"
+        sub.mkdir(parents=True)
+        (sub / "qa-task-1.md").write_text("---\ntype: qa_validation_result\n---\n\n# QA Report")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path), project_id=None)
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files", return_value=["qa.md"]
+        ):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is None
+
+    def test_does_not_flag_a_feature_dir_archived_file_as_wrong_name(self, tmp_path):
+        """The feature-folder fallback (permanent, already-shipped docs
+        copied out well after the concurrent-dispatch window this
+        convention protects has closed) must not be held to the live
+        suffix convention -- nothing there was ever meant to carry a task
+        id."""
+        phase = Mock(name="qa_validation", id="phase-1")
+        phase.name = "qa_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        feature_docs = tmp_path / ".hephaestus" / "features" / "feat-1" / "docs"
+        feature_docs.mkdir(parents=True)
+        (feature_docs / "qa.md").write_text("---\ntype: qa_validation_result\n---\n\n# QA Report")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path / "no-such-worktree"), project_id=None)
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files", return_value=["qa.md"]
+        ), patch("src.autopilot.spec.load_optional_phases", return_value=[]), patch(
+            "src.core.simple_config.get_config",
+            return_value=Mock(paths=Mock(project_root=tmp_path)),
+        ):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is None
+
+    def test_does_not_flag_a_subdir_prefixed_declared_name(self, tmp_path):
+        """A declared output that already carries its own subdirectory
+        prefix (e.g. an in-flight workflow's Phase.outputs row snapshotted
+        the old "security_review/security.md" form before the YAML was
+        normalized to the bare "security.md" -- see the ash-scan test
+        above) is a different, legacy naming pattern this floor never
+        meant to hold to the task-id-suffix convention. Same real file the
+        ash-scan test writes, but WITH a valid scan section, so the only
+        thing that could reject this is a false-positive naming flag."""
+        phase = Mock(name="security_review", id="phase-1")
+        phase.name = "security_review"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        sub = tmp_path / ".hephaestus" / "security_review"
+        sub.mkdir(parents=True)
+        (sub / "security.md").write_text(
+            "---\ntype: security_review_report\n---\n\n# Security Report\n\n"
+            "## Automated Scan Results\n\nash_results: clean\n"
+        )
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path), project_id=None)
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files",
+            return_value=["security_review/security.md"],
+        ), patch("src.autopilot.spec.load_optional_phases", return_value=[]):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is None
 
     def test_does_not_find_a_different_phases_subdirectory_output(self, tmp_path):
         """Regression: the old fallback searched EVERY subdirectory of
@@ -420,7 +546,7 @@ class TestVerifyOutputArtifact:
 
         sub = tmp_path / ".hephaestus" / "product_validation"
         sub.mkdir(parents=True)
-        (sub / "validation.md").write_text(
+        (sub / "validation-task-1.md").write_text(
             "---\ntype: product_validation_result\nverdict: PASS\n---\n\n# Report"
         )
 
@@ -523,7 +649,7 @@ class TestVerifyOutputArtifactWorktreeRecovery:
         # This run's completing agent -- fresh worktree with the real output.
         fresh_wt = tmp_path / "fresh-worktree"
         (fresh_wt / ".hephaestus" / "architectural_review").mkdir(parents=True)
-        (fresh_wt / ".hephaestus" / "architectural_review" / "review.md").write_text(
+        (fresh_wt / ".hephaestus" / "architectural_review" / "review-task-new.md").write_text(
             "---\ntype: architectural_review_result\n---\n\n# Review"
         )
 
@@ -637,7 +763,7 @@ class TestVerifyOutputSurvivedCommit:
         phase.name = "development"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1", status="done")
 
-        (tmp_path / "output.md").write_text("content")
+        (tmp_path / "output-task-1.md").write_text("content")
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
@@ -677,6 +803,40 @@ class TestVerifyOutputSurvivedCommit:
         assert "security.md" in result["message"]
         assert task.status == "failed"
         assert task.failure_reason == result["message"]
+
+    def test_rejects_when_the_correctly_named_file_got_replaced_by_a_bare_one(self, tmp_path):
+        """Defense-in-depth mirror of verify_output_artifact's own naming
+        floor: normally redundant (a wrongly-named file is rejected before
+        commit_and_link_ticket ever runs), but this function's whole
+        reason to exist is catching a last write that changed between the
+        pre-commit check and the actual commit -- if that last write
+        replaces the correctly-suffixed file with a bare-named one, this
+        is the only remaining place to catch it."""
+        phase = Mock(name="security_review", id="phase-1")
+        phase.name = "security_review"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1", status="done")
+
+        sub = tmp_path / ".hephaestus" / "security_review"
+        sub.mkdir(parents=True)
+        (sub / "security.md").write_text("content")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files",
+            return_value=["security.md"],
+        ):
+            result = TaskCompletionService.verify_output_survived_commit(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "security-task-1.md" in result["message"]
+        assert task.status == "failed"
 
 
 class TestVerifyGateResultSchema:

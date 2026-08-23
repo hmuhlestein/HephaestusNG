@@ -76,7 +76,13 @@ additional_notes: |
     Written by the orchestrator when it dispatched this task.
 
   FORENSICS REPORT (your output):
-    Write to: ./.hephaestus/forensics.md — ONE file, one location.
+    Write to: ./.hephaestus/forensics-<your Task ID's first 8 hex characters>.md
+    — ONE file, one location. forensics.md, wherever mentioned below,
+    means this suffixed filename (find your Task ID in "Task ID:" above).
+    Not optional: a duplicate/concurrent dispatch for this same phase then
+    writes to a DIFFERENT suffixed file instead of racing yours, and the
+    pipeline reads your own task's suffixed file specifically, not a bare
+    forensics.md.
 
   MANDATORY FIRST ACTION — run this before anything else:
   ```bash

@@ -44,6 +44,7 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
         get_phase_required_files,
         load_optional_phases,
         resolve_declared_output_path,
+        suffixed_output_name,
     )
     from src.core.constants import CONTEXT_DIR_NAME
     from src.core.database import Phase
@@ -170,8 +171,10 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
     feature_dir = _Path(project_base_dir or config.paths.project_root) / CONTEXT_DIR_NAME / "features"
     missing = []
     invalid_frontmatter = []
+    wrong_name = []
     for declared_output in required_files:
         found_path = None
+        found_in_worktree = False
         # 1. Check the workflow's shared worktree (task.workflow_id can
         # legitimately be unset for tasks not tied to any workflow --
         # only the "has a workflow_id but no working_directory" case
@@ -180,6 +183,7 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
             found_path = resolve_declared_output_path(
                 wf.working_directory, phase.name, declared_output, task_id=task.id
             )
+            found_in_worktree = found_path is not None
         # 2. Check feature folder
         if found_path is None and feature_dir.exists():
             for d in sorted(feature_dir.iterdir(), reverse=True):
@@ -204,6 +208,40 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
             if read_okf(found_path) is None:
                 invalid_frontmatter.append(f"{declared_output} (no valid OKF frontmatter block)")
 
+            # Naming-convention hard floor: every gated/reporting phase's
+            # prompt now instructs writing the task-id-suffixed filename
+            # (suffixed_output_name), not the bare declared name -- so a
+            # duplicate/concurrent dispatch for the same phase writes to a
+            # DIFFERENT file instead of racing on one shared path. Scoped to:
+            #   - found_in_worktree only -- the feature-folder fallback (2,
+            #     above) is archived/already-shipped documentation, copied
+            #     out well after the concurrent-dispatch window this
+            #     convention protects has closed; nothing there was ever
+            #     meant to carry a live task's suffix.
+            #   - a bare, top-level declared name ("/" not in declared_output
+            #     excludes feature_architect's per-feature
+            #     "features/<id>/scope.md", which is keyed by feature id,
+            #     not by dispatching task, and was never meant to carry
+            #     this suffix).
+            # Only flags an EXACT bare-name match -- a file found via
+            # resolve_declared_output_path's other fallbacks (an old pre-
+            # migration alias, or another task's leftover suffixed file
+            # caught by chance) is a different, already-tolerated legacy
+            # path, not this agent choosing to ignore its own prompt's
+            # naming instruction. Confirmed live: task b08abd39
+            # (adversarial_review) reported success having written the
+            # bare adversarial.md its own prompt explicitly told it not to.
+            if found_in_worktree and "/" not in declared_output and "<" not in declared_output:
+                expected_name = suffixed_output_name(declared_output, task.id)
+                if found_path.name == declared_output and found_path.name != expected_name:
+                    wrong_name.append(
+                        f"{declared_output} (wrote the bare filename; must be "
+                        f"named {expected_name} — your own prompt's naming "
+                        "convention, not optional: it's what lets a "
+                        "duplicate/concurrent dispatch for this phase write "
+                        "to a different file instead of racing yours)"
+                    )
+
             # Security review must include ash scan results. Fails closed,
             # not open, on a read error -- matching this function's own
             # established philosophy (see the comment above): an I/O
@@ -225,13 +263,13 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
                     logger.warning(f"Failed to read {declared_output} to verify ash scan results: {e}")
                     invalid_frontmatter.append(f"{declared_output} (could not be read to verify ash scan results: {e})")
 
-    if not missing and not invalid_frontmatter:
+    if not missing and not invalid_frontmatter and not wrong_name:
         return None
 
     # Optional phases may complete without their declared output(s).
     optional_phases = load_optional_phases(task.workflow_id)
     if phase.name in optional_phases:
-        logger.info(f"Agent completed optional phase {phase.name} without {missing or invalid_frontmatter} — allowing")
+        logger.info(f"Agent completed optional phase {phase.name} without {missing or invalid_frontmatter or wrong_name} — allowing")
         return None
 
     problems = []
@@ -239,6 +277,8 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
         problems.append(f"missing: {', '.join(missing)}")
     if invalid_frontmatter:
         problems.append(f"not valid OKF: {', '.join(invalid_frontmatter)}")
+    if wrong_name:
+        problems.append(f"wrong filename: {', '.join(wrong_name)}")
     summary = "; ".join(problems)
 
     logger.warning(f"Agent claimed done on {phase.name} but {summary} — rejecting")
@@ -446,6 +486,7 @@ def verify_output_survived_commit(session, task, phase=None) -> Optional[Dict[st
         OUTPUT_NAME_ALIASES,
         get_phase_required_files,
         resolve_declared_output_path,
+        suffixed_output_name,
     )
     from src.core.database import Phase, Workflow
 
@@ -469,10 +510,32 @@ def verify_output_survived_commit(session, task, phase=None) -> Optional[Dict[st
         return None  # verify_output_artifact already surfaces this case.
 
     missing = []
+    wrong_name = []
     for declared_output in required_files:
-        found = resolve_declared_output_path(
+        found_path = resolve_declared_output_path(
             wf.working_directory, phase.name, declared_output, task_id=task.id
-        ) is not None
+        )
+        found = found_path is not None
+        # Naming-convention floor, mirroring verify_output_artifact's own
+        # (see its comment for the full reasoning) -- normally redundant,
+        # since a wrongly-named file never reaches this point at all (that
+        # earlier check already rejected it before commit_and_link_ticket
+        # ever ran). Kept here too as defense-in-depth for the one gap
+        # that check can't close on its own: this function's whole reason
+        # to exist is catching a file that changed between the pre-commit
+        # check and the actual commit (an agent's last write landing
+        # somewhere else) -- if THAT last write is a correctly-suffixed
+        # file getting silently replaced by a bare-named one, this is the
+        # only remaining place to catch it.
+        if (
+            found
+            and declared_output.endswith(".md")
+            and "/" not in declared_output
+            and "<" not in declared_output
+        ):
+            expected_name = suffixed_output_name(declared_output, task.id)
+            if found_path.name == declared_output and found_path.name != expected_name:
+                wrong_name.append(f"{declared_output} (must be named {expected_name})")
         # Also check if the file exists in git (already committed) --
         # resolve_declared_output_path only checks the worktree's current
         # state, but a file already committed and then removed from the
@@ -497,8 +560,24 @@ def verify_output_survived_commit(session, task, phase=None) -> Optional[Dict[st
         if not found:
             missing.append(declared_output)
 
-    if not missing:
+    if not missing and not wrong_name:
         return None
+
+    if wrong_name and not missing:
+        logger.error(
+            f"Task {task.id} (phase {phase.name}) claimed done and passed the "
+            f"pre-commit naming check, but its last write replaced the "
+            f"correctly-named file with a wrongly-named one: {wrong_name}"
+        )
+        task.status = "failed"
+        task.failure_reason = (
+            f"Output validation failed after commit: wrong filename: {'; '.join(wrong_name)}"
+        )
+        session.commit()
+        return {
+            "status": "failed",
+            "message": task.failure_reason,
+        }
 
     logger.error(
         f"Task {task.id} (phase {phase.name}) claimed done and passed the "
