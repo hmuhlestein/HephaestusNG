@@ -34,6 +34,7 @@ def test_qa_pass_continues(strict_spec):
             "requirements_total": 5,
             "requirements_met": 5,
             "agent_score": 1.0,
+            "coverage_percent": 85,
         },
         strict_spec,
     )
@@ -50,6 +51,7 @@ def test_qa_subjective_blend_below_perfect(strict_spec):
             "total_tests": 1,
             "critical_issues": 0,
             "agent_score": 0.0,
+            "coverage_percent": 85,
         },
         strict_spec,
     )
@@ -122,6 +124,7 @@ def test_qa_pass_reason_has_no_permission_language(strict_spec):
             "total_tests": 10,
             "critical_issues": 0,
             "agent_score": 1.0,
+            "coverage_percent": 85,
         },
         strict_spec,
     )
@@ -175,6 +178,7 @@ def test_relaxed_spec_allows_some_failures():
             "total_tests": 10,
             "critical_issues": 0,
             "agent_score": 1.0,
+            "coverage_percent": 85,
         },
         relaxed,
     )
@@ -300,7 +304,8 @@ def test_build_phase_output_reads_hephaestus_phase_subdir(tmp_path):
         "passed_tests: 5\n"
         "total_tests: 5\n"
         "critical_issues: 0\n"
-        "agent_score: 1.0"
+        "agent_score: 1.0\n"
+        "coverage_percent: 85"
     ))
     out = S.build_phase_output("qa_validation", tmp_path, spec=dict(S.DEFAULT_SPEC))
     assert out["score"] >= 0.7
@@ -799,7 +804,7 @@ class TestOutputPathResolutionAgreesWithScoringPathResolution:
         sub.mkdir(parents=True)
         (sub / "qa_report.md").write_text(_okf(
             "type: qa_validation\nfailed_tests: 0\npassed_tests: 5\n"
-            "total_tests: 5\ncritical_issues: 0"
+            "total_tests: 5\ncritical_issues: 0\ncoverage_percent: 85"
         ))
 
         found = S.resolve_declared_output_path(str(tmp_path), "qa_validation", "qa.md")

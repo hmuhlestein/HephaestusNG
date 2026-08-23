@@ -193,6 +193,7 @@ class TestScoreQA:
             "requirements_met": 7,
             "requirements_total": 7,
             "agent_score": 1.0,
+            "coverage_percent": 85,
         }
         score, meta = score_qa(result, DEFAULT_SPEC)
         assert score >= 0.7
@@ -248,6 +249,7 @@ class TestScoreQA:
             "pass_rate": 100.0,
             "critical_issues": 0,
             "agent_score": 0.5,
+            "coverage_percent": 85,
         }
         score, meta = score_qa(result, DEFAULT_SPEC)
         assert 0.7 <= score <= 1.0
@@ -300,6 +302,7 @@ class TestScoreQA:
         result = {
             "overall_status": "PASS",
             "test_results": {"unit_tests": {"total": 2, "passed": 2, "failed": 0}},
+            "coverage_percent": 85,
         }
         score, meta = score_qa(
             result, DEFAULT_SPEC, working_directory=str(tmp_path)
@@ -510,7 +513,8 @@ class TestBuildPhaseOutput:
             "failed_tests: 0\n"
             "passed_tests: 50\n"
             "pass_rate: 100.0\n"
-            "critical_issues: 0"
+            "critical_issues: 0\n"
+            "coverage_percent: 85"
         ))
         result = build_phase_output("qa_validation", tmp_path)
         assert result["score"] >= 0.7

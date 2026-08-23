@@ -80,6 +80,7 @@ class TestSpecGateFiring:
             "pass_rate": 100.0,
             "critical_issues": 0,
             "agent_score": 1.0,
+            "coverage_percent": 85,
         }
         _write_qa_report(docs, qa_result)
 
