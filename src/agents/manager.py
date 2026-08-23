@@ -138,8 +138,8 @@ class AgentManager:
     def _resolve_project_base_dir(self, workflow_id: Optional[str]) -> Optional[Path]:
         return self._launch._resolve_project_base_dir(workflow_id)
 
-    def _scoped_worktree_manager(self, workflow_id: Optional[str]) -> WorktreeManager:
-        return self._launch._scoped_worktree_manager(workflow_id)
+    def _scoped_worktree_manager(self, workflow_id: Optional[str], repo_id: Optional[str] = None) -> WorktreeManager:
+        return self._launch._scoped_worktree_manager(workflow_id, repo_id)
 
     def _ensure_codegraph_initialized(self, working_directory: str) -> None:
         # The extraction that produced these delegators renamed the real first
