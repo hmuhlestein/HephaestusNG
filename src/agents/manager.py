@@ -707,8 +707,15 @@ class AgentManager:
         finally:
             session.close()
 
-    async def get_project_context(self) -> str:
+    async def get_project_context(self, task: Optional["Task"] = None) -> str:
         """Get current project context for task enrichment.
+
+        Args:
+            task: the task this context is being built for, if any. When
+                provided and task's project has >1 ProjectRepo, the returned
+                string gets an appended repo-awareness section (REQ-17/18).
+                When task is None, or the resolved project has exactly 1
+                ProjectRepo, behavior is byte-identical to today (REQ-21).
 
         Returns:
             Formatted project context string
@@ -745,13 +752,45 @@ class AgentManager:
 
 ## ACTIVE TASKS
 """
-            for task in active_tasks[:10]:
-                context += f"- {task.id[:8]}: {(task.enriched_description or task.raw_description)[:100]}...\n"
+            for task_item in active_tasks[:10]:
+                context += f"- {task_item.id[:8]}: {(task_item.enriched_description or task_item.raw_description)[:100]}...\n"
 
             if recent_tasks:
                 context += "\n## RECENT COMPLETIONS\n"
-                for task in recent_tasks:
-                    context += f"- {(task.enriched_description or task.raw_description)[:100]}...\n"
+                for task_item in recent_tasks:
+                    context += f"- {(task_item.enriched_description or task_item.raw_description)[:100]}...\n"
+
+            # REQ-17/18: Add repo awareness for multi-repo projects
+            if task is not None:
+                from src.core.database import ProjectRepo, Workflow
+                project_id = None
+                if task.workflow_id:
+                    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+                    if wf:
+                        project_id = wf.project_id
+                if project_id:
+                    repos = session.query(ProjectRepo).filter_by(project_id=project_id).all()
+                    if len(repos) > 1:
+                        # Check if this is feature-architect phase (no repo_id yet)
+                        is_architect = task.repo_id is None and task.phase_id
+                        if is_architect:
+                            from src.core.database import Phase
+                            phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                            phase_name = phase.name if phase else ""
+                            is_architect = phase_name in {"feature_architect", "architecture_design"}
+
+                        context += "\n## PROJECT REPOSITORIES"
+                        if is_architect:
+                            context += " (assign each Feature to exactly one)\n"
+                            for repo in repos:
+                                context += f"- {repo.label}: {repo.path}\n"
+                        else:
+                            context += "\n"
+                            for repo in repos:
+                                if task.repo_id and repo.id == task.repo_id:
+                                    context += f"- {repo.label} (WRITABLE \u2014 this task's assigned repo): {repo.path}\n"
+                                else:
+                                    context += f"- {repo.label} (READ-ONLY reference): {repo.path}\n"
 
             return context
 

@@ -147,6 +147,15 @@ feature_architect_system_prompt: |
   6. Write scope.md files for each feature
   7. Call complete_my_task when done (status='done') or failed (status='failed')
 
+  ═══ MULTI-REPO RULE (REQ-19/20) ═══
+  When PROJECT REPOSITORIES (above) lists multiple repos:
+  - Every Feature you create MUST be bound to exactly one repo.
+  - A design needing both an API change and its UI consumer is TWO features —
+    one per repo — not one feature spanning both.
+  - Express ordering between them with the existing `depends_on`/`execution`
+    fields in features.json (e.g. the frontend feature declares
+    `"depends_on": ["backend-feature-key"]`), never as free-text in scope.md.
+
   IDs: Agent={agent_id} | Task={task_id}
 
 # Phase agent instructions template
