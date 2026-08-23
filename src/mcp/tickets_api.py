@@ -38,9 +38,15 @@ def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[str]:
     """Resolve which project's repo a commit lives in via the ticket it's
     linked to. Returns None (never raises) when the commit isn't linked to
     any ticket, or the ticket/workflow/project chain doesn't resolve --
-    callers fall back to the process-wide active project in that case."""
+    callers fall back to the process-wide active project in that case.
+
+    Reads TicketCommit.repo_id (set at link time) so two repos with
+    colliding short SHAs resolve to their own distinct paths (REQ-14)
+    instead of always the project's one path.
+    """
     try:
-        from src.core.database import AutopilotProject, Ticket, TicketCommit, Workflow, get_db
+        from src.core.database import Ticket, TicketCommit, Workflow, get_db
+        from src.core.repo_resolution import RepoNotFoundError, resolve_repo_path
 
         with get_db() as db:
             commit = db.query(TicketCommit).filter_by(commit_sha=commit_sha).first()
@@ -52,10 +58,29 @@ def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[str]:
             wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
             if not wf or not wf.project_id:
                 return None
-            proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
-            return proj.base_dir if proj else None
+            try:
+                return str(resolve_repo_path(db, wf.project_id, commit.repo_id))
+            except (RepoNotFoundError, ValueError):
+                return None
     except Exception:
         return None
+
+
+def _resolve_repo_id_and_label_for_commit(commit_sha: str) -> "tuple[Optional[str], Optional[str]]":
+    """(repo_id, repo_label) for a commit's ProjectRepo, so GitDiffModal
+    (REQ-23) can display which repo a commit belongs to without a second
+    round-trip. Never raises; (None, None) when unresolvable."""
+    try:
+        from src.core.database import ProjectRepo, TicketCommit, get_db
+
+        with get_db() as db:
+            commit = db.query(TicketCommit).filter_by(commit_sha=commit_sha).first()
+            if not commit or not commit.repo_id:
+                return None, None
+            repo = db.query(ProjectRepo).filter_by(id=commit.repo_id).first()
+            return (repo.id, repo.label) if repo else (None, None)
+    except Exception:
+        return None, None
 
 
 async def _broadcast_update(data: dict, workflow_id: Optional[str] = None):
@@ -1149,6 +1174,8 @@ class CommitDiffResponse(BaseModel):
     total_deletions: int
     total_files: int
     files: List[FileDiff]
+    repo_id: Optional[str] = None
+    repo_label: Optional[str] = None
 
 
 @router.post("/approve", response_model=ApproveTicketResponse)
@@ -1311,6 +1338,7 @@ async def get_commit_diff_endpoint(
         if main_repo_path is None:
             config = get_config()
             main_repo_path = str(config.git.main_repo_path)
+        resolved_repo_id, resolved_repo_label = _resolve_repo_id_and_label_for_commit(commit_sha)
 
         # Helper function to detect language from file extension
         def detect_language(file_path: str) -> str:
@@ -1438,6 +1466,8 @@ async def get_commit_diff_endpoint(
             total_deletions=total_deletions,
             total_files=len(files_data),
             files=files_data,
+            repo_id=resolved_repo_id,
+            repo_label=resolved_repo_label,
         )
 
     except subprocess.CalledProcessError as e:

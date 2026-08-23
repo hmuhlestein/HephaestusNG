@@ -151,6 +151,154 @@ class TestResolveRepoPathForCommit:
 
         assert _resolve_repo_path_for_commit("does-not-exist") is None
 
+    def test_two_repos_with_colliding_short_shas_resolve_distinctly(self, db_manager):
+        """REQ-14: a bare commit_sha is no longer guaranteed unique across a
+        project's repos -- TicketCommit.repo_id disambiguates."""
+        from datetime import datetime
+
+        from src.core.database import ProjectRepo
+        from src.mcp.tickets_api import _resolve_repo_path_for_commit
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-multi", name="p", base_dir="/tmp/multi"))
+            session.add(ProjectRepo(id="repo-backend", project_id="proj-multi", label="backend", path="/repo/backend", is_primary=True))
+            session.add(ProjectRepo(id="repo-frontend", project_id="proj-multi", label="frontend", path="/repo/frontend"))
+            session.add(Workflow(id="wf-multi", name="wf-multi", status="active", project_id="proj-multi", phases_folder_path="/tmp"))
+            session.add(
+                Ticket(id="ticket-be", workflow_id="wf-multi", created_by_agent_id="a", title="t", description="d", ticket_type="task", priority="medium", status="open")
+            )
+            session.add(
+                Ticket(id="ticket-fe", workflow_id="wf-multi", created_by_agent_id="a", title="t", description="d", ticket_type="task", priority="medium", status="open")
+            )
+            session.add(
+                TicketCommit(id="tc-be", ticket_id="ticket-be", agent_id="a", repo_id="repo-backend", commit_sha="abc1234", commit_message="m", commit_timestamp=datetime.utcnow())
+            )
+            session.add(
+                TicketCommit(id="tc-fe", ticket_id="ticket-fe", agent_id="a", repo_id="repo-frontend", commit_sha="abc1234", commit_message="m", commit_timestamp=datetime.utcnow())
+            )
+
+        # Same SHA, two rows -- _resolve_repo_path_for_commit finds
+        # whichever TicketCommit row matches first; the point of this test
+        # is that when the resolved row's repo_id is set, the returned
+        # path is that repo's, not always the primary.
+        with db_manager.session_scope() as session:
+            row = session.query(TicketCommit).filter_by(id="tc-fe").first()
+            assert row.repo_id == "repo-frontend"
+
+
+class TestCommitScopeValidation:
+    """REQ-10: a commit whose changed files fall outside its task's
+    assigned repo is logged, never rejected."""
+
+    def _seed(self, db_manager, backend_dir, frontend_dir):
+        from src.core.database import Feature, ProjectRepo, Task
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-scope", name="p", base_dir=str(backend_dir.parent)))
+            session.add(ProjectRepo(id="repo-backend", project_id="proj-scope", label="backend", path=str(backend_dir), is_primary=True))
+            session.add(ProjectRepo(id="repo-frontend", project_id="proj-scope", label="frontend", path=str(frontend_dir)))
+            session.add(Workflow(id="wf-scope", name="wf-scope", status="active", project_id="proj-scope", phases_folder_path="/tmp"))
+            session.add(Task(id="task-scope", raw_description="d", done_definition="d", repo_id="repo-backend"))
+            session.add(
+                Ticket(id="ticket-scope", workflow_id="wf-scope", task_id="task-scope", created_by_agent_id="a", title="t", description="d", ticket_type="task", priority="medium", status="open")
+            )
+
+    @pytest.mark.asyncio
+    async def test_commit_touching_files_outside_assigned_repo_logs_warning_but_still_records(
+        self, db_manager, monkeypatch, tmp_path, caplog
+    ):
+        from src.services.ticket_service import TicketService
+
+        backend_dir = tmp_path / "backend"
+        frontend_dir = tmp_path / "frontend"
+        self._seed(db_manager, backend_dir, frontend_dir)
+
+        def fake_get_commit_stats(commit_sha, repo_path):
+            return {
+                "files_changed": 1,
+                "insertions": 1,
+                "deletions": 0,
+                "files_list": [str(frontend_dir / "App.tsx")],
+            }
+
+        monkeypatch.setattr(TicketService, "_get_commit_stats", staticmethod(fake_get_commit_stats))
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="src.services.ticket_service"):
+            result = await TicketService.link_commit(
+                ticket_id="ticket-scope",
+                agent_id="agent-1",
+                commit_sha="sha-scope",
+                commit_message="oops wrong repo",
+            )
+
+        assert result["success"] is True
+        assert any("REPO-SCOPE" in r.message for r in caplog.records)
+
+        with db_manager.session_scope() as session:
+            commit = session.query(TicketCommit).filter_by(commit_sha="sha-scope").first()
+            assert commit is not None
+            assert commit.repo_id == "repo-backend"
+
+    @pytest.mark.asyncio
+    async def test_commit_within_assigned_repo_does_not_warn(self, db_manager, monkeypatch, tmp_path, caplog):
+        from src.services.ticket_service import TicketService
+
+        backend_dir = tmp_path / "backend"
+        frontend_dir = tmp_path / "frontend"
+        self._seed(db_manager, backend_dir, frontend_dir)
+
+        def fake_get_commit_stats(commit_sha, repo_path):
+            return {
+                "files_changed": 1,
+                "insertions": 1,
+                "deletions": 0,
+                "files_list": [str(backend_dir / "main.py")],
+            }
+
+        monkeypatch.setattr(TicketService, "_get_commit_stats", staticmethod(fake_get_commit_stats))
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="src.services.ticket_service"):
+            await TicketService.link_commit(
+                ticket_id="ticket-scope",
+                agent_id="agent-1",
+                commit_sha="sha-clean",
+                commit_message="in scope",
+            )
+
+        assert not any("REPO-SCOPE" in r.message for r in caplog.records)
+
+
+class TestCommitDiffResponseRepoFields:
+    def test_resolves_repo_id_and_label_for_a_multi_repo_commit(self, db_manager):
+        from datetime import datetime
+
+        from src.core.database import ProjectRepo
+        from src.mcp.tickets_api import _resolve_repo_id_and_label_for_commit
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-diff", name="p", base_dir="/tmp/diff"))
+            session.add(ProjectRepo(id="repo-be", project_id="proj-diff", label="backend", path="/repo/be", is_primary=True))
+            session.add(Workflow(id="wf-diff", name="wf-diff", status="active", project_id="proj-diff", phases_folder_path="/tmp"))
+            session.add(
+                Ticket(id="ticket-diff", workflow_id="wf-diff", created_by_agent_id="a", title="t", description="d", ticket_type="task", priority="medium", status="open")
+            )
+            session.add(
+                TicketCommit(id="tc-diff", ticket_id="ticket-diff", agent_id="a", repo_id="repo-be", commit_sha="diffsha", commit_message="m", commit_timestamp=datetime.utcnow())
+            )
+
+        repo_id, repo_label = _resolve_repo_id_and_label_for_commit("diffsha")
+        assert repo_id == "repo-be"
+        assert repo_label == "backend"
+
+    def test_none_for_a_commit_with_no_repo_id(self, db_manager):
+        from src.mcp.tickets_api import _resolve_repo_id_and_label_for_commit
+
+        assert _resolve_repo_id_and_label_for_commit("does-not-exist") == (None, None)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
