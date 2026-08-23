@@ -1,5 +1,7 @@
 """add/list ProjectRepo endpoints (no update/delete in v1) -- REQ-24."""
 
+import asyncio
+
 import pytest
 from fastapi import HTTPException
 
@@ -114,6 +116,53 @@ class TestAddProjectRepo:
         with pytest.raises(HTTPException) as exc_info:
             await add_project_repo("proj-does-not-exist", ProjectRepoCreate(label="backend", path=str(backend)))
         assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_request_401s(self, db_manager, tmp_path, monkeypatch):
+        from src.mcp.autopilot import project_repo_routes as routes
+
+        async def _deny(agent_id):
+            return False
+
+        monkeypatch.setattr(routes, "verify_agent_authentication", _deny)
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+        backend = tmp_path / "backend"
+        backend.mkdir()
+        (backend / ".git").mkdir()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await routes.add_project_repo("proj-1", routes.ProjectRepoCreate(label="backend", path=str(backend)))
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_concurrent_first_add_only_yields_one_primary(self, db_manager, tmp_path):
+        """BLOCKER fix (REQ-01..06 concurrency): two concurrent 'add first
+        repo' calls for a project with 0 existing repos must not both
+        become primary. The in-process per-project lock in add_project_repo
+        serializes the check-then-insert so the second caller correctly
+        observes count()==1 and inserts non-primary."""
+        from src.mcp.autopilot.project_repo_routes import ProjectRepoCreate, add_project_repo
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-race", name="p", base_dir=str(tmp_path)))
+        backend = tmp_path / "backend"
+        frontend = tmp_path / "frontend"
+        for d in (backend, frontend):
+            d.mkdir()
+            (d / ".git").mkdir()
+
+        results = await asyncio.gather(
+            add_project_repo("proj-race", ProjectRepoCreate(label="backend", path=str(backend))),
+            add_project_repo("proj-race", ProjectRepoCreate(label="frontend", path=str(frontend))),
+        )
+
+        primaries = [r for r in results if r.is_primary]
+        assert len(primaries) == 1
+
+        with db_manager.session_scope() as session:
+            assert session.query(ProjectRepo).filter_by(project_id="proj-race", is_primary=True).count() == 1
 
 
 class TestListProjectRepos:

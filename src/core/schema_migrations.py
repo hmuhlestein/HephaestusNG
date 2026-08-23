@@ -778,6 +778,26 @@ def migrate_project_repos_table(engine):
     except Exception as e:
         logger.warning(f"project_repos table creation failed (not just 'already exists' -- check this): {e}")
 
+    # Partial unique index: at most one is_primary=1 row per project_id.
+    # Without this, two concurrent "check count()==0, then insert
+    # is_primary=1" callers (the API endpoint and this same backfill loop
+    # running under two workers) can both insert a primary row for the same
+    # project -- resolve_repo_path's is_primary lookup then becomes
+    # non-deterministic. This index turns that race into a clean
+    # IntegrityError instead of silent duplicate-primary corruption.
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_project_repos_one_primary "
+                    "ON project_repos(project_id) WHERE is_primary = 1"
+                )
+            )
+            conn.commit()
+        logger.info("Ensured uq_project_repos_one_primary partial unique index exists")
+    except Exception as e:
+        logger.warning(f"uq_project_repos_one_primary index creation failed: {e}")
+
     for table, column in (
         ("tasks", "repo_id"),
         ("tickets", "repo_id"),
@@ -798,6 +818,10 @@ def migrate_project_repos_table(engine):
 
     # Backfill: one primary ProjectRepo per existing AutopilotProject.
     # Idempotent via the "already has a primary repo" existence check.
+    # Each insert commits (and is caught) individually so that a second
+    # process/worker racing this same backfill for the same project_id
+    # loses cleanly to uq_project_repos_one_primary above, instead of
+    # both inserting and corrupting the table.
     try:
         with engine.connect() as conn:
             rows = conn.execute(text("SELECT id, base_dir FROM autopilot_projects")).fetchall()
@@ -810,15 +834,22 @@ def migrate_project_repos_table(engine):
                 ).fetchone()
                 if has_primary:
                     continue
-                conn.execute(
-                    text(
-                        "INSERT INTO project_repos (id, project_id, label, path, is_primary, created_at) "
-                        "VALUES (:id, :pid, 'primary', :path, 1, :now)"
-                    ),
-                    {"id": f"repo-{uuid.uuid4()}", "pid": project_id, "path": base_dir, "now": now},
-                )
-                created += 1
-            conn.commit()
+                try:
+                    conn.execute(
+                        text(
+                            "INSERT INTO project_repos (id, project_id, label, path, is_primary, created_at) "
+                            "VALUES (:id, :pid, 'primary', :path, 1, :now)"
+                        ),
+                        {"id": f"repo-{uuid.uuid4()}", "pid": project_id, "path": base_dir, "now": now},
+                    )
+                    conn.commit()
+                    created += 1
+                except sqlalchemy_exc.IntegrityError:
+                    conn.rollback()
+                    logger.info(
+                        f"[REPO-MIGRATION] project {project_id!r} already got a primary "
+                        "repo from a concurrent migration run -- skipping (harmless race)"
+                    )
             if created:
                 logger.info(f"Backfilled {created} primary project_repos row(s)")
     except Exception as e:

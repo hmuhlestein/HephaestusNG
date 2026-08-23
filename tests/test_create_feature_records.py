@@ -338,6 +338,39 @@ class TestCreateFeatureRecordsRepoId:
             feat = db.query(Feature).filter_by(id=records[0]["id"]).first()
             assert feat.repo_id is None
 
+    def test_files_spanning_two_repos_leaves_repo_id_none_and_warns(self, designs_folder, mock_logger, tmp_path, monkeypatch):
+        """A feature whose files genuinely span two repos (the architect
+        prompt's own forbidden case) must not silently majority-vote one
+        repo and drop the other's files from scope -- leave repo_id
+        unresolved and log loudly instead."""
+        from src.core.database import Feature, get_db
+
+        backend, frontend = self._seed_multi_repo_project(tmp_path, monkeypatch)
+        features_json = {
+            "design_name": "d",
+            "features": [
+                {
+                    "id": "cross-repo-feat",
+                    "name": "Cross",
+                    "scope": "s",
+                    "files": [str(backend / "api.py"), str(frontend / "api.py")],
+                    "depends_on": [],
+                    "execution": "parallel",
+                }
+            ],
+        }
+
+        records = _create_feature_records("des-multi", features_json, designs_folder, mock_logger)
+
+        with get_db() as db:
+            feat = db.query(Feature).filter_by(id=records[0]["id"]).first()
+            assert feat.repo_id is None
+
+        assert any(
+            "REPO-SCOPE" in str(call.args[0]) and "cross-repo-feat" in str(call.args[0])
+            for call in mock_logger.warning.call_args_list
+        )
+
     def test_single_repo_project_repo_id_always_none(self, designs_folder, mock_logger, tmp_path, monkeypatch):
         """Only one ProjectRepo row -- this whole component is a no-op,
         regression test asserts byte-identical Task/Feature creation flow

@@ -121,13 +121,31 @@ def _create_feature_records(
                     def _abs(f: str) -> str:
                         return f if Path(f).is_absolute() or not project_base_dir else str(Path(project_base_dir) / f)
 
-                    matches = [
-                        rid
+                    file_repo_pairs = [
+                        (f, rid)
                         for f in feat.get("files", [])
                         if (rid := repo_id_for_path(db, project_id, _abs(f))) is not None
                     ]
-                    if matches:
-                        feature_repo_id = max(set(matches), key=matches.count)
+                    distinct_repo_ids = {rid for _, rid in file_repo_pairs}
+                    if len(distinct_repo_ids) > 1:
+                        # feat["files"] genuinely spans >1 repo -- the
+                        # architect's own prompt forbids this (one feature
+                        # must not span an API change and its UI consumer).
+                        # Majority-voting one repo would silently drop the
+                        # other repo's files from this Feature's scope, only
+                        # to surface later as a confusing task-creation 400
+                        # when a task's cwd lands in the dropped repo.
+                        # Leave repo_id unresolved and log loudly instead --
+                        # REQ-19's per-Feature enforcement then does its job
+                        # the moment a task under this feature picks a repo.
+                        logger.warning(
+                            f"[REPO-SCOPE] feature {feature_key!r} in design {design_id!r} has "
+                            f"files spanning {len(distinct_repo_ids)} repos with no repo_label to "
+                            f"disambiguate ({file_repo_pairs}) -- leaving Feature.repo_id unset "
+                            "instead of arbitrarily picking one; this feature should be split"
+                        )
+                    elif distinct_repo_ids:
+                        feature_repo_id = next(iter(distinct_repo_ids))
 
             feature = Feature(
                 id=feature_id,

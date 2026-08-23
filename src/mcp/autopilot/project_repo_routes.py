@@ -82,35 +82,50 @@ async def add_project_repo(
         )
 
     from src.core.database import AutopilotProject, ProjectRepo, get_db
+    from src.mcp.autopilot.project_routes import _get_project_lock
 
     resolved_path = _validate_repo_path(req.path)
 
-    with get_db() as db:
-        project = db.query(AutopilotProject).filter_by(id=project_id).first()
-        if not project:
-            raise HTTPException(404, "Project not found")
+    # Serialize check-then-insert of the "is this the first repo" decision
+    # per project. In-process only -- the DB-level uq_project_repos_one_primary
+    # partial unique index (schema_migrations.migrate_project_repos_table) is
+    # what actually closes the race across worker processes; this lock just
+    # avoids surfacing a spurious 409 to two concurrent requests from the
+    # same process.
+    lock = await _get_project_lock(project_id)
+    async with lock:
+        with get_db() as db:
+            project = db.query(AutopilotProject).filter_by(id=project_id).first()
+            if not project:
+                raise HTTPException(404, "Project not found")
 
-        is_first_repo = db.query(ProjectRepo).filter_by(project_id=project_id).count() == 0
-        repo = ProjectRepo(
-            id=f"repo-{uuid.uuid4()}",
-            project_id=project_id,
-            label=req.label,
-            path=resolved_path,
-            is_primary=is_first_repo,
-        )
-        db.add(repo)
-        try:
-            db.flush()
-        except IntegrityError:
-            db.rollback()
-            raise HTTPException(
-                409, f"A repo with label {req.label!r} or path {resolved_path!r} already exists on this project"
+            is_first_repo = db.query(ProjectRepo).filter_by(project_id=project_id).count() == 0
+            repo = ProjectRepo(
+                id=f"repo-{uuid.uuid4()}",
+                project_id=project_id,
+                label=req.label,
+                path=resolved_path,
+                is_primary=is_first_repo,
             )
+            db.add(repo)
+            try:
+                db.flush()
+            except IntegrityError as e:
+                db.rollback()
+                if "uq_project_repos_one_primary" in str(e):
+                    raise HTTPException(
+                        409,
+                        "This project already has a primary repo (lost a concurrent "
+                        "race to add the first repo) -- retry the request",
+                    )
+                raise HTTPException(
+                    409, f"A repo with label {req.label!r} or path {resolved_path!r} already exists on this project"
+                )
 
-        return ProjectRepoItem(
-            id=repo.id,
-            label=repo.label,
-            path=repo.path,
-            is_primary=repo.is_primary,
-            created_at=repo.created_at.isoformat() if repo.created_at else "",
-        )
+            return ProjectRepoItem(
+                id=repo.id,
+                label=repo.label,
+                path=repo.path,
+                is_primary=repo.is_primary,
+                created_at=repo.created_at.isoformat() if repo.created_at else "",
+            )
