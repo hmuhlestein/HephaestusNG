@@ -55,10 +55,7 @@ def resolve_repo_path(db: Session, project_id: str, repo_id: Optional[str]) -> P
     if primary is not None:
         return Path(primary.path)
 
-    logger.warning(
-        f"[REPO-RESOLUTION] project {project_id!r} has no ProjectRepo rows "
-        "(migration not run?) -- falling back to AutopilotProject.base_dir"
-    )
+    logger.warning(f"[REPO-RESOLUTION] project {project_id!r} has no ProjectRepo rows (migration not run?) -- falling back to AutopilotProject.base_dir")
     return Path(project.base_dir)
 
 
@@ -69,12 +66,7 @@ def get_project_repos(db: Session, project_id: str) -> List["ProjectRepo"]:
     correct; resolve_repo_path is the strict variant for write paths."""
     from src.core.database import ProjectRepo
 
-    return (
-        db.query(ProjectRepo)
-        .filter_by(project_id=project_id)
-        .order_by(ProjectRepo.is_primary.desc(), ProjectRepo.label.asc())
-        .all()
-    )
+    return db.query(ProjectRepo).filter_by(project_id=project_id).order_by(ProjectRepo.is_primary.desc(), ProjectRepo.label.asc()).all()
 
 
 def repo_id_for_path(db: Session, project_id: str, file_path: str) -> Optional[str]:

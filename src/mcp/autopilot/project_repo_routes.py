@@ -115,12 +115,9 @@ async def add_project_repo(
                 if "uq_project_repos_one_primary" in str(e):
                     raise HTTPException(
                         409,
-                        "This project already has a primary repo (lost a concurrent "
-                        "race to add the first repo) -- retry the request",
+                        "This project already has a primary repo (lost a concurrent race to add the first repo) -- retry the request",
                     )
-                raise HTTPException(
-                    409, f"A repo with label {req.label!r} or path {resolved_path!r} already exists on this project"
-                )
+                raise HTTPException(409, f"A repo with label {req.label!r} or path {resolved_path!r} already exists on this project")
 
             return ProjectRepoItem(
                 id=repo.id,
