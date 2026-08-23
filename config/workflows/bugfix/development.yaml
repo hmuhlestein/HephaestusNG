@@ -19,7 +19,7 @@ done_definitions:
   - "All feature components implemented and tested"
   - "Integration points implemented"
   - ".gitignore created if missing, covering standard runtime/tool artifacts for this language"
-  - "Unit tests written and passing"
+  - "Unit tests written and passing, with unit test coverage of the code you wrote at or above 80% — the qa_validation gate rejects a run below this floor"
   - "For each bug fix: the new/changed test was stash-verified to fail before the fix and pass after (git stash discipline — see STEP 4)"
   - "For each new feature: an acceptance test was stash-verified to fail without the implementation and pass with it — same discipline, `git stash push -u` so brand-new untracked source files are actually removed"
   - "`ruff check .` and `ruff format --check .` pass with ZERO errors (logging not print, imports at top, sorted) and `mypy` passes — run `ruff check --fix . && ruff format .` first, then verify clean before marking done"
@@ -172,6 +172,11 @@ additional_notes: |
      - Integration tests for interfaces
      - Edge case tests
      - Aim for meaningful coverage, not just line count
+     - COVERAGE FLOOR (MANDATORY): the qa_validation gate requires >= 80%
+       unit test coverage (`pytest --cov=src`) and rejects the run
+       otherwise, sending it back here. Check your coverage before marking
+       done — don't wait for QA to bounce it: `pytest --cov=src --cov-report=term-missing`
+       and add tests for any of your own uncovered lines it reports.
 
      STASH-VERIFY EVERY TEST YOU WRITE. A test that passes whether or not
      your code is there proves nothing — it is not a test, it is decoration.
