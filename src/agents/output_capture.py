@@ -188,12 +188,29 @@ class AgentOutputCapture:
 
         session = self.db_manager.get_session()
         try:
-            # Try current task first, then most recent task
+            # Try current task first, then most recent task. Both
+            # agent.current_task_id and task.assigned_agent_id are cleared
+            # on termination (see database.py's Agent.current_task_id
+            # comment) -- a terminated agent's only remaining link back to
+            # its task is the AgentLog "created" record's details["task_id"],
+            # which termination never touches. Without this fallback,
+            # every terminated agent's transcript dir was unresolvable and
+            # get_agent_output fell through to near-empty output.
             task = None
             if agent.current_task_id:
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
             if not task:
                 task = session.query(Task).filter_by(assigned_agent_id=agent.id).order_by(Task.created_at.desc()).first()
+            if not task:
+                created_log = (
+                    session.query(AgentLog)
+                    .filter_by(agent_id=agent.id, log_type="created")
+                    .order_by(AgentLog.timestamp.desc())
+                    .first()
+                )
+                task_id = created_log.details.get("task_id") if created_log and created_log.details else None
+                if task_id:
+                    task = session.query(Task).filter_by(id=task_id).first()
             if task and task.workflow:
                 if task.workflow.working_directory:
                     working_dir = task.workflow.working_directory
