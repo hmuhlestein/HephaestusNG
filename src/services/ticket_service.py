@@ -29,16 +29,10 @@ class TicketApprovalManager:
     """Manages ticket approval workflow with timeout and blocking."""
 
     def __init__(self):
-        self._pending_approvals: Dict[
-            str, asyncio.Event
-        ] = {}  # ticket_id -> asyncio.Event
-        self._approval_decisions: Dict[
-            str, Dict[str, Any]
-        ] = {}  # ticket_id -> {"approved": bool, "reason": str}
+        self._pending_approvals: Dict[str, asyncio.Event] = {}  # ticket_id -> asyncio.Event
+        self._approval_decisions: Dict[str, Dict[str, Any]] = {}  # ticket_id -> {"approved": bool, "reason": str}
 
-    async def wait_for_approval(
-        self, ticket_id: str, timeout_seconds: int
-    ) -> Dict[str, Any]:
+    async def wait_for_approval(self, ticket_id: str, timeout_seconds: int) -> Dict[str, Any]:
         """
         Block and wait for human approval decision.
 
@@ -56,9 +50,7 @@ class TicketApprovalManager:
         self._pending_approvals[ticket_id] = event
 
         try:
-            logger.info(
-                f"[APPROVAL_MANAGER] Waiting for approval of ticket {ticket_id} (timeout: {timeout_seconds}s)"
-            )
+            logger.info(f"[APPROVAL_MANAGER] Waiting for approval of ticket {ticket_id} (timeout: {timeout_seconds}s)")
 
             # Wait for approval with timeout
             await asyncio.wait_for(event.wait(), timeout=timeout_seconds)
@@ -66,15 +58,11 @@ class TicketApprovalManager:
             # Get decision
             decision = self._approval_decisions.pop(ticket_id, None)
             if decision:
-                logger.info(
-                    f"[APPROVAL_MANAGER] Ticket {ticket_id} decision: approved={decision.get('approved')}"
-                )
+                logger.info(f"[APPROVAL_MANAGER] Ticket {ticket_id} decision: approved={decision.get('approved')}")
                 return {**decision, "timed_out": False}
             else:
                 # Event was set but no decision found (shouldn't happen)
-                logger.error(
-                    f"[APPROVAL_MANAGER] Ticket {ticket_id} event set but no decision recorded"
-                )
+                logger.error(f"[APPROVAL_MANAGER] Ticket {ticket_id} event set but no decision recorded")
                 return {
                     "approved": False,
                     "reason": "No decision recorded",
@@ -82,9 +70,7 @@ class TicketApprovalManager:
                 }
 
         except asyncio.TimeoutError:
-            logger.warning(
-                f"[APPROVAL_MANAGER] Ticket {ticket_id} approval timed out after {timeout_seconds}s"
-            )
+            logger.warning(f"[APPROVAL_MANAGER] Ticket {ticket_id} approval timed out after {timeout_seconds}s")
             return {"approved": False, "reason": "Approval timeout", "timed_out": True}
         finally:
             # Cleanup
@@ -100,17 +86,13 @@ class TicketApprovalManager:
             approved: Whether ticket was approved
             reason: Rejection reason if rejected
         """
-        logger.info(
-            f"[APPROVAL_MANAGER] Recording decision for ticket {ticket_id}: approved={approved}"
-        )
+        logger.info(f"[APPROVAL_MANAGER] Recording decision for ticket {ticket_id}: approved={approved}")
         self._approval_decisions[ticket_id] = {"approved": approved, "reason": reason}
         event = self._pending_approvals.get(ticket_id)
         if event:
             event.set()
         else:
-            logger.warning(
-                f"[APPROVAL_MANAGER] No pending approval found for ticket {ticket_id}"
-            )
+            logger.warning(f"[APPROVAL_MANAGER] No pending approval found for ticket {ticket_id}")
 
     def is_pending(self, ticket_id: str) -> bool:
         """Check if ticket is awaiting approval."""
@@ -162,10 +144,7 @@ class TicketService:
         while queue:
             current_id = queue.pop(0)
             if current_id == ticket_id:
-                raise ValueError(
-                    f"Circular blocking detected: adding this dependency "
-                    f"would create a cycle back to ticket {ticket_id}"
-                )
+                raise ValueError(f"Circular blocking detected: adding this dependency would create a cycle back to ticket {ticket_id}")
             if current_id in visited:
                 continue
             visited.add(current_id)
@@ -209,76 +188,45 @@ class TicketService:
             logger.error("[TICKET_SERVICE] ========== FAILED ==========")
             raise ValueError(f"Workflow not found: {workflow_id}")
         if workflow.status not in ["active", "paused", "completed"]:
-            raise ValueError(
-                f"Workflow is not in a state that allows ticket creation: {workflow.status}"
-            )
+            raise ValueError(f"Workflow is not in a state that allows ticket creation: {workflow.status}")
 
         # Validate board_config exists for workflow
-        board_config = (
-            db.query(BoardConfig).filter_by(workflow_id=workflow_id).first()
-        )
+        board_config = db.query(BoardConfig).filter_by(workflow_id=workflow_id).first()
         if not board_config:
-            raise ValueError(
-                f"Board configuration not found for workflow: {workflow_id}"
-            )
+            raise ValueError(f"Board configuration not found for workflow: {workflow_id}")
 
         # Validate board config structure
-        if (
-            not isinstance(board_config.columns, list)
-            or len(board_config.columns) == 0
-        ):
-            raise ValueError(
-                "Invalid board configuration: columns must be a non-empty list"
-            )
+        if not isinstance(board_config.columns, list) or len(board_config.columns) == 0:
+            raise ValueError("Invalid board configuration: columns must be a non-empty list")
 
-        if (
-            not isinstance(board_config.ticket_types, list)
-            or len(board_config.ticket_types) == 0
-        ):
-            raise ValueError(
-                "Invalid board configuration: ticket_types must be a non-empty list"
-            )
+        if not isinstance(board_config.ticket_types, list) or len(board_config.ticket_types) == 0:
+            raise ValueError("Invalid board configuration: ticket_types must be a non-empty list")
 
         # Validate ticket_type is allowed by board_config
-        allowed_types = [
-            t["id"] if isinstance(t, dict) else t for t in board_config.ticket_types
-        ]
+        allowed_types = [t["id"] if isinstance(t, dict) else t for t in board_config.ticket_types]
         if ticket_type not in allowed_types:
-            raise ValueError(
-                f"Invalid ticket type '{ticket_type}'. Allowed types: {allowed_types}"
-            )
+            raise ValueError(f"Invalid ticket type '{ticket_type}'. Allowed types: {allowed_types}")
 
         # Use board_config.initial_status if initial_status is None
         if initial_status is None:
             initial_status = board_config.initial_status
 
         # Validate status is valid per board_config
-        valid_statuses = [
-            col["id"] if isinstance(col, dict) else col
-            for col in board_config.columns
-        ]
+        valid_statuses = [col["id"] if isinstance(col, dict) else col for col in board_config.columns]
         if initial_status not in valid_statuses:
-            raise ValueError(
-                f"Invalid status '{initial_status}'. Valid statuses: {valid_statuses}"
-            )
+            raise ValueError(f"Invalid status '{initial_status}'. Valid statuses: {valid_statuses}")
 
         # Ensure initial_status exists in columns
         if board_config.initial_status not in valid_statuses:
-            raise ValueError(
-                f"Invalid board config: initial_status '{board_config.initial_status}' not in columns"
-            )
+            raise ValueError(f"Invalid board config: initial_status '{board_config.initial_status}' not in columns")
 
         # Validate all blocked_by_ticket_ids exist and belong to same workflow
         for blocking_ticket_id in blocked_by_ticket_ids:
-            blocking_ticket = (
-                db.query(Ticket).filter_by(id=blocking_ticket_id).first()
-            )
+            blocking_ticket = db.query(Ticket).filter_by(id=blocking_ticket_id).first()
             if not blocking_ticket:
                 raise ValueError(f"Blocking ticket not found: {blocking_ticket_id}")
             if blocking_ticket.workflow_id != workflow_id:
-                raise ValueError(
-                    f"Blocking ticket {blocking_ticket_id} belongs to different workflow"
-                )
+                raise ValueError(f"Blocking ticket {blocking_ticket_id} belongs to different workflow")
 
         # Check for circular blocking (even for new ticket)
         # This prevents creating a ticket blocked by another that might later try to be blocked by this one
@@ -307,9 +255,7 @@ class TicketService:
         """
         ticket = db.query(Ticket).filter_by(id=ticket_id).first()
         if not ticket:
-            logger.warning(
-                f"[TICKET_SERVICE] Ticket {ticket_id} not found for deletion (already deleted?)"
-            )
+            logger.warning(f"[TICKET_SERVICE] Ticket {ticket_id} not found for deletion (already deleted?)")
             return False
 
         # Delete associated records first to avoid foreign key constraint errors
@@ -320,10 +266,7 @@ class TicketService:
         # Now delete the ticket
         db.delete(ticket)
         db.commit()
-        logger.info(
-            f"[TICKET_SERVICE] ✅ Ticket {ticket_id} deleted due to {reason} "
-            f"(deleted {history_count} history, {comment_count} comments, {commit_count} commits)"
-        )
+        logger.info(f"[TICKET_SERVICE] ✅ Ticket {ticket_id} deleted due to {reason} (deleted {history_count} history, {comment_count} comments, {commit_count} commits)")
         return True
 
     @staticmethod
@@ -349,9 +292,7 @@ class TicketService:
             from src.core.database import resolve_project_for_workflow
 
             server_state = get_app_state()
-            bcast_project_id, bcast_project_name = resolve_project_for_workflow(
-                workflow_id
-            )
+            bcast_project_id, bcast_project_name = resolve_project_for_workflow(workflow_id)
             await server_state.broadcast_update(
                 {
                     "type": event_type,
@@ -366,9 +307,7 @@ class TicketService:
             logger.warning(f"[TICKET_SERVICE] Failed to broadcast {failure_context}: {e}")
 
     @staticmethod
-    async def _wait_for_ticket_approval(
-        ticket_id: str, workflow_id: str, title: str, approval_timeout: int
-    ) -> None:
+    async def _wait_for_ticket_approval(ticket_id: str, workflow_id: str, title: str, approval_timeout: int) -> None:
         """
         Wait for human approval of a pending ticket. Deletes the ticket
         and raises ValueError on timeout or rejection; marks it approved
@@ -383,9 +322,7 @@ class TicketService:
         Raises:
             ValueError: If the ticket times out or is rejected
         """
-        logger.info(
-            f"[TICKET_SERVICE] Waiting for human approval (timeout: {approval_timeout}s)..."
-        )
+        logger.info(f"[TICKET_SERVICE] Waiting for human approval (timeout: {approval_timeout}s)...")
 
         await TicketService._broadcast_ticket_event(
             "ticket_pending_review",
@@ -407,15 +344,11 @@ class TicketService:
                     {"ticket_id": ticket_id, "reason": "timeout"},
                     "ticket deletion",
                 )
-            raise ValueError(
-                f"Ticket approval timeout after {approval_timeout} seconds. Please try again."
-            )
+            raise ValueError(f"Ticket approval timeout after {approval_timeout} seconds. Please try again.")
 
         if not decision["approved"]:
             rejection_reason = decision.get("reason", "No reason provided")
-            logger.error(
-                f"[TICKET_SERVICE] Ticket {ticket_id} rejected: {rejection_reason}"
-            )
+            logger.error(f"[TICKET_SERVICE] Ticket {ticket_id} rejected: {rejection_reason}")
             with get_db() as db:
                 deleted = TicketService._delete_ticket_cascade(db, ticket_id, "rejection")
             if deleted:
@@ -439,13 +372,9 @@ class TicketService:
                 ticket.approval_status = "approved"
                 ticket.approval_decided_at = datetime.utcnow()
                 db.commit()
-                logger.info(
-                    f"[TICKET_SERVICE] Ticket {ticket_id} approval status updated to 'approved'"
-                )
+                logger.info(f"[TICKET_SERVICE] Ticket {ticket_id} approval status updated to 'approved'")
 
-        await TicketService._broadcast_ticket_event(
-            "ticket_approved", workflow_id, {"ticket_id": ticket_id}, "approval"
-        )
+        await TicketService._broadcast_ticket_event("ticket_approved", workflow_id, {"ticket_id": ticket_id}, "approval")
 
     @staticmethod
     async def _index_new_ticket(
@@ -472,9 +401,7 @@ class TicketService:
         """
         logger.info(f"[TICKET_SERVICE] Generating embedding for ticket {ticket_id}...")
         try:
-            logger.info(
-                f"Creating ticket for workflow {workflow_id}: '{title}' by agent {agent_id}"
-            )
+            logger.info(f"Creating ticket for workflow {workflow_id}: '{title}' by agent {agent_id}")
 
             embedding_id = await TicketSearchService.index_ticket(
                 ticket_id=ticket_id,
@@ -501,28 +428,17 @@ class TicketService:
                 db.commit()
 
             # Find semantically similar tickets for duplicate detection
-            similar_tickets = await TicketSearchService.find_related_tickets(
-                ticket_id, limit=3
-            )
+            similar_tickets = await TicketSearchService.find_related_tickets(ticket_id, limit=3)
 
             # Warn if potential duplicate detected
-            if (
-                similar_tickets
-                and similar_tickets[0]["similarity_score"]
-                >= TicketSearchService.DUPLICATE_THRESHOLD
-            ):
-                logger.warning(
-                    f"Potential duplicate ticket detected: {similar_tickets[0]['ticket_id']} "
-                    f"(similarity: {similar_tickets[0]['similarity_score']:.2f})"
-                )
+            if similar_tickets and similar_tickets[0]["similarity_score"] >= TicketSearchService.DUPLICATE_THRESHOLD:
+                logger.warning(f"Potential duplicate ticket detected: {similar_tickets[0]['ticket_id']} (similarity: {similar_tickets[0]['similarity_score']:.2f})")
 
             return True, similar_tickets
 
         except Exception as e:
             # Log error but don't fail ticket creation
-            logger.error(
-                f"[TICKET_SERVICE] ❌ Failed to generate embedding for ticket {ticket_id}: {e}"
-            )
+            logger.error(f"[TICKET_SERVICE] ❌ Failed to generate embedding for ticket {ticket_id}: {e}")
             return False, []
 
     @staticmethod
@@ -571,40 +487,32 @@ class TicketService:
         logger.info(f"[TICKET_SERVICE] workflow_id: {workflow_id}")
         logger.info(f"[TICKET_SERVICE] agent_id: {agent_id}")
         logger.info(f"[TICKET_SERVICE] title: {title[:60]}...")
-        logger.info(
-            f"[TICKET_SERVICE] ticket_type: {ticket_type}, priority: {priority}"
-        )
+        logger.info(f"[TICKET_SERVICE] ticket_type: {ticket_type}, priority: {priority}")
 
         blocked_by_ticket_ids = blocked_by_ticket_ids or []
         tags = tags or []
         related_task_ids = related_task_ids or []
 
         with get_db() as db:
-            workflow, board_config, initial_status = (
-                TicketService._validate_ticket_creation(
-                    db,
-                    workflow_id,
-                    ticket_type,
-                    initial_status,
-                    blocked_by_ticket_ids,
-                    agent_id,
-                )
+            workflow, board_config, initial_status = TicketService._validate_ticket_creation(
+                db,
+                workflow_id,
+                ticket_type,
+                initial_status,
+                blocked_by_ticket_ids,
+                agent_id,
             )
 
             # Check if human review is enabled
             human_review_enabled = board_config.ticket_human_review or False
             approval_timeout = board_config.approval_timeout_seconds or 1800
-            logger.info(
-                f"[TICKET_SERVICE] Human review enabled: {human_review_enabled}"
-            )
+            logger.info(f"[TICKET_SERVICE] Human review enabled: {human_review_enabled}")
 
             # Determine initial approval_status
             if human_review_enabled:
                 approval_status = "pending_review"
                 approval_requested_at = datetime.utcnow()
-                logger.info(
-                    f"[TICKET_SERVICE] Ticket will require human approval (timeout: {approval_timeout}s)"
-                )
+                logger.info(f"[TICKET_SERVICE] Ticket will require human approval (timeout: {approval_timeout}s)")
             else:
                 approval_status = "auto_approved"
                 approval_requested_at = None
@@ -667,15 +575,11 @@ class TicketService:
 
             logger.info("[TICKET_SERVICE] Committing transaction...")
             db.commit()
-            logger.info(
-                "[TICKET_SERVICE] ✅ Transaction committed - ticket saved to database"
-            )
+            logger.info("[TICKET_SERVICE] ✅ Transaction committed - ticket saved to database")
 
         # If human review required, wait for approval
         if human_review_enabled:
-            await TicketService._wait_for_ticket_approval(
-                ticket_id, workflow_id, title, approval_timeout
-            )
+            await TicketService._wait_for_ticket_approval(ticket_id, workflow_id, title, approval_timeout)
 
         # Generate embedding and store in Qdrant (outside transaction)
         embedding_created, similar_tickets = await TicketService._index_new_ticket(
@@ -753,9 +657,7 @@ class TicketService:
             # Process each update
             for field, new_value in updates.items():
                 if field not in allowed_fields:
-                    raise ValueError(
-                        f"Field '{field}' cannot be updated. Allowed fields: {allowed_fields}"
-                    )
+                    raise ValueError(f"Field '{field}' cannot be updated. Allowed fields: {allowed_fields}")
 
                 # Get old value
                 old_value = getattr(ticket, field)
@@ -816,9 +718,7 @@ class TicketService:
                 embedding_updated = True
                 logger.info(f"Regenerated embedding for ticket {ticket_id}")
             except Exception as e:
-                logger.error(
-                    f"Failed to regenerate embedding for ticket {ticket_id}: {e}"
-                )
+                logger.error(f"Failed to regenerate embedding for ticket {ticket_id}: {e}")
 
         return {
             "success": True,
@@ -859,38 +759,22 @@ class TicketService:
                 raise ValueError(f"Ticket not found: {ticket_id}")
 
             # Get board config to validate new_status
-            board_config = (
-                db.query(BoardConfig).filter_by(workflow_id=ticket.workflow_id).first()
-            )
+            board_config = db.query(BoardConfig).filter_by(workflow_id=ticket.workflow_id).first()
             if not board_config:
-                raise ValueError(
-                    f"Board configuration not found for workflow: {ticket.workflow_id}"
-                )
+                raise ValueError(f"Board configuration not found for workflow: {ticket.workflow_id}")
 
             # Validate new_status is valid per board_config
-            valid_statuses = [
-                col["id"] if isinstance(col, dict) else col
-                for col in board_config.columns
-            ]
+            valid_statuses = [col["id"] if isinstance(col, dict) else col for col in board_config.columns]
             if new_status not in valid_statuses:
-                raise ValueError(
-                    f"Invalid status '{new_status}'. Valid statuses: {valid_statuses}"
-                )
+                raise ValueError(f"Invalid status '{new_status}'. Valid statuses: {valid_statuses}")
 
             # CRITICAL: Check if ticket is blocked
             if ticket.blocked_by_ticket_ids and len(ticket.blocked_by_ticket_ids) > 0:
                 # Get blocking ticket titles for clearer error message
-                blocking_tickets = (
-                    db.query(Ticket)
-                    .filter(Ticket.id.in_(ticket.blocked_by_ticket_ids))
-                    .all()
-                )
+                blocking_tickets = db.query(Ticket).filter(Ticket.id.in_(ticket.blocked_by_ticket_ids)).all()
                 blocking_titles = [f"{t.id}: {t.title}" for t in blocking_tickets]
 
-                error_message = (
-                    f"Cannot change status: Ticket is blocked by {len(blocking_titles)} ticket(s): "
-                    f"{', '.join(blocking_titles[:3])}"
-                )
+                error_message = f"Cannot change status: Ticket is blocked by {len(blocking_titles)} ticket(s): {', '.join(blocking_titles[:3])}"
                 if len(blocking_titles) > 3:
                     error_message += f" and {len(blocking_titles) - 3} more"
 
@@ -918,17 +802,13 @@ class TicketService:
                 # Reset if moved back to initial
                 ticket.started_at = None
                 ticket.completed_at = None
-            elif (
-                ticket.started_at is None and new_status != board_config.initial_status
-            ):
+            elif ticket.started_at is None and new_status != board_config.initial_status:
                 # Mark as started if moving from initial status
                 ticket.started_at = datetime.utcnow()
 
             # Check if this is a completion status (last column)
             columns = board_config.columns
-            last_column_id = (
-                columns[-1]["id"] if isinstance(columns[-1], dict) else columns[-1]
-            )
+            last_column_id = columns[-1]["id"] if isinstance(columns[-1], dict) else columns[-1]
             if new_status == last_column_id:
                 ticket.completed_at = datetime.utcnow()
                 ticket.is_resolved = True
@@ -1056,9 +936,7 @@ class TicketService:
             ticket.updated_at = datetime.utcnow()
 
             # Check comment count - every 5 comments, reindex ticket
-            comment_count = (
-                db.query(TicketComment).filter_by(ticket_id=ticket_id).count()
-            )
+            comment_count = db.query(TicketComment).filter_by(ticket_id=ticket_id).count()
 
             db.commit()
 
@@ -1066,9 +944,7 @@ class TicketService:
         if comment_count % 5 == 0:
             try:
                 await TicketSearchService.reindex_ticket(ticket_id)
-                logger.info(
-                    f"Reindexed ticket {ticket_id} after {comment_count} comments"
-                )
+                logger.info(f"Reindexed ticket {ticket_id} after {comment_count} comments")
             except Exception as e:
                 logger.error(f"Failed to reindex ticket {ticket_id}: {e}")
 
@@ -1096,28 +972,13 @@ class TicketService:
                 return None
 
             # Get comments
-            comments = (
-                db.query(TicketComment)
-                .filter_by(ticket_id=ticket_id)
-                .order_by(TicketComment.created_at)
-                .all()
-            )
+            comments = db.query(TicketComment).filter_by(ticket_id=ticket_id).order_by(TicketComment.created_at).all()
 
             # Get history
-            history = (
-                db.query(TicketHistory)
-                .filter_by(ticket_id=ticket_id)
-                .order_by(TicketHistory.changed_at)
-                .all()
-            )
+            history = db.query(TicketHistory).filter_by(ticket_id=ticket_id).order_by(TicketHistory.changed_at).all()
 
             # Get commits
-            commits = (
-                db.query(TicketCommit)
-                .filter_by(ticket_id=ticket_id)
-                .order_by(TicketCommit.commit_timestamp)
-                .all()
-            )
+            commits = db.query(TicketCommit).filter_by(ticket_id=ticket_id).order_by(TicketCommit.commit_timestamp).all()
 
             # Get all tasks that reference this ticket
             related_tasks = db.query(Task).filter_by(ticket_id=ticket_id).all()
@@ -1125,9 +986,7 @@ class TicketService:
 
             # Find all tickets that are blocked by this ticket
             # Query for tickets where blocked_by_ticket_ids contains this ticket_id
-            all_tickets = (
-                db.query(Ticket).filter(Ticket.workflow_id == ticket.workflow_id).all()
-            )
+            all_tickets = db.query(Ticket).filter(Ticket.workflow_id == ticket.workflow_id).all()
             blocks_ticket_ids = []
             for t in all_tickets:
                 if t.blocked_by_ticket_ids and ticket_id in t.blocked_by_ticket_ids:
@@ -1148,26 +1007,17 @@ class TicketService:
                 "assigned_agent_id": ticket.assigned_agent_id,
                 "created_at": ticket.created_at.isoformat() + "Z",
                 "updated_at": ticket.updated_at.isoformat() + "Z",
-                "started_at": ticket.started_at.isoformat() + "Z"
-                if ticket.started_at
-                else None,
-                "completed_at": ticket.completed_at.isoformat() + "Z"
-                if ticket.completed_at
-                else None,
+                "started_at": ticket.started_at.isoformat() + "Z" if ticket.started_at else None,
+                "completed_at": ticket.completed_at.isoformat() + "Z" if ticket.completed_at else None,
                 "parent_ticket_id": ticket.parent_ticket_id,
                 "related_task_ids": related_task_ids,  # Dynamically fetched from tasks
                 "related_ticket_ids": ticket.related_ticket_ids or [],
                 "tags": ticket.tags or [],
                 "blocked_by_ticket_ids": ticket.blocked_by_ticket_ids or [],
                 "blocks_ticket_ids": blocks_ticket_ids,  # Dynamically computed reverse relationship
-                "is_blocked": bool(
-                    ticket.blocked_by_ticket_ids
-                    and len(ticket.blocked_by_ticket_ids) > 0
-                ),
+                "is_blocked": bool(ticket.blocked_by_ticket_ids and len(ticket.blocked_by_ticket_ids) > 0),
                 "is_resolved": ticket.is_resolved,
-                "resolved_at": ticket.resolved_at.isoformat() + "Z"
-                if ticket.resolved_at
-                else None,
+                "resolved_at": ticket.resolved_at.isoformat() + "Z" if ticket.resolved_at else None,
                 "comment_count": len(comments),
                 "commit_count": len(commits),
             }
@@ -1180,9 +1030,7 @@ class TicketService:
                     "comment_text": c.comment_text,
                     "comment_type": c.comment_type,
                     "created_at": c.created_at.isoformat() + "Z",
-                    "updated_at": c.updated_at.isoformat() + "Z"
-                    if c.updated_at
-                    else None,
+                    "updated_at": c.updated_at.isoformat() + "Z" if c.updated_at else None,
                     "is_edited": c.is_edited if c.is_edited is not None else False,
                     "mentions": c.mentions or [],
                     "attachments": c.attachments or [],
@@ -1229,9 +1077,7 @@ class TicketService:
             }
 
     @staticmethod
-    async def get_tickets_by_workflow(
-        workflow_id: str, filters: Optional[Dict[str, Any]] = None
-    ) -> List[Dict[str, Any]]:
+    async def get_tickets_by_workflow(workflow_id: str, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
         Get all tickets for a workflow with optional filtering.
 
@@ -1245,14 +1091,10 @@ class TicketService:
         # Offloaded -- callers loop this per-workflow for a project-wide
         # fetch (tickets_api.py's get_tickets_endpoint), so each iteration
         # would otherwise block the event loop for its own DB round-trip.
-        return await asyncio.to_thread(
-            TicketService._get_tickets_by_workflow_sync, workflow_id, filters
-        )
+        return await asyncio.to_thread(TicketService._get_tickets_by_workflow_sync, workflow_id, filters)
 
     @staticmethod
-    def _get_tickets_by_workflow_sync(
-        workflow_id: str, filters: Optional[Dict[str, Any]] = None
-    ) -> List[Dict[str, Any]]:
+    def _get_tickets_by_workflow_sync(workflow_id: str, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Sync body of get_tickets_by_workflow -- run via asyncio.to_thread."""
         filters = filters or {}
 
@@ -1265,9 +1107,7 @@ class TicketService:
             if "priority" in filters:
                 query = query.filter(Ticket.priority == filters["priority"])
             if "assigned_agent_id" in filters:
-                query = query.filter(
-                    Ticket.assigned_agent_id == filters["assigned_agent_id"]
-                )
+                query = query.filter(Ticket.assigned_agent_id == filters["assigned_agent_id"])
             if "ticket_type" in filters:
                 query = query.filter(Ticket.ticket_type == filters["ticket_type"])
             if "is_resolved" in filters:
@@ -1290,18 +1130,12 @@ class TicketService:
                     "assigned_agent_id": t.assigned_agent_id,
                     "created_at": t.created_at.isoformat() + "Z",
                     "updated_at": t.updated_at.isoformat() + "Z",
-                    "started_at": t.started_at.isoformat() + "Z"
-                    if t.started_at
-                    else None,
-                    "completed_at": t.completed_at.isoformat() + "Z"
-                    if t.completed_at
-                    else None,
+                    "started_at": t.started_at.isoformat() + "Z" if t.started_at else None,
+                    "completed_at": t.completed_at.isoformat() + "Z" if t.completed_at else None,
                     "tags": t.tags or [],
                     "comment_count": 0,  # TODO: Query actual count
                     "commit_count": 0,  # TODO: Query actual count
-                    "is_blocked": bool(
-                        t.blocked_by_ticket_ids and len(t.blocked_by_ticket_ids) > 0
-                    ),
+                    "is_blocked": bool(t.blocked_by_ticket_ids and len(t.blocked_by_ticket_ids) > 0),
                     "blocked_by_ticket_ids": t.blocked_by_ticket_ids or [],
                     "is_resolved": t.is_resolved,
                 }
@@ -1309,9 +1143,7 @@ class TicketService:
             ]
 
     @staticmethod
-    async def get_tickets_by_status(
-        workflow_id: str, status: str
-    ) -> List[Dict[str, Any]]:
+    async def get_tickets_by_status(workflow_id: str, status: str) -> List[Dict[str, Any]]:
         """
         Get all tickets with a specific status.
 
@@ -1322,9 +1154,7 @@ class TicketService:
         Returns:
             List of ticket dictionaries
         """
-        return await TicketService.get_tickets_by_workflow(
-            workflow_id, filters={"status": status}
-        )
+        return await TicketService.get_tickets_by_workflow(workflow_id, filters={"status": status})
 
     @staticmethod
     async def assign_ticket(ticket_id: str, agent_id: str) -> Dict[str, Any]:
@@ -1391,9 +1221,7 @@ class TicketService:
         try:
             # Get diff stats
             cmd = ["git", "show", "--numstat", "--format=", commit_sha]
-            result = subprocess.run(
-                cmd, cwd=repo_path, capture_output=True, text=True, check=True
-            )
+            result = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True, check=True)
 
             files_changed = 0
             insertions = 0
@@ -1466,13 +1294,9 @@ class TicketService:
             ValueError: If validation fails
         """
         if db is not None:
-            return await TicketService._link_commit_impl(
-                db, ticket_id, agent_id, commit_sha, commit_message, link_method
-            )
+            return await TicketService._link_commit_impl(db, ticket_id, agent_id, commit_sha, commit_message, link_method)
         with get_db() as db:
-            return await TicketService._link_commit_impl(
-                db, ticket_id, agent_id, commit_sha, commit_message, link_method
-            )
+            return await TicketService._link_commit_impl(db, ticket_id, agent_id, commit_sha, commit_message, link_method)
 
     @staticmethod
     async def _link_commit_impl(
@@ -1490,11 +1314,7 @@ class TicketService:
             raise ValueError(f"Ticket not found: {ticket_id}")
 
         # Check if commit already linked
-        existing = (
-            db.query(TicketCommit)
-            .filter_by(ticket_id=ticket_id, commit_sha=commit_sha)
-            .first()
-        )
+        existing = db.query(TicketCommit).filter_by(ticket_id=ticket_id, commit_sha=commit_sha).first()
         if existing:
             return {
                 "success": True,
@@ -1522,7 +1342,8 @@ class TicketService:
 
                 try:
                     main_repo_path = str(resolve_repo_path(db, project_id, commit_repo_id))
-                except (RepoNotFoundError, ValueError):
+                except (RepoNotFoundError, ValueError) as e:
+                    logger.warning(f"[REPO-RESOLUTION] Failed to resolve repo for ticket {ticket_id}, commit {commit_sha}: {e} -- falling back to config.main_repo_path")
                     main_repo_path = None
         if main_repo_path is None:
             config = get_config()
@@ -1530,9 +1351,7 @@ class TicketService:
         # _get_commit_stats shells out to `git show --numstat` --
         # blocking, offloaded so it doesn't stall the event loop.
         loop = asyncio.get_event_loop()
-        commit_stats = await loop.run_in_executor(
-            None, TicketService._get_commit_stats, commit_sha, main_repo_path
-        )
+        commit_stats = await loop.run_in_executor(None, TicketService._get_commit_stats, commit_sha, main_repo_path)
 
         # REQ-10 (soft enforcement): a commit whose changed files fall
         # outside its task's assigned repo is logged, never rejected --
@@ -1541,16 +1360,9 @@ class TicketService:
         if project_id and commit_repo_id:
             from src.core.repo_resolution import repo_id_for_path
 
-            offending = [
-                f
-                for f in commit_stats["files_list"] or []
-                if repo_id_for_path(db, project_id, str(Path(main_repo_path) / f)) not in (None, commit_repo_id)
-            ]
+            offending = [f for f in commit_stats["files_list"] or [] if repo_id_for_path(db, project_id, str(Path(main_repo_path) / f)) not in (None, commit_repo_id)]
             if offending:
-                logger.warning(
-                    f"[REPO-SCOPE] commit {commit_sha} on ticket {ticket_id} touches files "
-                    f"outside its assigned repo {commit_repo_id}: {offending}"
-                )
+                logger.warning(f"[REPO-SCOPE] commit {commit_sha} on ticket {ticket_id} touches files outside its assigned repo {commit_repo_id}: {offending}")
 
         # Create commit link with real stats
         commit_id = f"tc-{uuid.uuid4()}"
@@ -1583,8 +1395,8 @@ class TicketService:
             "success": True,
             "ticket_id": ticket_id,
             "commit_sha": commit_sha,
-                "message": "Commit linked successfully",
-            }
+            "message": "Commit linked successfully",
+        }
 
     @staticmethod
     async def resolve_ticket(
@@ -1645,24 +1457,15 @@ class TicketService:
 
             # Find all tickets blocked by this ticket
             # Query for tickets where blocked_by_ticket_ids contains this ticket_id
-            all_tickets = (
-                db.query(Ticket).filter(Ticket.workflow_id == ticket.workflow_id).all()
-            )
+            all_tickets = db.query(Ticket).filter(Ticket.workflow_id == ticket.workflow_id).all()
 
             unblocked_ticket_ids = []
 
             for dependent_ticket in all_tickets:
-                if (
-                    dependent_ticket.blocked_by_ticket_ids
-                    and ticket_id in dependent_ticket.blocked_by_ticket_ids
-                ):
+                if dependent_ticket.blocked_by_ticket_ids and ticket_id in dependent_ticket.blocked_by_ticket_ids:
                     # Remove this ticket_id from their blocked_by_ticket_ids
                     # Need to create a new list to trigger SQLAlchemy's change tracking
-                    new_blocked_list = [
-                        tid
-                        for tid in dependent_ticket.blocked_by_ticket_ids
-                        if tid != ticket_id
-                    ]
+                    new_blocked_list = [tid for tid in dependent_ticket.blocked_by_ticket_ids if tid != ticket_id]
                     dependent_ticket.blocked_by_ticket_ids = new_blocked_list
                     dependent_ticket.updated_at = datetime.utcnow()
 
@@ -1707,19 +1510,14 @@ class TicketService:
 
             db.commit()
 
-            logger.info(
-                f"Resolved ticket {ticket_id}, unblocking {len(unblocked_ticket_ids)} dependent tickets: "
-                f"{unblocked_ticket_ids}"
-            )
+            logger.info(f"Resolved ticket {ticket_id}, unblocking {len(unblocked_ticket_ids)} dependent tickets: {unblocked_ticket_ids}")
 
         # Unblock tasks associated with unblocked tickets (outside transaction)
         unblocked_task_ids = []
         if unblocked_ticket_ids:
             from src.services.task_blocking_service import TaskBlockingService
 
-            logger.info(
-                f"Checking for tasks to unblock for tickets: {unblocked_ticket_ids}"
-            )
+            logger.info(f"Checking for tasks to unblock for tickets: {unblocked_ticket_ids}")
 
             with get_db() as db:
                 # Find all tasks associated with the unblocked tickets
@@ -1738,37 +1536,25 @@ class TicketService:
                         # Get the task's ticket and check if it still has blockers
                         ticket = db.query(Ticket).filter_by(id=task.ticket_id).first()
                         if not ticket:
-                            logger.warning(
-                                f"Task {task.id} references non-existent ticket {task.ticket_id}"
-                            )
+                            logger.warning(f"Task {task.id} references non-existent ticket {task.ticket_id}")
                             continue
 
                         # Check if ticket still has blocking dependencies
-                        if (
-                            ticket.blocked_by_ticket_ids
-                            and len(ticket.blocked_by_ticket_ids) > 0
-                        ):
+                        if ticket.blocked_by_ticket_ids and len(ticket.blocked_by_ticket_ids) > 0:
                             # Ticket still has other blockers - don't unblock the task yet
                             remaining_blockers = ticket.blocked_by_ticket_ids
-                            logger.info(
-                                f"Task {task.id} still blocked - ticket {task.ticket_id} has {len(remaining_blockers)} "
-                                f"remaining blocker(s): {remaining_blockers}"
-                            )
+                            logger.info(f"Task {task.id} still blocked - ticket {task.ticket_id} has {len(remaining_blockers)} remaining blocker(s): {remaining_blockers}")
                             continue
 
                         # All blockers resolved - safe to unblock the task
                         result = TaskBlockingService.unblock_task(task.id)
                         if result["success"]:
                             unblocked_task_ids.append(task.id)
-                            logger.info(
-                                f"Unblocked task {task.id} (ticket {task.ticket_id}) - ALL blockers resolved"
-                            )
+                            logger.info(f"Unblocked task {task.id} (ticket {task.ticket_id}) - ALL blockers resolved")
                     except Exception as e:
                         logger.error(f"Failed to unblock task {task.id}: {e}")
 
-            logger.info(
-                f"Unblocked {len(unblocked_task_ids)} tasks: {unblocked_task_ids}"
-            )
+            logger.info(f"Unblocked {len(unblocked_task_ids)} tasks: {unblocked_task_ids}")
 
         return {
             "success": True,
@@ -1804,9 +1590,7 @@ class TicketService:
                 raise ValueError(f"Ticket not found: {ticket_id}")
 
             if ticket.approval_status != "pending_review":
-                raise ValueError(
-                    f"Ticket is not pending review (current status: {ticket.approval_status})"
-                )
+                raise ValueError(f"Ticket is not pending review (current status: {ticket.approval_status})")
 
             # Record who approved it (will be updated to 'approved' by create_ticket flow)
             ticket.approval_decided_by = approved_by
@@ -1843,9 +1627,7 @@ class TicketService:
         Raises:
             ValueError: If ticket not found or not pending review
         """
-        logger.info(
-            f"[TICKET_SERVICE] Rejecting ticket {ticket_id} by {rejected_by}: {rejection_reason}"
-        )
+        logger.info(f"[TICKET_SERVICE] Rejecting ticket {ticket_id} by {rejected_by}: {rejection_reason}")
 
         with get_db() as db:
             ticket = db.query(Ticket).filter_by(id=ticket_id).first()
@@ -1853,9 +1635,7 @@ class TicketService:
                 raise ValueError(f"Ticket not found: {ticket_id}")
 
             if ticket.approval_status != "pending_review":
-                raise ValueError(
-                    f"Ticket is not pending review (current status: {ticket.approval_status})"
-                )
+                raise ValueError(f"Ticket is not pending review (current status: {ticket.approval_status})")
 
             # Record rejection info (will be deleted by create_ticket flow)
             ticket.approval_decided_by = rejected_by
@@ -1863,9 +1643,7 @@ class TicketService:
             db.commit()
 
         # Record decision in approval manager to wake up waiting coroutine
-        approval_manager.record_decision(
-            ticket_id, approved=False, reason=rejection_reason
-        )
+        approval_manager.record_decision(ticket_id, approved=False, reason=rejection_reason)
 
         logger.info(f"[TICKET_SERVICE] ❌ Ticket {ticket_id} rejected by {rejected_by}")
 
