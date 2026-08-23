@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.core.database import (
     Agent,
     BoardConfig,
+    RepoResolutionError,
     Task,
     Ticket,
     TicketComment,
@@ -1352,8 +1353,10 @@ class TicketService:
             if wf and wf.project_id:
                 try:
                     resolved_repo = resolve_project_repo(db, wf.project_id, None)
-                except Exception:
-                    pass
+                except RepoResolutionError as e:
+                    logger.warning(f"Could not resolve project repo for ticket {ticket_id}: {e}")
+                except Exception as e:
+                    logger.error(f"Unexpected error resolving repo: {e}")
 
         main_repo_path = resolved_repo.path if resolved_repo else None
         if main_repo_path is None:

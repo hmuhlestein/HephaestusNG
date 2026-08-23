@@ -707,6 +707,13 @@ async def create_project_repo(
         if not proj:
             raise HTTPException(404, "Project not found")
 
+        # WARNING-3: Clear is_primary on existing repos if creating a new primary
+        if req.is_primary:
+            db.query(ProjectRepo).filter(
+                ProjectRepo.project_id == project_id,
+                ProjectRepo.is_primary,
+            ).update({"is_primary": False})
+
         repo_id = f"repo-{uuid.uuid4()}"
         repo = ProjectRepo(
             id=repo_id,
@@ -797,6 +804,11 @@ async def delete_project_repo(
             raise HTTPException(404, "Repo not found")
         if repo.is_primary:
             raise HTTPException(400, "Cannot delete the primary repo")
+
+        # WARNING-5: Check if this is the last repo for the project
+        repo_count = db.query(ProjectRepo).filter_by(project_id=project_id).count()
+        if repo_count <= 1:
+            raise HTTPException(400, "Cannot delete the last repo for a project")
 
         # Check for FK references
         task_refs = db.query(Task).filter_by(repo_id=repo_id).count()

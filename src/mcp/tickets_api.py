@@ -48,6 +48,7 @@ def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[tuple]:
     try:
         from src.core.database import (
             ProjectRepo,
+            RepoResolutionError,
             Task,
             Ticket,
             TicketCommit,
@@ -85,6 +86,9 @@ def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[tuple]:
                 logger.warning(f"Commit {commit_sha[:8]} linked to ticket {ticket.id} without task_id or repo_id in multi-repo project {wf.project_id}; falling back to primary repo {repo.id}")
 
             return (repo.path, repo.id, repo.label)
+    except RepoResolutionError as e:
+        logger.warning(f"No ProjectRepo for commit {commit_sha[:8]}: {e}")
+        return None
     except Exception as e:
         logger.error(f"Error resolving repo path for commit {commit_sha[:8]}: {e}")
         return None

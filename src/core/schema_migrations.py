@@ -749,15 +749,15 @@ def migrate_project_repos_table(engine):
 
     try:
         with engine.connect() as conn:
-            for table, column in [
-                ("tasks", "repo_id"),
-                ("tickets", "repo_id"),
-                ("ticket_commits", "repo_id"),
-                ("agent_worktrees", "repo_id"),
-                ("ticket_commits", "out_of_scope"),
+            for table, column, col_type in [
+                ("tasks", "repo_id", "VARCHAR"),
+                ("tickets", "repo_id", "VARCHAR"),
+                ("ticket_commits", "repo_id", "VARCHAR"),
+                ("agent_worktrees", "repo_id", "VARCHAR"),
+                ("ticket_commits", "out_of_scope", "BOOLEAN DEFAULT 0"),
             ]:
                 try:
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} VARCHAR"))
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
                 except Exception:
                     pass  # Column already exists
             # Create unique partial index for is_primary (BLOCKER-2 fix)

@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Set, Tuple
@@ -108,35 +107,45 @@ def is_design_fully_complete(workflow_id: str, logger: "OrchestratorLogger") -> 
 
     # Check for unmerged agent branches
     try:
-        # Get project path from workflow's working directory
-        wf_data = get_workflow_status(workflow_id)
-        project_path = wf_data.get("working_directory") or os.getenv("PROJECT_PATH")
-        if not project_path:
-            # Fallback: try to get from DB
-            try:
-                from src.core.database import Workflow, get_db
+        from src.core.database import ProjectRepo
 
-                with get_db() as _db:
-                    _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
-                    if _wf and _wf.working_directory and Path(_wf.working_directory).exists():
-                        project_path = _wf.working_directory
-            except Exception:
-                pass
-        if not project_path:
-            return False, "Cannot determine project path for branch check"
-        result = subprocess.run(
-            ["git", "branch", "--list", "agent-*"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=project_path,
-        )
-        if result.returncode == 0:
-            branches = [b.strip().lstrip("* ") for b in result.stdout.strip().split("\n") if b.strip()]
-            if branches:
-                return False, f"{len(branches)} unmerged agent branch(es)"
-    except Exception:
-        pass
+        # Get project_id from workflow
+        project_id = None
+        try:
+            from src.core.database import Workflow, get_db
+
+            with get_db() as _db:
+                _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
+                if _wf:
+                    project_id = _wf.project_id
+        except Exception:
+            pass
+
+        if not project_id:
+            return False, "Cannot determine project for branch check"
+
+        # Iterate all ProjectRepos for the project (BLOCKER-3 fix)
+        with get_db() as _db:
+            repos = _db.query(ProjectRepo).filter_by(project_id=project_id).all()
+            if not repos:
+                return False, "No ProjectRepos found for project"
+
+            for repo in repos:
+                if not Path(repo.path).exists():
+                    continue
+                result = subprocess.run(
+                    ["git", "branch", "--list", "agent-*"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    cwd=repo.path,
+                )
+                if result.returncode == 0:
+                    branches = [b.strip().lstrip("* ") for b in result.stdout.strip().split("\n") if b.strip()]
+                    if branches:
+                        return False, f"{len(branches)} unmerged agent branch(es) in {repo.label}"
+    except Exception as e:
+        logger.warning(f"Error checking branches: {e}")
 
     # Check done task count vs actual phase count (not hardcoded 10).
     try:

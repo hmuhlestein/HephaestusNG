@@ -248,8 +248,8 @@ def _resolve_recovery_project_paths(workflow_id: str) -> List[str]:
                         paths.append(repo.path)
             if not paths and _wf and _wf.working_directory and Path(_wf.working_directory).exists():
                 paths.append(_wf.working_directory)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to resolve recovery paths for workflow {workflow_id}: {e}")
     if not paths:
         env_path = os.getenv("PROJECT_PATH")
         if env_path:
