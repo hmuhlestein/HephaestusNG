@@ -671,3 +671,171 @@ async def delete_project(
 
 
 
+
+
+# ── ProjectRepo CRUD ──────────────────────────────────────────────
+
+
+class ProjectRepoItem(BaseModel):
+    id: str
+    project_id: str
+    label: str
+    path: str
+    is_primary: bool
+    created_at: str
+
+
+class ProjectRepoCreate(BaseModel):
+    label: str
+    path: str
+    is_primary: bool = False
+
+
+@router.get("/projects/{project_id}/repos", response_model=List[ProjectRepoItem])
+async def list_project_repos(project_id: str):
+    """List all repos for a project."""
+    from src.core.database import ProjectRepo, get_db
+
+    with get_db() as db:
+        repos = db.query(ProjectRepo).filter_by(project_id=project_id).all()
+        return [
+            ProjectRepoItem(
+                id=r.id,
+                project_id=r.project_id,
+                label=r.label,
+                path=r.path,
+                is_primary=r.is_primary,
+                created_at=r.created_at.isoformat() if r.created_at else "",
+            )
+            for r in repos
+        ]
+
+
+@router.post("/projects/{project_id}/repos", response_model=ProjectRepoItem)
+async def create_project_repo(
+    project_id: str,
+    req: ProjectRepoCreate,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    """Create a new repo for a project."""
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
+
+    from src.core.database import AutopilotProject, ProjectRepo, get_db
+
+    # Validate path exists and is a git repo
+    repo_path = Path(req.path).expanduser().resolve()
+    if not repo_path.exists() or not repo_path.is_dir():
+        raise HTTPException(400, f"Directory does not exist: {repo_path}")
+    if not (repo_path / ".git").exists():
+        raise HTTPException(400, f"Not a git repository: {repo_path}")
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+
+        repo_id = f"repo-{uuid.uuid4()}"
+        repo = ProjectRepo(
+            id=repo_id,
+            project_id=project_id,
+            label=req.label,
+            path=str(repo_path),
+            is_primary=req.is_primary,
+        )
+        db.add(repo)
+        try:
+            db.flush()
+        except Exception as e:
+            if "UNIQUE" in str(e):
+                raise HTTPException(409, f"Duplicate label or path: {e}")
+            raise
+
+        return ProjectRepoItem(
+            id=repo.id,
+            project_id=repo.project_id,
+            label=repo.label,
+            path=repo.path,
+            is_primary=repo.is_primary,
+            created_at=repo.created_at.isoformat() if repo.created_at else "",
+        )
+
+
+@router.put("/projects/{project_id}/repos/{repo_id}", response_model=ProjectRepoItem)
+async def update_project_repo(
+    project_id: str,
+    repo_id: str,
+    req: ProjectRepoCreate,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    """Update a repo. Setting is_primary clears it on other repos."""
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
+
+    from src.core.database import ProjectRepo, get_db
+
+    with get_db() as db:
+        repo = db.query(ProjectRepo).filter_by(id=repo_id, project_id=project_id).first()
+        if not repo:
+            raise HTTPException(404, "Repo not found")
+
+        repo.label = req.label
+        repo.path = str(Path(req.path).expanduser().resolve())
+
+        if req.is_primary and not repo.is_primary:
+            # Clear is_primary on other repos for this project
+            db.query(ProjectRepo).filter(
+                ProjectRepo.project_id == project_id,
+                ProjectRepo.id != repo_id,
+            ).update({"is_primary": False})
+            repo.is_primary = True
+
+        try:
+            db.flush()
+        except Exception as e:
+            if "UNIQUE" in str(e):
+                raise HTTPException(409, f"Duplicate label or path: {e}")
+            raise
+
+        return ProjectRepoItem(
+            id=repo.id,
+            project_id=repo.project_id,
+            label=repo.label,
+            path=repo.path,
+            is_primary=repo.is_primary,
+            created_at=repo.created_at.isoformat() if repo.created_at else "",
+        )
+
+
+@router.delete("/projects/{project_id}/repos/{repo_id}")
+async def delete_project_repo(
+    project_id: str,
+    repo_id: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    """Delete a repo. Rejects primary repo deletion."""
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
+
+    from src.core.database import AgentWorktree, ProjectRepo, Task, TicketCommit, get_db
+
+    with get_db() as db:
+        repo = db.query(ProjectRepo).filter_by(id=repo_id, project_id=project_id).first()
+        if not repo:
+            raise HTTPException(404, "Repo not found")
+        if repo.is_primary:
+            raise HTTPException(400, "Cannot delete the primary repo")
+
+        # Check for FK references
+        task_refs = db.query(Task).filter_by(repo_id=repo_id).count()
+        commit_refs = db.query(TicketCommit).filter_by(repo_id=repo_id).count()
+        worktree_refs = db.query(AgentWorktree).filter_by(repo_id=repo_id).count()
+        if task_refs or commit_refs or worktree_refs:
+            raise HTTPException(
+                409,
+                f"Repo is referenced by {task_refs} tasks, {commit_refs} commits, "
+                f"{worktree_refs} worktrees. Cannot delete.",
+            )
+
+        db.delete(repo)
+        return {"deleted": repo_id}
