@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from src.core.constants import (
@@ -33,6 +33,7 @@ from src.mcp.autopilot.project_routes import (
     _get_project_lock,
     _sync_project_designs,
 )
+from src.mcp.server._shared import verify_agent_authentication
 from src.services.design_status_service import get_design_status
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,17 @@ def _resolve_design_filepath(file_path: Optional[str], fallback: Path) -> Path:
 
 
 @router.post("/projects/{project_id}/sync", response_model=List[DesignItem])
-async def sync_project_designs(project_id: str):
+async def sync_project_designs(
+    project_id: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before syncing designs
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotProject, get_db
 
     lock = await _get_project_lock(project_id)
@@ -109,8 +120,18 @@ async def sync_project_designs(project_id: str):
 
 
 @router.post("/projects/{project_id}/designs/reload", response_model=List[DesignItem])
-async def reload_project_designs(project_id: str):
+async def reload_project_designs(
+    project_id: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
     """Force resync designs from filesystem."""
+    # SECURITY: Verify agent authentication before reloading designs
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotProject, get_db
 
     cache_key = f"project_designs:{project_id}"
@@ -156,7 +177,18 @@ async def list_project_designs(project_id: str):
 
 
 @router.post("/projects/{project_id}/designs", response_model=DesignItem)
-async def add_project_design(project_id: str, req: DesignAddRequest):
+async def add_project_design(
+    project_id: str,
+    req: DesignAddRequest,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before adding designs
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
@@ -259,7 +291,11 @@ class EnsureFolderRequest(BaseModel):
 
 
 @router.post("/projects/{project_id}/ensure-folder")
-async def ensure_project_folder(project_id: str, req: EnsureFolderRequest):
+async def ensure_project_folder(
+    project_id: str,
+    req: EnsureFolderRequest,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
     """Create a folder (and any missing parents) under the project root if
     it doesn't already exist yet.
 
@@ -270,6 +306,13 @@ async def ensure_project_folder(project_id: str, req: EnsureFolderRequest):
     mkdir already handles that case, but leaves the folder invisible to
     a browse/select round-trip in between).
     """
+    # SECURITY: Verify agent authentication before creating folders
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotProject, get_db
 
     with get_db() as db:
@@ -361,7 +404,18 @@ async def browse_project_file_content(project_id: str, path: str = Query(...)):
 
 
 @router.put("/projects/{project_id}/designs/reorder")
-async def reorder_project_designs(project_id: str, req: DesignReorderRequest):
+async def reorder_project_designs(
+    project_id: str,
+    req: DesignReorderRequest,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before reordering designs
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
@@ -388,7 +442,18 @@ async def reorder_project_designs(project_id: str, req: DesignReorderRequest):
 
 
 @router.delete("/projects/{project_id}/designs/{filename}")
-async def remove_project_design(project_id: str, filename: str):
+async def remove_project_design(
+    project_id: str,
+    filename: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before removing designs
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     logger.info(f"[DELETE] remove_project_design called: project={project_id}, file={filename}")
     from src.core.database import (
         Agent,
