@@ -90,7 +90,7 @@ export default function Overview() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 flex items-center">
-            <Compass className="w-8 h-8 mr-3 text-blue-600" />
+            <Compass className="w-8 h-8 mr-3 text-blue-600 dark:text-blue-400" />
             System Overview
           </h1>
           <p className="text-gray-600 dark:text-gray-400 mt-1">
@@ -113,7 +113,7 @@ export default function Overview() {
               onClick={() => setShowBroadcastDialog(true)}
               variant="outline"
               size="sm"
-              className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20"
+              className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20"
             >
               <MessageSquare className="w-4 h-4 mr-2" />
               Broadcast
@@ -172,7 +172,7 @@ export default function Overview() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center">
-              <Bot className="w-5 h-5 mr-2 text-blue-600" />
+              <Bot className="w-5 h-5 mr-2 text-blue-600 dark:text-blue-400" />
               Agent Trajectory Status
             </CardTitle>
             <CardDescription>
@@ -192,7 +192,7 @@ export default function Overview() {
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <Bot className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                      <Bot className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
                       <div className="min-w-0">
                         <p className="font-mono text-xs text-gray-500 dark:text-gray-400">{agent.agent_id.substring(0, 8)}</p>
                         <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">Click to view details</p>
@@ -210,9 +210,9 @@ export default function Overview() {
                       <span className="text-xs text-gray-500 dark:text-gray-400">Alignment</span>
                       <span className={cn(
                         "text-sm font-semibold",
-                        agent.alignment_score > 0.8 ? "text-green-600" :
-                        agent.alignment_score > 0.4 ? "text-yellow-600" :
-                        "text-red-600"
+                        agent.alignment_score > 0.8 ? "text-green-600 dark:text-green-400" :
+                        agent.alignment_score > 0.4 ? "text-yellow-600 dark:text-yellow-400" :
+                        "text-red-600 dark:text-red-400"
                       )}>
                         {Math.round((agent.alignment_score || 0) * 100)}%
                       </span>

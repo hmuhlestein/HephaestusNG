@@ -191,7 +191,7 @@ const RelatedTaskItem: React.FC<{
             {taskId}
           </span>
         </div>
-        <ExternalLink className="w-3 h-3 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+        <ExternalLink className="w-3 h-3 text-gray-400 dark:text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity" />
       </div>
 
       {/* Description */}
@@ -424,7 +424,7 @@ const TicketDetailModal: React.FC<TicketDetailModalProps> = ({ ticketId, onClose
                           </div>
                         ) : (
                           <div className="relative group">
-                            <div className="prose prose-sm max-w-none">
+                            <div className="prose prose-sm dark:prose-invert max-w-none">
                               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                                 {ticket.description}
                               </ReactMarkdown>
@@ -777,7 +777,7 @@ const TicketDetailModal: React.FC<TicketDetailModalProps> = ({ ticketId, onClose
 
                   {/* Commits Section */}
                   {commits.length > 0 && (
-                    <div className="bg-gray-50 rounded-lg p-4 border">
+                    <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
                       <button
                         onClick={() => toggleSection('commits')}
                         className="flex items-center justify-between w-full font-semibold text-gray-900 dark:text-gray-100 mb-3"

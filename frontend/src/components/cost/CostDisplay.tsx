@@ -52,7 +52,7 @@ const CostDisplay: React.FC<CostDisplayProps> = ({
         <AlertTriangle className="w-4 h-4 text-red-500" />
       )}
       {showProgress && progressPercent != null && (
-        <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden ml-2">
+        <div className="w-16 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden ml-2">
           <div
             className={`h-full rounded-full transition-all ${
               isOverBudget ? 'bg-red-500' : progressPercent > 80 ? 'bg-yellow-500' : 'bg-green-500'
