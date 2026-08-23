@@ -727,6 +727,87 @@ def migrate_workflow_type_columns(engine):
         logger.warning(f"workflow_type columns migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_project_repos_table(engine):
+    """Create project_repos table + repo_id columns on tasks,
+    tickets, ticket_commits, agent_worktrees for existing databases.
+    Then backfill exactly one primary ProjectRepo per existing
+    AutopilotProject (path=base_dir, is_primary=True). Idempotent --
+    safe to call on every startup."""
+    from src.core.database import ProjectRepo, Base
+
+    try:
+        Base.metadata.create_all(engine, tables=[ProjectRepo.__table__], checkfirst=True)
+        logger.info("Ensured project_repos table exists")
+    except Exception as e:
+        logger.warning(f"project_repos table creation failed (not just 'already exists' -- check this): {e}")
+
+    try:
+        with engine.connect() as conn:
+            for table, column in [
+                ("tasks", "repo_id"),
+                ("tickets", "repo_id"),
+                ("ticket_commits", "repo_id"),
+                ("agent_worktrees", "repo_id"),
+                ("ticket_commits", "out_of_scope"),
+            ]:
+                try:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} VARCHAR"))
+                except Exception:
+                    pass  # Column already exists
+            # Create unique partial index for is_primary (BLOCKER-2 fix)
+            try:
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_one_primary_per_project "
+                    "ON project_repos (project_id) WHERE is_primary = 1"
+                ))
+            except Exception:
+                pass  # Index already exists
+            conn.commit()
+            logger.info("Migrated repo_id columns + partial index")
+    except Exception as e:
+        logger.warning(f"repo_id columns migration failed (not just 'already exists' -- check this): {e}")
+
+    # Backfill: one primary ProjectRepo per existing AutopilotProject
+    # that doesn't already have one. Guarded by an existence check
+    # (not a blanket insert) so re-running this migration is a no-op --
+    # required for NFR-02 (idempotent, no duplicate rows on rerun).
+    try:
+        from src.core.database import AutopilotProject
+        import uuid
+        from sqlalchemy.orm import sessionmaker
+
+        SessionLocal = sessionmaker(bind=engine)
+        session = SessionLocal()
+        try:
+            projects = session.query(AutopilotProject).all()
+            created = 0
+            for project in projects:
+                existing = (
+                    session.query(ProjectRepo)
+                    .filter_by(project_id=project.id, is_primary=True)
+                    .first()
+                )
+                if existing:
+                    continue
+                session.add(ProjectRepo(
+                    id=f"repo-{uuid.uuid4()}",
+                    project_id=project.id,
+                    label="primary",
+                    path=project.base_dir,
+                    is_primary=True,
+                ))
+                created += 1
+            session.commit()
+            logger.info(f"Backfilled {created} primary ProjectRepo row(s)")
+        except Exception as e:
+            session.rollback()
+            logger.warning(f"ProjectRepo backfill failed (not just 'already exists' -- check this): {e}")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"ProjectRepo backfill setup failed: {e}")
+
+
 def migrate_autopilot_pipeline_events_table(engine):
     """Create autopilot_pipeline_events for existing databases -- replaces
     the old per-run events.jsonl file (OrchestratorLogger.event()).
@@ -781,4 +862,5 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_agent_working_directory_column", migrate_agent_working_directory_column),
     ("_migrate_workflow_type_columns", migrate_workflow_type_columns),
     ("_migrate_autopilot_pipeline_events_table", migrate_autopilot_pipeline_events_table),
+    ("_migrate_project_repos_table", migrate_project_repos_table),
 ]

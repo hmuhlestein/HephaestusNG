@@ -243,6 +243,7 @@ class Task(Base):
     created_by_agent_id = Column(String, ForeignKey("agents.id"))
     phase_id = Column(String, ForeignKey("phases.id"))  # Phase this task belongs to
     workflow_id = Column(String, ForeignKey("workflows.id"))  # Workflow this task is part of
+    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)  # REQ-02: nullable FK to ProjectRepo
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
     completion_notes = Column(Text)
@@ -619,6 +620,7 @@ class AgentWorktree(Base):
     __tablename__ = "agent_worktrees"
 
     agent_id = Column(String, ForeignKey("agents.id"), primary_key=True)
+    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)  # REQ-02: nullable FK to ProjectRepo
     worktree_path = Column(Text, nullable=False)
     branch_name = Column(String, unique=True, nullable=False)
     parent_agent_id = Column(String, ForeignKey("agents.id"))
@@ -957,6 +959,7 @@ class Ticket(Base):
     parent_ticket_id = Column(String, ForeignKey("tickets.id"))
     task_id = Column(String, ForeignKey("tasks.id"))  # Primary task this ticket relates to
     phase_id = Column(String, ForeignKey("phases.id"))  # Phase where this ticket was created
+    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)  # REQ-02: nullable FK to ProjectRepo
     related_task_ids = Column(JSON)  # List of related task IDs
     related_ticket_ids = Column(JSON)  # List of related ticket IDs for context
     tags = Column(JSON)  # List of tags
@@ -1061,6 +1064,7 @@ class TicketCommit(Base):
     id = Column(String, primary_key=True)  # Format: tc-{uuid}
     ticket_id = Column(String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
     agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
+    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)  # REQ-02: nullable FK to ProjectRepo
 
     # Commit Information
     commit_sha = Column(String(40), nullable=False)
@@ -1072,6 +1076,9 @@ class TicketCommit(Base):
     insertions = Column(Integer)
     deletions = Column(Integer)
     files_list = Column(JSON)  # List of changed file paths
+
+    # REQ-10: Soft enforcement flag for out-of-scope commits
+    out_of_scope = Column(Boolean, default=False, nullable=False)
 
     # Linking
     linked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -1143,6 +1150,73 @@ class AutopilotProject(Base):
     review_mode = Column(Boolean, default=False, nullable=False)
 
     designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
+    repos = relationship("ProjectRepo", back_populates="project", cascade="all, delete-orphan")
+
+
+class RepoResolutionError(Exception):
+    """No ProjectRepo exists for the given project_id.
+
+    Raised by resolve_project_repo() when the project has zero
+    ProjectRepo rows (migration didn't run, or project_id is wrong).
+    Every project is guaranteed >=1 ProjectRepo post-migration, so
+    this is a fatal configuration error -- callers must not silently
+    swallow it.
+    """
+
+    def __init__(self, project_id: str, repo_id: Optional[str] = None):
+        self.project_id = project_id
+        self.repo_id = repo_id
+        super().__init__(f"No ProjectRepo found for project {project_id} (repo_id={repo_id})")
+
+
+def resolve_project_repo(session, project_id: str, repo_id: Optional[str] = None) -> "ProjectRepo":
+    """Resolve repo_id to a ProjectRepo row, falling back to the
+    project's primary repo when repo_id is None or doesn't resolve.
+
+    Args:
+        session: active SQLAlchemy session.
+        project_id: the AutopilotProject this resolution is scoped to.
+        repo_id: a Task/TicketCommit/AgentWorktree.repo_id value, or None.
+
+    Returns:
+        The resolved ProjectRepo.
+
+    Raises:
+        RepoResolutionError: no ProjectRepo at all exists for
+            project_id (migration didn't run, or project_id is wrong).
+    """
+    if repo_id:
+        repo = session.query(ProjectRepo).filter_by(id=repo_id, project_id=project_id).first()
+        if repo:
+            return repo
+    # Fallback to primary repo (REQ-06)
+    primary = session.query(ProjectRepo).filter_by(project_id=project_id, is_primary=True).first()
+    if primary:
+        return primary
+    raise RepoResolutionError(project_id, repo_id)
+
+
+class ProjectRepo(Base):
+    """One git repo belonging to a project. Every AutopilotProject must
+    have at least one (is_primary=True). Pre-existing projects get one
+    auto-created by migration; new projects require the user to create
+    one via the project-settings API."""
+
+    __tablename__ = "project_repos"
+
+    id = Column(String, primary_key=True)  # Format: repo-{uuid}
+    project_id = Column(String, ForeignKey("autopilot_projects.id", ondelete="CASCADE"), nullable=False)
+    label = Column(String(100), nullable=False)  # "backend", "frontend"
+    path = Column(Text, nullable=False)  # absolute; not required under base_dir
+    is_primary = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    project = relationship("AutopilotProject", back_populates="repos")
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "path", name="uq_project_repo_path"),
+        UniqueConstraint("project_id", "label", name="uq_project_repo_label"),
+    )
 
 
 class PromptProposal(Base):
