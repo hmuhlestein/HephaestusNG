@@ -647,6 +647,115 @@ async def delete_project(
     return {"deleted": project_id}
 
 
+# ── C10: Project Repo CRUD endpoints (REQ-24) ────────────────────────
+
+class ProjectRepoItem(BaseModel):
+    id: str
+    project_id: str
+    label: str
+    path: str
+    is_primary: bool
+    created_at: str
+
+
+class AddProjectRepoRequest(BaseModel):
+    label: str
+    path: str
+
+
+@router.get("/projects/{project_id}/repos", response_model=List[ProjectRepoItem])
+async def get_project_repos(project_id: str):
+    """List all repos for a project, primary first."""
+    from src.core.database import get_db
+    from src.core.repo_resolution import list_repos
+
+    with get_db() as db:
+        repos = list_repos(db, project_id)
+        return [
+            ProjectRepoItem(
+                id=r.id,
+                project_id=r.project_id,
+                label=r.label,
+                path=r.path,
+                is_primary=r.is_primary,
+                created_at=r.created_at.isoformat() if r.created_at else "",
+            )
+            for r in repos
+        ]
+
+
+@router.post("/projects/{project_id}/repos", response_model=ProjectRepoItem)
+async def add_project_repo(
+    project_id: str,
+    req: AddProjectRepoRequest,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    """Add a child repo to a project."""
+    from src.core.database import ProjectRepo, get_db
+
+    # Validate label
+    label = req.label.strip()
+    if not label:
+        raise HTTPException(400, "Label must not be empty")
+
+    # Validate path is absolute
+    if not os.path.isabs(req.path):
+        raise HTTPException(400, "Path must be absolute")
+
+    # Validate path is a git repo
+    try:
+        import git as gitpython
+        gitpython.Repo(req.path)
+    except Exception:
+        raise HTTPException(400, f"Path is not a valid git repository: {req.path}")
+
+    with get_db() as db:
+        # Verify project exists
+        from src.core.database import AutopilotProject
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+
+        # Pre-check uniqueness for specific error messages
+        existing_path = db.query(ProjectRepo).filter_by(
+            project_id=project_id, path=req.path
+        ).first()
+        if existing_path:
+            raise HTTPException(409, f"Repo already exists for path: {req.path}")
+
+        existing_label = db.query(ProjectRepo).filter_by(
+            project_id=project_id, label=label
+        ).first()
+        if existing_label:
+            raise HTTPException(409, f"Repo already exists with label: {label}")
+
+        repo = ProjectRepo(
+            id=f"repo-{uuid.uuid4().hex[:12]}",
+            project_id=project_id,
+            label=label,
+            path=req.path,
+            is_primary=False,
+        )
+        db.add(repo)
+
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            if "UNIQUE" in str(e):
+                raise HTTPException(409, "Repo already exists (race condition)")
+            raise
+
+        return ProjectRepoItem(
+            id=repo.id,
+            project_id=repo.project_id,
+            label=repo.label,
+            path=repo.path,
+            is_primary=repo.is_primary,
+            created_at=repo.created_at.isoformat() if repo.created_at else "",
+        )
+
+
 
 
 

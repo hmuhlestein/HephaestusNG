@@ -53,6 +53,14 @@ def _create_feature_records(
         # in database.py and docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md.
         parent_design = db.query(AutopilotDesign).filter_by(id=design_id).first()
         design_workflow_type = parent_design.workflow_type if parent_design else "feature"
+
+        # C9: Build label→repo_id map for repo assignment (REQ-19/20)
+        label_to_repo_id: dict = {}
+        if parent_design and parent_design.project_id:
+            from src.core.repo_resolution import list_repos
+            for r in list_repos(db, parent_design.project_id):
+                label_to_repo_id[r.label] = r.id
+
         # Idempotency guard: finalize_phase0_workflow can now call this from
         # two independent sites for the same design (run_phase0's own
         # synchronous tail, and the generic phase0-completion hook in
@@ -93,6 +101,17 @@ def _create_feature_records(
             scope_doc_path = feature_record_path / "scope.md"
             scope_doc_path_str = str(scope_doc_path) if scope_doc_path.exists() else None
 
+            # C9: Resolve repo label to repo_id (Gotcha 7: warn, don't raise)
+            feat_repo_id = None
+            repo_label = feat.get("repo")
+            if repo_label and label_to_repo_id:
+                feat_repo_id = label_to_repo_id.get(repo_label)
+                if feat_repo_id is None:
+                    logger.warning(
+                        f"Feature {feature_key} references unknown repo label '{repo_label}', "
+                        f"leaving repo_id=None (will fall back to primary repo)"
+                    )
+
             feature = Feature(
                 id=feature_id,
                 design_id=design_id,
@@ -106,6 +125,7 @@ def _create_feature_records(
                 scope_doc_path=scope_doc_path_str,
                 feature_record_path=str(feature_record_path),
                 workflow_type=design_workflow_type,
+                repo_id=feat_repo_id,
             )
             db.add(feature)
 
@@ -584,6 +604,11 @@ def _validate_features_json(features_json: dict) -> None:
         execution = feat.get("execution", "parallel")
         if execution not in ("parallel", "sequential"):
             raise ValueError(f"Feature {feat_id} has invalid execution: {execution}")
+
+        # C9: Check repo field type (optional, must be str if present)
+        repo = feat.get("repo")
+        if repo is not None and not isinstance(repo, str):
+            raise ValueError(f"Feature {feat_id} repo must be a string, got {type(repo).__name__}")
 
         # Check depends_on references
         depends_on = feat.get("depends_on", [])

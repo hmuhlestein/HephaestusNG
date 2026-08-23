@@ -19,6 +19,7 @@ import {
   BlockedTask,
   WorkflowDefinition,
   WorkflowExecution,
+  ProjectRepo,
 } from '@/types';
 
 interface ResultQueryParams {
@@ -944,6 +945,18 @@ export const apiService = {
 
   updateProject: async (projectId: string, updates: Record<string, any>): Promise<any> => {
     const { data } = await api.put(`/autopilot/projects/${encodeURIComponent(projectId)}`, updates);
+    return data;
+  },
+
+  // ── Project Repo Endpoints (C10, REQ-24) ─────────────────────────────
+
+  getProjectRepos: async (projectId: string): Promise<ProjectRepo[]> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/repos`);
+    return data;
+  },
+
+  addProjectRepo: async (projectId: string, label: string, path: string): Promise<ProjectRepo> => {
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/repos`, { label, path });
     return data;
   },
 
