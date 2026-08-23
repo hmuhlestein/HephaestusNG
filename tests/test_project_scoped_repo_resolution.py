@@ -157,7 +157,6 @@ class TestResolveRepoPathForCommit:
         from datetime import datetime
 
         from src.core.database import ProjectRepo
-        from src.mcp.tickets_api import _resolve_repo_path_for_commit
 
         with db_manager.session_scope() as session:
             session.add(AutopilotProject(id="proj-multi", name="p", base_dir="/tmp/multi"))
@@ -191,7 +190,7 @@ class TestCommitScopeValidation:
     assigned repo is logged, never rejected."""
 
     def _seed(self, db_manager, backend_dir, frontend_dir):
-        from src.core.database import Feature, ProjectRepo, Task
+        from src.core.database import ProjectRepo, Task
 
         with db_manager.session_scope() as session:
             session.add(AutopilotProject(id="proj-scope", name="p", base_dir=str(backend_dir.parent)))

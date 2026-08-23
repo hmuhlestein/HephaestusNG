@@ -5,10 +5,13 @@ import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import git as _git
 
+from src.autopilot.orchestrator.state import (
+    DesignEntry,
+)
 from src.core.constants import (
     CONTEXT_DIR_NAME,
 )
@@ -21,12 +24,6 @@ from src.core.database import (
     get_db,
 )
 from src.core.simple_config import get_config
-
-from src.autopilot.orchestrator.state import (
-    DesignEntry,
-)
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
