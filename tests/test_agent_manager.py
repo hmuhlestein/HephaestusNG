@@ -314,6 +314,7 @@ class TestCreateAgentForTask:
             assert saved_agent is not None
             assert saved_agent.status == "working"
             assert saved_agent.current_task_id == "task-1"
+            assert saved_agent.working_directory == "/tmp/test-project-agent"
 
     @pytest.mark.asyncio
     async def test_assign_to_task_persists_claim_before_slow_setup(

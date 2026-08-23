@@ -182,35 +182,30 @@ class AgentOutputCapture:
         .clean.log) live in. Shared by _read_transcript_log and
         _poll_stable_transcript so both agree on the same directory.
         """
+        # agent.working_directory is set once at creation and never
+        # cleared or reassigned -- read it directly instead of rederiving
+        # via task->workflow.working_directory, which used to be the only
+        # path here and breaks the moment current_task_id/assigned_agent_id
+        # are cleared on termination (see database.py's Agent.current_task_id
+        # comment), leaving every terminated agent's transcript dir
+        # unresolvable.
+        if agent.working_directory:
+            return Path(agent.working_directory) / CONTEXT_DIR_NAME / "tmux"
+
+        # Legacy fallback: agents created before the working_directory
+        # column existed have no value to read above. Rederive it the old
+        # way, through whichever of the agent's tasks is still reachable.
         working_dir = None
         project_base = None
         from src.core.database import Task
 
         session = self.db_manager.get_session()
         try:
-            # Try current task first, then most recent task. Both
-            # agent.current_task_id and task.assigned_agent_id are cleared
-            # on termination (see database.py's Agent.current_task_id
-            # comment) -- a terminated agent's only remaining link back to
-            # its task is the AgentLog "created" record's details["task_id"],
-            # which termination never touches. Without this fallback,
-            # every terminated agent's transcript dir was unresolvable and
-            # get_agent_output fell through to near-empty output.
             task = None
             if agent.current_task_id:
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
             if not task:
                 task = session.query(Task).filter_by(assigned_agent_id=agent.id).order_by(Task.created_at.desc()).first()
-            if not task:
-                created_log = (
-                    session.query(AgentLog)
-                    .filter_by(agent_id=agent.id, log_type="created")
-                    .order_by(AgentLog.timestamp.desc())
-                    .first()
-                )
-                task_id = created_log.details.get("task_id") if created_log and created_log.details else None
-                if task_id:
-                    task = session.query(Task).filter_by(id=task_id).first()
             if task and task.workflow:
                 if task.workflow.working_directory:
                     working_dir = task.workflow.working_directory

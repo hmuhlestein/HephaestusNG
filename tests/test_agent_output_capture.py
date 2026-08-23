@@ -275,6 +275,7 @@ class TestAgentOutputCapture:
         mock_agent.status = "working"
         mock_agent.tmux_session_name = session_name
         mock_agent.current_task_id = "task1"
+        mock_agent.working_directory = None  # exercise the legacy task-lookup path below
 
         # Create mock tmux session
         mock_tmux_session = Mock()
@@ -405,12 +406,15 @@ class TestAgentOutputCapture:
 class TestResolveTmuxTranscriptDirSurvivesTermination:
     """Regression: termination clears agent.current_task_id AND
     task.assigned_agent_id (the documented Agent.current_task_id
-    invariant), which used to make _resolve_tmux_transcript_dir unable to
-    find ANY task for a terminated agent -- it had no other way back to
-    workflow.working_directory. The tmux viewer showed nothing for every
-    terminated agent as a result. The fix falls back to the AgentLog
-    "created" record's details["task_id"], which termination never
-    touches (see database.py's Agent.current_task_id comment)."""
+    invariant), which used to be _resolve_tmux_transcript_dir's ONLY way
+    to find a terminated agent's workflow.working_directory. The tmux
+    viewer showed nothing for every terminated agent as a result.
+
+    The fix stores working_directory directly on the Agent row at
+    creation time -- it's never cleared or reassigned, so termination
+    can no longer break this lookup at all. The old task-based lookup
+    is kept only as a legacy fallback for agents created before this
+    column existed."""
 
     @pytest.fixture
     def db_manager(self, tmp_path, monkeypatch):
@@ -420,7 +424,35 @@ class TestResolveTmuxTranscriptDirSurvivesTermination:
         db.create_tables()
         return db
 
-    def test_falls_back_to_agent_log_created_task_id(self, db_manager, tmp_path):
+    def test_reads_working_directory_directly_after_termination(self, db_manager, tmp_path):
+        from src.agents.output_capture import AgentOutputCapture
+
+        agent_id = str(uuid.uuid4())
+        working_directory = str(tmp_path / "worktree")
+
+        session = db_manager.get_session()
+        session.add(Agent(
+            id=agent_id, system_prompt="p", status="terminated",
+            cli_type="pi", tmux_session_name="agent_test",
+            working_directory=working_directory,
+            current_task_id=None,  # cleared, as termination does
+        ))
+        session.commit()
+        session.close()
+
+        capture = AgentOutputCapture(db_manager, tmux_server=Mock())
+        agent = db_manager.get_session().query(Agent).filter_by(id=agent_id).first()
+
+        transcript_dir = capture._resolve_tmux_transcript_dir(agent)
+
+        assert transcript_dir == Path(working_directory) / ".hephaestus" / "tmux"
+
+    def test_legacy_agent_without_working_directory_falls_back_to_task_lookup(
+        self, db_manager, tmp_path
+    ):
+        """An agent created before the working_directory column existed
+        has no value to read directly -- falls back to the old
+        task->workflow.working_directory resolution."""
         from src.agents.output_capture import AgentOutputCapture
         from src.core.database import Workflow
 
@@ -436,18 +468,14 @@ class TestResolveTmuxTranscriptDirSurvivesTermination:
         ))
         session.add(Task(
             id=task_id, raw_description="do it", done_definition="done",
-            status="failed", workflow_id=workflow_id,
-            assigned_agent_id=None,  # cleared, as termination does
+            status="in_progress", workflow_id=workflow_id,
+            assigned_agent_id=agent_id,
         ))
         session.add(Agent(
-            id=agent_id, system_prompt="p", status="terminated",
+            id=agent_id, system_prompt="p", status="working",
             cli_type="pi", tmux_session_name="agent_test",
-            current_task_id=None,  # cleared, as termination does
-        ))
-        session.add(AgentLog(
-            agent_id=agent_id, log_type="created",
-            message="Agent created for task: do it",
-            details={"cli_type": "pi", "task_id": task_id},
+            working_directory=None,  # pre-migration row
+            current_task_id=task_id,
         ))
         session.commit()
         session.close()

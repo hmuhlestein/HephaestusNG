@@ -161,6 +161,15 @@ class Agent(Base):
     # it works precisely because it doesn't depend on current_task_id
     # surviving termination.
     current_task_id = Column(String, ForeignKey("tasks.id"))
+    # The worktree/project directory this agent's tmux session runs in.
+    # Set ONCE at creation (from the resolved worktree path) and never
+    # cleared or reassigned afterward -- unlike current_task_id, tracing an
+    # agent back to its own working directory must keep working after
+    # termination (get_agent_output/_resolve_tmux_transcript_dir need it to
+    # find .hephaestus/tmux/). Reading it straight off this column avoids
+    # having to rederive it via task->workflow.working_directory, which
+    # breaks the moment current_task_id is cleared.
+    working_directory = Column(String)
     last_activity = Column(DateTime, default=datetime.utcnow)
     # Stamped at the start of the CURRENT attempt -- both
     # create_agent_for_task and restart_agent set this to datetime.utcnow()

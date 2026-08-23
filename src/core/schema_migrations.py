@@ -688,6 +688,23 @@ def migrate_agent_pending_message_column(engine):
         logger.warning(f"agents.pending_message_sent_at migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_agent_working_directory_column(engine):
+    """Add agents.working_directory for existing databases.
+
+    Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE agents ADD COLUMN working_directory VARCHAR"))
+            except Exception:
+                pass  # Column already exists
+            conn.commit()
+            logger.info("Migrated agents.working_directory column")
+    except Exception as e:
+        logger.warning(f"agents.working_directory migration failed (not just 'already exists' -- check this): {e}")
+
+
 def migrate_workflow_type_columns(engine):
     """Add autopilot_designs.workflow_type and features.workflow_type for
     existing databases. Both default "feature" (today's only behavior).
@@ -761,6 +778,7 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_phase_fallback_columns", migrate_phase_fallback_columns),
     ("_migrate_review_mode_columns", migrate_review_mode_columns),
     ("_migrate_agent_pending_message_column", migrate_agent_pending_message_column),
+    ("_migrate_agent_working_directory_column", migrate_agent_working_directory_column),
     ("_migrate_workflow_type_columns", migrate_workflow_type_columns),
     ("_migrate_autopilot_pipeline_events_table", migrate_autopilot_pipeline_events_table),
 ]
