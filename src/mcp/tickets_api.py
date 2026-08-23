@@ -6,7 +6,7 @@ Extracted from server.py for better modularity (M-1 fix).
 import logging
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -39,23 +39,38 @@ def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[str]:
     linked to. Returns None (never raises) when the commit isn't linked to
     any ticket, or the ticket/workflow/project chain doesn't resolve --
     callers fall back to the process-wide active project in that case."""
+    path, _ = _resolve_repo_info_for_commit(commit_sha)
+    return path
+
+
+def _resolve_repo_info_for_commit(
+    commit_sha: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve repo path and label for a commit via TicketCommit.repo_id.
+
+    Returns (repo_path, repo_label) or (None, None) on any failure.
+    C7: disambiguates which repo a SHA belongs to via the recorded repo_id.
+    """
     try:
-        from src.core.database import AutopilotProject, Ticket, TicketCommit, Workflow, get_db
+        from src.core.database import Ticket, TicketCommit, Workflow, get_db
+        from src.core.repo_resolution import resolve_repo
 
         with get_db() as db:
             commit = db.query(TicketCommit).filter_by(commit_sha=commit_sha).first()
             if not commit:
-                return None
+                return None, None
             ticket = db.query(Ticket).filter_by(id=commit.ticket_id).first()
             if not ticket or not ticket.workflow_id:
-                return None
+                return None, None
             wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
             if not wf or not wf.project_id:
-                return None
-            proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
-            return proj.base_dir if proj else None
+                return None, None
+            repo = resolve_repo(db, wf.project_id, commit.repo_id)
+            if repo:
+                return repo.path, repo.label
+            return None, None
     except Exception:
-        return None
+        return None, None
 
 
 async def _broadcast_update(data: dict, workflow_id: Optional[str] = None):

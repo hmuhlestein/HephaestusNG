@@ -167,19 +167,18 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
 
     if req.destination == "queue":
         # Store in .hephaestus/designs/ (not git-tracked) so git commits
-        # don't delete design files.
+        # don't delete design files. (REQ-13: unchanged at base_dir level)
         design_dir = Path(base_dir) / DESIGN_CONTEXT_SUBDIR
     else:
-        # Any other destination is a real, git-tracked folder under the
-        # project root -- "docs" (legacy literal), DESIGN_SUBDIR/
-        # BUGFIX_SUBDIR (the New Feature/Report Bug flows' defaults), or
-        # an arbitrary folder the user picked via the destination-folder
-        # browser. Unlike "queue" above, this value can come from the
-        # client (typed or browsed), so it MUST be validated to stay
-        # within base_dir -- _safe_path does that (raises 400 on escape),
-        # the same check every other browse/content endpoint in this
-        # file already applies to user-supplied paths.
-        design_dir = _safe_path(base_dir, req.destination)
+        # C6: resolve to primary ProjectRepo for git-tracked destinations (REQ-12)
+        from src.core.repo_resolution import resolve_repo
+
+        with get_db() as db:
+            repo = resolve_repo(db, project_id, None)  # primary repo
+        if repo is None:
+            raise HTTPException(400, "Project has no repos configured")
+        # Boundary check against repo path, not base_dir (Gotcha 9)
+        design_dir = _safe_path(repo.path, req.destination)
     design_dir.mkdir(parents=True, exist_ok=True)
 
     ext = req.extension if req.extension in ALLOWED_EXTENSIONS else ".md"

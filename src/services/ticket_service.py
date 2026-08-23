@@ -1502,30 +1502,58 @@ class TicketService:
                 "message": "Commit already linked to this ticket",
             }
 
-        # Get real commit stats from git -- resolve the ticket's own
-        # project repo rather than assuming it's whichever project the
-        # process-wide singleton currently points at (only one project
-        # could ever be active before multi-project concurrency).
-        main_repo_path = None
+        # C5: Resolve repo path and repo_id via resolve_repo (REQ-10/14)
+        from src.core.repo_resolution import resolve_repo
+
+        resolved_repo = None
+        project_id = None
+        task_repo_id = None
         if ticket.workflow_id:
             wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
             if wf and wf.project_id:
-                from src.core.database import AutopilotProject
+                project_id = wf.project_id
+                # If the ticket has a task with repo_id, use it
+                if ticket.task_id:
+                    task = db.query(Task).filter_by(id=ticket.task_id).first()
+                    if task and task.repo_id:
+                        task_repo_id = task.repo_id
+                resolved_repo = resolve_repo(db, project_id, task_repo_id)
 
-                proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
-                if proj and proj.base_dir:
-                    main_repo_path = proj.base_dir
-        if main_repo_path is None:
+        if resolved_repo is not None:
+            main_repo_path = resolved_repo.path
+        else:
             config = get_config()
             main_repo_path = str(config.git.main_repo_path)
+
+        # C5: Soft existence check via git cat-file -e (REQ-10)
+        loop = asyncio.get_event_loop()
+        try:
+            proc = await loop.run_in_executor(
+                None,
+                lambda: __import__("subprocess").run(
+                    ["git", "cat-file", "-e", commit_sha],
+                    cwd=main_repo_path,
+                    capture_output=True,
+                ),
+            )
+            if proc.returncode != 0:
+                logger.warning(
+                    "Commit %s not found in repo %s (soft check, linking anyway)",
+                    commit_sha, main_repo_path,
+                )
+        except (OSError, Exception) as e:
+            logger.warning(
+                "git cat-file check failed for %s in %s: %s (treating as exists)",
+                commit_sha, main_repo_path, e,
+            )
+
         # _get_commit_stats shells out to `git show --numstat` --
         # blocking, offloaded so it doesn't stall the event loop.
-        loop = asyncio.get_event_loop()
         commit_stats = await loop.run_in_executor(
             None, TicketService._get_commit_stats, commit_sha, main_repo_path
         )
 
-        # Create commit link with real stats
+        # Create commit link with real stats, stamping repo_id (REQ-10)
         commit_id = f"tc-{uuid.uuid4()}"
         ticket_commit = TicketCommit(
             id=commit_id,
@@ -1539,6 +1567,7 @@ class TicketService:
             insertions=commit_stats["insertions"],
             deletions=commit_stats["deletions"],
             files_list=commit_stats["files_list"],
+            repo_id=resolved_repo.id if resolved_repo else None,
         )
 
         db.add(ticket_commit)
@@ -1555,8 +1584,8 @@ class TicketService:
             "success": True,
             "ticket_id": ticket_id,
             "commit_sha": commit_sha,
-                "message": "Commit linked successfully",
-            }
+            "message": "Commit linked successfully",
+        }
 
     @staticmethod
     async def resolve_ticket(
