@@ -1482,6 +1482,7 @@ class TicketService:
         commit_message: str,
         link_method: str,
     ) -> Dict[str, Any]:
+        from pathlib import Path
         from src.core.simple_config import get_config
 
         ticket = db.query(Ticket).filter_by(id=ticket_id).first()
@@ -1502,28 +1503,60 @@ class TicketService:
                 "message": "Commit already linked to this ticket",
             }
 
-        # Get real commit stats from git -- resolve the ticket's own
-        # project repo rather than assuming it's whichever project the
-        # process-wide singleton currently points at (only one project
-        # could ever be active before multi-project concurrency).
-        main_repo_path = None
-        if ticket.workflow_id:
+        # Resolve repo via ticket -> task.repo_id -> primary repo (REQ-10)
+        from src.core.database import (
+            AutopilotProject,
+            ProjectRepo,
+            Task,
+            Workflow,
+            resolve_project_repo,
+        )
+
+        resolved_repo = None
+        if ticket.task_id:
+            task = db.query(Task).filter_by(id=ticket.task_id).first()
+            if task and task.repo_id:
+                resolved_repo = db.query(ProjectRepo).filter_by(id=task.repo_id).first()
+        if resolved_repo is None and ticket.repo_id:
+            resolved_repo = db.query(ProjectRepo).filter_by(id=ticket.repo_id).first()
+        if resolved_repo is None and ticket.workflow_id:
             wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
             if wf and wf.project_id:
-                from src.core.database import AutopilotProject
+                try:
+                    resolved_repo = resolve_project_repo(db, wf.project_id, None)
+                except Exception:
+                    pass
 
-                proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
-                if proj and proj.base_dir:
-                    main_repo_path = proj.base_dir
+        main_repo_path = resolved_repo.path if resolved_repo else None
         if main_repo_path is None:
             config = get_config()
             main_repo_path = str(config.git.main_repo_path)
+
         # _get_commit_stats shells out to `git show --numstat` --
         # blocking, offloaded so it doesn't stall the event loop.
         loop = asyncio.get_event_loop()
         commit_stats = await loop.run_in_executor(
             None, TicketService._get_commit_stats, commit_sha, main_repo_path
         )
+
+        # REQ-10: Path-prefix check for out-of-scope detection
+        out_of_scope = False
+        if resolved_repo and commit_stats.get("files_list"):
+            repo_path = Path(resolved_repo.path).resolve()
+            out_of_files = []
+            for file_path in commit_stats["files_list"]:
+                try:
+                    abs_file = Path(main_repo_path, file_path).resolve()
+                    if not abs_file.is_relative_to(repo_path):
+                        out_of_files.append(file_path)
+                except (ValueError, OSError):
+                    pass
+            if out_of_files:
+                out_of_scope = True
+                logger.warning(
+                    f"Commit {commit_sha[:8]} has {len(out_of_files)} file(s) outside "
+                    f"repo {resolved_repo.label} ({resolved_repo.path}): {out_of_files}"
+                )
 
         # Create commit link with real stats
         commit_id = f"tc-{uuid.uuid4()}"
@@ -1539,6 +1572,8 @@ class TicketService:
             insertions=commit_stats["insertions"],
             deletions=commit_stats["deletions"],
             files_list=commit_stats["files_list"],
+            repo_id=resolved_repo.id if resolved_repo else None,
+            out_of_scope=out_of_scope,
         )
 
         db.add(ticket_commit)

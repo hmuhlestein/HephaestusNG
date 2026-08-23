@@ -1196,6 +1196,26 @@ def resolve_project_repo(session, project_id: str, repo_id: Optional[str] = None
     raise RepoResolutionError(project_id, repo_id)
 
 
+def validate_ticket_repo_consistency(session, ticket: "Ticket") -> None:
+    """Validate Ticket.repo_id matches Task.repo_id when task_id is set.
+
+    Args:
+        session: active SQLAlchemy session.
+        ticket: the Ticket being created/updated.
+
+    Raises:
+        ValueError: if ticket.task_id is set and ticket.repo_id
+            differs from the linked task's repo_id.
+    """
+    if ticket.task_id and ticket.repo_id:
+        task = session.query(Task).filter_by(id=ticket.task_id).first()
+        if task and task.repo_id and task.repo_id != ticket.repo_id:
+            raise ValueError(
+                f"Ticket.repo_id ({ticket.repo_id}) does not match "
+                f"Task.repo_id ({task.repo_id}) for task {task.id}"
+            )
+
+
 class ProjectRepo(Base):
     """One git repo belonging to a project. Every AutopilotProject must
     have at least one (is_primary=True). Pre-existing projects get one
