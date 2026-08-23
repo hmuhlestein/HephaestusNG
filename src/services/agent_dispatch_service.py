@@ -52,6 +52,8 @@ class AgentDispatchService:
         phase_id: Optional[str],
         requesting_agent_id: str = "system",
         explicit_working_directory: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Gather everything needed to create an agent for a task.
 
@@ -67,12 +69,16 @@ class AgentDispatchService:
         # + vector search) don't read each other's output -- the phase-context
         # merge below only needs project_context, and is itself synchronous.
         project_context, context_memories = await asyncio.gather(
-            server_state.agent_manager.get_project_context(),
+            server_state.agent_manager.get_project_context(
+                workflow_id=workflow_id,
+                repo_id=repo_id,
+            ),
             server_state.rag_system.retrieve_for_task(
                 task_description=task_description_for_rag,
                 requesting_agent_id=requesting_agent_id,
             ),
         )
+
         # get_phase_context (a Phase query) and _assemble_dispatch_dict (its
         # own Phase query, for cli config) are both plain synchronous
         # SQLAlchemy calls -- offloaded together since neither is async I/O
@@ -83,9 +89,7 @@ class AgentDispatchService:
             if phase_id and server_state.phase_manager:
                 phase_context = server_state.phase_manager.get_phase_context(phase_id)
                 if phase_context:
-                    final_project_context = (
-                        f"{project_context}\n\n{phase_context.to_prompt_context()}"
-                    )
+                    final_project_context = f"{project_context}\n\n{phase_context.to_prompt_context()}"
 
             # FIX #6: Pass explicit_working_directory (may be None) to the assembler
             # so the phase's configured working_directory can be used as fallback.
@@ -119,11 +123,7 @@ class AgentDispatchService:
             cli_config = AgentDispatchService.get_phase_cli_config(session, phase_id)
 
         # Phase working_directory is a fallback if caller didn't provide one
-        effective_working_directory = (
-            working_directory
-            or cli_config["working_directory"]
-            or os.getcwd()
-        )
+        effective_working_directory = working_directory or cli_config["working_directory"] or os.getcwd()
 
         return {
             "project_context": project_context,

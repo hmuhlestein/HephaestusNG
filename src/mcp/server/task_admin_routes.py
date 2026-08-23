@@ -30,6 +30,7 @@ logger = logging.getLogger("src.mcp.server.task_admin_routes")
 
 router = APIRouter()
 
+
 @router.get("/api/workflows")
 async def get_workflows_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
@@ -58,6 +59,7 @@ async def get_workflows_endpoint(
     except Exception as e:
         logger.error(f"Failed to fetch workflows: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/api/tasks/{task_id}/pause")
 async def pause_task_endpoint(task_id: str):
@@ -137,6 +139,7 @@ async def pause_task_endpoint(task_id: str):
         logger.error(f"Failed to pause task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.post("/api/bump_task_priority")
 async def bump_task_priority_endpoint(
     task_id: str = Body(..., embed=True),
@@ -199,6 +202,8 @@ async def bump_task_priority_endpoint(
         dispatch_context = await AgentDispatchService.build_dispatch_context(
             task_description_for_rag=task.enriched_description or task.raw_description,
             phase_id=task.phase_id,
+            workflow_id=task.workflow_id,
+            repo_id=task.repo_id,
         )
 
         # This endpoint's whole point is "start now, bypassing the global
@@ -214,19 +219,11 @@ async def bump_task_priority_endpoint(
         _reservation = None
         if qs.cli_model_concurrency_limits:
             with qs.db_manager.session_scope() as _qsession:
-                _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(
-                    _qsession, task
-                )
+                _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(_qsession, task)
             if _saturated:
-                logger.warning(
-                    f"Task {task_id}'s combo is at its concurrency limit with no usable "
-                    "fallback -- dispatching anyway (bump-priority bypasses limits)"
-                )
+                logger.warning(f"Task {task_id}'s combo is at its concurrency limit with no usable fallback -- dispatching anyway (bump-priority bypasses limits)")
             elif _cli_override:
-                logger.info(
-                    f"Task {task_id}'s primary combo at its concurrency limit -- "
-                    f"dispatching on fallback model {_model_override} instead"
-                )
+                logger.info(f"Task {task_id}'s primary combo at its concurrency limit -- dispatching on fallback model {_model_override} instead")
                 dispatch_context["phase_cli_tool"] = _cli_override
                 dispatch_context["phase_cli_model"] = _model_override
 
@@ -286,13 +283,10 @@ async def bump_task_priority_endpoint(
                 server_state.queue_service.enqueue_task(task_id)
                 logger.info(f"Requeued task {task_id} after failed bump dispatch")
             except Exception as requeue_error:
-                logger.error(
-                    f"Failed to requeue task {task_id} after failed bump "
-                    f"dispatch -- it is now stranded in 'assigned' with no "
-                    f"agent: {requeue_error}"
-                )
+                logger.error(f"Failed to requeue task {task_id} after failed bump dispatch -- it is now stranded in 'assigned' with no agent: {requeue_error}")
 
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/api/tasks/{task_id}/cancel")
 async def cancel_task_endpoint(task_id: str):
@@ -331,9 +325,7 @@ async def cancel_task_endpoint(task_id: str):
             # (an unlocked status="failed" write landing inside
             # claim_next_queued_task's select-then-dequeue window would let
             # a cancelled task get dispatched anyway).
-            outcome, cancelled_task_workflow_id = server_state.queue_service.cancel_queued_task(
-                resolved_task_id, reason="Cancelled by user"
-            )
+            outcome, cancelled_task_workflow_id = server_state.queue_service.cancel_queued_task(resolved_task_id, reason="Cancelled by user")
             if outcome == "cancelled":
                 cancelled_task_id = resolved_task_id
         else:
@@ -383,6 +375,7 @@ async def cancel_task_endpoint(task_id: str):
     except Exception as e:
         logger.error(f"Failed to cancel task: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.delete("/api/tasks/{task_id}")
 async def delete_task_endpoint(task_id: str):
@@ -451,10 +444,7 @@ async def delete_task_endpoint(task_id: str):
             session.rollback()
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    f"Cannot delete task {task_id}: other records still reference it "
-                    f"(e.g. a subtask or diagnostic run) -- {e}"
-                ),
+                detail=(f"Cannot delete task {task_id}: other records still reference it (e.g. a subtask or diagnostic run) -- {e}"),
             )
         finally:
             session.close()
@@ -474,6 +464,7 @@ async def delete_task_endpoint(task_id: str):
     except Exception as e:
         logger.error(f"Failed to delete task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/api/tasks/{task_id}/complete")
 async def complete_task_as_user(
@@ -526,13 +517,9 @@ async def complete_task_as_user(
         # would be a redundant, unrelated commit on top of it.
         output_lost_rejection = None
         if not phase or phase.name != "git_expert":
-            await TaskCompletionService.commit_and_link_ticket(
-                session, task.assigned_agent_id or "human-operator", task, summary.strip()
-            )
+            await TaskCompletionService.commit_and_link_ticket(session, task.assigned_agent_id or "human-operator", task, summary.strip())
             loop = asyncio.get_event_loop()
-            output_lost_rejection = await loop.run_in_executor(
-                None, functools.partial(TaskCompletionService.verify_output_survived_commit, session, task, phase=phase)
-            )
+            output_lost_rejection = await loop.run_in_executor(None, functools.partial(TaskCompletionService.verify_output_survived_commit, session, task, phase=phase))
             if output_lost_rejection:
                 task.status = "failed"
                 task.failure_reason = output_lost_rejection["message"]
@@ -540,6 +527,7 @@ async def complete_task_as_user(
                 raise HTTPException(status_code=400, detail=output_lost_rejection["message"])
 
         from src.autopilot.orchestrator.phase_transitions import fire_spec_gate_if_ready
+
         await fire_spec_gate_if_ready(session, task)
         session.commit()
     except HTTPException:
@@ -571,6 +559,7 @@ async def complete_task_as_user(
 
     return {"success": True, "task_id": task_id, "message": "Task marked done"}
 
+
 @router.post("/api/cancel_queued_task")
 async def cancel_queued_task_endpoint(
     task_id: str = Body(..., embed=True),
@@ -587,9 +576,7 @@ async def cancel_queued_task_endpoint(
         # claim_next_queued_task's executor-thread claim (the same race
         # class dequeue_task's own lock closes; this is the write that
         # happens before that dequeue call).
-        outcome, queued_task_workflow_id = (
-            server_state.queue_service.cancel_queued_task(task_id)
-        )
+        outcome, queued_task_workflow_id = server_state.queue_service.cancel_queued_task(task_id)
         if outcome == "not_found":
             raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
         if outcome == "not_queued":
@@ -626,6 +613,7 @@ async def cancel_queued_task_endpoint(
 
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/api/restart_task")
 async def restart_task_endpoint(
@@ -698,6 +686,7 @@ async def restart_task_endpoint(
                     # paused_at stale, the same bug class as this item's
                     # other resume-side fixes.
                     from src.autopilot.orchestrator.engine_client import resume_workflow
+
                     resume_workflow(task.workflow_id, force=True, session=session)
                 elif wf and wf.status != "active":
                     wf.status = "active"
@@ -705,6 +694,7 @@ async def restart_task_endpoint(
                     execution = session.query(PhaseExecution).filter_by(phase_id=task.phase_id).first()
                     if execution and execution.status != "in_progress":
                         from src.autopilot.orchestrator.phase_transitions import reopen_phase_execution
+
                         # started_at left alone: this reopens a task under
                         # an execution that may already have been running
                         # (a broader guard than _start_next_phase's --
@@ -783,6 +773,8 @@ async def restart_task_endpoint(
             dispatch_context = await AgentDispatchService.build_dispatch_context(
                 task_description_for_rag=task.enriched_description or task.raw_description,
                 phase_id=task.phase_id,
+                workflow_id=task.workflow_id,
+                repo_id=task.repo_id,
             )
 
             # Per-cli/model concurrency gate -- same reasoning as create_task's
@@ -793,14 +785,9 @@ async def restart_task_endpoint(
             _reservation = None
             if qs.cli_model_concurrency_limits:
                 with qs.db_manager.session_scope() as _qsession:
-                    _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(
-                        _qsession, task
-                    )
+                    _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(_qsession, task)
                 if _saturated:
-                    logger.info(
-                        f"Task {task_id}'s combo is already at its concurrency limit with no "
-                        "usable fallback -- queueing instead of dispatching"
-                    )
+                    logger.info(f"Task {task_id}'s combo is already at its concurrency limit with no usable fallback -- queueing instead of dispatching")
                     qs.enqueue_task(task_id)
                     await server_state.broadcast_update(
                         {"type": "task_restarted", "task_id": task_id, "status": "queued"},
@@ -813,10 +800,7 @@ async def restart_task_endpoint(
                         "status": "queued",
                     }
                 if _cli_override:
-                    logger.info(
-                        f"Task {task_id}'s primary combo at its concurrency limit -- "
-                        f"dispatching on fallback model {_model_override} instead"
-                    )
+                    logger.info(f"Task {task_id}'s primary combo at its concurrency limit -- dispatching on fallback model {_model_override} instead")
                     dispatch_context["phase_cli_tool"] = _cli_override
                     dispatch_context["phase_cli_model"] = _model_override
 
@@ -865,6 +849,7 @@ async def restart_task_endpoint(
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/api/queue_status")
 async def get_queue_status_endpoint():
     """Get current queue status information.
@@ -877,6 +862,7 @@ async def get_queue_status_endpoint():
     except Exception as e:
         logger.error(f"Failed to get queue status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -895,6 +881,7 @@ async def websocket_endpoint(websocket: WebSocket):
         server_state.active_websockets.remove(websocket)
         logger.info("WebSocket client disconnected")
 
+
 @router.get("/health")
 async def health_check():
     """Health check endpoint."""
@@ -903,6 +890,7 @@ async def health_check():
         "timestamp": datetime.utcnow().isoformat(),
         "version": "1.0.0",
     }
+
 
 @router.get("/")
 async def root():
