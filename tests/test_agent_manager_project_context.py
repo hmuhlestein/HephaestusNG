@@ -271,6 +271,38 @@ class TestGetProjectContextRepoAwareness:
         # Repo section absent due to failure
         assert "PROJECT REPOSITORIES" not in result
 
+    def test_workflow_id_exceeding_max_length_ignored(self, agent_manager, db_manager):
+        """workflow_id > 200 chars is sanitized to None."""
+        long_id = "x" * 201
+        result = asyncio.get_event_loop().run_until_complete(
+            agent_manager.get_project_context(workflow_id=long_id)
+        )
+        assert "## PROJECT STATUS" in result
+        assert "PROJECT REPOSITORIES" not in result
+
+    def test_repo_id_exceeding_max_length_ignored(self, agent_manager, db_manager):
+        """repo_id > 200 chars is sanitized to None."""
+        with db_manager.session_scope() as session:
+            project, repos = _create_project_with_repos(session, 2)
+            wf = _create_workflow(session, project)
+
+        long_id = "x" * 201
+        result = asyncio.get_event_loop().run_until_complete(
+            agent_manager.get_project_context(workflow_id=wf.id, repo_id=long_id)
+        )
+        # Repo list present but no REPO ACCESS (repo_id was sanitized out)
+        assert "## PROJECT REPOSITORIES" in result
+        assert "REPO ACCESS" not in result
+
+    def test_db_failure_returns_fallback(self, agent_manager, db_manager):
+        """DB failure in get_project_context returns fallback string."""
+        with patch.object(agent_manager.db_manager, "get_session") as mock_session:
+            mock_session.return_value.query.side_effect = Exception("DB down")
+            result = asyncio.get_event_loop().run_until_complete(
+                agent_manager.get_project_context()
+            )
+        assert result == "Project context unavailable"
+
 
 class TestCallerThreading:
     """Tests for repo_id preservation through dispatch paths (WARNING 2)."""

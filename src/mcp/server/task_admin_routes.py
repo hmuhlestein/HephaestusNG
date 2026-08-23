@@ -58,7 +58,7 @@ async def get_workflows_endpoint(
 
     except Exception as e:
         logger.error(f"Failed to fetch workflows: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/api/tasks/{task_id}/pause")
@@ -137,7 +137,7 @@ async def pause_task_endpoint(task_id: str):
         raise
     except Exception as e:
         logger.error(f"Failed to pause task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/api/bump_task_priority")
@@ -285,7 +285,7 @@ async def bump_task_priority_endpoint(
             except Exception as requeue_error:
                 logger.error(f"Failed to requeue task {task_id} after failed bump dispatch -- it is now stranded in 'assigned' with no agent: {requeue_error}")
 
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/api/tasks/{task_id}/cancel")
@@ -374,7 +374,7 @@ async def cancel_task_endpoint(task_id: str):
         raise
     except Exception as e:
         logger.error(f"Failed to cancel task: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/api/tasks/{task_id}")
@@ -463,7 +463,7 @@ async def delete_task_endpoint(task_id: str):
         raise
     except Exception as e:
         logger.error(f"Failed to delete task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/api/tasks/{task_id}/complete")
@@ -536,7 +536,7 @@ async def complete_task_as_user(
     except Exception as e:
         session.rollback()
         logger.error(f"Failed to human-complete task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         session.close()
 
@@ -612,7 +612,7 @@ async def cancel_queued_task_endpoint(
         import traceback
 
         logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/api/restart_task")
@@ -847,7 +847,7 @@ async def restart_task_endpoint(
         import traceback
 
         logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/api/queue_status")
@@ -861,7 +861,7 @@ async def get_queue_status_endpoint():
         return status
     except Exception as e:
         logger.error(f"Failed to get queue status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.websocket("/ws")
