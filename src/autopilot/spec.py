@@ -36,6 +36,7 @@ DEFAULT_SPEC: Dict[str, Any] = {
     "required_pass_rate": 100,  # percent of tests that must pass
     "min_requirements_met_rate": 100,  # percent of requirements that must be met
     "max_minor_unmet_requirements": 2,  # PASS_WITH_MINOR_GAPS tolerance, see score_product_validation
+    "min_coverage_percent": 80,  # unit test coverage floor, see score_qa
 }
 
 _WORKFLOWS_DIR = Path(__file__).parent.parent.parent / "config" / "workflows"
@@ -1295,6 +1296,18 @@ def score_qa(
     req_met = int(result.get("requirements_met", req_total) or 0)
     req_rate = (req_met / req_total * 100.0) if req_total > 0 else 100.0
 
+    # Agent-self-reported, like pass_rate/critical_issues/requirements_met --
+    # not cross-checked by run_independent_test_verification, which only
+    # re-derives pass/fail counts from pytest's summary line, not a coverage
+    # percentage. Unlike those fields, a missing value is NOT treated as
+    # satisfying the floor (0 failed_tests, 100% pass_rate on omission is
+    # already generous elsewhere in this function) -- omitting
+    # coverage_percent would otherwise silently exempt every run from the
+    # floor entirely, defeating the point of enforcing it.
+    coverage_percent = result.get("coverage_percent")
+    coverage_reported = coverage_percent is not None
+    coverage_percent = float(coverage_percent) if coverage_reported else 0.0
+
     # Enhancement 1: Independent test verification
     independent_verification = None
     verification_discrepancy = ""
@@ -1361,6 +1374,11 @@ def score_qa(
         violations.append(
             f"requirements_met={req_rate:.0f}% < {spec.get('min_requirements_met_rate', 100)}%"
         )
+    min_coverage = spec.get("min_coverage_percent", DEFAULT_SPEC["min_coverage_percent"])
+    if not coverage_reported:
+        violations.append(f"coverage_percent not reported (required: >= {min_coverage}%)")
+    elif coverage_percent < min_coverage:
+        violations.append(f"coverage_percent={coverage_percent:.0f}% < {min_coverage}%")
 
     meta = {
         "gate": "qa",
@@ -1368,6 +1386,7 @@ def score_qa(
         "pass_rate": round(pass_rate, 1),
         "failed_tests": failed,
         "critical_issues": critical,
+        "coverage_percent": round(coverage_percent, 1) if coverage_reported else None,
         "requirements_met_rate": round(req_rate, 1),
     }
 
@@ -1989,6 +2008,7 @@ def synthetic_clean_result(phase_name: str, run_count: int) -> Dict[str, Any]:
             "critical_issues": 0,
             "requirements_met": 1,
             "requirements_total": 1,
+            "coverage_percent": DEFAULT_SPEC["min_coverage_percent"],
         }
     if phase_name == "product_validation":
         return {**base, "verdict": "PASS", "unmet_requirements": []}

@@ -213,22 +213,25 @@ additional_notes: |
   Then run whatever tests you find:
   ```bash
   # If pytest tests exist
-  python -m pytest -v --tb=short -p no:libtmux 2>&1 | tee all_results.txt
+  python -m pytest -v --tb=short -p no:libtmux --cov=src --cov-report=term-missing 2>&1 | tee all_results.txt
   # Note: -p no:libtmux avoids plugin conflict if libtmux is installed globally
-  
+  # --cov=src reports unit test coverage -- REQUIRED, the gate enforces an 80% floor (see STEP 11)
+
   # If npm/node tests exist
   npm test 2>&1 | tee all_results.txt
-  
+
   # If no tests exist, note this and create basic smoke tests
   ```
-  
+
   If no tests exist, create minimal smoke tests based on design.md to validate the core functionality works.
 
   Capture:
   - Pass/fail counts
   - Failed test names and errors
   - Execution time
-  - Coverage (if available)
+  - Coverage percent from the `TOTAL` line of the `--cov` report -- REQUIRED, not optional.
+    Omitting it does not exempt this run from the coverage floor; it fails the gate
+    the same as reporting a number under 80%.
 
 
   ## STEP 6: SCOPE COMPLIANCE CHECK
@@ -456,6 +459,7 @@ additional_notes: |
   major_issues: 0
   requirements_total: 0
   requirements_met: 0
+  coverage_percent: 0
   agent_score: 0.0
   verdict: PASS
   summary: "one-line summary"
@@ -475,6 +479,9 @@ additional_notes: |
   - pass_rate is a percent (0–100): passed_tests / total_tests * 100.
   - critical_issues = security/data-loss/complete-failure issues (these send the
     pipeline back to architecture). major issues go in major_issues.
+  - coverage_percent is the unit test coverage percent (0–100) from `pytest --cov=src`'s
+    `TOTAL` line (STEP 5). The gate requires >= 80%; omitting this field fails the
+    gate the same as reporting a number below the floor.
   - agent_score (0.0–1.0) is YOUR subjective quality judgement for things the
     numbers don't capture (only used when all hard floors pass).
   - verdict is "PASS", "NEEDS_WORK", or "FAIL".
