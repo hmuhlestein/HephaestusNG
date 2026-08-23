@@ -391,6 +391,7 @@ async def _send_launch_command_and_record_agent(
             cli_type=cli_type,
             cli_model=prep.model,
             tmux_session_name=prep.session_name,
+            working_directory=prep.branch_path,
             current_task_id=task.id,
             last_activity=datetime.utcnow(),
             launched_at=datetime.utcnow(),
