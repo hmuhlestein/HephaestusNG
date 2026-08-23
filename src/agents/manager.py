@@ -667,6 +667,14 @@ class AgentManager:
         """
         session = self.db_manager.get_session()
         try:
+            # Validate input lengths to prevent abuse
+            if workflow_id and len(workflow_id) > 200:
+                logger.warning(f"workflow_id exceeds max length ({len(workflow_id)} > 200), ignoring")
+                workflow_id = None
+            if repo_id and len(repo_id) > 200:
+                logger.warning(f"repo_id exceeds max length ({len(repo_id)} > 200), ignoring")
+                repo_id = None
+
             # Resolve project_id from workflow_id (REQ-17/18)
             project_id = None
             if workflow_id:
@@ -717,6 +725,20 @@ class AgentManager:
             session.close()
 
     @staticmethod
+    def _sanitize_for_prompt(value: str, max_len: int = 200) -> str:
+        """Sanitize a user-controlled string before interpolating into an LLM prompt.
+
+        Strips control characters and truncates to prevent prompt injection
+        via crafted repo labels or paths (e.g. a label like\n'\nIgnore all previous instructions...').
+        """
+        import re
+        # Remove control chars (\n, \r, \t, etc.) except space
+        sanitized = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', value)
+        # Collapse whitespace runs to single space
+        sanitized = re.sub(r'\s+', ' ', sanitized).strip()
+        return sanitized[:max_len]
+
+    @staticmethod
     def _build_repo_context(
         session,
         project_id: Optional[str],
@@ -748,10 +770,12 @@ class AgentManager:
         if len(repos) <= 1:
             return ""
 
-        # REQ-17: list all repos
+        # REQ-17: list all repos — sanitize label/path to prevent prompt injection
         lines = ["\n## PROJECT REPOSITORIES\n"]
         for repo in repos:
-            lines.append(f"- {repo.label}: {repo.path}")
+            safe_label = AgentManager._sanitize_for_prompt(repo.label, 100)
+            safe_path = AgentManager._sanitize_for_prompt(repo.path, 500)
+            lines.append(f"- {safe_label}: {safe_path}")
 
         # REQ-18: writable vs read-only framing
         if repo_id:
@@ -759,9 +783,11 @@ class AgentManager:
             if matched:
                 lines.append("\n## REPO ACCESS\n")
                 for repo in repos:
+                    safe_label = AgentManager._sanitize_for_prompt(repo.label, 100)
                     if repo.id == repo_id:
-                        lines.append(f"- {repo.label}: WRITABLE (your assigned repo)")
+                        lines.append(f"- {safe_label}: WRITABLE (your assigned repo)")
                     else:
-                        lines.append(f"- {repo.label}: READ-ONLY reference ({repo.path})")
+                        safe_path = AgentManager._sanitize_for_prompt(repo.path, 500)
+                        lines.append(f"- {safe_label}: READ-ONLY reference ({safe_path})")
 
         return "\n".join(lines) + "\n"
