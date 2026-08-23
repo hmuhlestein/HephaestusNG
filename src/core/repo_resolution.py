@@ -84,4 +84,5 @@ def repo_id_for_path(db: Session, project_id: str, file_path: str) -> Optional[s
 
     if not matches:
         return None
-    return str(max(matches, key=lambda r: len(r.path)).id)
+    # Tie-break: longest path first, then prefer primary, then alphabetical label
+    return str(max(matches, key=lambda r: (len(r.path), r.is_primary, r.label)).id)

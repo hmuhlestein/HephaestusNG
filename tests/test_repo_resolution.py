@@ -127,5 +127,32 @@ def test_resolve_repo_path_zero_project_repos_falls_back_to_base_dir(db_manager,
         assert session.query(ProjectRepo).filter_by(project_id="proj-zero-repos").count() == 0
 
 
+def test_repo_id_for_path_tie_breaks_by_primary_then_label(db_manager, tmp_path):
+    """WARNING-5: when two repos have equal-length paths, tie-break by
+    is_primary (prefer primary) then by label (alphabetical)."""
+    # Create two repos with same-length paths
+    repo_a = tmp_path / "aaaa"  # 4 chars
+    repo_b = tmp_path / "bbbb"  # 4 chars
+    repo_a.mkdir()
+    repo_b.mkdir()
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-tie", name="t", base_dir=str(tmp_path)))
+        # repo-bbbb is primary
+        session.add(ProjectRepo(id="repo-b", project_id="proj-tie", label="bbbb", path=str(repo_b), is_primary=True))
+        session.add(ProjectRepo(id="repo-a", project_id="proj-tie", label="aaaa", path=str(repo_a), is_primary=False))
+
+    # A file under repo_a should resolve to repo-a (longest prefix match)
+    with db_manager.session_scope() as session:
+        assert repo_id_for_path(session, "proj-tie", str(repo_a / "file.py")) == "repo-a"
+
+    # A file under repo_b should resolve to repo-b (longest prefix match)
+    with db_manager.session_scope() as session:
+        assert repo_id_for_path(session, "proj-tie", str(repo_b / "file.py")) == "repo-b"
+
+    # A file that matches NEITHER should return None
+    with db_manager.session_scope() as session:
+        assert repo_id_for_path(session, "proj-tie", str(tmp_path / "other" / "file.py")) is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
