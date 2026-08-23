@@ -1268,6 +1268,10 @@ def score_qa(
     Expected result keys (all optional, scored defensively):
         failed_tests, passed_tests, total_tests, pass_rate (0-100),
         critical_issues, requirements_met, requirements_total, agent_score (0-1).
+    coverage_percent (0-100) is the one exception: it's still an optional key
+    on the input dict, but an absent value is scored as a floor violation
+    rather than defaulted to a passing value -- see the coverage_reported
+    check below.
 
     Enhancement 1: If working_directory is provided, runs an independent test
     verification and compares against the agent's self-reported metrics.
