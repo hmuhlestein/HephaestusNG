@@ -940,6 +940,42 @@ class TestProjectScopedWorktreeManager:
             is mock_agent_manager.branch_manager
         )
 
+    @pytest.mark.asyncio
+    async def test_resolves_workflow_feature_repo_id_for_multi_repo_project(
+        self, mock_agent_manager, db_manager
+    ):
+        """A workflow bound to a Feature scoped to a child repo (REQ-19/REQ-20's
+        "feature -> repo" mapping) must resolve THAT repo's path, not the
+        project's primary repo."""
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, ProjectRepo
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-multi", name="Multi", base_dir="/tmp/multi-repo-project"))
+            session.add(
+                ProjectRepo(id="repo-primary", project_id="proj-multi", label="backend", path="/tmp/multi-repo-project/backend", is_primary=True)
+            )
+            session.add(
+                ProjectRepo(id="repo-frontend", project_id="proj-multi", label="frontend", path="/tmp/multi-repo-project/frontend", is_primary=False)
+            )
+            session.add(
+                AutopilotDesign(id="design-1", project_id="proj-multi", filename="d.md", name="d")
+            )
+            session.add(Feature(id="feat-fe", design_id="design-1", feature_key="fe", name="FE", scope="s", repo_id="repo-frontend"))
+            session.add(
+                Workflow(
+                    id="wf-multi",
+                    name="Multi Workflow",
+                    status="active",
+                    phases_folder_path="/tmp",
+                    project_id="proj-multi",
+                    feature_id="feat-fe",
+                )
+            )
+
+        assert mock_agent_manager._resolve_project_base_dir("wf-multi") == Path(
+            "/tmp/multi-repo-project/frontend"
+        )
+
 
 class TestCreateAgentForTaskFallback:
     """When a phase configures fallback_cli_tool and the primary CLI fails,
