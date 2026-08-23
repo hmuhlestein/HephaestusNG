@@ -390,17 +390,18 @@ def heal_orphaned_agent_branches(logger: "OrchestratorLogger") -> int:
     """
     from src.core.database import AutopilotProject
     from src.core.database import DatabaseManager as DbManager
+    from src.core.repo_resolution import get_project_repos
 
     cfg = get_config()
     db = DbManager(str(cfg.paths.database_path))
     healed = 0
     try:
         with db.session_scope() as session:
-            project_dirs = {
-                proj.base_dir
-                for proj in session.query(AutopilotProject).all()
-                if proj.base_dir and Path(proj.base_dir).is_dir()
-            }
+            project_dirs = set()
+            for proj in session.query(AutopilotProject).all():
+                repos = get_project_repos(session, proj.id)
+                paths = [repo.path for repo in repos] if repos else [proj.base_dir]
+                project_dirs.update(p for p in paths if p and Path(p).is_dir())
 
         for project_dir in project_dirs:
             try:
@@ -585,6 +586,7 @@ def _recover_abandoned_workflows_missing_worktree(logger: "OrchestratorLogger") 
     instead of looping forever.
     """
     from src.core.database import AutopilotDesign, AutopilotProject, Feature
+    from src.core.repo_resolution import RepoNotFoundError, resolve_repo_path
 
     max_recovery_attempts = 2
     recovered = 0
@@ -608,6 +610,10 @@ def _recover_abandoned_workflows_missing_worktree(logger: "OrchestratorLogger") 
             project = db.query(AutopilotProject).filter_by(id=design.project_id).first()
             if not project or not project.base_dir:
                 continue
+            try:
+                repo_path = resolve_repo_path(db, design.project_id, feature.repo_id)
+            except (RepoNotFoundError, ValueError):
+                repo_path = Path(project.base_dir)
 
             # Scoped to the CURRENTLY in_progress phase only -- a workflow
             # that's been through several goto cycles can carry old,
@@ -642,7 +648,7 @@ def _recover_abandoned_workflows_missing_worktree(logger: "OrchestratorLogger") 
                 continue
 
             branch = f"feature/{feature.design_id[:8]}/{feature.feature_key}"
-            wt_path = _create_integration_worktree(Path(project.base_dir), feature.design_id, branch, logger)
+            wt_path = _create_integration_worktree(repo_path, feature.design_id, branch, logger)
             if not wt_path:
                 logger.warning(f"[WORKFLOW-RECOVERY] Could not rebuild worktree for workflow {wf.id[:8]} (branch {branch}) -- leaving failed")
                 continue
