@@ -22,9 +22,11 @@ on the next startup of every deployed instance.
 
 import logging
 
-from sqlalchemy import exc as sqlalchemy_exc, text
+from sqlalchemy import exc as sqlalchemy_exc
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+
 
 def migrate_task_dependency_columns(engine):
     """Add dependency columns to tasks table for existing databases."""
@@ -52,6 +54,7 @@ def migrate_task_dependency_columns(engine):
             logger.info("Migrated task dependency columns")
     except Exception as e:
         logger.warning(f"Task dependency migration failed (not just 'already exists' -- check this): {e}")
+
 
 def migrate_autopilot_designs_columns(engine):
     """Add status/content_hash/feature_folder/completed_at to autopilot_designs for existing databases."""
@@ -132,6 +135,7 @@ def migrate_autopilot_designs_columns(engine):
     except Exception as e:
         logger.warning(f"agents.launched_at migration failed (not just 'already exists' -- check this): {e}")
 
+
 def migrate_feature_model_columns(engine):
     """Add Feature model columns to autopilot_designs and workflows for existing databases.
 
@@ -199,9 +203,7 @@ def migrate_feature_model_columns(engine):
 
     # Create prompt_proposals table if it doesn't exist (finding 8).
     try:
-        Base.metadata.create_all(
-            engine, tables=[PromptProposal.__table__], checkfirst=True
-        )
+        Base.metadata.create_all(engine, tables=[PromptProposal.__table__], checkfirst=True)
         logger.info("Ensured prompt_proposals table exists")
     except Exception as e:
         logger.warning(f"prompt_proposals table creation failed (not just 'already exists' -- check this): {e}")
@@ -217,6 +219,7 @@ def migrate_feature_model_columns(engine):
             logger.info("Migrated features.pr_url column")
     except Exception as e:
         logger.warning(f"features.pr_url migration failed (not just 'already exists' -- check this): {e}")
+
 
 def migrate_total_gotos_column(engine):
     """Add workflows.total_gotos for existing databases.
@@ -234,6 +237,7 @@ def migrate_total_gotos_column(engine):
     except Exception as e:
         logger.warning(f"workflows.total_gotos migration failed (not just 'already exists' -- check this): {e}")
 
+
 def migrate_workflow_gotos_reset_at_column(engine):
     """Add workflows.gotos_reset_at for existing databases.
 
@@ -249,6 +253,7 @@ def migrate_workflow_gotos_reset_at_column(engine):
             logger.info("Migrated workflows.gotos_reset_at column")
     except Exception as e:
         logger.warning(f"workflows.gotos_reset_at migration failed (not just 'already exists' -- check this): {e}")
+
 
 def migrate_task_retry_count_column(engine):
     """Add tasks.retry_count for existing databases.
@@ -266,6 +271,7 @@ def migrate_task_retry_count_column(engine):
     except Exception as e:
         logger.warning(f"tasks.retry_count migration failed (not just 'already exists' -- check this): {e}")
 
+
 def migrate_phase_retry_count_column(engine):
     """Add phases.retry_count for existing databases.
 
@@ -281,6 +287,7 @@ def migrate_phase_retry_count_column(engine):
             logger.info("Migrated phases.retry_count column")
     except Exception as e:
         logger.warning(f"phases.retry_count migration failed (not just 'already exists' -- check this): {e}")
+
 
 def migrate_self_review_columns(engine):
     """Add tasks.self_review_done and phases.self_review for existing databases.
@@ -315,17 +322,14 @@ def migrate_self_review_columns(engine):
                 # skips it silently and that phase never gets self-review
                 # enabled -- indistinguishable, from the caller's side,
                 # from a phase that was deliberately configured off.
-                conn.execute(text(
-                    "UPDATE phases SET self_review = :value "
-                    "WHERE name = 'development' "
-                    "AND (self_review IS NULL OR self_review = 'null')"
-                ), {"value": '{"enabled": true}'})
+                conn.execute(text("UPDATE phases SET self_review = :value WHERE name = 'development' AND (self_review IS NULL OR self_review = 'null')"), {"value": '{"enabled": true}'})
             except Exception:
                 pass  # Already populated or table empty
             conn.commit()
             logger.info("Migrated tasks.self_review_done / phases.self_review columns")
     except Exception as e:
         logger.warning(f"self_review columns migration failed (not just 'already exists' -- check this): {e}")
+
 
 def backfill_self_review_defaults(engine):
     """Re-enable self_review on any development Phase row still missing it.
@@ -355,18 +359,10 @@ def backfill_self_review_defaults(engine):
             # Both spellings of "no value": a true SQL NULL and the JSON
             # null literal. A column written as the four-byte string
             # 'null' is not SQL NULL, so an IS NULL predicate skips it.
-            result = conn.execute(text(
-                "UPDATE phases SET self_review = :value "
-                "WHERE name = 'development' "
-                "AND (self_review IS NULL OR self_review = 'null')"
-            ), {"value": '{"enabled": true}'})
+            result = conn.execute(text("UPDATE phases SET self_review = :value WHERE name = 'development' AND (self_review IS NULL OR self_review = 'null')"), {"value": '{"enabled": true}'})
             conn.commit()
             if result.rowcount:
-                logger.warning(
-                    f"[SELF-REVIEW] Repaired {result.rowcount} development phase row(s) "
-                    "that had self_review unset -- the self-review gate would not have "
-                    "fired for tasks on them"
-                )
+                logger.warning(f"[SELF-REVIEW] Repaired {result.rowcount} development phase row(s) that had self_review unset -- the self-review gate would not have fired for tasks on them")
     except Exception as e:
         logger.warning(f"self_review backfill failed: {e}")
 
@@ -387,6 +383,7 @@ def migrate_phase_execution_task_claim_column(engine):
     except Exception as e:
         logger.warning(f"phase_executions.task_creation_claimed_at migration failed (not just 'already exists' -- check this): {e}")
 
+
 def migrate_autopilot_designs_error_column(engine):
     """Add autopilot_designs.error for existing databases.
 
@@ -402,6 +399,7 @@ def migrate_autopilot_designs_error_column(engine):
             logger.info("Migrated autopilot_designs.error column")
     except Exception as e:
         logger.warning(f"autopilot_designs.error migration failed (not just 'already exists' -- check this): {e}")
+
 
 def migrate_workflow_paused_by_column(engine):
     """Add workflows.paused_by for existing databases.
@@ -419,6 +417,7 @@ def migrate_workflow_paused_by_column(engine):
     except Exception as e:
         logger.warning(f"workflows.paused_by migration failed (not just 'already exists' -- check this): {e}")
 
+
 def migrate_workflow_status_reason_column(engine):
     """Add workflows.status_reason for existing databases.
 
@@ -434,6 +433,7 @@ def migrate_workflow_status_reason_column(engine):
             logger.info("Migrated workflows.status_reason column")
     except Exception as e:
         logger.warning(f"workflows.status_reason migration failed (not just 'already exists' -- check this): {e}")
+
 
 def migrate_workflow_paused_at_column(engine):
     """Add workflows.paused_at for existing databases.
@@ -451,6 +451,7 @@ def migrate_workflow_paused_at_column(engine):
     except Exception as e:
         logger.warning(f"workflows.paused_at migration failed (not just 'already exists' -- check this): {e}")
 
+
 def migrate_workflow_paused_retry_count_column(engine):
     """Add workflows.paused_retry_count for existing databases.
 
@@ -467,6 +468,7 @@ def migrate_workflow_paused_retry_count_column(engine):
     except Exception as e:
         logger.warning(f"workflows.paused_retry_count migration failed (not just 'already exists' -- check this): {e}")
 
+
 def migrate_task_action_target_phase_column(engine):
     """Add tasks.action_target_phase for existing databases.
 
@@ -482,6 +484,7 @@ def migrate_task_action_target_phase_column(engine):
             logger.info("Migrated tasks.action_target_phase column")
     except Exception as e:
         logger.warning(f"tasks.action_target_phase migration failed (not just 'already exists' -- check this): {e}")
+
 
 def migrate_cost_tracking_columns(engine):
     """Add cost tracking columns and tables for existing databases.
@@ -608,6 +611,7 @@ def migrate_cost_tracking_columns(engine):
     except Exception as e:
         logger.warning(f"Cost entries indexes failed (not just 'already exists' -- check this): {e}")
 
+
 def migrate_phase_fallback_columns(engine):
     """Add fallback_cli_tool and fallback_cli_model columns to phases table."""
     try:
@@ -626,13 +630,14 @@ def migrate_phase_fallback_columns(engine):
         # Populate fallback values from workflow config for existing phases
         try:
             from src.core.simple_config import get_config
+
             cfg = get_config()
             if cfg.agents.default_fallback_cli_tool:
                 with engine.connect() as conn:
-                    result = conn.execute(text(
-                        "UPDATE phases SET fallback_cli_tool = :tool, fallback_cli_model = :model "
-                        "WHERE fallback_cli_tool IS NULL OR fallback_cli_tool = ''"
-                    ), {"tool": cfg.agents.default_fallback_cli_tool, "model": cfg.agents.default_fallback_cli_model})
+                    result = conn.execute(
+                        text("UPDATE phases SET fallback_cli_tool = :tool, fallback_cli_model = :model WHERE fallback_cli_tool IS NULL OR fallback_cli_tool = ''"),
+                        {"tool": cfg.agents.default_fallback_cli_tool, "model": cfg.agents.default_fallback_cli_model},
+                    )
                     conn.commit()
                     if result.rowcount > 0:
                         logger.info(f"Populated fallback for {result.rowcount} phases from global config")
@@ -640,6 +645,7 @@ def migrate_phase_fallback_columns(engine):
             logger.warning(f"Could not populate phase fallbacks from global config: {e}")
     except Exception as e:
         logger.warning(f"Phases fallback columns migration failed (not just 'already exists' -- check this): {e}")
+
 
 def migrate_review_mode_columns(engine):
     """Add review_mode to autopilot_projects and review columns to features."""
@@ -733,7 +739,7 @@ def migrate_project_repos_table(engine):
     Then backfill exactly one primary ProjectRepo per existing
     AutopilotProject (path=base_dir, is_primary=True). Idempotent --
     safe to call on every startup."""
-    from src.core.database import ProjectRepo, Base
+    from src.core.database import Base, ProjectRepo
 
     try:
         Base.metadata.create_all(engine, tables=[ProjectRepo.__table__], checkfirst=True)
@@ -756,10 +762,7 @@ def migrate_project_repos_table(engine):
                     pass  # Column already exists
             # Create unique partial index for is_primary (BLOCKER-2 fix)
             try:
-                conn.execute(text(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_one_primary_per_project "
-                    "ON project_repos (project_id) WHERE is_primary = 1"
-                ))
+                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_one_primary_per_project ON project_repos (project_id) WHERE is_primary = 1"))
             except Exception:
                 pass  # Index already exists
             conn.commit()
@@ -772,30 +775,30 @@ def migrate_project_repos_table(engine):
     # (not a blanket insert) so re-running this migration is a no-op --
     # required for NFR-02 (idempotent, no duplicate rows on rerun).
     try:
-        from src.core.database import AutopilotProject
         import uuid
+
         from sqlalchemy.orm import sessionmaker
 
-        SessionLocal = sessionmaker(bind=engine)
-        session = SessionLocal()
+        from src.core.database import AutopilotProject
+
+        session_factory = sessionmaker(bind=engine)
+        session = session_factory()
         try:
             projects = session.query(AutopilotProject).all()
             created = 0
             for project in projects:
-                existing = (
-                    session.query(ProjectRepo)
-                    .filter_by(project_id=project.id, is_primary=True)
-                    .first()
-                )
+                existing = session.query(ProjectRepo).filter_by(project_id=project.id, is_primary=True).first()
                 if existing:
                     continue
-                session.add(ProjectRepo(
-                    id=f"repo-{uuid.uuid4()}",
-                    project_id=project.id,
-                    label="primary",
-                    path=project.base_dir,
-                    is_primary=True,
-                ))
+                session.add(
+                    ProjectRepo(
+                        id=f"repo-{uuid.uuid4()}",
+                        project_id=project.id,
+                        label="primary",
+                        path=project.base_dir,
+                        is_primary=True,
+                    )
+                )
                 created += 1
             session.commit()
             logger.info(f"Backfilled {created} primary ProjectRepo row(s)")
@@ -824,12 +827,8 @@ def migrate_autopilot_pipeline_events_table(engine):
 
     try:
         with engine.connect() as conn:
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_autopilot_pipeline_events_project_id ON autopilot_pipeline_events(project_id)")
-            )
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_autopilot_pipeline_events_created_at ON autopilot_pipeline_events(created_at)")
-            )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_autopilot_pipeline_events_project_id ON autopilot_pipeline_events(project_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_autopilot_pipeline_events_created_at ON autopilot_pipeline_events(created_at)"))
             conn.commit()
             logger.info("Created autopilot_pipeline_events indexes")
     except Exception as e:
