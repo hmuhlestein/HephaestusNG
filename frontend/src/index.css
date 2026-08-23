@@ -283,6 +283,16 @@
   fill: #e5e7eb;
 }
 
+/* "React Flow" attribution badge (bottom-right) is a semi-transparent
+   white chip by default -- a faint white smudge on a dark canvas. */
+.dark .react-flow__attribution {
+  background: rgba(31, 41, 55, 0.7);
+}
+
+.dark .react-flow__attribution a {
+  color: #9ca3af;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
