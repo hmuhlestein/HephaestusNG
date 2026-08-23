@@ -198,30 +198,35 @@ class LaunchPipeline:
         return None
 
     def _resolve_project_base_dir(self, workflow_id: Optional[str]) -> Optional[Path]:
-        """Resolve workflow_id's project base_dir via Workflow.project_id ->
-        AutopilotProject.base_dir. Never raises -- returns None on any
-        lookup failure (no workflow_id, workflow/project row missing, or no
-        project_id) so callers can fall back to today's default-instance
-        behavior instead of erroring.
+        """Resolve workflow_id's project repo path via Workflow.project_id ->
+        (Workflow.feature_id -> Feature.repo_id ->) resolve_repo_path. Never
+        raises -- returns None on any lookup failure (no workflow_id,
+        workflow/project row missing, or no project_id) so callers can fall
+        back to today's default-instance behavior instead of erroring.
         """
         if not workflow_id:
             return None
         try:
-            from src.core.database import AutopilotProject, Workflow
+            from src.core.database import Feature, Workflow
+            from src.core.repo_resolution import RepoNotFoundError, resolve_repo_path
 
             session = self.db_manager.get_session()
             try:
                 wf = session.query(Workflow).filter_by(id=workflow_id).first()
                 if not wf or not wf.project_id:
                     return None
-                proj = (
-                    session.query(AutopilotProject)
-                    .filter_by(id=wf.project_id)
-                    .first()
-                )
-                if not proj or not proj.base_dir:
+                repo_id = None
+                if wf.feature_id:
+                    feature = session.query(Feature).filter_by(id=wf.feature_id).first()
+                    if feature is not None:
+                        repo_id = feature.repo_id
+                try:
+                    return resolve_repo_path(session, wf.project_id, repo_id)
+                except (RepoNotFoundError, ValueError) as e:
+                    logger.warning(
+                        f"[WORKTREE] Could not resolve repo path for workflow {workflow_id}: {e}"
+                    )
                     return None
-                return Path(proj.base_dir)
             finally:
                 session.close()
         except Exception as e:
