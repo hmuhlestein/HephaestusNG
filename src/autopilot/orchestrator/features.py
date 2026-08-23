@@ -106,8 +106,7 @@ def _create_feature_records(
             # (or a single-repo project) leaves repo_id None -- falls back
             # to the primary repo everywhere downstream (REQ-06).
             feature_repo_id = None
-            if multi_repo:
-                assert project_id is not None  # multi_repo is only True when project_id resolved
+            if multi_repo and project_id is not None:
                 repo_label = feat.get("repo_label")
                 if repo_label:
                     repo = db.query(ProjectRepo).filter_by(project_id=project_id, label=repo_label).first()
