@@ -210,6 +210,12 @@ additional_notes: |
   - ALWAYS use the "Artifacts Path" value for ALL generated docs (.md, .json, .txt).
   - ALWAYS use the "Project Path" value for ALL implementation code.
   - Your task description contains the exact paths — copy them exactly.
+  - requirements.md, wherever mentioned in this prompt, means
+    requirements-<your Task ID's first 8 hex characters>.md (find your
+    Task ID in "Task ID:" above). Not optional: a duplicate/concurrent
+    dispatch for this same phase then writes to a DIFFERENT suffixed file
+    instead of racing yours, and the pipeline reads your own task's
+    suffixed file specifically, not a bare requirements.md.
 
   Read your task description for the correct paths:
   - "Design Document:" tells you where the design doc is
