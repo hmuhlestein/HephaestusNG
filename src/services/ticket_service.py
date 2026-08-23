@@ -17,6 +17,7 @@ from src.core.database import (
     TicketHistory,
     Workflow,
     get_db,
+    validate_ticket_repo_consistency,
 )
 from src.services.ticket_history_service import TicketHistoryService
 from src.services.ticket_search_service import TicketSearchService
@@ -552,6 +553,10 @@ class TicketService:
 
             db.add(ticket)
             logger.info(f"[TICKET_SERVICE] Ticket object created: {ticket_id}")
+
+            # REQ-02: Validate repo_id consistency with task
+            validate_ticket_repo_consistency(db, ticket)
+
             db.flush()  # Flush to get the ID for history
             logger.info("[TICKET_SERVICE] db.flush() completed")
 
@@ -1313,6 +1318,9 @@ class TicketService:
         ticket = db.query(Ticket).filter_by(id=ticket_id).first()
         if not ticket:
             raise ValueError(f"Ticket not found: {ticket_id}")
+
+        # REQ-02: Validate repo_id consistency with task before linking commit
+        validate_ticket_repo_consistency(db, ticket)
 
         # Check if commit already linked
         existing = db.query(TicketCommit).filter_by(ticket_id=ticket_id, commit_sha=commit_sha).first()
