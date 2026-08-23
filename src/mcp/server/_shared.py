@@ -172,6 +172,7 @@ class CreateTaskRequest(BaseModel):
     phase_id: Optional[str] = Field(default=None, description="Phase ID for workflow-based tasks")
     phase_order: Optional[int] = Field(default=None, description="Phase order number (alternative to phase_id)")
     cwd: Optional[str] = Field(default=None, description="Working directory for the task")
+    repo_id: Optional[str] = Field(default=None, description="ProjectRepo this task is scoped to (multi-repo projects only)")
     ticket_id: Optional[str] = Field(
         default=None,
         description="Associated ticket ID (required when ticket tracking enabled)",

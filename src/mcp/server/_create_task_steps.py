@@ -207,6 +207,58 @@ def _guard_phase_ownership(agent_id: str, request: CreateTaskRequest, dedup_phas
             _s.close()
 
 
+def _resolve_task_repo_id(session, request: CreateTaskRequest) -> Optional[str]:
+    """Resolve + validate this task's repo_id (REQ-19/WARNING-1/BLOCKER --
+    see architecture.md's "Feature.repo_id + create_task repo/feature
+    validation" component). Never guesses across projects: an explicit
+    repo_id is validated to belong to the task's own project BEFORE the
+    Task row is persisted, and a Feature/task repo_id mismatch is rejected
+    outright. Returns the resolved repo_id (possibly None -- single-repo
+    projects/no workflow are unaffected, byte-identical to before this
+    change). Raises HTTPException(400) on any validation failure.
+    """
+    from src.core.database import Feature, Workflow
+    from src.core.repo_resolution import RepoNotFoundError, repo_id_for_path, resolve_repo_path
+
+    if not request.workflow_id:
+        return request.repo_id
+
+    wf = session.query(Workflow).filter_by(id=request.workflow_id).first()
+    if not wf or not wf.project_id:
+        return request.repo_id
+    project_id = wf.project_id
+
+    resolved_repo_id = request.repo_id
+    if resolved_repo_id is None and request.cwd:
+        resolved_repo_id = repo_id_for_path(session, project_id, request.cwd)
+
+    if resolved_repo_id is not None:
+        try:
+            resolve_repo_path(session, project_id, resolved_repo_id)
+        except RepoNotFoundError:
+            raise HTTPException(400, "repo_id does not belong to this project")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    feature = None
+    if wf.feature_id:
+        feature = session.query(Feature).filter_by(id=wf.feature_id).first()
+
+    if feature is not None:
+        if feature.repo_id and resolved_repo_id and feature.repo_id != resolved_repo_id:
+            raise HTTPException(
+                400,
+                f"task repo_id {resolved_repo_id} conflicts with this feature's assigned "
+                f"repo {feature.repo_id} -- every task under one Feature must share its repo (REQ-19)",
+            )
+        if feature.repo_id and not resolved_repo_id:
+            resolved_repo_id = feature.repo_id
+        elif not feature.repo_id and resolved_repo_id:
+            feature.repo_id = resolved_repo_id
+
+    return resolved_repo_id
+
+
 def _persist_new_task(agent_id: str, request: CreateTaskRequest, task_id: str) -> None:
     """Create the initial task row (pending status), auto-creating the
     created_by_agent_id Agent FK row if it doesn't exist yet."""
@@ -233,6 +285,7 @@ def _persist_new_task(agent_id: str, request: CreateTaskRequest, task_id: str) -
                 )
             )
             session.flush()
+        resolved_repo_id = _resolve_task_repo_id(session, request)
         task = Task(
             id=task_id,
             raw_description=request.task_description,
@@ -249,6 +302,7 @@ def _persist_new_task(agent_id: str, request: CreateTaskRequest, task_id: str) -
             depends_on=request.depends_on,
             parallel_group=request.parallel_group,
             max_concurrent=request.max_concurrent or 1,
+            repo_id=resolved_repo_id,
         )
         session.add(task)
         session.commit()
