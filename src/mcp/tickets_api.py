@@ -34,13 +34,28 @@ def _get_workflow_id_for_ticket(ticket_id: str) -> Optional[str]:
         return None
 
 
-def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[str]:
-    """Resolve which project's repo a commit lives in via the ticket it's
-    linked to. Returns None (never raises) when the commit isn't linked to
-    any ticket, or the ticket/workflow/project chain doesn't resolve --
-    callers fall back to the process-wide active project in that case."""
+def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[tuple]:
+    """Resolve which repo a commit lives in via the ticket it's linked to.
+
+    Resolution chain (REQ-14):
+    1. If ticket.task_id is set -> use task.repo_id
+    2. Else if ticket.repo_id is set -> use ticket.repo_id
+    3. Else -> fall through to workflow -> project -> primary ProjectRepo.path
+
+    Returns (path, repo_id, label) tuple or None (never raises) when the
+    commit isn't linked to any ticket, or the chain doesn't resolve.
+    """
     try:
-        from src.core.database import AutopilotProject, Ticket, TicketCommit, Workflow, get_db
+        from src.core.database import (
+            AutopilotProject,
+            ProjectRepo,
+            Task,
+            Ticket,
+            TicketCommit,
+            Workflow,
+            get_db,
+            resolve_project_repo,
+        )
 
         with get_db() as db:
             commit = db.query(TicketCommit).filter_by(commit_sha=commit_sha).first()
@@ -52,9 +67,31 @@ def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[str]:
             wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
             if not wf or not wf.project_id:
                 return None
-            proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
-            return proj.base_dir if proj else None
-    except Exception:
+
+            # Resolution chain: task.repo_id -> ticket.repo_id -> primary repo
+            repo = None
+            if ticket.task_id:
+                task = db.query(Task).filter_by(id=ticket.task_id).first()
+                if task and task.repo_id:
+                    repo = db.query(ProjectRepo).filter_by(id=task.repo_id).first()
+            if repo is None and ticket.repo_id:
+                repo = db.query(ProjectRepo).filter_by(id=ticket.repo_id).first()
+            if repo is None:
+                # Fallback to primary repo (REQ-06)
+                repo = resolve_project_repo(db, wf.project_id, None)
+
+            # Log warning for multi-repo fallback (architecture gotcha)
+            repo_count = db.query(ProjectRepo).filter_by(project_id=wf.project_id).count()
+            if repo_count > 1 and not ticket.task_id and not ticket.repo_id:
+                logger.warning(
+                    f"Commit {commit_sha[:8]} linked to ticket {ticket.id} without "
+                    f"task_id or repo_id in multi-repo project {wf.project_id}; "
+                    f"falling back to primary repo {repo.id}"
+                )
+
+            return (repo.path, repo.id, repo.label)
+    except Exception as e:
+        logger.error(f"Error resolving repo path for commit {commit_sha[:8]}: {e}")
         return None
 
 
@@ -1149,6 +1186,8 @@ class CommitDiffResponse(BaseModel):
     total_deletions: int
     total_files: int
     files: List[FileDiff]
+    repo_id: Optional[str] = None  # REQ-14: which repo this commit belongs to
+    repo_label: Optional[str] = None  # REQ-23: human-readable repo label
 
 
 @router.post("/approve", response_model=ApproveTicketResponse)
@@ -1307,10 +1346,13 @@ async def get_commit_diff_endpoint(
         # it's linked to -- falls back to the process-wide "active project"
         # singleton (today's behavior) when the commit isn't linked to any
         # ticket, e.g. commits made outside the ticket-linking flow.
-        main_repo_path = _resolve_repo_path_for_commit(commit_sha)
-        if main_repo_path is None:
+        repo_result = _resolve_repo_path_for_commit(commit_sha)
+        if repo_result is not None:
+            main_repo_path, repo_id, repo_label = repo_result
+        else:
             config = get_config()
             main_repo_path = str(config.git.main_repo_path)
+            repo_id, repo_label = None, None
 
         # Helper function to detect language from file extension
         def detect_language(file_path: str) -> str:
@@ -1438,6 +1480,8 @@ async def get_commit_diff_endpoint(
             total_deletions=total_deletions,
             total_files=len(files_data),
             files=files_data,
+            repo_id=repo_id,
+            repo_label=repo_label,
         )
 
     except subprocess.CalledProcessError as e:
