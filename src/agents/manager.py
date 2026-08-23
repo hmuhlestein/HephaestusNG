@@ -547,6 +547,42 @@ class AgentManager:
         finally:
             await loop.run_in_executor(None, session.close)
 
+    async def send_raw_key(self, agent_id: str, key: str) -> bool:
+        """Send a single literal tmux key name (e.g. "Escape") to an
+        agent's pane, unlike send_message_to_agent which sends text
+        followed by Enter. Same tmux-lookup shape as
+        send_recovery_keystrokes above, but user-triggered (tmux viewer's
+        Esc button) rather than mechanical-recovery-triggered, and for
+        exactly one key rather than a CLI-specific sequence."""
+        import functools
+
+        loop = asyncio.get_event_loop()
+        session = self.db_manager.get_session()
+        try:
+            agent = await loop.run_in_executor(
+                None, lambda: session.query(Agent).filter_by(id=agent_id).first()
+            )
+            if not agent or not agent.tmux_session_name:
+                return False
+            tmux_session = await loop.run_in_executor(
+                None, self._find_tmux_session, agent.tmux_session_name
+            )
+            if not tmux_session:
+                return False
+            pane = tmux_session.attached_window.attached_pane
+            # literal=False so tmux interprets the key name instead of
+            # typing it as text (matches send_recovery_keystrokes above).
+            await loop.run_in_executor(
+                None,
+                functools.partial(pane.send_keys, key, enter=False, literal=False),
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to send key {key!r} to agent {agent_id[:8]}: {e}")
+            return False
+        finally:
+            await loop.run_in_executor(None, session.close)
+
     async def send_message_to_agent(self, agent_id: str, message: str, session=None):
         """Send a message to an agent's tmux session.
 
