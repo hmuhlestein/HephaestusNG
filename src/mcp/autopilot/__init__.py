@@ -11,6 +11,7 @@ from src.mcp.autopilot import (
     feature_routes,
     intervention_routes,
     message_routes,
+    project_repo_routes,
     project_routes,
     prompt_proposal_routes,
     queue_routes,
@@ -21,6 +22,7 @@ router = APIRouter(prefix="/api/autopilot", tags=["Autopilot"])
 router.include_router(control_routes.router)
 router.include_router(queue_routes.router)
 router.include_router(project_routes.router)
+router.include_router(project_repo_routes.router)
 router.include_router(cost_routes.router)
 router.include_router(design_file_routes.router)
 router.include_router(feature_routes.router)
