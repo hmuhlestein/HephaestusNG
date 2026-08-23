@@ -755,6 +755,75 @@ def migrate_autopilot_pipeline_events_table(engine):
         logger.warning(f"autopilot_pipeline_events indexes failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_project_repos_table(engine):
+    """Create project_repos and add repo_id columns to tasks/tickets/
+    ticket_commits/agent_worktrees/features, backfilling one primary
+    ProjectRepo per existing AutopilotProject.
+
+    Idempotent - safe to call on every startup. Non-destructive:
+    AutopilotProject.base_dir is never written to, and no existing
+    Task/TicketCommit/AgentWorktree/Feature row's repo_id is backfilled --
+    repo_resolution.resolve_repo_path treats repo_id=None as "use the
+    project's primary repo" everywhere.
+    """
+    import uuid
+    from datetime import datetime
+
+    from src.core.database import Base, ProjectRepo
+
+    try:
+        Base.metadata.create_all(engine, tables=[ProjectRepo.__table__], checkfirst=True)
+        logger.info("Ensured project_repos table exists")
+    except Exception as e:
+        logger.warning(f"project_repos table creation failed (not just 'already exists' -- check this): {e}")
+
+    for table, column in (
+        ("tasks", "repo_id"),
+        ("tickets", "repo_id"),
+        ("ticket_commits", "repo_id"),
+        ("agent_worktrees", "repo_id"),
+        ("features", "repo_id"),
+    ):
+        try:
+            with engine.connect() as conn:
+                try:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} VARCHAR REFERENCES project_repos(id)"))
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info(f"Migrated {table}.{column} column")
+        except Exception as e:
+            logger.warning(f"{table}.{column} migration failed (not just 'already exists' -- check this): {e}")
+
+    # Backfill: one primary ProjectRepo per existing AutopilotProject.
+    # Idempotent via the "already has a primary repo" existence check.
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT id, base_dir FROM autopilot_projects")).fetchall()
+            now = datetime.utcnow().isoformat()
+            created = 0
+            for project_id, base_dir in rows:
+                has_primary = conn.execute(
+                    text("SELECT 1 FROM project_repos WHERE project_id = :pid AND is_primary = 1"),
+                    {"pid": project_id},
+                ).fetchone()
+                if has_primary:
+                    continue
+                conn.execute(
+                    text(
+                        "INSERT INTO project_repos (id, project_id, label, path, is_primary, created_at) "
+                        "VALUES (:id, :pid, 'primary', :path, 1, :now)"
+                    ),
+                    {"id": f"repo-{uuid.uuid4()}", "pid": project_id, "path": base_dir, "now": now},
+                )
+                created += 1
+            conn.commit()
+            if created:
+                logger.info(f"Backfilled {created} primary project_repos row(s)")
+    except Exception as e:
+        logger.warning(f"project_repos primary backfill failed: {e}")
+
+
 # ── Registry ─────────────────────────────────────────────────────────
 # (id, function). Ids match the pre-split method names -- see module
 # docstring for why they must not be renamed.
@@ -781,4 +850,5 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_agent_working_directory_column", migrate_agent_working_directory_column),
     ("_migrate_workflow_type_columns", migrate_workflow_type_columns),
     ("_migrate_autopilot_pipeline_events_table", migrate_autopilot_pipeline_events_table),
+    ("_migrate_project_repos_table", migrate_project_repos_table),
 ]
