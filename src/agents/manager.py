@@ -707,14 +707,37 @@ class AgentManager:
         finally:
             session.close()
 
-    async def get_project_context(self) -> str:
+    async def get_project_context(
+        self,
+        workflow_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
+    ) -> str:
         """Get current project context for task enrichment.
 
+        Args:
+            workflow_id: the calling task's Workflow.id, if known. Used to
+                resolve the owning AutopilotProject and its ProjectRepo rows.
+                None reproduces pre-change output exactly (REQ-21).
+            repo_id: the calling task's assigned ProjectRepo.id (Task.repo_id),
+                if known. Only meaningful together with workflow_id. Marks
+                that repo writable and every sibling ProjectRepo read-only
+                in the output (REQ-18).
+
         Returns:
-            Formatted project context string
+            Formatted project context string. Never raises -- DB/query
+            errors are caught and logged, degrading to the existing
+            "Project context unavailable" string.
         """
         session = self.db_manager.get_session()
         try:
+            # Resolve project_id from workflow_id (REQ-17/18)
+            project_id = None
+            if workflow_id:
+                from src.core.database import Workflow
+                wf = session.query(Workflow).filter_by(id=workflow_id).first()
+                if wf and wf.project_id:
+                    project_id = wf.project_id
+
             # Get active tasks
             active_tasks = (
                 session.query(Task)
@@ -753,6 +776,14 @@ class AgentManager:
                 for task in recent_tasks:
                     context += f"- {(task.enriched_description or task.raw_description)[:100]}...\n"
 
+            # Append repo context for multi-repo projects (REQ-17/18/21)
+            try:
+                repo_context = self._build_repo_context(session, project_id, repo_id)
+                if repo_context:
+                    context += repo_context
+            except Exception as e:
+                logger.warning(f"Failed to build repo context (degrading to no-repo output): {e}")
+
             return context
 
         except Exception as e:
@@ -760,3 +791,37 @@ class AgentManager:
             return "Project context unavailable"
         finally:
             session.close()
+
+    @staticmethod
+    def _build_repo_context(
+        session,
+        project_id: Optional[str],
+        repo_id: Optional[str],
+    ) -> Optional[str]:
+        """Build the PROJECT REPOS section for multi-repo projects.
+
+        Returns None for single-repo projects (REQ-21: no additional text).
+        """
+        if not project_id:
+            return None
+
+        from src.core.repo_resolution import list_repos
+
+        repos = list_repos(session, project_id)
+        if len(repos) <= 1:
+            return None  # REQ-21: no section for single-repo
+
+        lines = ["\n## PROJECT REPOS\n"]
+        if repo_id:
+            # Implementation mode: mark writable vs read-only (REQ-18)
+            for r in repos:
+                if r.id == repo_id:
+                    lines.append(f"- {r.label} (WRITABLE): {r.path}")
+                else:
+                    lines.append(f"- {r.label} (read-only reference): {r.path}")
+        else:
+            # Architect mode: list repos plainly (REQ-17)
+            for r in repos:
+                lines.append(f"- {r.label}: {r.path}")
+
+        return "\n".join(lines) + "\n"
