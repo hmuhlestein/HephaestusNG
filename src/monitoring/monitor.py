@@ -785,17 +785,18 @@ class MonitoringLoop:
         import asyncio
 
         from src.core.database import AutopilotProject
+        from src.core.repo_resolution import get_project_repos
         from src.core.worktree_manager import WorktreeManager
 
         with self.db_manager.session_scope() as session:
-            active_projects = [
-                (p.id, p.base_dir)
-                for p in session.query(AutopilotProject).filter_by(is_active=True).all()
-                if p.base_dir
-            ]
+            active_repo_dirs = []
+            for p in session.query(AutopilotProject).filter_by(is_active=True).all():
+                repos = get_project_repos(session, p.id)
+                paths = [repo.path for repo in repos] if repos else [p.base_dir]
+                active_repo_dirs.extend((p.id, path) for path in paths if path)
 
         loop = asyncio.get_event_loop()
-        for project_id, base_dir in active_projects:
+        for project_id, base_dir in active_repo_dirs:
             try:
                 bm = WorktreeManager(self.db_manager)
                 bm.reload(base_dir)

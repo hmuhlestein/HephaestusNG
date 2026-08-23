@@ -4016,6 +4016,112 @@ class TestRunOneFeatureWorktreeCleanupTiming:
         mock_cleanup.assert_not_called()
 
 
+class TestRunOneFeatureRepoScopedWorktree:
+    """A Feature bound to a specific ProjectRepo (REQ-19/REQ-20) must have
+    its worktree created against THAT repo's path, not the design-level
+    project_path passed in (which is the project's primary/workspace
+    root) -- see _run_one_feature's repo-resolution block."""
+
+    def _setup(self, orch_db_env, tmp_path, feature_repo_id=None):
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, ProjectRepo
+        from src.autopilot.orchestrator.state import DesignEntry
+
+        backend_dir = tmp_path / "backend"
+        frontend_dir = tmp_path / "frontend"
+        backend_dir.mkdir()
+        frontend_dir.mkdir()
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-multi", name="p", base_dir=str(tmp_path)))
+            session.add(ProjectRepo(id="repo-backend", project_id="proj-multi", label="backend", path=str(backend_dir), is_primary=True))
+            session.add(ProjectRepo(id="repo-frontend", project_id="proj-multi", label="frontend", path=str(frontend_dir), is_primary=False))
+            session.add(AutopilotDesign(id="design-multi", project_id="proj-multi", filename="d.md", name="D"))
+            session.add(
+                Feature(
+                    id="feature-row-multi",
+                    design_id="design-multi",
+                    feature_key="feat-fe",
+                    name="Feature FE",
+                    scope="s",
+                    status="pending",
+                    repo_id=feature_repo_id,
+                )
+            )
+
+        design_path = tmp_path / "design.md"
+        design_path.write_text("# Design\n")
+        design_entry = DesignEntry(path=design_path, name="Test Design", content_hash="hash", db_id="design-multi")
+        feature = {"id": "feat-fe", "name": "Feature FE"}
+        designs_folder = tmp_path / "designs"
+        (designs_folder / "features" / "feat-fe").mkdir(parents=True)
+        return design_entry, feature, designs_folder
+
+    def test_worktree_created_against_features_own_repo(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _run_one_feature
+
+        design_entry, feature, designs_folder = self._setup(orch_db_env, tmp_path, feature_repo_id="repo-frontend")
+        worktree_dir = tmp_path / "worktree"
+        worktree_dir.mkdir()
+
+        with patch(
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
+            return_value=worktree_dir,
+        ) as mock_create_wt, patch(
+            "src.autopilot.orchestrator.pipeline.run_single_workflow",
+            return_value=FeatureRunStatus.COMPLETED,
+        ), patch(
+            "src.autopilot.orchestrator.pipeline._cleanup_worktree"
+        ):
+            _run_one_feature(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                feature=feature,
+                designs_folder=designs_folder,
+                project_path=tmp_path,  # design-level path -- must NOT be what's used
+                logger=OrchestratorLogger(tmp_path),
+                state=None,
+                project_id="proj-multi",
+            )
+
+        called_path = mock_create_wt.call_args[0][0]
+        assert Path(called_path) == tmp_path / "frontend"
+
+    def test_repo_id_unset_falls_back_to_primary_unchanged(self, orch_db_env, tmp_path):
+        """A Feature with no repo_id (single-repo project, or inconclusive
+        inference) must behave exactly like before this change -- the
+        project's PRIMARY repo, not the design-level project_path param
+        (which, once a project has ProjectRepo rows, is no longer
+        necessarily the same path)."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _run_one_feature
+
+        design_entry, feature, designs_folder = self._setup(orch_db_env, tmp_path, feature_repo_id=None)
+        worktree_dir = tmp_path / "worktree"
+        worktree_dir.mkdir()
+
+        with patch(
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
+            return_value=worktree_dir,
+        ) as mock_create_wt, patch(
+            "src.autopilot.orchestrator.pipeline.run_single_workflow",
+            return_value=FeatureRunStatus.COMPLETED,
+        ), patch(
+            "src.autopilot.orchestrator.pipeline._cleanup_worktree"
+        ):
+            _run_one_feature(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                feature=feature,
+                designs_folder=designs_folder,
+                project_path=tmp_path,
+                logger=OrchestratorLogger(tmp_path),
+                state=None,
+                project_id="proj-multi",
+            )
+
+        called_path = mock_create_wt.call_args[0][0]
+        assert Path(called_path) == tmp_path / "backend"  # the primary repo
+
+
 class TestRunDesignAggregateNonTerminalHandling:
     """Phase 3 Tier 2 item 19: a mixed dependency layer (one feature
     COMPLETED, another still genuinely in progress -- INTERRUPTED/TIMEOUT)
