@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy import desc
 
 from src.agents.manager import AgentManager
-from src.core.database import Agent, CostEntry, DatabaseManager, Task, Workflow
+from src.core.database import Agent, AgentLog, CostEntry, DatabaseManager, Task, Workflow
 from src.core.phase_lookup import resolve_task_phase
 from src.phases import PhaseManager
 
@@ -210,6 +210,80 @@ class TaskService:
                         else None,
                     }
                     system_prompt = agent.system_prompt
+
+            # Get every agent ever created for this task, not just the
+            # current assignee -- task.assigned_agent_id is overwritten on
+            # each retry/restart, so it alone can't reconstruct history.
+            # AgentLog's "created" entries (details.task_id) survive
+            # reassignment and agent termination, same lookup
+            # _authorize_agent_for_task uses to recognize a terminated
+            # agent's own task. Falls back to a Python-level filter since
+            # SQLite JSON extraction via as_string() can miss rows.
+            creation_logs = (
+                session.query(AgentLog)
+                .filter(
+                    AgentLog.log_type == "created",
+                    AgentLog.details["task_id"].as_string() == task.id,
+                )
+                .all()
+            )
+            matched_agent_ids = {log.agent_id for log in creation_logs if log.agent_id}
+            if not matched_agent_ids:
+                for log in session.query(AgentLog).filter(AgentLog.log_type == "created").all():
+                    if log.details and log.details.get("task_id") == task.id and log.agent_id:
+                        matched_agent_ids.add(log.agent_id)
+
+            agent_history = []
+            if matched_agent_ids:
+                history_agents = (
+                    session.query(Agent)
+                    .filter(Agent.id.in_(matched_agent_ids))
+                    .order_by(Agent.created_at)
+                    .all()
+                )
+                # Each agent's own attempt outcome isn't stored anywhere as
+                # a single field -- only the task's CURRENT status is, and
+                # every retry/restart overwrites it. mechanical_recovery's
+                # session/spend-limit path DOES leave a durable record
+                # (AgentLog "session_limit_terminated", written before the
+                # task gets reset for the next attempt) -- use it when
+                # present. Other termination paths (e.g. exceeding the
+                # restart cap in launch_pipeline.restart_agent) write
+                # nothing durable, so an earlier agent falls back to
+                # "superseded": true (a later agent replaced it) without
+                # fabricating a reason we don't actually have.
+                session_limit_logs = (
+                    session.query(AgentLog)
+                    .filter(
+                        AgentLog.log_type == "session_limit_terminated",
+                        AgentLog.agent_id.in_(matched_agent_ids),
+                    )
+                    .order_by(AgentLog.timestamp)
+                    .all()
+                )
+                session_limit_reason_by_agent = {
+                    log.agent_id: log.message for log in session_limit_logs if log.agent_id
+                }
+
+                last_agent_id = history_agents[-1].id
+                agent_history = [
+                    {
+                        "id": a.id,
+                        "status": a.status,
+                        "cli_type": a.cli_type,
+                        "cli_model": a.cli_model,
+                        "created_at": a.created_at.isoformat() + "Z" if a.created_at else None,
+                        "last_activity": a.last_activity.isoformat() + "Z" if a.last_activity else None,
+                        "terminated_at": a.terminated_at.isoformat() + "Z" if a.terminated_at else None,
+                        "outcome": (
+                            task.status if a.id == last_agent_id
+                            else "session_limit" if a.id in session_limit_reason_by_agent
+                            else "superseded"
+                        ),
+                        "outcome_detail": session_limit_reason_by_agent.get(a.id),
+                    }
+                    for a in history_agents
+                ]
 
             # Get phase information
             phase_info = None
@@ -412,6 +486,7 @@ class TaskService:
                 "action_target_phase": task.action_target_phase or None,
                 "phase_info": phase_info,
                 "agent_info": agent_info,
+                "agent_history": agent_history,
                 "parent_task": parent_task,
                 "child_tasks": child_tasks,
                 "has_results": task.has_results,
