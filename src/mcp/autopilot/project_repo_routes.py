@@ -49,7 +49,18 @@ def _validate_repo_path(path: str) -> str:
 
 
 @router.get("/projects/{project_id}/repos", response_model=List[ProjectRepoItem])
-async def list_project_repos(project_id: str):
+async def list_project_repos(
+    project_id: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before listing repos
+    # Repo paths are sensitive filesystem information
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotProject, get_db
     from src.core.repo_resolution import get_project_repos
 
