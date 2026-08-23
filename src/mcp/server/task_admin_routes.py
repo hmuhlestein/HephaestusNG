@@ -22,7 +22,7 @@ from src.core.database import (
     Task,
     Workflow,
 )
-from src.mcp.server._shared import server_state, spawn_background_task
+from src.mcp.server._shared import server_state, spawn_background_task, verify_agent_authentication
 
 # Import routers at module level for test compatibility
 
@@ -62,12 +62,14 @@ async def get_workflows_endpoint(
 
 
 @router.post("/api/tasks/{task_id}/pause")
-async def pause_task_endpoint(task_id: str):
+async def pause_task_endpoint(task_id: str, x_agent_id: str = Header(..., alias="X-Agent-ID")):
     """Pause a single task: terminate its agent (if any, WIP is committed by
     terminate_agent) and mark it 'blocked' so it won't be picked up again until
     Resume is pressed. Mirrors /features/{id}/pause's per-task logic, scoped to
     just this one task.
     """
+    if not await verify_agent_authentication(x_agent_id):
+        raise HTTPException(status_code=401, detail="Agent not authenticated")
     logger.info(f"Pause request for task {task_id}")
 
     try:
@@ -143,7 +145,10 @@ async def pause_task_endpoint(task_id: str):
 @router.post("/api/bump_task_priority")
 async def bump_task_priority_endpoint(
     task_id: str = Body(..., embed=True),
+    x_agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
+    if not await verify_agent_authentication(x_agent_id):
+        raise HTTPException(status_code=401, detail="Agent not authenticated")
     """Bump a queued task and start it immediately, bypassing the agent limit.
 
     This allows urgent tasks to start even when at max capacity (e.g., 2/2 → 3/2).
@@ -289,8 +294,10 @@ async def bump_task_priority_endpoint(
 
 
 @router.post("/api/tasks/{task_id}/cancel")
-async def cancel_task_endpoint(task_id: str):
+async def cancel_task_endpoint(task_id: str, x_agent_id: str = Header(..., alias="X-Agent-ID")):
     """Cancel a task by ID."""
+    if not await verify_agent_authentication(x_agent_id):
+        raise HTTPException(status_code=401, detail="Agent not authenticated")
     logger.info(f"Cancel request for task {task_id}")
 
     try:
@@ -378,7 +385,7 @@ async def cancel_task_endpoint(task_id: str):
 
 
 @router.delete("/api/tasks/{task_id}")
-async def delete_task_endpoint(task_id: str):
+async def delete_task_endpoint(task_id: str, x_agent_id: str = Header(..., alias="X-Agent-ID")):
     """Permanently delete a single task and its dependent records.
 
     Unlike pause/cancel (which only apply to pending/queued/in-progress
@@ -388,6 +395,8 @@ async def delete_task_endpoint(task_id: str):
     agent) that just clutters the queue view with no path to actually
     disappear otherwise.
     """
+    if not await verify_agent_authentication(x_agent_id):
+        raise HTTPException(status_code=401, detail="Agent not authenticated")
     logger.info(f"Delete request for task {task_id}")
 
     from sqlalchemy.exc import IntegrityError
@@ -563,11 +572,14 @@ async def complete_task_as_user(
 @router.post("/api/cancel_queued_task")
 async def cancel_queued_task_endpoint(
     task_id: str = Body(..., embed=True),
+    x_agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Cancel a queued task and remove it from the queue.
 
     The task will be marked as failed and removed from the queue.
     """
+    if not await verify_agent_authentication(x_agent_id):
+        raise HTTPException(status_code=401, detail="Agent not authenticated")
     logger.info(f"Cancel request for queued task {task_id}")
 
     try:
@@ -618,6 +630,7 @@ async def cancel_queued_task_endpoint(
 @router.post("/api/restart_task")
 async def restart_task_endpoint(
     task_id: str = Body(..., embed=True),
+    x_agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Restart a completed or failed task.
 
@@ -627,6 +640,8 @@ async def restart_task_endpoint(
     - Reset task to pending/queued status
     - Create new agent or queue based on capacity
     """
+    if not await verify_agent_authentication(x_agent_id):
+        raise HTTPException(status_code=401, detail="Agent not authenticated")
     logger.info(f"Restart request for task {task_id}")
 
     try:
@@ -865,8 +880,12 @@ async def get_queue_status_endpoint():
 
 
 @router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, agent_id: str = None):
     """WebSocket endpoint for real-time updates."""
+    # SECURITY: Verify agent authentication before accepting connection
+    if not agent_id or not await verify_agent_authentication(agent_id):
+        await websocket.close(code=4001, reason="Agent not authenticated")
+        return
     await websocket.accept()
     server_state.active_websockets.append(websocket)
 
