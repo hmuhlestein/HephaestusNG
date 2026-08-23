@@ -406,6 +406,7 @@ async def _resolve_phase_and_enrich(request: CreateTaskRequest, agent_id: str) -
         done_definition=request.done_definition,
         phase_context_str=phase_context_str,
         requesting_agent_id=agent_id,
+        phase_id=phase_id,
     )
 
     return {
@@ -742,6 +743,23 @@ async def _dispatch_agent_for_task(
         workflow_id=task_data["workflow_id"],
         created_by_agent_id=agent_id,
     )
+
+    # REQ-18: for a task with repo_id already resolved (see
+    # _resolve_task_repo_id/_persist_new_task), state plainly which repo is
+    # writable for THIS task -- task-specific, so it belongs here rather
+    # than in the task-agnostic get_project_context().
+    with server_state.db_manager.session_scope() as _repo_session:
+        db_task = _repo_session.query(Task).filter_by(id=task_id).first()
+        if db_task and db_task.repo_id:
+            from src.core.database import ProjectRepo
+
+            repo = _repo_session.query(ProjectRepo).filter_by(id=db_task.repo_id).first()
+            if repo:
+                project_context = (
+                    f"{project_context}\n\nYour assigned repo for this task: "
+                    f"{repo.label} ({repo.path}) -- write here. Other listed repos are "
+                    "read-only reference."
+                )
 
     # Dispatch reuses the RAG memories/project context already fetched
     # during enrichment above (unlike process_queue, which re-fetches
