@@ -307,6 +307,14 @@ export const apiService = {
     return data;
   },
 
+  sendAgentKey: async (
+    agentId: string,
+    key: string
+  ): Promise<{ sent: boolean; agent_id: string }> => {
+    const { data } = await api.post(`/agents/${agentId}/send_key`, { key });
+    return data;
+  },
+
   sendMessage: async (
     message: string,
     recipientAgentId: string,

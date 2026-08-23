@@ -85,6 +85,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [sendStatus, setSendStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [sendErrorMessage, setSendErrorMessage] = useState('');
+  const [isSendingEscape, setIsSendingEscape] = useState(false);
 
   const outputRef = useRef<HTMLPreElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
@@ -303,6 +304,20 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       }, 3000);
     } finally {
       setIsSending(false);
+    }
+  };
+
+  // Send a literal Escape keypress -- unlike handleSendMessage, no text is
+  // typed and no Enter follows.
+  const handleSendEscape = async () => {
+    if (!agent || isSendingEscape || currentStatus === 'terminated') return;
+    setIsSendingEscape(true);
+    try {
+      await apiService.sendAgentKey(agent.id, 'Escape');
+    } catch (error) {
+      console.error('Failed to send Escape key:', error);
+    } finally {
+      setIsSendingEscape(false);
     }
   };
 
@@ -653,6 +668,14 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
                     </motion.div>
                   )}
                 </div>
+                <button
+                  onClick={handleSendEscape}
+                  disabled={isSendingEscape}
+                  className="px-2.5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                  title="Send Escape key"
+                >
+                  <span className="text-xs font-medium">Esc</span>
+                </button>
                 <button
                   onClick={handleSendMessage}
                   disabled={isSending || !messageText.trim()}

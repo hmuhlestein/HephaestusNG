@@ -235,6 +235,29 @@ async def send_agent_message(agent_id: str, request: Request):
         session.close()
 
 
+@router.post("/api/agents/{agent_id}/send_key")
+async def send_agent_key(agent_id: str, request: Request):
+    """Send a single literal tmux key (e.g. "Escape") to an agent's pane --
+    unlike /message, no Enter follows and no text is typed."""
+    server_state = _get_server_state()
+    _require_localhost(request)
+    body = await request.json()
+    key = body.get("key", "")
+    if not key:
+        raise HTTPException(status_code=400, detail="Key required")
+
+    session = server_state.db_manager.get_session()
+    try:
+        agent = session.query(Agent).filter_by(id=agent_id).first()
+        if not agent or not agent.tmux_session_name:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+        sent = await server_state.agent_manager.send_raw_key(agent_id, key)
+        return {"sent": sent, "agent_id": agent_id}
+    finally:
+        session.close()
+
+
 @router.get("/api/agents/{agent_id}/logs")
 async def get_agent_logs(agent_id: str, limit: int = 50, request: Request = None):
     """Get logs for a specific agent."""
