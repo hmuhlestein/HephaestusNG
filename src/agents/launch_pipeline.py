@@ -203,6 +203,13 @@ class LaunchPipeline:
         raises -- returns None on any lookup failure (no workflow_id,
         workflow/project row missing, or no project_id) so callers can fall
         back to today's default-instance behavior instead of erroring.
+
+        WARNING-1 fix: distinguishes "workflow doesn't resolve to a project"
+        (safe to fall back, returns None) from "project resolved but the
+        assigned repo_id is invalid" (RepoNotFoundError -- a genuine data-
+        integrity error that should abort dispatch loudly, not silently
+        substitute a different repo). The latter raises instead of returning
+        None, so _scoped_worktree_manager can distinguish the two cases.
         """
         if not workflow_id:
             return None
@@ -222,13 +229,22 @@ class LaunchPipeline:
                         repo_id = feature.repo_id
                 try:
                     return resolve_repo_path(session, wf.project_id, repo_id)
-                except (RepoNotFoundError, ValueError) as e:
+                except RepoNotFoundError:
+                    # Project resolved but the assigned repo_id is invalid --
+                    # this is a data-integrity error, not a "workflow doesn't
+                    # resolve" case. Re-raise so _scoped_worktree_manager can
+                    # distinguish it from the None/"no project" fallback.
+                    raise
+                except ValueError as e:
                     logger.warning(
                         f"[WORKTREE] Could not resolve repo path for workflow {workflow_id}: {e}"
                     )
                     return None
             finally:
                 session.close()
+        except RepoNotFoundError:
+            # Propagate -- _scoped_worktree_manager catches this specifically.
+            raise
         except Exception as e:
             logger.warning(
                 f"[WORKTREE] Could not resolve project for workflow {workflow_id}: {e}"
@@ -251,8 +267,23 @@ class LaunchPipeline:
         Falls back to self.branch_manager, unreloaded, when workflow_id
         doesn't resolve to a project -- preserves today's default/
         single-project behavior for that edge case rather than erroring.
+
+        WARNING-1 fix: when the project resolved but the assigned repo_id
+        is invalid (RepoNotFoundError), this is a genuine data-integrity
+        error that must NOT silently fall back to the shared, unreloaded
+        branch_manager. Raise instead of substituting a different repo.
         """
-        base_dir = self._resolve_project_base_dir(workflow_id)
+        from src.core.repo_resolution import RepoNotFoundError
+
+        try:
+            base_dir = self._resolve_project_base_dir(workflow_id)
+        except RepoNotFoundError:
+            # Project resolved but repo_id is invalid -- this is a real
+            # data-integrity error. Do NOT silently fall back to the shared
+            # branch_manager (which may be pointed at a completely different
+            # repo from a concurrent operation). Raise so the caller knows
+            # the dispatch cannot proceed safely.
+            raise
         if base_dir is None:
             return self.branch_manager
         wt_mgr = WorktreeManager(db_manager=self.db_manager)
