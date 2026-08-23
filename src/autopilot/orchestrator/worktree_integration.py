@@ -226,12 +226,10 @@ def _cleanup_worktree(
                 except Exception as e:
                     logger.warning(f"Failed to clear workflow working_directory: {e}")
         finally:
-            session = getattr(db, "_session", None) or getattr(db, "session", None)
-            if session is not None:
-                try:
-                    session.close()
-                except Exception:
-                    pass
+            try:
+                db.close()
+            except Exception:
+                pass
     except Exception as e:
         logger.warning(f"Failed to cleanup worktree: {e}")
 
@@ -398,7 +396,8 @@ def heal_orphaned_agent_branches(logger: "OrchestratorLogger") -> int:
 def _heal_orphaned_branches_for_project(project_dir: Path, cfg, logger: "OrchestratorLogger") -> int:
     try:
         repo = _git.Repo(project_dir)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[BRANCH-HEAL] Could not open repo at {project_dir}: {e}")
         return 0
 
     base_branch = cfg.git.base_branch
