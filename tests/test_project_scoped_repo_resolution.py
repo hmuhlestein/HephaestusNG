@@ -49,6 +49,17 @@ def _seed_project_workflow_ticket(db_manager, project_id="proj-a", base_dir="/tm
                 status="open",
             )
         )
+        # Add primary ProjectRepo for repo resolution
+        from src.core.database import ProjectRepo
+        session.add(
+            ProjectRepo(
+                id=f"repo-{project_id}",
+                project_id=project_id,
+                label="main",
+                path=base_dir,
+                is_primary=True,
+            )
+        )
 
 
 class TestLinkCommitUsesOwnProjectRepo:
@@ -64,7 +75,13 @@ class TestLinkCommitUsesOwnProjectRepo:
             captured["repo_path"] = repo_path
             return {"files_changed": 1, "insertions": 2, "deletions": 0, "files_list": ["f.py"]}
 
+        # Mock git cat-file to succeed (commit exists)
+        import subprocess
+        def fake_run(*args, **kwargs):
+            return type("Proc", (), {"returncode": 0})()
+
         monkeypatch.setattr(TicketService, "_get_commit_stats", staticmethod(fake_get_commit_stats))
+        monkeypatch.setattr(subprocess, "run", fake_run)
         monkeypatch.setattr(
             "src.core.simple_config.get_config",
             lambda: type("Cfg", (), {
@@ -109,7 +126,13 @@ class TestLinkCommitUsesOwnProjectRepo:
             captured["repo_path"] = repo_path
             return {"files_changed": 0, "insertions": 0, "deletions": 0, "files_list": []}
 
+        # Mock git cat-file to succeed (commit exists)
+        import subprocess
+        def fake_run(*args, **kwargs):
+            return type("Proc", (), {"returncode": 0})()
+
         monkeypatch.setattr(TicketService, "_get_commit_stats", staticmethod(fake_get_commit_stats))
+        monkeypatch.setattr(subprocess, "run", fake_run)
         monkeypatch.setattr(
             "src.core.simple_config.get_config",
             lambda: type("Cfg", (), {
