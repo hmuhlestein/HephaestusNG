@@ -31,6 +31,14 @@ class HumanInputRequest(BaseModel):
     options: List[str]
     labels: Dict[str, str]
     project_id: Optional[str] = None
+    # Present on an arbitration-deadlock escalation (written by
+    # _escalate_arbitration_deadlock_to_human), absent on every other kind
+    # of request -- BaseModel silently drops any field not declared here,
+    # so without these the frontend's row-correlation (which workflow is
+    # this request for?) never receives them even though the request file
+    # on disk always has them.
+    workflow_id: Optional[str] = None
+    phase_id: Optional[str] = None
     # Structured breakdown of an arbitration-deadlock escalation's actual
     # attempt history (see arbitration.py's _build_arbitration_decision_
     # context) -- None for every other kind of human-input request.
