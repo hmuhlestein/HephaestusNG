@@ -1654,6 +1654,43 @@ class TestSendInitialPromptSessionLimitCheck:
             )
 
     @pytest.mark.asyncio
+    async def test_does_not_false_positive_on_a_stale_rejection_from_an_earlier_task(
+        self, mock_agent_manager
+    ):
+        """Regression, found live: qa_validation reuses one persistent CLI
+        session across dispatches. A rejection banner from an EARLIER
+        task's attempt (already resolved -- the reset time had long since
+        passed) was still sitting in the pane's last-50-lines scrollback
+        when a fresh, healthy delivery for a NEW task ran -- wrongly
+        flagged as still session-limited, forcing an unnecessary (paid)
+        fallback dispatch. The check must only look at content after THIS
+        delivery's own "Task ID: ..." marker, not the whole block."""
+        pane = MagicMock()
+        pane.cmd.return_value = MagicMock(
+            stdout=[
+                "Task ID: b1267d44-a759-4552-8131-c59f99c31a94",
+                "You've hit your session limit · resets 3:10pm (America/Denver)",
+                "Usage limit reached · continuing automatically at 3:10pm",
+                "Task ID: t1",  # this delivery's own marker
+                "Reading files...",
+                "Implementing feature...",
+            ]
+        )
+        cli_agent = MagicMock()
+        cli_agent.needs_chunked_delivery = False
+        cli_agent.format_message = MagicMock(return_value="formatted prompt")
+
+        with patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
+            await mock_agent_manager._send_initial_prompt_with_retry(
+                pane=pane,
+                cli_agent=cli_agent,
+                cli_type="claude",
+                initial_message="do the task",
+                agent_id="a1",
+                task_id="t1",
+            )
+
+    @pytest.mark.asyncio
     async def test_does_not_false_positive_on_bare_429(self, mock_agent_manager):
         """Regression: a bare 3-digit '429' is deliberately NOT checked --
         it's too likely to appear incidentally in the freshly-echoed task
