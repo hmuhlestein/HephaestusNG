@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { apiService } from '@/services/api';
+import ProjectReposSection from './ProjectReposSection';
 
 interface ProjectSettingsModalProps {
   isOpen: boolean;
@@ -469,6 +470,8 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                           </button>
                         )}
                       </div>
+                      {/* Repositories Section (REQ-24) */}
+                      <ProjectReposSection projectId={project.id} />
                     </div>
                   ))}
                 </div>
