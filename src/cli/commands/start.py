@@ -16,10 +16,10 @@ from src.cli.utils import (
     read_pid,
     save_pid,
 )
-from src.core.constants import HEPHAESTUS_LOGS_DIR
+from src.core.constants import HEPHAESTUS_INSTALL_DIR, HEPHAESTUS_LOGS_DIR
 from src.core.simple_config import get_config as _get_config
 
-HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
+HEPHAESTUS_DIR = HEPHAESTUS_INSTALL_DIR
 logger = logging.getLogger(__name__)
 
 

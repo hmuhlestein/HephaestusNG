@@ -18,6 +18,8 @@ from typing import Any, Dict, Optional
 import yaml
 from dotenv import load_dotenv
 
+from src.core.constants import HEPHAESTUS_INSTALL_DIR
+
 # Load environment variables
 load_dotenv()
 
@@ -67,6 +69,20 @@ class PathsConfig(_ConfigSection):
     def __init__(self, config: Dict[str, Any]):
         paths = config.get("paths", {})
         self.database_path = Path(paths.get("database", "./hephaestus.db"))
+        if not self.database_path.is_absolute():
+            # hephaestus_config.yaml is git-tracked, so this same relative
+            # "./hephaestus.db" is committed into every worktree checkout
+            # too. Resolving it against cwd (the old behavior) meant
+            # whichever directory the server process happened to be
+            # launched from silently picked its database -- confirmed
+            # live: a backend started with cwd inside a linked worktree
+            # opened/created a fresh, empty hephaestus.db there instead of
+            # the real one, and every /autopilot request it served showed
+            # zero projects. HEPHAESTUS_INSTALL_DIR resolves to the one
+            # true repo root via git-common-dir regardless of cwd or which
+            # worktree's copy of this file is executing, so anchor here
+            # instead of trusting cwd.
+            self.database_path = HEPHAESTUS_INSTALL_DIR / self.database_path
         # Worktree isolation base. None => WorktreeManager computes <repo>/.worktrees
         # (in-repo, git-excluded). Set an explicit path only to override.
         _wt_base = paths.get("worktree_base_path")
