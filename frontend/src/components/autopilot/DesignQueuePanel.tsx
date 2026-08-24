@@ -860,7 +860,15 @@ const FeatureRow: React.FC<{
   pendingInputRequest?: any;
 }> = ({ feature, onTaskClick, onSelectFeature, onReviewFeature, onFeatureUpdate, reviewMode, pendingInputRequest }) => {
   const [showDecisionModal, setShowDecisionModal] = useState(false);
-  const hasPendingDecision = !!pendingInputRequest && pendingInputRequest.workflow_id === feature.workflow_id;
+  // Regression: a non-arbitration human_input_required request (e.g. the
+  // generic "stuck for Ns" escalation) carries no workflow_id field at
+  // all, and a feature that hasn't started yet also has workflow_id ===
+  // undefined -- `undefined === undefined` is true in JS, so the bare
+  // equality below lit up the Decision button on every pending feature
+  // for ANY pending request, not just this feature's own arbitration
+  // escalation. Require an actual, truthy workflow_id on both sides.
+  const hasPendingDecision =
+    !!pendingInputRequest?.workflow_id && pendingInputRequest.workflow_id === feature.workflow_id;
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-features');
