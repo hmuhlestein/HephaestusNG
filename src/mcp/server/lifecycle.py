@@ -23,6 +23,7 @@ from src.mcp.server.background_loops import background_phase_advancement_sweep, 
 
 logger = logging.getLogger("src.mcp.server.lifecycle")
 
+
 async def _resume_interrupted_workflows(
     workflow_id: Optional[str] = None,
     project_id: Optional[str] = None,
@@ -93,6 +94,7 @@ async def _resume_interrupted_workflows(
                         # "failed" features uniformly for this function --
                         # a second, narrower cascade here would be redundant.
                         from src.autopilot.orchestrator.engine_client import resume_workflow
+
                         resume_workflow(wf.id, force=True, cascade_to_feature=False, session=session)
                     else:
                         wf.status = "active"
@@ -163,6 +165,8 @@ async def _resume_interrupted_workflows(
                             dispatch_context = await AgentDispatchService.build_dispatch_context(
                                 task_description_for_rag=t.enriched_description or t.raw_description,
                                 phase_id=t.phase_id,
+                                workflow_id=t.workflow_id,
+                                repo_id=t.repo_id,
                             )
                             agent = await AgentDispatchService.dispatch(
                                 task=t,
@@ -210,18 +214,13 @@ async def _resume_interrupted_workflows(
                     continue  # still alive (e.g., only the monitor restarted) — leave it
 
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
-                landed = task and await loop.run_in_executor(
-                    None, _git_expert_already_landed, session, task, config
-                )
+                landed = task and await loop.run_in_executor(None, _git_expert_already_landed, session, task, config)
                 if landed:
                     logger.info(f"[RESUME] Workflow {wf.id[:8]}: orphaned agent {agent.id[:8]}'s git_expert work already landed on {config.base_branch} -- marking done instead of redispatching")
                     task.status = "done"
                     task.completed_at = datetime.utcnow()
                     task.failure_reason = None
-                    task.completion_notes = (
-                        (task.completion_notes or "")
-                        + "\n[auto-recovered: git work had already landed before the agent's completion call was lost]"
-                    ).strip()
+                    task.completion_notes = ((task.completion_notes or "") + "\n[auto-recovered: git work had already landed before the agent's completion call was lost]").strip()
                     from src.autopilot.orchestrator.engine_client import terminate_agent
 
                     # flush first: sessions are autoflush=False, so the
@@ -258,6 +257,7 @@ async def _resume_interrupted_workflows(
     finally:
         session.close()
 
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize server on startup."""
@@ -293,8 +293,6 @@ async def startup_event():
         features_dir=os.environ.get("FEATURES_DIR", ""),
     )
     app.include_router(autopilot_router)
-
-
 
     # Note: tickets_router (M-1: extracted from server.py) is included at
     # module level above, not here — TestClient(app) used without the
@@ -542,7 +540,9 @@ async def startup_event():
 
     logger.info("Server started successfully")
 
+
 SAFE_RESTART_GRACE_SECONDS = 10
+
 
 async def _notify_agents_of_restart(project_id: str) -> int:
     """Best-effort checkpoint nudge to every working phase agent in this
@@ -559,27 +559,13 @@ async def _notify_agents_of_restart(project_id: str) -> int:
     agent_ids: list = []
     try:
         with server_state.db_manager.session_scope() as session:
-            wf_ids = [
-                w.id
-                for w in session.query(Workflow).filter_by(project_id=project_id).all()
-            ]
+            wf_ids = [w.id for w in session.query(Workflow).filter_by(project_id=project_id).all()]
             if not wf_ids:
                 return 0
-            task_ids = [
-                t.id
-                for t in session.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()
-            ]
-            agent_ids = [
-                a.id
-                for a in session.query(Agent)
-                .filter(Agent.status == "working", Agent.current_task_id.in_(task_ids))
-                .all()
-            ]
+            task_ids = [t.id for t in session.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()]
+            agent_ids = [a.id for a in session.query(Agent).filter(Agent.status == "working", Agent.current_task_id.in_(task_ids)).all()]
     except Exception as e:
-        logger.warning(
-            f"[SAFE-RESTART] Could not enumerate agents to notify for "
-            f"project {project_id[:8]}: {e}"
-        )
+        logger.warning(f"[SAFE-RESTART] Could not enumerate agents to notify for project {project_id[:8]}: {e}")
         return 0
 
     notified = 0
@@ -596,6 +582,7 @@ async def _notify_agents_of_restart(project_id: str) -> int:
         except Exception as e:
             logger.debug(f"[SAFE-RESTART] Could not notify agent {agent_id[:8]}: {e}")
     return notified
+
 
 async def _notify_and_pause_for_restart(running_services: list) -> None:
     """Notify every in-flight agent across `running_services`' projects,
@@ -617,25 +604,16 @@ async def _notify_and_pause_for_restart(running_services: list) -> None:
     if not running_services:
         return
 
-    logger.info(
-        f"[SAFE-RESTART] Pausing {len(running_services)} running "
-        "autopilot pipeline(s) for restart..."
-    )
+    logger.info(f"[SAFE-RESTART] Pausing {len(running_services)} running autopilot pipeline(s) for restart...")
     total_notified = 0
     for service in running_services:
         try:
             notified = await _notify_agents_of_restart(service.project_id)
             total_notified += notified
             if notified:
-                logger.info(
-                    f"[SAFE-RESTART] Notified {notified} agent(s) "
-                    f"in project {service.project_id[:8]}"
-                )
+                logger.info(f"[SAFE-RESTART] Notified {notified} agent(s) in project {service.project_id[:8]}")
         except Exception as e:
-            logger.warning(
-                f"[SAFE-RESTART] Failed to notify agents for project "
-                f"{service.project_id[:8]}: {e}"
-            )
+            logger.warning(f"[SAFE-RESTART] Failed to notify agents for project {service.project_id[:8]}: {e}")
 
     # Give notified agents a real chance to finish an atomic step before
     # this process actually stops accepting connections, instead of
@@ -652,17 +630,14 @@ async def _notify_and_pause_for_restart(running_services: list) -> None:
     # case of no agents actively working shouldn't pay this delay on
     # every restart.
     if total_notified:
-        logger.info(
-            f"[SAFE-RESTART] Waiting {SAFE_RESTART_GRACE_SECONDS}s before "
-            "pausing pipelines, so in-flight agent calls have a chance to "
-            "land first..."
-        )
+        logger.info(f"[SAFE-RESTART] Waiting {SAFE_RESTART_GRACE_SECONDS}s before pausing pipelines, so in-flight agent calls have a chance to land first...")
         await asyncio.sleep(SAFE_RESTART_GRACE_SECONDS)
 
     await asyncio.gather(
         *(service.pause_for_restart() for service in running_services),
         return_exceptions=True,
     )
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
