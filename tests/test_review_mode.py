@@ -340,8 +340,17 @@ class TestFeatureStatusDerivation:
     def test_paused_feature_stays_paused(self, db_session, review_setup):
         from src.core.status_derivation import derive_feature_status
 
+        # Both flags together, matching what _pause_feature_for_review/
+        # pause_feature actually write in one transaction -- a paused
+        # feature whose workflow is still "active" isn't a real reachable
+        # state, it's the exact stale-cache bug derive_feature_status now
+        # guards against (see test_does_not_stay_paused_once_its_workflow_
+        # resumed in test_status_derivation.py): a workflow can resume
+        # through paths that never call resume_feature, and a feature must
+        # not report "paused" forever once that happens.
         feature, workflow, _, _ = review_setup
         feature.status = "paused"
+        workflow.status = "paused"
         db_session.commit()
 
         status = derive_feature_status(db_session, feature.id, write_back=False)
