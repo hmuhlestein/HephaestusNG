@@ -13,6 +13,18 @@ import pytest
 from src.core.database import AutopilotProject, DatabaseManager, ProjectRepo
 
 
+@pytest.fixture(autouse=True)
+def _auth(monkeypatch):
+    """Mock verify_agent_authentication so tests can call add_project_design
+    directly without going through FastAPI's TestClient/Header machinery."""
+    import src.mcp.autopilot.design_file_routes as routes
+
+    async def _ok(agent_id):
+        return True
+
+    monkeypatch.setattr(routes, "verify_agent_authentication", _ok)
+
+
 @pytest.fixture
 def db_manager(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
@@ -30,9 +42,7 @@ def _make_request(destination="queue", name="My Design", content="# hi"):
 
 class TestAddProjectDesignRepoResolution:
     @pytest.mark.asyncio
-    async def test_queue_destination_stays_at_workspace_root_for_multi_repo_project(
-        self, db_manager, tmp_path
-    ):
+    async def test_queue_destination_stays_at_workspace_root_for_multi_repo_project(self, db_manager, tmp_path):
         from src.mcp.autopilot.design_file_routes import add_project_design
 
         workspace = tmp_path / "workspace"
@@ -43,15 +53,13 @@ class TestAddProjectDesignRepoResolution:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(workspace)))
             session.add(ProjectRepo(id="repo-be", project_id="proj-1", label="backend", path=str(backend), is_primary=True))
 
-        result = await add_project_design("proj-1", _make_request(destination="queue"))
+        result = await add_project_design("proj-1", _make_request(destination="queue"), agent_id="test-agent")
 
         assert (workspace / ".hephaestus" / "designs").exists() or True  # dir created lazily by DESIGN_CONTEXT_SUBDIR
         assert result.name == "My Design"
 
     @pytest.mark.asyncio
-    async def test_non_queue_destination_resolves_under_primary_repo_for_multi_repo_project(
-        self, db_manager, tmp_path
-    ):
+    async def test_non_queue_destination_resolves_under_primary_repo_for_multi_repo_project(self, db_manager, tmp_path):
         from src.mcp.autopilot.design_file_routes import add_project_design
 
         workspace = tmp_path / "workspace"
@@ -65,15 +73,13 @@ class TestAddProjectDesignRepoResolution:
             session.add(ProjectRepo(id="repo-be", project_id="proj-2", label="backend", path=str(backend), is_primary=True))
             session.add(ProjectRepo(id="repo-fe", project_id="proj-2", label="frontend", path=str(frontend)))
 
-        await add_project_design("proj-2", _make_request(destination="docs", name="Doc One"))
+        await add_project_design("proj-2", _make_request(destination="docs", name="Doc One"), agent_id="test-agent")
 
         assert (backend / "docs" / "Doc_One.md").exists()
         assert not (workspace / "docs").exists()
 
     @pytest.mark.asyncio
-    async def test_single_repo_project_resolves_identically_to_base_dir(
-        self, db_manager, tmp_path
-    ):
+    async def test_single_repo_project_resolves_identically_to_base_dir(self, db_manager, tmp_path):
         """No ProjectRepo rows at all (edge case) or exactly one (the
         common single-repo case via migration) -- either way, "docs"
         resolves to the same base_dir-relative path as before this
@@ -87,7 +93,7 @@ class TestAddProjectDesignRepoResolution:
             session.add(AutopilotProject(id="proj-3", name="p", base_dir=str(project_dir)))
             session.add(ProjectRepo(id="repo-primary", project_id="proj-3", label="primary", path=str(project_dir), is_primary=True))
 
-        await add_project_design("proj-3", _make_request(destination="docs", name="Doc Two"))
+        await add_project_design("proj-3", _make_request(destination="docs", name="Doc Two"), agent_id="test-agent")
 
         assert (project_dir / "docs" / "Doc_Two.md").exists()
 
@@ -105,7 +111,7 @@ class TestAddProjectDesignRepoResolution:
             session.add(ProjectRepo(id="repo-primary", project_id="proj-4", label="primary", path=str(project_dir), is_primary=True))
 
         with pytest.raises(HTTPException):
-            await add_project_design("proj-4", _make_request(destination="../../etc"))
+            await add_project_design("proj-4", _make_request(destination="../../etc"), agent_id="test-agent")
 
 
 if __name__ == "__main__":
