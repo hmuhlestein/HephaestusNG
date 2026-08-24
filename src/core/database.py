@@ -1288,6 +1288,9 @@ class Feature(Base):
     # Pull request URL — populated by git_expert phase after creating PR
     pr_url = Column(Text, nullable=True)
 
+    # Multi-repo: which ProjectRepo this feature writes to (REQ-19/20)
+    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
+
     # Denormalized copy of the parent AutopilotDesign.workflow_type at
     # decomposition time -- not a join, since this feature's pipeline can be
     # resumed long after the parent design row's own lifecycle is otherwise

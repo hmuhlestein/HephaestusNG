@@ -351,6 +351,24 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                           </div>
                           <p className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">{project.base_dir}</p>
                           <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{project.design_count || 0} designs</p>
+                          {/* C10: Show repos for multi-repo projects (REQ-24) */}
+                          {project.repos && project.repos.length > 1 && (
+                            <div className="mt-1.5 flex flex-wrap gap-1">
+                              {project.repos.map((repo: any) => (
+                                <span
+                                  key={repo.id}
+                                  className={`inline-flex items-center px-1.5 py-0.5 text-xs rounded ${
+                                    repo.is_primary
+                                      ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300'
+                                      : 'bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
+                                  }`}
+                                >
+                                  {repo.label}
+                                  {repo.is_primary && ' (primary)'}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
 

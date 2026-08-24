@@ -69,6 +69,7 @@ class ProjectItem(BaseModel):
     updated_at: str
     cost_total_usd: float = 0.0
     cost_limit_usd: Optional[float] = None
+    repos: Optional[List[dict]] = None  # C10: ProjectRepo list for multi-repo projects
 
 
 class ProjectCreate(BaseModel):
@@ -265,12 +266,18 @@ def _validate_base_dir(base_dir: str) -> str:
 @router.get("/projects", response_model=List[ProjectItem])
 async def list_projects():
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
+    from src.core.repo_resolution import list_repos
 
     with get_db() as db:
         projects = db.query(AutopilotProject).order_by(AutopilotProject.name).all()
         result = []
         for p in projects:
             count = db.query(AutopilotDesign).filter_by(project_id=p.id).count()
+            # C10: Include repos for multi-repo projects (REQ-24)
+            repos = list_repos(db, p.id)
+            repos_data = None
+            if len(repos) > 1:
+                repos_data = [{"id": r.id, "label": r.label, "path": r.path, "is_primary": r.is_primary} for r in repos]
             result.append(
                 ProjectItem(
                     id=p.id,
@@ -283,6 +290,7 @@ async def list_projects():
                     updated_at=p.updated_at.isoformat() if p.updated_at else "",
                     cost_total_usd=p.cost_total_usd or 0.0,
                     cost_limit_usd=p.cost_limit_usd,
+                    repos=repos_data,
                 )
             )
         return result
