@@ -290,7 +290,8 @@ def _has_unfinished_phases(exec_id: str, done_count: int, logger: OrchestratorLo
 
 
 def _merge_design_branch_into_main(
-    design_branch: Optional[str], project_path: str, logger: OrchestratorLogger
+    design_branch: Optional[str], project_path: str, logger: OrchestratorLogger,
+    db_manager: Optional["DatabaseManager"] = None,
 ) -> None:
     """Merge the shared design branch into main once the workflow completes.
 
@@ -309,8 +310,9 @@ def _merge_design_branch_into_main(
         from src.core.worktree_manager import WorktreeManager
 
         cfg = get_config()
+        db = db_manager or DbManager(str(cfg.paths.database_path))
         wt_mgr = WorktreeManager(
-            db_manager=DbManager(str(cfg.paths.database_path)),
+            db_manager=db,
             repo_path=Path(project_path),
         )
 
@@ -732,7 +734,8 @@ def run_single_workflow(
                     logger.info(f"Workflow complete: {len(activity.done)} tasks done, no agents active, all phases done")
 
                     _merge_design_branch_into_main(
-                        getattr(state, "_design_branch", None), project_path, logger
+                        getattr(state, "_design_branch", None), project_path, logger,
+                        db_manager=db,
                     )
 
                     if state:

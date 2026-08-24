@@ -1724,6 +1724,17 @@ class DatabaseManager:
         """Drop all database tables (for testing)."""
         Base.metadata.drop_all(bind=self.engine)
 
+    def dispose(self) -> None:
+        """Dispose of the engine's connection pool.
+
+        Call this when done with a short-lived DatabaseManager to release
+        connections back to the pool. Safe to call multiple times.
+        """
+        try:
+            self.engine.dispose()
+        except Exception as e:
+            logger.warning(f"Error disposing engine: {e}")
+
 
 @contextmanager
 def get_db(database_path: Optional[str] = None):
