@@ -743,8 +743,20 @@ class AgentManager:
         finally:
             session.close()
 
-    async def get_project_context(self) -> str:
+    async def get_project_context(
+        self, project_id: Optional[str] = None, phase_name: Optional[str] = None
+    ) -> str:
         """Get current project context for task enrichment.
+
+        Args:
+            project_id: AutopilotProject.id, when the caller has one in
+                scope (resolved from phase_id -> Phase.workflow_id ->
+                Workflow.project_id). When it doesn't resolve, behavior is
+                UNCHANGED from before this param existed (REQ-21) -- no new
+                text, since there's nothing to scope a repo list to anyway.
+            phase_name: Phase.name, when in scope. Only used to detect the
+                feature-architect phase (exact string match, see below) for
+                its extra hard-rule text.
 
         Returns:
             Formatted project context string
@@ -788,6 +800,47 @@ class AgentManager:
                 context += "\n## RECENT COMPLETIONS\n"
                 for task in recent_tasks:
                     context += f"- {(task.enriched_description or task.raw_description)[:100]}...\n"
+
+            # Multi-repo project support (REQ-17/18/19/20/21). No new text
+            # for the case that can't be scoped anyway (project_id doesn't
+            # resolve) or the common single-repo case (<=1 ProjectRepo row)
+            # -- byte-identical to before this param existed.
+            if project_id:
+                from src.core.repo_resolution import get_project_repos
+
+                repos = get_project_repos(session, project_id)
+                if len(repos) > 1:
+                    context += "\n## PROJECT REPOSITORIES\nThis project spans multiple repos:\n"
+                    for repo in repos:
+                        context += f"- {repo.label} (writable for {repo.label}-scoped tasks): {repo.path}\n"
+                    context += (
+                        "\nRULES:\n"
+                        "- Every task you create is scoped to exactly one repo (see repo_id below).\n"
+                        "- The repo a task is assigned to is WRITABLE; all other listed repos are\n"
+                        "  READ-ONLY reference for cross-stack context (read the API contract in\n"
+                        "  one repo while implementing its consumer in another) -- do not write to\n"
+                        "  a repo your task isn't assigned to.\n"
+                    )
+                    # Exact string match against the existing Phase.name
+                    # convention (config/workflows/feature_architect/01_feature_architect.yaml
+                    # sets name: feature_architect) -- not "or equivalent".
+                    if phase_name == "feature_architect":
+                        context += (
+                            "\nREPO ASSIGNMENT RULE (multi-repo project): every Feature you create "
+                            "must be bound to exactly ONE repo -- this is CODE-ENFORCED, not just a "
+                            "convention: every task you create under a feature is validated against "
+                            "that feature's assigned repo, and a mismatch is REJECTED. An API change "
+                            "and its UI consumer are TWO features (one per repo), never one feature "
+                            "spanning both. In your features.json entry for each feature, set "
+                            '"repo_label" to one of the repo labels listed above -- this is what gets '
+                            "validated. If you omit it, the system infers a repo from your feature's "
+                            '"files" list, but an explicit "repo_label" is preferred and required '
+                            "whenever a feature's files could plausibly span more than one repo. "
+                            "Express cross-repo ordering with the EXISTING Feature.depends_on "
+                            "mechanism (e.g. the frontend feature's depends_on includes the backend "
+                            "feature's feature_key) -- never a free-text ordering note in a feature's "
+                            "description.\n"
+                        )
 
             return context
 

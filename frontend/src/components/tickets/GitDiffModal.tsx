@@ -111,6 +111,12 @@ const GitDiffModal: React.FC<GitDiffModalProps> = ({ commitSha, onClose }) => {
                       <span className="text-green-600 dark:text-green-400">+{commitDiff.total_insertions}</span>
                       <span className="text-red-600 dark:text-red-400">-{commitDiff.total_deletions}</span>
                       <span>{commitDiff.total_files} files</span>
+                      {/* Only shown for a multi-repo project's commit -- absent otherwise (REQ-23) */}
+                      {commitDiff.repo_label && (
+                        <span className="px-1.5 py-0.5 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full font-mono">
+                          {commitDiff.repo_label}
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}
