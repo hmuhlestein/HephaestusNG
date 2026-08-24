@@ -94,7 +94,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     queryKey: ['autopilot-design-statuses', projectId, designs?.length],
     queryFn: async () => {
       if (!projectId || !designs || designs.length === 0) return {};
-      const statuses: Record<string, { status: string; workflowId?: string; error?: string | null; costTotal: number; costUnavailable?: boolean; pausedBy?: string | null; statusReason?: string | null; workflowType?: string; features: any[] }> = {};
+      const statuses: Record<string, { status: string; workflowId?: string; workflowIds?: string[]; error?: string | null; costTotal: number; costUnavailable?: boolean; pausedBy?: string | null; statusReason?: string | null; workflowType?: string; features: any[] }> = {};
       await Promise.all(
         designs.map(async (d: any) => {
           try {
@@ -102,6 +102,14 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
             statuses[d.filename] = {
               status: status.status || 'pending',
               workflowId: status.workflows?.[0]?.id,
+              // A design can accumulate many historical workflow executions
+              // (retries/reruns) over time -- workflows?.[0] is just "the
+              // first one returned," not necessarily the one a pending
+              // human-input request belongs to. Kept alongside the
+              // existing single workflowId (other call sites depend on
+              // that one) so the Decide-button correlation below can check
+              // every workflow this design has, not just the first.
+              workflowIds: (status.workflows || []).map((w: any) => w.id),
               error: status.error || null,
               costTotal: status.cost_total_usd ?? 0,
               pausedBy: status.paused_by || null,
@@ -391,7 +399,8 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   onRefetchFeatures={refetchDesignStatuses}
                   statusReason={designStatuses[item.filename]?.statusReason}
                   pendingInputRequest={
-                    pendingInputRequest && pendingInputRequest.workflow_id === designStatuses[item.filename]?.workflowId
+                    pendingInputRequest &&
+                    (designStatuses[item.filename]?.workflowIds || []).includes(pendingInputRequest.workflow_id)
                       ? pendingInputRequest
                       : undefined
                   }
