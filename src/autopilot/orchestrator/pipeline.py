@@ -485,7 +485,7 @@ def run_single_workflow(
 
         cfg = get_config()
         db = DbManager(str(cfg.paths.database_path))
-        wt_mgr = WorktreeManager(db_manager=db)
+        wt_mgr = WorktreeManager(db_manager=db, repo_path=Path(project_path))
 
         # FIX: If project_path is already a worktree (contains .worktrees/),
         # use it directly as the design worktree. Don't create a nested
@@ -495,8 +495,6 @@ def run_single_workflow(
             design_worktree_path = str(project_path)
             logger.info(f"Using existing worktree directly: {design_worktree_path}")
         else:
-            # Reload to point at the actual project repo (not config.main_repo_path)
-            wt_mgr.reload(Path(project_path))
 
             # Create feature branch from main
             import git as _git
