@@ -215,8 +215,6 @@ async def process_queue(project_id: Optional[str] = None):
                 task_description_for_rag=task_description_for_rag,
                 phase_id=task_for_agent.phase_id,
                 requesting_agent_id="system",
-                workflow_id=task_for_agent.workflow_id,
-                repo_id=task_for_agent.repo_id,
             )
 
         # QueueService.get_next_queued_task set this when the phase's
