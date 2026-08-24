@@ -227,6 +227,88 @@ duplicates of anything above:
 
 ---
 
+---
+
+## 5. Follow-up sweep, 2026-08-24 — four more findings
+
+Different angles than §1-4: deprecated API usage, a duplicated construction
+pattern with a known fix already proven in one corner of the codebase, N+1
+query candidates found the same way `ticket_service.py`'s were (§2, now
+fixed), and untested high-blast-radius modules.
+
+### 5a. `datetime.utcnow()`: 182 call sites across 58 files, deprecated since Python 3.12
+
+Every test run this whole session has printed this warning dozens of times;
+never previously counted or written down. This one is genuinely tricky, not
+a find-and-replace: `CLAUDE.md`'s own critical invariant mandates
+`datetime.utcnow()` specifically over `datetime.now()`, root-caused to a real
+incident (a staleness check comparing a `utcnow()`-stamped value against a
+`now()`-based cutoff, silently never firing). The correct migration is
+`datetime.now(timezone.utc)`, not a blind revert to `datetime.now()` — but
+that produces a **timezone-aware** datetime, and this codebase's DB columns
+and comparisons are written assuming naive UTC throughout. Swapping one call
+site at a time risks a naive/aware comparison `TypeError` at the boundary
+between migrated and un-migrated code. Not attempted here — flagging the
+scale (58 files) and the specific hazard (naive vs. aware, not just a
+deprecation warning) rather than a mechanical fix.
+
+### 5b. `DatabaseManager(None)` constructed independently at 14 more sites — the fix pattern already exists, just not generalized
+
+`src/auth/auth_db.py`'s own docstring documents this exact problem and its
+own fix: "each file independently constructed its own `DatabaseManager(None)`
+... fragile in exactly the way `SOLID_OO_REVIEW_UPDATE_2026-08-19.md`
+found" — and solves it with one shared `get_db_manager()` accessor, but only
+for `src/auth/`'s own two call sites. The same raw `DatabaseManager(None)`
+construction still exists at 14 other sites (verified by direct grep, not
+estimated):
+`prompts/assembler.py` (×2), `autopilot/spec.py` (×4),
+`orchestrator/agent_registration.py`, `orchestrator/phase_transitions.py`
+(×3), `orchestrator/pipeline.py`, `orchestrator/arbitration.py` (×3),
+`services/task_blocking_service.py`. **Not a performance bug** —
+`DatabaseManager.__init__` caches engines by resolved path
+(`_engines`/`_sessions` class dicts), so repeated construction is cheap, not
+N duplicate connection pools. It's the same "N-th independent
+implementation of a primitive" shape this whole refactor effort has spent
+weeks closing elsewhere (task-creation-claim, agent-termination, pause-state
+— see `AUTOPILOT_REFACTOR_PLAN.md` §4), just never extended past `src/auth/`
+to the rest of the codebase.
+
+### 5c. Two real N+1 query candidates, same shape as `ticket_service.py`'s (now fixed in `1e72c4ef`)
+
+- `src/services/agent_communication.py:58-59` — fetches a workflow's
+  child agents in one bulk query, then queries `Task` individually per
+  agent in a loop (`session.query(Task).filter_by(id=child.current_task_id)`)
+  instead of one `Task.id.in_(...)` bulk query. A workflow with many
+  concurrent agents pays one query per agent instead of one query total.
+- `src/services/ticket_service.py:273-275` — a *different* site than the one
+  already fixed today: iterating `blocked_by_ticket_ids` and querying
+  `Ticket` once per ID. Lower urgency (blocking-ticket lists are typically
+  small, single digits), but the exact same fixable shape.
+
+Not fixed here — flagged as two more instances of a pattern this session
+already has a proven fix template for (§2's bulk `group_by` rewrite).
+
+### 5d. Two high-blast-radius modules with zero dedicated test coverage
+
+- **`src/prompts/assembler.py` (596 lines) — genuinely zero test coverage,
+  not even indirect.** No test file imports it, references
+  `assemble_prompt`, or exercises it through an integration path. This is
+  the module that builds the actual prompt text sent to every dispatched
+  agent — arguably the single highest-blast-radius untested file in the
+  repo, since a bug here doesn't crash anything, it just silently changes
+  or corrupts what every agent is told to do.
+- **`src/mcp/frontend/dashboard_service.py` (1418 lines) — one loose test
+  reference, no dedicated test file.** Backs the main dashboard's data;
+  `get_results` (233 lines) and `get_graph_data` (199 lines) — both
+  previously checked in §"Not flagged" below and found not to be
+  god-functions — have no direct test coverage either.
+
+Neither reviewed for *what* to test (that needs domain understanding of
+each function's contract) — this is a coverage-gap finding, not a
+test-writing plan.
+
+---
+
 ## Not flagged
 
 Checked and found reasonably sized, not god-functions/files by the same bar
