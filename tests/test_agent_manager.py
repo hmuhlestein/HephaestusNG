@@ -2054,23 +2054,74 @@ class TestWaitForPaneIdle:
     capture-pane for the CLI's own idle/ready pattern instead, up to
     agents.termination_delay as a ceiling."""
 
-    def test_returns_as_soon_as_the_ready_pattern_matches(self):
+    def test_returns_once_the_ready_pattern_matches_twice_in_a_row(self):
         from src.agents.terminator import Terminator
 
         term = Terminator.__new__(Terminator)
         pane = MagicMock()
-        # First two polls: still mid-turn (no prompt char). Third: idle.
+        # First two polls: still mid-turn (no prompt char). Third and
+        # fourth: idle -- two consecutive matches required (see
+        # test_a_single_flickering_match_is_not_enough for why).
         pane.cmd.side_effect = [
             MagicMock(stdout=["✳ Sublimating… (5s)"]),
             MagicMock(stdout=["✳ Sublimating… (6s)"]),
+            MagicMock(stdout=["Some output", "› "]),
             MagicMock(stdout=["Some output", "› "]),
         ]
 
         with patch("src.agents.terminator.time.sleep") as mock_sleep:
             term._wait_for_pane_idle(pane, "claude", poll_interval=0.1)
 
-        assert pane.cmd.call_count == 3
-        assert mock_sleep.call_count == 2, "must not sleep once the pattern already matched"
+        assert pane.cmd.call_count == 4
+        assert mock_sleep.call_count == 3, "must not sleep once the second consecutive match confirms idle"
+
+    def test_a_single_flickering_match_is_not_enough(self):
+        """Regression, found live: agent e3720f9a's tmux session was
+        killed while its complete_my_task response was still in flight
+        ("MCP extension session shutdown" on the agent's side, even though
+        the status update had already landed server-side). pi/opencode/
+        droid's ready pattern includes a bare ">" -- a turn can transiently
+        render a line ending in ">" (a diff, a quote) mid-response before
+        continuing, so a single match must not be enough to declare idle."""
+        from src.agents.terminator import Terminator
+
+        term = Terminator.__new__(Terminator)
+        pane = MagicMock()
+        pane.cmd.side_effect = [
+            MagicMock(stdout=["still working >"]),  # flickers a match...
+            MagicMock(stdout=["...but keeps going"]),  # ...then un-matches
+            MagicMock(stdout=["pi> "]),  # genuinely idle now
+            MagicMock(stdout=["pi> "]),  # confirmed on the next poll
+        ]
+
+        with patch("src.agents.terminator.time.sleep") as mock_sleep:
+            term._wait_for_pane_idle(pane, "pi", poll_interval=0.1)
+
+        assert pane.cmd.call_count == 4
+        assert mock_sleep.call_count == 3
+
+    def test_a_match_earlier_in_scrollback_is_not_enough(self):
+        """The health-check pattern must be checked against the pane's
+        LAST line only -- pi/opencode/droid's bare ">" would otherwise
+        match any incidental ">" the agent's own just-rendered tool output
+        happens to contain (a diff, a quote, a comparison) while it's
+        still actively finishing its turn, well before it's back at its
+        actual interactive prompt."""
+        from src.agents.terminator import Terminator
+
+        term = Terminator.__new__(Terminator)
+        pane = MagicMock()
+        pane.cmd.return_value = MagicMock(
+            stdout=["if x > 0:", "    do_something()", "still rendering output..."]
+        )
+
+        with patch("src.agents.terminator.time.sleep") as mock_sleep:
+            term._wait_for_pane_idle(pane, "pi", poll_interval=1)
+
+        # Never actually idle (last line never matches) -- must exhaust
+        # the ceiling rather than false-positive on the earlier ">" line.
+        assert pane.cmd.call_count == 5
+        assert mock_sleep.call_count == 5
 
     def test_gives_up_after_the_configured_ceiling_if_never_idle(self):
         from src.agents.terminator import Terminator
