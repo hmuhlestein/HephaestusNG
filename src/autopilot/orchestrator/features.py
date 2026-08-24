@@ -3,8 +3,7 @@
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional
-
+from typing import TYPE_CHECKING, List, Optional
 
 from src.core.database import (
     Agent,
@@ -15,8 +14,6 @@ from src.core.database import (
 )
 from src.core.simple_config import get_config
 from src.core.status_derivation import derive_feature_status
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -43,7 +40,8 @@ def _create_feature_records(
     """
     import uuid
 
-    from src.core.database import AutopilotDesign, Feature
+    from src.core.database import AutopilotDesign, AutopilotProject, Feature, ProjectRepo
+    from src.core.repo_resolution import get_project_repos, repo_id_for_path
 
     feature_records = []
 
@@ -53,6 +51,15 @@ def _create_feature_records(
         # in database.py and docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md.
         parent_design = db.query(AutopilotDesign).filter_by(id=design_id).first()
         design_workflow_type = parent_design.workflow_type if parent_design else "feature"
+        project_id: Optional[str] = parent_design.project_id if parent_design else None
+        # Single-repo projects: this whole resolution is a no-op (REQ-19's
+        # component doc) -- skip the query entirely rather than pay for it
+        # when there's only one possible repo anyway.
+        multi_repo = project_id is not None and len(get_project_repos(db, project_id)) > 1
+        project_base_dir = None
+        if multi_repo:
+            project = db.query(AutopilotProject).filter_by(id=project_id).first()
+            project_base_dir = project.base_dir if project else None
         # Idempotency guard: finalize_phase0_workflow can now call this from
         # two independent sites for the same design (run_phase0's own
         # synchronous tail, and the generic phase0-completion hook in
@@ -93,10 +100,54 @@ def _create_feature_records(
             scope_doc_path = feature_record_path / "scope.md"
             scope_doc_path_str = str(scope_doc_path) if scope_doc_path.exists() else None
 
+            # REQ-19: resolve which repo this feature is bound to. An
+            # explicit "repo_label" in the architect's features.json entry
+            # wins; otherwise infer from files' majority repo. Unresolved
+            # (or a single-repo project) leaves repo_id None -- falls back
+            # to the primary repo everywhere downstream (REQ-06).
+            feature_repo_id = None
+            if multi_repo and project_id is not None:
+                repo_label = feat.get("repo_label")
+                if repo_label:
+                    repo = db.query(ProjectRepo).filter_by(project_id=project_id, label=repo_label).first()
+                    feature_repo_id = repo.id if repo else None
+                else:
+                    # feat["files"] entries are typically relative to the
+                    # project root (the architect prompt's schema shows
+                    # "src/auth/", not an absolute path) -- repo_id_for_path
+                    # needs an absolute path to prefix-match against each
+                    # ProjectRepo.path, so resolve against project_base_dir
+                    # first. An already-absolute entry is left as-is.
+                    def _abs(f: str) -> str:
+                        return f if Path(f).is_absolute() or not project_base_dir else str(Path(project_base_dir) / f)
+
+                    file_repo_pairs = [(f, rid) for f in feat.get("files", []) if (rid := repo_id_for_path(db, project_id, _abs(f))) is not None]
+                    distinct_repo_ids = {rid for _, rid in file_repo_pairs}
+                    if len(distinct_repo_ids) > 1:
+                        # feat["files"] genuinely spans >1 repo -- the
+                        # architect's own prompt forbids this (one feature
+                        # must not span an API change and its UI consumer).
+                        # Majority-voting one repo would silently drop the
+                        # other repo's files from this Feature's scope, only
+                        # to surface later as a confusing task-creation 400
+                        # when a task's cwd lands in the dropped repo.
+                        # Leave repo_id unresolved and log loudly instead --
+                        # REQ-19's per-Feature enforcement then does its job
+                        # the moment a task under this feature picks a repo.
+                        logger.warning(
+                            f"[REPO-SCOPE] feature {feature_key!r} in design {design_id!r} has "
+                            f"files spanning {len(distinct_repo_ids)} repos with no repo_label to "
+                            f"disambiguate ({file_repo_pairs}) -- leaving Feature.repo_id unset "
+                            "instead of arbitrarily picking one; this feature should be split"
+                        )
+                    elif distinct_repo_ids:
+                        feature_repo_id = next(iter(distinct_repo_ids))
+
             feature = Feature(
                 id=feature_id,
                 design_id=design_id,
                 feature_key=feature_key,
+                repo_id=feature_repo_id,
                 name=feat.get("name", feature_key),
                 scope=feat.get("scope", ""),
                 files=feat.get("files", []),
@@ -211,13 +262,7 @@ def _sync_stale_feature_statuses(logger: "OrchestratorLogger") -> int:
     # live: a feature's workflow reached "completed" but Feature.workflow_id
     # was never set, leaving Feature.status stuck "active" across restarts.
     with get_db() as db:
-        orphaned_design_ids = {
-            design_id
-            for (design_id,) in db.query(Feature.design_id)
-            .filter(Feature.workflow_id.is_(None))
-            .distinct()
-            .all()
-        }
+        orphaned_design_ids = {design_id for (design_id,) in db.query(Feature.design_id).filter(Feature.workflow_id.is_(None)).distinct().all()}
     for design_id in orphaned_design_ids:
         _relink_features_to_workflows(design_id, logger)
 
@@ -358,9 +403,7 @@ def _relink_features_to_workflows(design_id: str, logger: "OrchestratorLogger") 
         # feature) could link a feature to the WRONG design's workflow.
         # Matters more now that this runs after every single feature
         # completes, not just once per design reprocessing.
-        workflows = db.query(Workflow).filter(
-            Workflow.definition_id == "autopilot", Workflow.design_id == design_id
-        ).order_by(Workflow.created_at.desc()).all()
+        workflows = db.query(Workflow).filter(Workflow.definition_id == "autopilot", Workflow.design_id == design_id).order_by(Workflow.created_at.desc()).all()
 
         for feat in unlinked:
             for wf in workflows:
@@ -468,10 +511,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
             .all()
         )
         for task in stranded:
-            logger.info(
-                f"[STRANDED-TASK] Task {task.id[:8]} assigned with no agent since "
-                f"{task.queued_at} (>{grace_seconds}s) — returning to queue"
-            )
+            logger.info(f"[STRANDED-TASK] Task {task.id[:8]} assigned with no agent since {task.queued_at} (>{grace_seconds}s) — returning to queue")
             task.status = "queued"
             task.queue_position = None
         if stranded:
@@ -518,10 +558,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
             .all()
         )
         for task in stale_in_completed_phase:
-            logger.info(
-                f"[STALE-TASK] Task {task.id[:8]} pending with no agent in an "
-                "already-completed phase — marking duplicated"
-            )
+            logger.info(f"[STALE-TASK] Task {task.id[:8]} pending with no agent in an already-completed phase — marking duplicated")
             task.status = "duplicated"
             task.failure_reason = "Orphaned: never dispatched, and its phase already completed via another task"
         if stale_in_completed_phase:

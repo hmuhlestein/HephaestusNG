@@ -8,6 +8,7 @@ review: a package __init__ should be a re-export surface, not host 3000+
 lines of the package's own business logic -- see
 docs/SOLID_OO_REVIEW_UPDATE_2026-08-19.md).
 """
+
 import copy
 import json
 import logging
@@ -129,34 +130,6 @@ MAX_PARALLEL_FEATURES = 4  # max concurrent feature pipelines
 # single bare global here was a live cross-project bug.
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ProjectContext keys for AutopilotService's "was a pipeline running, with
 # what args" resume marker -- see src/autopilot/service.py's
 # _persist_running_state/load_persisted_state/clear_persisted_state/
@@ -164,12 +137,6 @@ MAX_PARALLEL_FEATURES = 4  # max concurrent feature pipelines
 # can be running concurrently); _RUNNING_STATE_KEY_LEGACY is the single
 # pre-multi-project bare key, migrated in place by enumerate_persisted_states
 # the first time the backend reads it after this change deploys.
-
-
-
-
-
-
 
 
 class _WorkflowActivity(NamedTuple):
@@ -185,21 +152,13 @@ class _WorkflowActivity(NamedTuple):
 
     @property
     def has_any_work(self) -> bool:
-        return bool(
-            self.active_agents
-            or self.pending
-            or self.in_progress
-            or self.non_terminal
-            or self.done
-        )
+        return bool(self.active_agents or self.pending or self.in_progress or self.non_terminal or self.done)
 
     @property
     def is_idle(self) -> bool:
         """Nothing running and nothing left queued -- the precondition for
         declaring the workflow either complete or broken."""
-        return not (
-            self.active_agents or self.pending or self.in_progress or self.non_terminal
-        )
+        return not (self.active_agents or self.pending or self.in_progress or self.non_terminal)
 
 
 def _snapshot_workflow_activity(exec_id: str) -> _WorkflowActivity:
@@ -289,9 +248,7 @@ def _has_unfinished_phases(exec_id: str, done_count: int, logger: OrchestratorLo
         return False
 
 
-def _merge_design_branch_into_main(
-    design_branch: Optional[str], project_path: str, logger: OrchestratorLogger
-) -> None:
+def _merge_design_branch_into_main(design_branch: Optional[str], project_path: str, logger: OrchestratorLogger) -> None:
     """Merge the shared design branch into main once the workflow completes.
 
     A merge conflict aborts and preserves the branch for a manual merge/PR
@@ -580,9 +537,7 @@ def run_single_workflow(
                 from src.core.database import AutopilotDesign
 
                 with get_db() as _db_p0:
-                    _db_p0.query(AutopilotDesign).filter_by(id=design_id).update(
-                        {AutopilotDesign.phase0_workflow_id: exec_id}
-                    )
+                    _db_p0.query(AutopilotDesign).filter_by(id=design_id).update({AutopilotDesign.phase0_workflow_id: exec_id})
             except Exception as e:
                 logger.warning(f"Failed to persist phase0_workflow_id immediately after launch: {e}")
 
@@ -691,7 +646,9 @@ def run_single_workflow(
             _log_phase_transitions(exec_id)
             _last_agent_states = _log_agent_state_changes(activity.agents, _last_agent_states, logger)
 
-            logger.info(f"[{workflow_id}] [{elapsed}s] Agents: {len(activity.active_agents)} active | Tasks: {len(activity.pending)} pending, {len(activity.in_progress)} active, {len(activity.done)} done, {len(activity.failed)} failed")
+            logger.info(
+                f"[{workflow_id}] [{elapsed}s] Agents: {len(activity.active_agents)} active | Tasks: {len(activity.pending)} pending, {len(activity.in_progress)} active, {len(activity.done)} done, {len(activity.failed)} failed"
+            )
 
             # Phase progression — the single source of truth for advancing phases.
             # This replaces the monitor's phase progression logic.
@@ -731,9 +688,7 @@ def run_single_workflow(
 
                     logger.info(f"Workflow complete: {len(activity.done)} tasks done, no agents active, all phases done")
 
-                    _merge_design_branch_into_main(
-                        getattr(state, "_design_branch", None), project_path, logger
-                    )
+                    _merge_design_branch_into_main(getattr(state, "_design_branch", None), project_path, logger)
 
                     if state:
                         state.current_workflow_id = None
@@ -869,10 +824,7 @@ def run_bugfix_single_feature(
 
     with _get_db() as _db:
         existing_features = _db.query(FeatureModel).filter_by(design_id=design_entry.db_id).all()
-        existing_feature_data = [
-            {"id": f.feature_key, "name": f.name, "scope": f.scope, "files": f.files or [], "depends_on": f.depends_on or [], "execution": f.execution}
-            for f in existing_features
-        ]
+        existing_feature_data = [{"id": f.feature_key, "name": f.name, "scope": f.scope, "files": f.files or [], "depends_on": f.depends_on or [], "execution": f.execution} for f in existing_features]
     if existing_feature_data:
         logger.info(f"Feature already exists for bugfix design {design_entry.name} -- skipping single-feature creation")
         features_json = {"design_name": design_entry.name, "features": existing_feature_data}
@@ -907,14 +859,16 @@ def run_bugfix_single_feature(
 
     features_json = {
         "design_name": design_entry.name,
-        "features": [{
-            "id": feature_key,
-            "name": design_entry.name,
-            "scope": design_content,
-            "files": [],
-            "depends_on": [],
-            "execution": "sequential",
-        }],
+        "features": [
+            {
+                "id": feature_key,
+                "name": design_entry.name,
+                "scope": design_content,
+                "files": [],
+                "depends_on": [],
+                "execution": "sequential",
+            }
+        ],
     }
     (designs_folder / "features.json").write_text(json.dumps(features_json, indent=2))
 
@@ -981,12 +935,7 @@ def run_phase0(
     from src.core.database import Workflow as _Wf0
 
     with _get_db() as _db:
-        paused_phase0_wf = (
-            _db.query(_Wf0)
-            .filter_by(design_id=design_entry.db_id, definition_id="feature_architect", paused_by="review")
-            .order_by(_Wf0.created_at.desc())
-            .first()
-        )
+        paused_phase0_wf = _db.query(_Wf0).filter_by(design_id=design_entry.db_id, definition_id="feature_architect", paused_by="review").order_by(_Wf0.created_at.desc()).first()
         paused_phase0_wf_id = paused_phase0_wf.id if paused_phase0_wf else None
     if paused_phase0_wf_id:
         logger.info(f"Phase 0 workflow {paused_phase0_wf_id[:8]} is already paused for review — re-entering wait")
@@ -1399,10 +1348,12 @@ def _should_pause_for_review(project_id: str) -> bool:
     """
     try:
         from src.core.database import AutopilotProject, get_db
+
         with get_db() as db:
             proj = db.query(AutopilotProject).get(project_id)
             return bool(proj and getattr(proj, "review_mode", False))
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[REVIEW] Failed to check review mode for project {project_id}: {e} -- defaulting to enabled")
         return True
 
 
@@ -1414,6 +1365,7 @@ def _pause_feature_for_review(feature_id: str, logger: "OrchestratorLogger") -> 
     """
     try:
         from src.core.database import Feature, Workflow, get_db
+
         with get_db() as db:
             feat = db.query(Feature).filter_by(id=feature_id).first()
             if feat and feat.workflow_id:
@@ -1424,6 +1376,7 @@ def _pause_feature_for_review(feature_id: str, logger: "OrchestratorLogger") -> 
                 wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
                 if wf and wf.paused_by != "review" and wf.status != "failed":
                     from src.autopilot.orchestrator.engine_client import pause_workflow
+
                     # cascade_to_feature=False: this function already owns
                     # the write for `feat` specifically, below.
                     pause_workflow(wf.id, reason="review", cascade_to_feature=False, session=db)
@@ -1454,6 +1407,7 @@ def _wait_for_review_clearance(
             return
         try:
             from src.core.database import Feature, Workflow, get_db
+
             with get_db() as db:
                 feat = db.query(Feature).filter_by(id=feature_id).first()
                 if not feat or not feat.workflow_id:
@@ -1484,6 +1438,7 @@ def _restore_phase0_completed_status(workflow_id: str, logger: "OrchestratorLogg
     """
     try:
         from src.core.database import Workflow, get_db
+
         with get_db() as db:
             wf = db.query(Workflow).filter_by(id=workflow_id).first()
             if wf and wf.status != "completed":
@@ -1503,6 +1458,7 @@ def _pause_phase0_for_review(workflow_id: str, logger: "OrchestratorLogger") -> 
     """
     try:
         from src.core.database import Workflow, get_db
+
         with get_db() as db:
             wf = db.query(Workflow).filter_by(id=workflow_id).first()
             # "completed" is a valid source state, not just "active" --
@@ -1516,6 +1472,7 @@ def _pause_phase0_for_review(workflow_id: str, logger: "OrchestratorLogger") -> 
             # workflow that didn't actually finish has nothing to review.
             if wf and wf.paused_by != "review" and wf.status != "failed":
                 from src.autopilot.orchestrator.engine_client import pause_workflow
+
                 # No Feature row to cascade to at this point -- see this
                 # function's own docstring.
                 pause_workflow(wf.id, reason="review", cascade_to_feature=False, session=db)
@@ -1553,6 +1510,7 @@ def _wait_for_phase0_review_clearance(
             return False
         try:
             from src.core.database import Workflow, get_db
+
             with get_db() as db:
                 wf = db.query(Workflow).filter_by(id=workflow_id).first()
                 if not wf:
@@ -1792,10 +1750,14 @@ def _run_one_feature(
     if depends_on:
         with get_db() as db:
             for dep_key in depends_on:
-                dep_feature = db.query(Feature).filter_by(
-                    design_id=design_entry.db_id,
-                    feature_key=dep_key,
-                ).first()
+                dep_feature = (
+                    db.query(Feature)
+                    .filter_by(
+                        design_id=design_entry.db_id,
+                        feature_key=dep_key,
+                    )
+                    .first()
+                )
                 if not dep_feature:
                     logger.warning(f"[DEPENDENCY] Feature {feature_key} depends on {dep_key} which doesn't exist — skipping")
                     return FeatureRunStatus.SKIPPED
@@ -1805,6 +1767,7 @@ def _run_one_feature(
 
     # Set structured log context for this feature's lifetime
     from src.core.log_context import set_log_context
+
     set_log_context(workflow=feature_key, phase="feature_pipeline")
 
     # Find feature record in DB
@@ -1812,6 +1775,7 @@ def _run_one_feature(
 
     feature_id = None
     existing_workflow_id = None
+    feature_repo_id = None
     with get_db() as db:
         # Budget guard: refuse to launch features for over-budget projects
         # (inside same session to avoid race condition with concurrent cost writes)
@@ -1829,6 +1793,7 @@ def _run_one_feature(
         )
         if feat_record:
             feature_id = feat_record.id
+            feature_repo_id = feat_record.repo_id
 
             # Resume support: a design that was Phase-0'd, then had this
             # feature's pipeline stopped mid-flight (service stop/pause),
@@ -1859,9 +1824,7 @@ def _run_one_feature(
                     # normal completion path.
                     _design_slug = (design_entry.db_id or "unknown")[:8]
                     _branch = f"feature/{_design_slug}/{feature_key}"
-                    _wt = _create_integration_worktree(
-                        project_path, feature_key, _branch, logger
-                    )
+                    _wt = _create_integration_worktree(project_path, feature_key, _branch, logger)
                     if _wt:
                         _cleanup_worktree(_wt, _branch, project_path, logger)
                     return FeatureRunStatus.COMPLETED
@@ -1874,12 +1837,8 @@ def _run_one_feature(
                 from src.core.cost_derivation import check_budget_before_new_work
 
                 if not check_budget_before_new_work(db, project_id):
-                    logger.info(
-                        f"[BUDGET] Project over budget — blocking new workflow for feature {feature_key}"
-                    )
-                    _update_feature_status(
-                        feature_id, design_entry.db_id, "paused", "Budget limit reached", logger
-                    )
+                    logger.info(f"[BUDGET] Project over budget — blocking new workflow for feature {feature_key}")
+                    _update_feature_status(feature_id, design_entry.db_id, "paused", "Budget limit reached", logger)
                     return FeatureRunStatus.BUDGET_BLOCKED
 
             # Update status to active
@@ -1890,6 +1849,27 @@ def _run_one_feature(
     if not feature_id:
         logger.error(f"Feature record not found for {feature_key}")
         return FeatureRunStatus.FAILED
+
+    # Multi-repo: a Feature bound to a specific repo (REQ-19/REQ-20) runs
+    # its pipeline against THAT repo's path, not the project's primary --
+    # repo_id is None for single-repo projects (or a feature whose repo
+    # inference was inconclusive), in which case resolve_repo_path falls
+    # back to the project's primary repo, i.e. today's project_path.
+    if project_id:
+        from src.core.repo_resolution import RepoNotFoundError, resolve_repo_path
+
+        with get_db() as db:
+            try:
+                project_path = resolve_repo_path(db, project_id, feature_repo_id)
+            except (RepoNotFoundError, ValueError) as e:
+                if feature_repo_id:
+                    # Feature bound to a specific repo but resolution failed --
+                    # fail the feature instead of silently running against wrong repo
+                    logger.error(f"[REPO-SCOPE] Feature {feature_key} bound to repo {feature_repo_id} but resolution failed: {e} -- failing feature")
+                    _update_feature_status(feature_id, design_entry.db_id, "failed", f"Repo resolution failed: {e}", logger)
+                    return FeatureRunStatus.FAILED
+                else:
+                    logger.warning(f"[REPO-SCOPE] Could not resolve repo path for feature {feature_key}: {e} -- using default")
 
     # Create feature record folder
     feature_record_path = designs_folder / "features" / feature_key
@@ -2038,9 +2018,7 @@ def _run_one_feature(
         # for either, and writing "failed" is exactly the bug the branch
         # above exists to avoid.
         if final_status.is_terminal:
-            _update_feature_status(
-                feature_id, design_entry.db_id, final_status.value, logger=logger
-            )
+            _update_feature_status(feature_id, design_entry.db_id, final_status.value, logger=logger)
 
         # Sweep artifacts to permanent record. Phase reports now live under
         # .hephaestus/ (git-excluded) -- some flat at the top level
@@ -2238,11 +2216,7 @@ def run_feature_pipelines(
         # execution_groups fresh and correctly re-encounter this layer
         # before ever reaching the ones after it.
         if halted_early:
-            logger.info(
-                "Halting feature pipeline walk early: a feature in this "
-                "layer did not reach a resolved status (interrupted/timeout) "
-                "-- not dispatching later dependency layers this walk."
-            )
+            logger.info("Halting feature pipeline walk early: a feature in this layer did not reach a resolved status (interrupted/timeout) -- not dispatching later dependency layers this walk.")
             break
 
     # Log summary
@@ -2356,7 +2330,6 @@ def run_design_aggregate(
     )
 
     return status, report
-
 
 
 def run_single_design(
@@ -2510,9 +2483,7 @@ def _build_and_start_pipeline_sdk(args, project_path: Path, logger: Orchestrator
     return sdk, cli_tool
 
 
-def _persist_design_outcome(
-    design, status, current_project_id: Optional[str], logger: OrchestratorLogger
-) -> None:
+def _persist_design_outcome(design, status, current_project_id: Optional[str], logger: OrchestratorLogger) -> None:
     """Write a finished design's status back to the DB.
 
     Best-effort: a failure here must not stop the pipeline from moving on to
@@ -2689,10 +2660,7 @@ def run_continuous_pipeline(args) -> None:
                     current_project_id = _proj.id
                     logger.set_project_id(current_project_id)
         except Exception as e:
-            logger.warning(
-                f"Could not resolve current_project_id for {project_path}; stop/pause "
-                f"signals keyed by project_id won't reach this pipeline: {e}"
-            )
+            logger.warning(f"Could not resolve current_project_id for {project_path}; stop/pause signals keyed by project_id won't reach this pipeline: {e}")
 
     processed_file = log_dir / "processed.json"
 
@@ -2701,9 +2669,7 @@ def run_continuous_pipeline(args) -> None:
     # Register orchestrator as an agent, keyed by project_id so a second
     # project's pipeline running concurrently can't overwrite this one's
     # registration (SOLID review 2.4).
-    _orchestrator_agent_ids[current_project_id] = _register_orchestrator_agent(
-        log_dir, cli_tool, logger
-    )
+    _orchestrator_agent_ids[current_project_id] = _register_orchestrator_agent(log_dir, cli_tool, logger)
 
     # NOTE: this used to unconditionally fail (or complete) every workflow
     # still "active" at startup, on the theory that "active" + backend-just-
@@ -2775,10 +2741,7 @@ def run_continuous_pipeline(args) -> None:
                         continue
                     elif still_blocking:
                         wf_ids = [i[:8] for i in still_blocking]
-                        logger.info(
-                            f"Workflow(s) still active ({', '.join(wf_ids)}) but another design has "
-                            "resumable ready features -- proceeding to pick_next_design instead of waiting"
-                        )
+                        logger.info(f"Workflow(s) still active ({', '.join(wf_ids)}) but another design has resumable ready features -- proceeding to pick_next_design instead of waiting")
 
                     # Also check previous workflow is fully complete (all phases done, branches merged).
                     # Same reasoning as the still_blocking bypass above: skip this
@@ -2796,10 +2759,7 @@ def run_continuous_pipeline(args) -> None:
                     # active-workflow list regardless of state.current_workflow_id.
                     resumable_elsewhere = _has_resumable_active_design(current_project_id)
                     if state.current_workflow_id and resumable_elsewhere:
-                        logger.info(
-                            f"Previous workflow {state.current_workflow_id[:8]} not re-checked this cycle "
-                            "-- another design has resumable ready features"
-                        )
+                        logger.info(f"Previous workflow {state.current_workflow_id[:8]} not re-checked this cycle -- another design has resumable ready features")
                     elif state.current_workflow_id:
                         # First check if workflow still exists in DB
                         try:

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from src.core.constants import (
@@ -33,6 +33,7 @@ from src.mcp.autopilot.project_routes import (
     _get_project_lock,
     _sync_project_designs,
 )
+from src.mcp.server._shared import verify_agent_authentication
 from src.services.design_status_service import get_design_status
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,17 @@ def _resolve_design_filepath(file_path: Optional[str], fallback: Path) -> Path:
 
 
 @router.post("/projects/{project_id}/sync", response_model=List[DesignItem])
-async def sync_project_designs(project_id: str):
+async def sync_project_designs(
+    project_id: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before syncing designs
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotProject, get_db
 
     lock = await _get_project_lock(project_id)
@@ -109,8 +120,18 @@ async def sync_project_designs(project_id: str):
 
 
 @router.post("/projects/{project_id}/designs/reload", response_model=List[DesignItem])
-async def reload_project_designs(project_id: str):
+async def reload_project_designs(
+    project_id: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
     """Force resync designs from filesystem."""
+    # SECURITY: Verify agent authentication before reloading designs
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotProject, get_db
 
     cache_key = f"project_designs:{project_id}"
@@ -156,7 +177,18 @@ async def list_project_designs(project_id: str):
 
 
 @router.post("/projects/{project_id}/designs", response_model=DesignItem)
-async def add_project_design(project_id: str, req: DesignAddRequest):
+async def add_project_design(
+    project_id: str,
+    req: DesignAddRequest,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before adding designs
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
@@ -167,19 +199,34 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
 
     if req.destination == "queue":
         # Store in .hephaestus/designs/ (not git-tracked) so git commits
-        # don't delete design files.
+        # don't delete design files. Stays at the workspace-root (base_dir)
+        # level, unaffected by repo count (REQ-13) -- it has no
+        # git-tracking requirement to satisfy.
         design_dir = Path(base_dir) / DESIGN_CONTEXT_SUBDIR
     else:
-        # Any other destination is a real, git-tracked folder under the
-        # project root -- "docs" (legacy literal), DESIGN_SUBDIR/
-        # BUGFIX_SUBDIR (the New Feature/Report Bug flows' defaults), or
-        # an arbitrary folder the user picked via the destination-folder
-        # browser. Unlike "queue" above, this value can come from the
-        # client (typed or browsed), so it MUST be validated to stay
-        # within base_dir -- _safe_path does that (raises 400 on escape),
-        # the same check every other browse/content endpoint in this
-        # file already applies to user-supplied paths.
-        design_dir = _safe_path(base_dir, req.destination)
+        # Any other destination is a real, git-tracked folder -- "docs"
+        # (legacy literal), DESIGN_SUBDIR/BUGFIX_SUBDIR (the New Feature/
+        # Report Bug flows' defaults), or an arbitrary folder the user
+        # picked via the destination-folder browser. Resolves under the
+        # PRIMARY ProjectRepo's path (REQ-12), not the workspace root: a
+        # multi-repo project's base_dir need not itself be a git repo, so
+        # writing there wouldn't be tracked by anything; single-repo
+        # projects resolve to the same base_dir as before (byte-identical).
+        # Unlike "queue" above, this value can come from the client (typed
+        # or browsed), so it MUST be validated to stay within the resolved
+        # repo path -- _safe_path does that (raises 400 on escape), the
+        # same check every other browse/content endpoint in this file
+        # already applies to user-supplied paths. Resolve the repo path
+        # FIRST, then _safe_path against it -- the boundary must be the
+        # repo's, not the (wider) workspace root's.
+        from src.core.repo_resolution import RepoNotFoundError, resolve_repo_path
+
+        with get_db() as db:
+            try:
+                repo_path = resolve_repo_path(db, project_id, None)
+            except (RepoNotFoundError, ValueError) as e:
+                raise HTTPException(400, str(e))
+        design_dir = _safe_path(str(repo_path), req.destination)
     design_dir.mkdir(parents=True, exist_ok=True)
 
     ext = req.extension if req.extension in ALLOWED_EXTENSIONS else ".md"
@@ -244,7 +291,11 @@ class EnsureFolderRequest(BaseModel):
 
 
 @router.post("/projects/{project_id}/ensure-folder")
-async def ensure_project_folder(project_id: str, req: EnsureFolderRequest):
+async def ensure_project_folder(
+    project_id: str,
+    req: EnsureFolderRequest,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
     """Create a folder (and any missing parents) under the project root if
     it doesn't already exist yet.
 
@@ -255,6 +306,13 @@ async def ensure_project_folder(project_id: str, req: EnsureFolderRequest):
     mkdir already handles that case, but leaves the folder invisible to
     a browse/select round-trip in between).
     """
+    # SECURITY: Verify agent authentication before creating folders
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotProject, get_db
 
     with get_db() as db:
@@ -346,7 +404,18 @@ async def browse_project_file_content(project_id: str, path: str = Query(...)):
 
 
 @router.put("/projects/{project_id}/designs/reorder")
-async def reorder_project_designs(project_id: str, req: DesignReorderRequest):
+async def reorder_project_designs(
+    project_id: str,
+    req: DesignReorderRequest,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before reordering designs
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
@@ -373,7 +442,18 @@ async def reorder_project_designs(project_id: str, req: DesignReorderRequest):
 
 
 @router.delete("/projects/{project_id}/designs/{filename}")
-async def remove_project_design(project_id: str, filename: str):
+async def remove_project_design(
+    project_id: str,
+    filename: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before removing designs
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     logger.info(f"[DELETE] remove_project_design called: project={project_id}, file={filename}")
     from src.core.database import (
         Agent,

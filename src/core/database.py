@@ -23,13 +23,9 @@ from sqlalchemy import (
     create_engine,
     event,
 )
-from sqlalchemy import (
-    exc as sqlalchemy_exc,
-)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import backref, relationship, sessionmaker
 from sqlalchemy.pool import QueuePool, StaticPool
-from sqlalchemy.sql import text
 
 Base = declarative_base()
 logger = logging.getLogger(__name__)
@@ -305,6 +301,7 @@ class Task(Base):
     # Ticket tracking integration
     ticket_id = Column(String, ForeignKey("tickets.id"))  # Associated ticket (required when ticket tracking enabled)
     related_ticket_ids = Column(JSON)  # List of related ticket IDs for context
+    repo_id = Column(String, ForeignKey("project_repos.id"))  # ProjectRepo this task is scoped to (multi-repo projects)
 
     # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
     cost_total_usd = Column(Float, default=0.0, nullable=False)
@@ -619,6 +616,7 @@ class AgentWorktree(Base):
     __tablename__ = "agent_worktrees"
 
     agent_id = Column(String, ForeignKey("agents.id"), primary_key=True)
+    repo_id = Column(String, ForeignKey("project_repos.id"))  # ProjectRepo this worktree is scoped to (multi-repo projects)
     worktree_path = Column(Text, nullable=False)
     branch_name = Column(String, unique=True, nullable=False)
     parent_agent_id = Column(String, ForeignKey("agents.id"))
@@ -957,6 +955,7 @@ class Ticket(Base):
     parent_ticket_id = Column(String, ForeignKey("tickets.id"))
     task_id = Column(String, ForeignKey("tasks.id"))  # Primary task this ticket relates to
     phase_id = Column(String, ForeignKey("phases.id"))  # Phase where this ticket was created
+    repo_id = Column(String, ForeignKey("project_repos.id"))  # ProjectRepo this ticket is scoped to (multi-repo projects)
     related_task_ids = Column(JSON)  # List of related task IDs
     related_ticket_ids = Column(JSON)  # List of related ticket IDs for context
     tags = Column(JSON)  # List of tags
@@ -1061,6 +1060,7 @@ class TicketCommit(Base):
     id = Column(String, primary_key=True)  # Format: tc-{uuid}
     ticket_id = Column(String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
     agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
+    repo_id = Column(String, ForeignKey("project_repos.id"))  # ProjectRepo this commit belongs to (multi-repo projects)
 
     # Commit Information
     commit_sha = Column(String(40), nullable=False)
@@ -1143,6 +1143,29 @@ class AutopilotProject(Base):
     review_mode = Column(Boolean, default=False, nullable=False)
 
     designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
+    repos = relationship("ProjectRepo", back_populates="project", cascade="all, delete-orphan")
+
+
+class ProjectRepo(Base):
+    """One git repo belonging to a project. A project spans N sibling repos;
+    the primary repo (is_primary=True) is what single-repo projects have
+    always had via AutopilotProject.base_dir."""
+
+    __tablename__ = "project_repos"
+
+    id = Column(String, primary_key=True)  # Format: repo-{uuid}
+    project_id = Column(String, ForeignKey("autopilot_projects.id", ondelete="CASCADE"), nullable=False)
+    label = Column(String(100), nullable=False)  # "backend", "frontend"
+    path = Column(Text, nullable=False)  # absolute path, not required under base_dir
+    is_primary = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    project = relationship("AutopilotProject", back_populates="repos")
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "path", name="uq_project_repos_project_path"),
+        UniqueConstraint("project_id", "label", name="uq_project_repos_project_label"),
+    )
 
 
 class PromptProposal(Base):
@@ -1209,6 +1232,7 @@ class Feature(Base):
     id = Column(String, primary_key=True)  # feat-<uuid8>
     design_id = Column(String, ForeignKey("autopilot_designs.id"), nullable=False)
     feature_key = Column(String(100), nullable=False)  # slug from features.json "id" field
+    repo_id = Column(String, ForeignKey("project_repos.id"))  # ProjectRepo this feature is scoped to (multi-repo projects)
     name = Column(String, nullable=False)
     scope = Column(Text, nullable=False)  # one-paragraph summary
     files = Column(JSON, nullable=True)  # list of file paths owned

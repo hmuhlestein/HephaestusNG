@@ -11,6 +11,7 @@ in sequence.
 
 import logging
 import os
+import threading
 from difflib import SequenceMatcher
 from typing import Any, Dict, Optional
 
@@ -27,6 +28,20 @@ from src.mcp.server._shared import (
 )
 
 logger = logging.getLogger("src.mcp.server._create_task_steps")
+
+# Per-feature lock for serializing concurrent repo_id backfill operations.
+# Without this, two concurrent create_task calls for the same feature can
+# both read feature.repo_id is None and both backfill with different values.
+_feature_repo_id_locks: Dict[str, threading.Lock] = {}
+_feature_repo_id_lock_guard = threading.Lock()
+
+
+def _get_feature_lock(feature_id: str) -> threading.Lock:
+    """Get or create a per-feature lock for serializing repo_id backfill."""
+    with _feature_repo_id_lock_guard:
+        if feature_id not in _feature_repo_id_locks:
+            _feature_repo_id_locks[feature_id] = threading.Lock()
+        return _feature_repo_id_locks[feature_id]
 
 
 def _enforce_ticket_tracking_requirement(agent_id: str, request: CreateTaskRequest) -> None:
@@ -107,9 +122,7 @@ def _resolve_dedup_phase_id(agent_id: str, request: CreateTaskRequest) -> Option
     return dedup_phase_id
 
 
-def _check_duplicate_active_task_for_phase(
-    request: CreateTaskRequest, dedup_phase_id: Optional[str]
-) -> Optional[CreateTaskResponse]:
+def _check_duplicate_active_task_for_phase(request: CreateTaskRequest, dedup_phase_id: Optional[str]) -> Optional[CreateTaskResponse]:
     """Content-aware dedup: if the phase already has a near-identical active
     task, return the existing task's response so the caller can short-circuit
     instead of creating a duplicate. Returns None if no dedup match (or no
@@ -207,6 +220,75 @@ def _guard_phase_ownership(agent_id: str, request: CreateTaskRequest, dedup_phas
             _s.close()
 
 
+def _resolve_task_repo_id(session, request: CreateTaskRequest) -> Optional[str]:
+    """Resolve + validate this task's repo_id (REQ-19/WARNING-1/BLOCKER --
+    see architecture.md's "Feature.repo_id + create_task repo/feature
+    validation" component). Never guesses across projects: an explicit
+    repo_id is validated to belong to the task's own project BEFORE the
+    Task row is persisted, and a Feature/task repo_id mismatch is rejected
+    outright. Returns the resolved repo_id (possibly None -- single-repo
+    projects/no workflow are unaffected, byte-identical to before this
+    change). Raises HTTPException(400) on any validation failure.
+    """
+    from src.core.database import Feature, Workflow
+    from src.core.repo_resolution import RepoNotFoundError, repo_id_for_path, resolve_repo_path
+
+    if not request.workflow_id:
+        return request.repo_id
+
+    wf = session.query(Workflow).filter_by(id=request.workflow_id).first()
+    if not wf or not wf.project_id:
+        return request.repo_id
+    project_id = wf.project_id
+
+    resolved_repo_id = request.repo_id
+    if resolved_repo_id is None and request.cwd:
+        resolved_repo_id = repo_id_for_path(session, project_id, request.cwd)
+
+    if resolved_repo_id is not None:
+        try:
+            resolve_repo_path(session, project_id, resolved_repo_id)
+        except RepoNotFoundError:
+            raise HTTPException(400, "repo_id does not belong to this project")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    feature = None
+    if wf.feature_id:
+        feature = session.query(Feature).filter_by(id=wf.feature_id).first()
+
+    if feature is not None:
+        if feature.repo_id and resolved_repo_id and feature.repo_id != resolved_repo_id:
+            raise HTTPException(
+                400,
+                f"task repo_id {resolved_repo_id} conflicts with this feature's assigned repo {feature.repo_id} -- every task under one Feature must share its repo (REQ-19)",
+            )
+        if feature.repo_id and not resolved_repo_id:
+            resolved_repo_id = feature.repo_id
+        elif not feature.repo_id and resolved_repo_id:
+            # WARNING-1 fix: use per-feature lock to serialize concurrent
+            # repo_id backfill operations. Without this, two concurrent
+            # create_task calls can both read feature.repo_id is None and
+            # both backfill with different values -- last committer wins.
+            lock = _get_feature_lock(feature.id)
+            with lock:
+                # Re-read feature inside the lock to get current state
+                session.refresh(feature)
+                if feature.repo_id is None:
+                    feature.repo_id = resolved_repo_id
+                    session.flush()
+                elif feature.repo_id != resolved_repo_id:
+                    raise HTTPException(
+                        400,
+                        f"task repo_id {resolved_repo_id} conflicts with this feature's "
+                        f"assigned repo {feature.repo_id} (set by a concurrent task creation) "
+                        f"-- every task under one Feature must share its repo (REQ-19)",
+                    )
+                # else: feature.repo_id == resolved_repo_id, already set correctly
+
+    return resolved_repo_id
+
+
 def _persist_new_task(agent_id: str, request: CreateTaskRequest, task_id: str) -> None:
     """Create the initial task row (pending status), auto-creating the
     created_by_agent_id Agent FK row if it doesn't exist yet."""
@@ -233,6 +315,7 @@ def _persist_new_task(agent_id: str, request: CreateTaskRequest, task_id: str) -
                 )
             )
             session.flush()
+        resolved_repo_id = _resolve_task_repo_id(session, request)
         task = Task(
             id=task_id,
             raw_description=request.task_description,
@@ -249,6 +332,7 @@ def _persist_new_task(agent_id: str, request: CreateTaskRequest, task_id: str) -
             depends_on=request.depends_on,
             parallel_group=request.parallel_group,
             max_concurrent=request.max_concurrent or 1,
+            repo_id=resolved_repo_id,
         )
         session.add(task)
         session.commit()
@@ -352,6 +436,7 @@ async def _resolve_phase_and_enrich(request: CreateTaskRequest, agent_id: str) -
         done_definition=request.done_definition,
         phase_context_str=phase_context_str,
         requesting_agent_id=agent_id,
+        phase_id=phase_id,
     )
 
     return {
@@ -364,9 +449,7 @@ async def _resolve_phase_and_enrich(request: CreateTaskRequest, agent_id: str) -
     }
 
 
-def _apply_enrichment_to_task(
-    task_id: str, request: CreateTaskRequest, phase_id: Optional[str], workflow_id: Optional[str], enriched_task: dict
-) -> Optional[dict]:
+def _apply_enrichment_to_task(task_id: str, request: CreateTaskRequest, phase_id: Optional[str], workflow_id: Optional[str], enriched_task: dict) -> Optional[dict]:
     """Write enriched fields back to the task row, inheriting phase
     validation if enabled. Returns the task_data dict later steps need, or
     None if the task row is gone (log + let caller stop)."""
@@ -513,9 +596,7 @@ def _has_unmet_dependencies(depends_on) -> bool:
     session = server_state.db_manager.get_session()
     try:
         for dep_id in depends_on:
-            dep_status = (
-                session.query(Task.status).filter_by(id=dep_id).first()
-            )
+            dep_status = session.query(Task.status).filter_by(id=dep_id).first()
             if dep_status is None or dep_status[0] != "done":
                 return True
         return False
@@ -556,11 +637,7 @@ async def _dispatch_ready_dependents(completed_task_id: str, workflow_id: Option
 
     session = server_state.db_manager.get_session()
     try:
-        candidates = (
-            session.query(Task)
-            .filter(Task.workflow_id == workflow_id, Task.status == "pending")
-            .all()
-        )
+        candidates = session.query(Task).filter(Task.workflow_id == workflow_id, Task.status == "pending").all()
         # Snapshot the fields each candidate needs before the session that
         # produced them closes -- dispatch below does its own session work
         # per candidate and must not hold this one open across it.
@@ -593,10 +670,7 @@ async def _dispatch_ready_dependents(completed_task_id: str, workflow_id: Option
             # each is an independent task that will surface its own error
             # (or sit pending for the next promotion event / manual retry)
             # rather than silently blocking unrelated dependents.
-            logger.error(
-                f"[DEPENDENCY-PROMOTE] Failed to dispatch {task_data['id']} "
-                f"after its dependencies cleared: {e}"
-            )
+            logger.error(f"[DEPENDENCY-PROMOTE] Failed to dispatch {task_data['id']} after its dependencies cleared: {e}")
 
 
 async def _dispatch_or_queue_promoted_task(task_data: dict) -> None:
@@ -655,9 +729,7 @@ async def _dispatch_or_queue_promoted_task(task_data: dict) -> None:
         return  # queued by the per-cli/model concurrency gate instead
 
     await _finalize_task_dispatch(task_id, task_data, agent, enriched_task)
-    logger.info(
-        f"[DEPENDENCY-PROMOTE] Dispatched {task_id} -- its dependencies just cleared"
-    )
+    logger.info(f"[DEPENDENCY-PROMOTE] Dispatched {task_id} -- its dependencies just cleared")
 
 
 async def _dispatch_agent_for_task(
@@ -689,6 +761,19 @@ async def _dispatch_agent_for_task(
         created_by_agent_id=agent_id,
     )
 
+    # REQ-18: for a task with repo_id already resolved (see
+    # _resolve_task_repo_id/_persist_new_task), state plainly which repo is
+    # writable for THIS task -- task-specific, so it belongs here rather
+    # than in the task-agnostic get_project_context().
+    with server_state.db_manager.session_scope() as _repo_session:
+        db_task = _repo_session.query(Task).filter_by(id=task_id).first()
+        if db_task and db_task.repo_id:
+            from src.core.database import ProjectRepo
+
+            repo = _repo_session.query(ProjectRepo).filter_by(id=db_task.repo_id).first()
+            if repo:
+                project_context = f"{project_context}\n\nYour assigned repo for this task: {repo.label} ({repo.path}) -- write here. Other listed repos are read-only reference."
+
     # Dispatch reuses the RAG memories/project context already fetched
     # during enrichment above (unlike process_queue, which re-fetches
     # post-enrichment) -- only the phase CLI config lookup is added here.
@@ -710,14 +795,9 @@ async def _dispatch_agent_for_task(
     _reservation = None
     if qs.cli_model_concurrency_limits:
         with qs.db_manager.session_scope() as _qsession:
-            _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(
-                _qsession, temp_task
-            )
+            _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(_qsession, temp_task)
         if _saturated:
-            logger.info(
-                f"Task {task_id}'s combo is already at its concurrency limit with no "
-                "usable fallback -- queueing instead of dispatching"
-            )
+            logger.info(f"Task {task_id}'s combo is already at its concurrency limit with no usable fallback -- queueing instead of dispatching")
             qs.enqueue_task(task_id)
             queue_status = qs.get_queue_status()
             from src.core.database import resolve_project_for_workflow
@@ -736,10 +816,7 @@ async def _dispatch_agent_for_task(
             )
             return None
         if _cli_override:
-            logger.info(
-                f"Task {task_id}'s primary combo at its concurrency limit -- "
-                f"dispatching on fallback model {_model_override} instead"
-            )
+            logger.info(f"Task {task_id}'s primary combo at its concurrency limit -- dispatching on fallback model {_model_override} instead")
             dispatch_context["phase_cli_tool"] = _cli_override
             dispatch_context["phase_cli_model"] = _model_override
 
@@ -801,10 +878,6 @@ async def _handle_task_processing_failure(task_id: str, error: Exception) -> Non
             session.commit()
     except Exception as recovery_error:
         session.rollback()
-        logger.error(
-            f"Failed to mark task {task_id} as failed during recovery: {recovery_error}"
-        )
+        logger.error(f"Failed to mark task {task_id} as failed during recovery: {recovery_error}")
     finally:
         session.close()
-
-
