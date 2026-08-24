@@ -3833,7 +3833,12 @@ class TestRunOneFeatureDoesNotOverrideGotoBudget:
             return "completed"
 
         with patch(
-            "src.autopilot.orchestrator.worktree_integration._create_integration_worktree",
+            # pipeline.py does `from ...worktree_integration import
+            # _create_integration_worktree`, binding its own name at
+            # import time -- patching the worktree_integration module's
+            # copy doesn't touch pipeline's already-bound reference, which
+            # is the one _run_one_feature actually calls.
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
             return_value=worktree_dir,
         ), patch(
             "src.autopilot.orchestrator.pipeline.run_single_workflow",
@@ -4473,7 +4478,19 @@ class TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn:
 
         with patch(
             "src.autopilot.orchestrator.pipeline.run_single_workflow"
-        ) as mock_run, patch("src.autopilot.orchestrator.worktree_integration._cleanup_worktree"):
+        ) as mock_run, patch(
+            # pipeline.py binds its own names via `from ...worktree_integration
+            # import _cleanup_worktree, _create_integration_worktree` -- must
+            # patch pipeline's copies, not worktree_integration's originals,
+            # or the already-completed fast path's real cleanup call reaches
+            # _create_integration_worktree for real and tries to open the
+            # actual production database (see conftest.py's
+            # _forbid_production_database guard).
+            "src.autopilot.orchestrator.pipeline._cleanup_worktree"
+        ), patch(
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
+            return_value=None,
+        ):
             status = _run_one_feature(
                 sdk=MagicMock(),
                 design_entry=design_entry,
