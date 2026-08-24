@@ -1,0 +1,14 @@
+[run]
+source =
+    src/core/schema_migrations.py
+    src/core/database.py
+    src/mcp/tickets_api.py
+    src/services/ticket_service.py
+    src/autopilot/orchestrator/queue.py
+    src/autopilot/orchestrator/policy.py
+    src/mcp/autopilot/project_routes.py
+    src/agents/launch_pipeline.py
+    src/agents/manager.py
+
+[report]
+show_missing = true
