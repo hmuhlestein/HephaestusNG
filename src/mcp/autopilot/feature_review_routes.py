@@ -273,6 +273,14 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             # Restore Feature.status to "active" so derive_feature_status
             # doesn't short-circuit on "paused" forever after approval.
             feature.status = "active"
+            # resume_workflow sets wf.status="active", but for a feature
+            # that completed all phases before the review gate, the
+            # workflow should be "completed" -- otherwise the continuous
+            # pipeline loop sees an "active" workflow and blocks on it
+            # (or re-enters _run_one_feature and re-pauses for review).
+            # Same reasoning as _restore_phase0_completed_status.
+            if wf.status == "active" and wf.paused_by is None:
+                wf.status = "completed"
             db.commit()
 
             # Create review_approved marker so the safe git wrapper

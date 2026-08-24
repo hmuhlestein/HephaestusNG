@@ -184,6 +184,11 @@ additional_notes: |
   git push $REMOTE $DEFAULT_BRANCH  # skip if no remote
   ```
 
+  Pull --rebase in local main to sync with any concurrent changes:
+  ```bash
+  git pull --rebase $REMOTE $DEFAULT_BRANCH
+  ```
+
   CREATE A PR (mandatory — the review modal links to it):
   ```bash
   PR_URL=$(gh pr create --title "feat: <feature name>" --body "Autopilot-validated feature.
@@ -220,6 +225,8 @@ additional_notes: |
   - Push the feature branch before merging
   - Merge into main locally (gh PR is optional, not a substitute)
   - Use --no-verify for automated pipeline commits
+  - Push main to remote after merging
+  - Pull --rebase in local main after pushing to sync with any concurrent changes
   - Record the commit hash
   
   DO NOT:
