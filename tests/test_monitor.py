@@ -2848,6 +2848,46 @@ class TestSessionLimitPause:
         mock_agent_manager.terminate_agent.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_usage_limit_banner_dispatches_fallback_when_configured(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Claude Code's rolling-usage-window banner ("Usage limit reached
+        · continuing automatically at 3:10pm · esc or type to cancel") is
+        worded differently from both _SESSION_LIMIT_RE and _SPEND_LIMIT_RE,
+        so neither one caught it -- and because the pane keeps re-rendering
+        this exact line, the frozen-output detector never catches it
+        either. Confirmed live: agent 5718f663 sat well past its own
+        stated reset time with no recovery attempted. Same hard-blocker
+        handling as spend/session limit: terminate immediately and
+        redispatch on the configured fallback rather than waiting out the
+        reset window."""
+        agent = Agent(id="a1", cli_type="claude")
+        banner = "Usage limit reached · continuing automatically at 3:10pm · esc or type to cancel"
+        mock_agent_manager.get_agent_output.return_value = banner
+        self._wire_tmux_pane_output(mock_agent_manager, mock_db, "a1", banner)
+        mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
+        new_agent = Mock(id="a2")
+        mock_agent_manager.create_agent_for_task = AsyncMock(return_value=new_agent)
+
+        task = Mock(
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1",
+            enriched_description="do the thing", done_definition="done",
+        )
+        phase = Mock(fallback_cli_tool="pi", fallback_cli_model=None)
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        mock_agent_manager.create_agent_for_task.assert_called_once()
+        assert task.status == "pending"
+        assert workflow.status == "active"
+        assert workflow.paused_by is None
+        mock_agent_manager.terminate_agent.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_session_limit_fires_before_frozen_nudge_when_both_patterns_match(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):

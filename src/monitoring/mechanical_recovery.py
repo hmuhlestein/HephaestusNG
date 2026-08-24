@@ -31,6 +31,7 @@ from src.monitoring.patterns import (
     _MONITOR_TIMEOUT_RE,
     _SESSION_LIMIT_RE,
     _SPEND_LIMIT_RE,
+    _USAGE_LIMIT_RE,
     MAX_FALLBACK_ATTEMPTS,
     _strip_sgr,
 )
@@ -207,7 +208,8 @@ class MechanicalRecoveryDetector:
         stripped_raw = _strip_sgr(raw_text)
         if stripped_raw:
             spend_limit_hit = _SPEND_LIMIT_RE.search(stripped_raw)
-            if spend_limit_hit or _SESSION_LIMIT_RE.search(stripped_raw):
+            usage_limit_hit = _USAGE_LIMIT_RE.search(stripped_raw)
+            if spend_limit_hit or usage_limit_hit or _SESSION_LIMIT_RE.search(stripped_raw):
                 # Determine the specific limit kind for accurate logging
                 if spend_limit_hit:
                     matched_text = spend_limit_hit.group(0).lower()
@@ -215,6 +217,8 @@ class MechanicalRecoveryDetector:
                         limit_kind = "weekly spend limit"
                     else:
                         limit_kind = "monthly spend limit"
+                elif usage_limit_hit:
+                    limit_kind = "usage limit (auto-resume window)"
                 else:
                     limit_kind = "session limit"
                 logger.warning(

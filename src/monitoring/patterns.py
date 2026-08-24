@@ -64,6 +64,23 @@ _SPEND_LIMIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Claude Code's own banner for its rolling usage-window cap, e.g. "Usage
+# limit reached · continuing automatically at 3:10pm · esc or type to
+# cancel" -- distinct from _SESSION_LIMIT_RE/_SPEND_LIMIT_RE's wording, so
+# neither pattern caught it. Same failure class as those two (a hard
+# blocker the agent cannot self-rescue from) but worse if left undetected:
+# the pane keeps re-rendering this exact line as the countdown updates, so
+# it never goes "frozen" either -- nothing else in this module would ever
+# flag it. Anchored to both halves of the banner on the same line (not the
+# bare word "limit", which risks matching an agent's own reasoning text)
+# -- confirmed live: agent 5718f663 sat past its own reset time with no
+# recovery attempted because neither the pattern check nor the frozen-pane
+# fallback ever fired for it.
+_USAGE_LIMIT_RE = re.compile(
+    r"usage limit reached.*continuing automatically",
+    re.IGNORECASE,
+)
+
 # Claude Code's own UI for a backgrounded tool call, e.g. "Monitor started ·
 # task bg0fucqr2 · timeout 300s" -- a legitimate, bounded wait that
 # otherwise leaves the pane signature static long enough to trip the
