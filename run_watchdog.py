@@ -53,8 +53,7 @@ def main():
 
     python = _find_python(HEPHAESTUS_DIR)
 
-    watchdog = ProcessWatchdog(check_interval=args.check_interval)
-    watchdog._backend_port = args.port
+    watchdog = ProcessWatchdog(check_interval=args.check_interval, backend_port=args.port)
     watchdog.register_service(
         "backend", lambda: _start_backend(python, args.port, args.reload)
     )
