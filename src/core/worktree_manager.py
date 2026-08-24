@@ -98,12 +98,22 @@ class WorktreeManager:
 
     Each agent gets its own worktree + branch; the main repo stays on the base
     branch. Merge-on-success, discard-on-failure.
+
+    Args:
+        db_manager: Database manager instance.
+        repo_path: Optional path to the git repository. If provided, skips
+            reading from config. Used for multi-repo projects where each
+            task targets a specific repo.
     """
 
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager, repo_path: Optional[Path] = None):
         self.db_manager = db_manager
         self.config = get_config()
-        self._project_root = Path(self.config.git.main_repo_path)
+
+        if repo_path is not None:
+            self._project_root = Path(repo_path) if not isinstance(repo_path, Path) else repo_path
+        else:
+            self._project_root = Path(self.config.git.main_repo_path)
 
         try:
             self.main_repo = Repo(self._project_root)

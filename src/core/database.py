@@ -1143,6 +1143,77 @@ class AutopilotProject(Base):
     review_mode = Column(Boolean, default=False, nullable=False)
 
     designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
+    repos = relationship("ProjectRepo", back_populates="project", cascade="all, delete-orphan")
+
+
+class ProjectRepo(Base):
+    """A git repository belonging to a project.
+
+    Enables multi-repo projects where one Hephaestus project spans multiple
+    git repos (e.g. backend/ and frontend/ as siblings).
+    """
+
+    __tablename__ = "project_repos"
+
+    id = Column(String, primary_key=True)  # Format: repo-{uuid}
+    project_id = Column(String, ForeignKey("autopilot_projects.id"), nullable=False)
+    label = Column(String(100), nullable=False)  # "backend", "frontend"
+    path = Column(Text, nullable=False)  # Absolute path to repo root
+    is_primary = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "path"),
+        UniqueConstraint("project_id", "label"),
+    )
+
+    project = relationship("AutopilotProject", back_populates="repos")
+
+
+def resolve_repo_path(
+    db_session,
+    project_id: str,
+    repo_id: Optional[str] = None,
+) -> Path:
+    """Resolve a repo_id to an absolute Path.
+
+    Falls back to the project's primary ProjectRepo when repo_id is None.
+    If no ProjectRepo rows exist yet (single-repo project before migration),
+    falls back to AutopilotProject.base_dir.
+    """
+    from pathlib import Path as PathlibPath
+
+    if repo_id:
+        repo = db_session.query(ProjectRepo).filter_by(
+            id=repo_id, project_id=project_id
+        ).first()
+        if repo:
+            return PathlibPath(repo.path)
+        logger.warning(
+            f"repo_id={repo_id} not found for project={project_id}, "
+            f"falling back to primary repo"
+        )
+
+    # Try primary ProjectRepo first
+    primary = db_session.query(ProjectRepo).filter_by(
+        project_id=project_id, is_primary=True
+    ).first()
+    if primary:
+        return PathlibPath(primary.path)
+
+    # Fallback: any ProjectRepo for this project
+    any_repo = db_session.query(ProjectRepo).filter_by(
+        project_id=project_id
+    ).first()
+    if any_repo:
+        return PathlibPath(any_repo.path)
+
+    # Final fallback: AutopilotProject.base_dir (pre-migration single-repo)
+    project = db_session.query(AutopilotProject).filter_by(id=project_id).first()
+    if project:
+        return PathlibPath(project.base_dir)
+
+    raise ValueError(f"No repo path found for project={project_id}, repo_id={repo_id}")
 
 
 class PromptProposal(Base):
