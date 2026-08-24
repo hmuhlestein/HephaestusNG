@@ -16,6 +16,7 @@ import pytest
 from src.core.database import (
     AutopilotProject,
     DatabaseManager,
+    ProjectRepo,
     Ticket,
     TicketCommit,
     Workflow,
@@ -34,6 +35,14 @@ def db_manager(tmp_path, monkeypatch):
 def _seed_project_workflow_ticket(db_manager, project_id="proj-a", base_dir="/tmp/proj-a", workflow_id="wf-1", ticket_id="ticket-1"):
     with db_manager.session_scope() as session:
         session.add(AutopilotProject(id=project_id, name=project_id, base_dir=base_dir))
+        # Create primary ProjectRepo (migration does this automatically in production)
+        session.add(ProjectRepo(
+            id=f"repo-{project_id}",
+            project_id=project_id,
+            label="primary",
+            path=base_dir,
+            is_primary=True,
+        ))
         session.add(
             Workflow(id=workflow_id, name=workflow_id, status="active", project_id=project_id, phases_folder_path="/tmp")
         )
@@ -144,7 +153,7 @@ class TestResolveRepoPathForCommit:
                 )
             )
 
-        assert _resolve_repo_path_for_commit("abc123") == "/repo/proj-a"
+        assert _resolve_repo_path_for_commit("abc123") == ("/repo/proj-a", "repo-proj-a", "primary")
 
     def test_returns_none_when_commit_not_linked_to_any_ticket(self, db_manager):
         from src.mcp.tickets_api import _resolve_repo_path_for_commit
