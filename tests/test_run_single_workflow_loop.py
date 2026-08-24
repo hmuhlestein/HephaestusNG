@@ -265,6 +265,57 @@ class TestImpasseEscalation:
 
         assert _run(setup) is FeatureRunStatus.SKIPPED
 
+    def test_prompt_reason_is_prefixed_with_spec_and_feature_name(self, tmp_path, monkeypatch):
+        """Regression: the bare "Task {id} stuck for {N}s" reason gave no
+        way to tell which spec/feature needed attention without manually
+        looking it up. Prefixed with "[<design name> / <feature name>]"
+        when both are resolvable."""
+        from src.core.database import DatabaseManager, Feature
+
+        db_path = tmp_path / "test.db"
+        db_manager = DatabaseManager(str(db_path))
+        db_manager.create_tables()
+        session = db_manager.get_session()
+        session.add(Feature(
+            id="feat-1", design_id="des-1", feature_key="my-feature",
+            name="My Feature", scope="s", status="active",
+            workflow_id="autopilot",
+        ))
+        session.commit()
+        session.close()
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+
+        # _LoopHarness's own prompt_human patch only returns a fixed
+        # choice string, discarding the reason it was called with -- swap
+        # it out here for a capturing one instead of reusing _run(), which
+        # would nest a second patch of the same target and shadow this one.
+        seen_reasons = []
+
+        def capturing_prompt(reason, *a, **k):
+            seen_reasons.append(reason)
+            return "q"  # ends the loop immediately once escalated
+
+        harness = _LoopHarness()
+        harness.agents = [_agent()]
+        harness.impasse = (True, "Task abc12345 stuck for 1800s")
+        sdk = MagicMock()
+        sdk.start_workflow.return_value = "exec-1"
+        with harness, patch(
+            "src.autopilot.orchestrator.pipeline.prompt_human", side_effect=capturing_prompt
+        ):
+            result = run_single_workflow(
+                sdk=sdk,
+                workflow_id="autopilot",
+                project_path="/tmp/does-not-exist-project",
+                description="d",
+                logger=MagicMock(),
+                launch_params={"design_document": "my_spec.md"},
+            )
+
+        assert result is FeatureRunStatus.INTERRUPTED
+        assert seen_reasons, "prompt_human must have been called"
+        assert seen_reasons[0] == "[my spec / My Feature] Task abc12345 stuck for 1800s"
+
     def test_prompt_only_fires_after_threshold_consecutive_impasses(self):
         """A single impasse poll must not prompt -- one non-impasse poll in
         between resets the counter to zero."""

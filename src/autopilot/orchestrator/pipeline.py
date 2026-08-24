@@ -752,7 +752,27 @@ def run_single_workflow(
             if impasse:
                 stuck_count += 1
                 if stuck_count >= STUCK_THRESHOLD:
-                    choice = prompt_human(impasse_reason, logger, project_id=project_id)
+                    # The bare "Task {id} stuck for {N}s" reason gave no
+                    # way to tell WHICH spec/feature needed attention
+                    # without going and looking it up manually -- prefix
+                    # with the spec (design) and feature names, resolved
+                    # only here (not every poll) since this is the one
+                    # place they're actually needed. Best-effort: this is
+                    # decorating an already-real impasse, not causing one --
+                    # a lookup failure must not crash the escalation itself.
+                    feature_name = None
+                    try:
+                        from src.core.database import Feature as _Feature
+
+                        with get_db() as _db:
+                            _feature = _db.query(_Feature).filter_by(workflow_id=workflow_id).first()
+                            feature_name = _feature.name if _feature else None
+                    except Exception as e:
+                        logger.debug(f"[ORCHESTRATOR] Could not resolve feature name for impasse message: {e}")
+                    context_label = " / ".join(p for p in (design_name, feature_name) if p)
+                    prefixed_reason = f"[{context_label}] {impasse_reason}" if context_label else impasse_reason
+
+                    choice = prompt_human(prefixed_reason, logger, project_id=project_id)
                     if choice == "q":
                         return FeatureRunStatus.INTERRUPTED
                     elif choice == "s":
