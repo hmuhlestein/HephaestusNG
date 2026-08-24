@@ -403,6 +403,54 @@ class TestAgentOutputCapture:
         mock_db_session.commit.assert_called_once()
 
 
+class TestIsPaneDead:
+    """AgentManager.is_pane_dead (delegates to OutputCapture.is_pane_dead) --
+    the shared "is this session's pane actually dead" check relocated here
+    from guardian_dispatch.py's own private copy so messenger.py and
+    manager.py's send_recovery_keystrokes can reuse it too, now that
+    remain-on-exit means has_session alone no longer implies "agent alive".
+    """
+
+    @pytest.fixture
+    def mock_db_manager(self):
+        return Mock(spec=DatabaseManager)
+
+    @pytest.fixture
+    def mock_llm_provider(self):
+        llm_provider = Mock()
+        llm_provider.generate_agent_prompt = AsyncMock(return_value="Test prompt")
+        return llm_provider
+
+    @pytest.fixture
+    def mock_tmux_server(self):
+        return Mock()
+
+    @pytest.fixture
+    def agent_manager(self, mock_db_manager, mock_llm_provider, mock_tmux_server):
+        return AgentManager(
+            mock_db_manager, mock_llm_provider, tmux_server=mock_tmux_server
+        )
+
+    def test_reads_pane_dead_format_variable(self, agent_manager, mock_tmux_server):
+        mock_pane = Mock()
+        mock_pane.cmd.return_value.stdout = ["1"]
+        mock_window = Mock()
+        mock_window.attached_pane = mock_pane
+        mock_tmux_session = Mock()
+        mock_tmux_session.name = "agent-tmux-1"
+        mock_tmux_session.attached_window = mock_window
+        mock_tmux_server.has_session.return_value = True
+        mock_tmux_server.sessions = [mock_tmux_session]
+
+        assert agent_manager.is_pane_dead("agent-tmux-1") is True
+        mock_pane.cmd.assert_called_once_with("display-message", "-p", "#{pane_dead}")
+
+    def test_false_when_session_missing(self, agent_manager, mock_tmux_server):
+        mock_tmux_server.has_session.return_value = False
+
+        assert agent_manager.is_pane_dead("agent-tmux-1") is False
+
+
 class TestResolveTmuxTranscriptDirSurvivesTermination:
     """Regression: termination clears agent.current_task_id AND
     task.assigned_agent_id (the documented Agent.current_task_id

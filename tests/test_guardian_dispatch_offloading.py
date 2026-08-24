@@ -75,7 +75,7 @@ async def test_dead_pane_triggers_restart_even_though_session_exists(dispatcher)
     instead of destroying the whole session -- that's what preserves
     capture-pane/pipe-pane evidence. But it also means has_session alone
     can no longer detect a dead agent: the session lives on forever with
-    nothing left to do in it. _is_pane_dead must be checked too, or a
+    nothing left to do in it. is_pane_dead must be checked too, or a
     crashed agent just hangs forever uncaught instead of being restarted."""
     agent = MagicMock(spec=Agent)
     agent.id = "agent-1"
@@ -92,10 +92,10 @@ async def test_dead_pane_triggers_restart_even_though_session_exists(dispatcher)
     dispatcher.db_manager.get_session.return_value = mock_session
 
     dispatcher.handle_missing_tmux_session = AsyncMock()
-    dispatcher._is_pane_dead = MagicMock(return_value=True)
+    dispatcher.agent_manager.is_pane_dead = MagicMock(return_value=True)
 
     fake_loop = MagicMock()
-    # has_session() -> True (session exists), then _is_pane_dead() -> True
+    # has_session() -> True (session exists), then is_pane_dead() -> True
     fake_loop.run_in_executor = AsyncMock(side_effect=[True, True])
 
     with patch("asyncio.get_event_loop", return_value=fake_loop):
@@ -103,7 +103,7 @@ async def test_dead_pane_triggers_restart_even_though_session_exists(dispatcher)
 
     assert fake_loop.run_in_executor.call_count == 2
     fake_loop.run_in_executor.assert_any_call(
-        None, dispatcher._is_pane_dead, "agent-tmux-1"
+        None, dispatcher.agent_manager.is_pane_dead, "agent-tmux-1"
     )
     dispatcher.handle_missing_tmux_session.assert_called_once_with(agent)
 
@@ -120,7 +120,7 @@ async def test_live_pane_does_not_trigger_restart(dispatcher):
     dispatcher.handle_missing_tmux_session = AsyncMock()
 
     fake_loop = MagicMock()
-    # has_session() -> True, _is_pane_dead() -> False
+    # has_session() -> True, is_pane_dead() -> False
     fake_loop.run_in_executor = AsyncMock(side_effect=[True, False])
 
     with patch("asyncio.get_event_loop", return_value=fake_loop):
@@ -130,21 +130,3 @@ async def test_live_pane_does_not_trigger_restart(dispatcher):
         await dispatcher.guardian_analysis_for_agent(agent)
 
     dispatcher.handle_missing_tmux_session.assert_not_called()
-
-
-def test_is_pane_dead_reads_pane_dead_format_variable(dispatcher):
-    mock_pane = MagicMock()
-    mock_pane.cmd.return_value.stdout = ["1"]
-    mock_window = MagicMock()
-    mock_window.attached_pane = mock_pane
-    mock_tmux_session = MagicMock()
-    mock_tmux_session.attached_window = mock_window
-    dispatcher.agent_manager._find_tmux_session.return_value = mock_tmux_session
-
-    assert dispatcher._is_pane_dead("agent-tmux-1") is True
-    mock_pane.cmd.assert_called_once_with("display-message", "-p", "#{pane_dead}")
-
-
-def test_is_pane_dead_false_when_session_missing(dispatcher):
-    dispatcher.agent_manager._find_tmux_session.return_value = None
-    assert dispatcher._is_pane_dead("agent-tmux-1") is False
