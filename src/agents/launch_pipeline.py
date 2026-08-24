@@ -250,8 +250,7 @@ class LaunchPipeline:
         base_dir = self._resolve_project_base_dir(workflow_id)
         if base_dir is None:
             return self.branch_manager
-        wt_mgr = WorktreeManager(db_manager=self.db_manager)
-        wt_mgr.reload(base_dir)
+        wt_mgr = WorktreeManager(db_manager=self.db_manager, repo_path=base_dir)
         return wt_mgr
 
     @staticmethod
@@ -607,7 +606,7 @@ class LaunchPipeline:
                                 # (races concurrent dispatch threads).
                                 from src.core.worktree_manager import WorktreeManager
 
-                                WorktreeManager(db_manager=self.db_manager).reload(wt_path)
+                                WorktreeManager(db_manager=self.db_manager, repo_path=wt_path)
                             logger.info(
                                 f"Using shared worktree for agent {agent_id[:8]} "
                                 f"at {branch_path}"

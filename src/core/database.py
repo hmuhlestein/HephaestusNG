@@ -5,6 +5,7 @@ import os
 import threading
 from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from sqlalchemy import (
@@ -1181,14 +1182,12 @@ def resolve_repo_path(
     If no ProjectRepo rows exist yet (single-repo project before migration),
     falls back to AutopilotProject.base_dir.
     """
-    from pathlib import Path as PathlibPath
-
     if repo_id:
         repo = db_session.query(ProjectRepo).filter_by(
             id=repo_id, project_id=project_id
         ).first()
         if repo:
-            return PathlibPath(repo.path)
+            return Path(repo.path)
         logger.warning(
             f"repo_id={repo_id} not found for project={project_id}, "
             f"falling back to primary repo"
@@ -1199,19 +1198,19 @@ def resolve_repo_path(
         project_id=project_id, is_primary=True
     ).first()
     if primary:
-        return PathlibPath(primary.path)
+        return Path(primary.path)
 
     # Fallback: any ProjectRepo for this project
     any_repo = db_session.query(ProjectRepo).filter_by(
         project_id=project_id
     ).first()
     if any_repo:
-        return PathlibPath(any_repo.path)
+        return Path(any_repo.path)
 
     # Final fallback: AutopilotProject.base_dir (pre-migration single-repo)
     project = db_session.query(AutopilotProject).filter_by(id=project_id).first()
     if project:
-        return PathlibPath(project.base_dir)
+        return Path(project.base_dir)
 
     raise ValueError(f"No repo path found for project={project_id}, repo_id={repo_id}")
 
