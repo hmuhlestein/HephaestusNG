@@ -2002,6 +2002,68 @@ class TestUpdateAgentHealth:
         assert guardian_analysis.steering_recommendation == "Stop installing external libraries"
 
     @pytest.mark.asyncio
+    async def test_a_real_aligned_analysis_refreshes_last_activity(
+        self, make_monitoring_loop, mock_db
+    ):
+        from contextlib import contextmanager
+
+        agent = Agent(id="a1")
+        analysis = {"trajectory_aligned": True, "alignment_score": 0.9}
+        sentinel = object()
+        db_agent = Mock(id="a1", health_check_failures=0, last_activity=sentinel)
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = db_agent
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+
+        await make_monitoring_loop._update_agent_health_from_trajectory(agent, analysis)
+        assert db_agent.last_activity is not sentinel
+
+    @pytest.mark.asyncio
+    async def test_analysis_unavailable_does_not_refresh_last_activity(
+        self, make_monitoring_loop, mock_db
+    ):
+        """Regression, found live: agent 281ccc9b sat at its initial
+        prompt with zero output for 50+ minutes, un-caught by
+        detect_agent_never_started, because _get_default_analysis's
+        benign trajectory_aligned=True fallback (used whenever the LLM
+        analysis itself couldn't run, e.g. no task found or an exception)
+        kept refreshing last_activity every Guardian cycle -- indistinct
+        from a real "agent is on track" judgment. That check's own
+        docstring assumes last_activity is only ever refreshed by a
+        successful Guardian cycle; a fallback isn't one."""
+        from contextlib import contextmanager
+
+        agent = Agent(id="a1")
+        analysis = {
+            "trajectory_aligned": True,
+            "alignment_score": 0.5,
+            "trajectory_summary": "LLM analysis unavailable - using default",
+            "analysis_unavailable": True,
+        }
+        sentinel = object()
+        db_agent = Mock(id="a1", health_check_failures=3, last_activity=sentinel)
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = db_agent
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+
+        await make_monitoring_loop._update_agent_health_from_trajectory(agent, analysis)
+
+        # health_check_failures still resets (a fallback isn't evidence of
+        # trouble either) -- only last_activity must stay untouched.
+        assert db_agent.health_check_failures == 0
+        assert db_agent.last_activity is sentinel
+
+    @pytest.mark.asyncio
     async def test_handles_no_agent(self, make_monitoring_loop, mock_db):
         from contextlib import contextmanager
 

@@ -68,6 +68,15 @@ class GuardianTrajectoryAnalysis(TypedDict):
     conversation_length: NotRequired[int]
     session_duration: NotRequired[str]
     current_focus: NotRequired[Optional[str]]
+    # True only from _get_default_analysis's "LLM analysis failed" fallback
+    # -- guardian_dispatch.py's update_agent_health_from_trajectory must
+    # NOT treat this analysis's benign trajectory_aligned=True as evidence
+    # of real progress (it refreshes Agent.last_activity on that signal).
+    # Absent/False for every real LLM-judged analysis, aligned or not, and
+    # for _get_timeout_escalation_analysis (already trajectory_aligned=
+    # False, so it never hit this path anyway). See guardian_dispatch.py's
+    # own comment for the confirmed live incident this field fixes.
+    analysis_unavailable: NotRequired[bool]
 
 # Consecutive Guardian LLM-analysis timeouts (see analyze_agent_with_trajectory's
 # GUARDIAN_LLM_TIMEOUT) before the timeout pattern itself is treated as a stuck
@@ -821,6 +830,7 @@ class Guardian:
             "steering_message": None,  # Keep consistent field name
             "accumulated_goal": "Unknown",
             "active_constraints": [],
+            "analysis_unavailable": True,
         }
 
     def _get_timeout_escalation_analysis(

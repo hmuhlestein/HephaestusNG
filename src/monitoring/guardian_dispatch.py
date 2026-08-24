@@ -22,6 +22,7 @@ from src.core.database import (
     AgentLog,
     GuardianAnalysis,
     Task,
+    utc_now,
 )
 
 logger = logging.getLogger(__name__)
@@ -394,12 +395,28 @@ class GuardianDispatcher:
 
             # Track health_check_failures for Guardian last-resort steering
             if analysis.get("trajectory_aligned", True):
-                # Agent is on track — reset failures so it recovers. This
-                # also counts as real progress, mirroring the mechanical-
-                # recovery detector's "tmux output changed" touch above:
-                # refresh last_activity.
                 db_agent.health_check_failures = 0
-                db_agent.last_activity = datetime.utcnow()
+                # analysis_unavailable (_get_default_analysis's fallback,
+                # e.g. no task found or an LLM-call exception) is NOT
+                # evidence of real progress -- it means Guardian couldn't
+                # even attempt a real judgment this cycle, and its benign
+                # trajectory_aligned=True default must not be read as
+                # "agent is on track." Refreshing last_activity here
+                # anyway silently defeated detect_agent_never_started's
+                # entire detection mechanism (that check's own docstring
+                # assumes last_activity is "only ever refreshed... by a
+                # successful Guardian cycle") -- a genuinely silent-since-
+                # launch agent kept looking "recently active" forever, one
+                # Guardian cycle at a time. Confirmed live: agent
+                # 281ccc9b sat at its initial prompt with zero output for
+                # 50+ minutes while last_activity kept advancing every
+                # cycle, never tripping the never-started grace period.
+                if not analysis.get("analysis_unavailable"):
+                    # Agent is on track — reset failures so it recovers.
+                    # This also counts as real progress, mirroring the
+                    # mechanical-recovery detector's "tmux output changed"
+                    # touch above: refresh last_activity.
+                    db_agent.last_activity = utc_now()
             else:
                 alignment_score = analysis.get("alignment_score", 0.5)
                 if alignment_score < 0.3:
