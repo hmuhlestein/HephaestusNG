@@ -189,28 +189,6 @@ class TaskService:
             if not task:
                 raise HTTPException(status_code=404, detail="Task not found")
 
-            # Get assigned agent details
-            agent_info = None
-            system_prompt = None
-            if task.assigned_agent_id:
-                agent = (
-                    session.query(Agent).filter_by(id=task.assigned_agent_id).first()
-                )
-                if agent:
-                    agent_info = {
-                        "id": agent.id,
-                        "status": agent.status,
-                        "cli_type": agent.cli_type,
-                        "cli_model": agent.cli_model,
-                        "created_at": agent.created_at.isoformat() + "Z"
-                        if agent.created_at
-                        else None,
-                        "last_activity": agent.last_activity.isoformat() + "Z"
-                        if agent.last_activity
-                        else None,
-                    }
-                    system_prompt = agent.system_prompt
-
             # Get every agent ever created for this task, not just the
             # current assignee -- task.assigned_agent_id is overwritten on
             # each retry/restart, so it alone can't reconstruct history.
@@ -233,6 +211,16 @@ class TaskService:
                     if log.details and log.details.get("task_id") == task.id and log.agent_id:
                         matched_agent_ids.add(log.agent_id)
 
+            # "Assigned" agent details shown as the task's current/latest
+            # agent -- task.assigned_agent_id is NOT durable (cleared on
+            # termination/failure, see the invariant above), so a
+            # completed/failed task would otherwise show no agent at all.
+            # Prefer the latest AgentLog-tracked agent (history_agents[-1]
+            # below, ordered by created_at); fall back to assigned_agent_id
+            # only for tasks predating this AgentLog "created" logging.
+            agent_info = None
+            system_prompt = None
+
             agent_history = []
             if matched_agent_ids:
                 history_agents = (
@@ -241,6 +229,21 @@ class TaskService:
                     .order_by(Agent.created_at)
                     .all()
                 )
+                if history_agents:
+                    latest_agent = history_agents[-1]
+                    agent_info = {
+                        "id": latest_agent.id,
+                        "status": latest_agent.status,
+                        "cli_type": latest_agent.cli_type,
+                        "cli_model": latest_agent.cli_model,
+                        "created_at": latest_agent.created_at.isoformat() + "Z"
+                        if latest_agent.created_at
+                        else None,
+                        "last_activity": latest_agent.last_activity.isoformat() + "Z"
+                        if latest_agent.last_activity
+                        else None,
+                    }
+                    system_prompt = latest_agent.system_prompt
                 # Each agent's own attempt outcome isn't stored anywhere as
                 # a single field -- only the task's CURRENT status is, and
                 # every retry/restart overwrites it. mechanical_recovery's
@@ -284,6 +287,24 @@ class TaskService:
                     }
                     for a in history_agents
                 ]
+            elif task.assigned_agent_id:
+                # No AgentLog "created" record at all (task predates that
+                # logging) -- assigned_agent_id is the only signal we have.
+                agent = session.query(Agent).filter_by(id=task.assigned_agent_id).first()
+                if agent:
+                    agent_info = {
+                        "id": agent.id,
+                        "status": agent.status,
+                        "cli_type": agent.cli_type,
+                        "cli_model": agent.cli_model,
+                        "created_at": agent.created_at.isoformat() + "Z"
+                        if agent.created_at
+                        else None,
+                        "last_activity": agent.last_activity.isoformat() + "Z"
+                        if agent.last_activity
+                        else None,
+                    }
+                    system_prompt = agent.system_prompt
 
             # Get phase information
             phase_info = None
