@@ -1056,3 +1056,10 @@ def _resolve_arbitration_outcome(
         )
         if not dispatched:
             logger.error(f"[ARBITRATE] {phase_name}: resolved to {action} -> {target_phase_name}, but failed to create its task -- pipeline may be stalled")
+        else:
+            # The entry warning above logs the arbiter's DECISION; this
+            # logs that it was actually EXECUTED -- the two previously
+            # diverged silently (a decision logged but whose task creation
+            # failed left no follow-up, and a successful one left no
+            # confirmation that the pipeline moved on).
+            logger.info(f"[ARBITRATE] {phase_name}: decision executed -- {action} -> {target_phase_name} task dispatched")
