@@ -9,11 +9,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from src.mcp.autopilot._shared import _extract_pr_url, _invalidate
 from src.mcp.autopilot.feature_routes import _spawn_agent_for_task
+from src.mcp.server._shared import verify_agent_authentication
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +29,12 @@ class FeatureReviewRequest(BaseModel):
     feedback: Optional[str] = None
 
 @router.patch("/projects/{project_id}/review-mode")
-async def set_review_mode(project_id: str, req: ReviewModeUpdate):
+async def set_review_mode(project_id: str, req: ReviewModeUpdate, agent_id: str = Header("ui-user", alias="X-Agent-ID")):
     """Toggle review mode for a project. When enabled, the pipeline pauses
     after each feature's deploy phase and waits for explicit approval."""
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated set_review_mode attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
     from src.core.database import AutopilotProject, get_db
 
     with get_db() as db:
@@ -228,12 +232,15 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
     return {"success": True, "message": "Changes requested — re-decomposition queued"}
 
 @router.post("/features/{feature_id}/review")
-async def review_feature(feature_id: str, req: FeatureReviewRequest):
+async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: str = Header("ui-user", alias="X-Agent-ID")):
     """Approve a feature or request changes.
 
     approve:          clears the review pause, pipeline advances.
     request_changes:  saves feedback, resumes iteration, pipeline advances.
     """
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated review_feature attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
     if req.action not in ("approve", "request_changes"):
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'request_changes'")
     if req.action == "request_changes" and not (req.feedback or "").strip():

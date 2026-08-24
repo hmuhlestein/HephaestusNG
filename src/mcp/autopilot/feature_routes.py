@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
 from src.core.constants import CONTEXT_DIR_NAME
 from src.mcp.autopilot import _shared
@@ -28,6 +28,7 @@ from src.mcp.autopilot.feature_record_routes import (
     _feature_record_cost,
     _find_archived_feature_report,
 )
+from src.mcp.server._shared import verify_agent_authentication
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +103,11 @@ async def list_features():
     return _scan_features()
 
 @router.post("/features/{feature_id}/pause")
-async def pause_feature(feature_id: str):
+async def pause_feature(feature_id: str, agent_id: str = Header("ui-user", alias="X-Agent-ID")):
     """Pause a feature's workflow and block its in-flight child tasks."""
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated pause_feature attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
     from src.core.database import Agent, Feature, Task, Workflow, get_db
 
     with get_db() as db:
@@ -184,8 +188,11 @@ async def pause_feature(feature_id: str):
         }
 
 @router.post("/features/{feature_id}/resume")
-async def resume_feature(feature_id: str):
+async def resume_feature(feature_id: str, agent_id: str = Header("ui-user", alias="X-Agent-ID")):
     """Resume a paused or failed feature: recover blocked, failed, and errored tasks."""
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated resume_feature attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
     from src.core.database import Agent, Feature, Task, Workflow, get_db
 
     with get_db() as db:
@@ -291,7 +298,7 @@ async def resume_feature(feature_id: str):
     }
 
 @router.delete("/features/{feature_id}")
-async def delete_feature(feature_id: str):
+async def delete_feature(feature_id: str, agent_id: str = Header("ui-user", alias="X-Agent-ID")):
     """Permanently delete a feature: terminate any agent still working its
     tasks, remove its worktree (if any), and delete the feature, its
     workflow, and every dependent record. For an old/stuck feature run
@@ -299,6 +306,9 @@ async def delete_feature(feature_id: str):
     rerun_design's own cleanup (Step 2b above), scoped to one feature
     instead of an entire design.
     """
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated delete_feature attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
     from sqlalchemy.exc import IntegrityError
 
     from src.core.app_context import get_app_state

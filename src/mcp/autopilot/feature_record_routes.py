@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 
 from src.core.constants import CONTEXT_DIR_NAME, PHASE0_DEFINITION_IDS
@@ -20,6 +20,7 @@ from src.mcp.autopilot._shared import (
     _safe_path,
     _store,
 )
+from src.mcp.server._shared import verify_agent_authentication
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ def _find_archived_feature_report(project_base: str, workflow_id: str) -> Option
     return None
 
 @router.get("/workflows/{workflow_id}/feature_report")
-async def get_workflow_feature_report(workflow_id: str):
+async def get_workflow_feature_report(workflow_id: str, agent_id: str = Header("ui-user", alias="X-Agent-ID")):
     """Serve doc_review's HTML feature report, preferring the workflow's
     live worktree and falling back to the archived features gallery copy
     once that worktree is gone.
@@ -90,6 +91,9 @@ async def get_workflow_feature_report(workflow_id: str):
     run_phase0's synopsis_src copy) instead of the per-feature features
     gallery, since Phase 0 predates any Feature row existing.
     """
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated get_workflow_feature_report attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
     from src.core.database import AutopilotDesign, AutopilotProject, Workflow, get_db
 
     with get_db() as db:
@@ -137,7 +141,7 @@ async def get_workflow_feature_report(workflow_id: str):
     return HTMLResponse(content=report_path.read_text(errors="replace"))
 
 @router.get("/workflows/{workflow_id}/decomposition_review")
-async def get_workflow_decomposition_review(workflow_id: str):
+async def get_workflow_decomposition_review(workflow_id: str, agent_id: str = Header("ui-user", alias="X-Agent-ID")):
     """Serve feature_review's adversarial feature_review.md for a Phase 0
     workflow.
 
@@ -145,6 +149,9 @@ async def get_workflow_decomposition_review(workflow_id: str):
     get_workflow_feature_report, since feature_review.md is copied to
     designs_folder by run_phase0 alongside feature_report.html.
     """
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated get_workflow_decomposition_review attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
     from src.core.database import AutopilotDesign, Workflow, get_db
 
     with get_db() as db:
@@ -231,7 +238,7 @@ def _resolve_feature_docs_base(wf) -> Optional[str]:
     return None
 
 @router.get("/feature-records/{feature_id}/docs")
-async def list_feature_record_docs(feature_id: str):
+async def list_feature_record_docs(feature_id: str, agent_id: str = Header("ui-user", alias="X-Agent-ID")):
     """List generated docs for a Feature Model row (Feature DB table).
 
     Distinct from /features/{feature_id}/docs above -- that endpoint reads
@@ -241,6 +248,9 @@ async def list_feature_record_docs(feature_id: str):
     feature design pipeline actually writes to (architecture.md,
     qa.md, etc., same files task_completion_service verifies).
     """
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated list_feature_record_docs attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
     from src.core.database import AutopilotDesign, Feature, Workflow, get_db
 
     with get_db() as db:
@@ -297,8 +307,11 @@ async def list_feature_record_docs(feature_id: str):
     return {"docs": docs}
 
 @router.get("/feature-records/{feature_id}/docs/{doc_name}")
-async def get_feature_record_doc(feature_id: str, doc_name: str):
+async def get_feature_record_doc(feature_id: str, doc_name: str, agent_id: str = Header("ui-user", alias="X-Agent-ID")):
     """Read one generated doc's content for a Feature Model row."""
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated get_feature_record_doc attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
     from src.core.database import AutopilotDesign, Feature, Workflow, get_db
 
     with get_db() as db:
@@ -330,7 +343,7 @@ async def get_feature_record_doc(feature_id: str, doc_name: str):
     return {"name": doc_name, "content": doc_path.read_text(errors="replace")}
 
 @router.get("/feature-records/{feature_id}/report")
-async def get_feature_record_report(feature_id: str):
+async def get_feature_record_report(feature_id: str, agent_id: str = Header("ui-user", alias="X-Agent-ID")):
     """Serve feature_report.html as a real HTML response (not the {name,
     content} JSON shape /docs/{doc_name} above returns) for direct browser
     navigation -- the modal's header "Download Report" link needs raw
@@ -340,6 +353,9 @@ async def get_feature_record_report(feature_id: str):
     Feature DB row's own id instead of needing its workflow_id threaded
     through as a separate prop.
     """
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated get_feature_record_report attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
     from src.core.database import Feature, Workflow, get_db
 
     with get_db() as db:
