@@ -1,6 +1,5 @@
 """Tests for C1+C2: ProjectRepo model, repo_resolution functions, and migration."""
 
-import datetime
 import logging
 
 import pytest
@@ -10,11 +9,9 @@ from sqlalchemy.orm import Session
 from src.core.database import (
     AutopilotProject,
     Base,
-    Feature,
     ProjectRepo,
     Task,
     Ticket,
-    TicketCommit,
     Workflow,
 )
 from src.core.repo_resolution import (
@@ -40,9 +37,7 @@ def session(engine):
 
 
 def _make_project(session, project_id="proj-1", base_dir="/tmp/proj1"):
-    p = AutopilotProject(
-        id=project_id, name="test", base_dir=base_dir
-    )
+    p = AutopilotProject(id=project_id, name="test", base_dir=base_dir)
     session.add(p)
     session.flush()
     return p
@@ -52,9 +47,7 @@ class TestProjectRepoModel:
     def test_project_repo_created_with_unique_constraints(self, engine):
         """REQ-01: ProjectRepo table exists with both unique constraints."""
         with Session(engine) as session:
-            project = AutopilotProject(
-                id="proj-uniq", name="p", base_dir="/tmp/uniq"
-            )
+            project = AutopilotProject(id="proj-uniq", name="p", base_dir="/tmp/uniq")
             session.add(project)
             session.flush()
 
@@ -86,9 +79,7 @@ class TestProjectRepoModel:
     def test_project_repo_duplicate_label_raises(self, engine):
         """REQ-01: Unique constraint on (project_id, label)."""
         with Session(engine) as session:
-            project = AutopilotProject(
-                id="proj-dup-label", name="p", base_dir="/tmp"
-            )
+            project = AutopilotProject(id="proj-dup-label", name="p", base_dir="/tmp")
             session.add(project)
             session.flush()
 
@@ -119,9 +110,7 @@ class TestProjectRepoModel:
     def test_project_repo_path_absolute_outside_basedir(self, engine):
         """REQ-03: path is absolute and need not be under base_dir."""
         with Session(engine) as session:
-            project = AutopilotProject(
-                id="proj-abs", name="p", base_dir="/tmp/proj"
-            )
+            project = AutopilotProject(id="proj-abs", name="p", base_dir="/tmp/proj")
             session.add(project)
             session.flush()
 
@@ -153,14 +142,10 @@ class TestEnsurePrimaryRepo:
         """ensure_primary_repo returns existing repo, creates no new row."""
         project = _make_project(session)
         repo1 = ensure_primary_repo(session, project)
-        count_before = session.query(ProjectRepo).filter_by(
-            project_id=project.id
-        ).count()
+        count_before = session.query(ProjectRepo).filter_by(project_id=project.id).count()
 
         repo2 = ensure_primary_repo(session, project)
-        count_after = session.query(ProjectRepo).filter_by(
-            project_id=project.id
-        ).count()
+        count_after = session.query(ProjectRepo).filter_by(project_id=project.id).count()
 
         assert repo1.id == repo2.id
         assert count_before == count_after == 1
@@ -198,7 +183,7 @@ class TestResolveRepo:
 
     def test_valid_repo_id_returns_that_repo(self, session):
         project = _make_project(session)
-        primary = ensure_primary_repo(session, project)
+        ensure_primary_repo(session, project)
 
         other = ProjectRepo(
             id="repo-other",
@@ -255,16 +240,25 @@ class TestListRepos:
         project = _make_project(session)
 
         repo_b = ProjectRepo(
-            id="repo-b", project_id=project.id, label="backend",
-            path="/b", is_primary=False,
+            id="repo-b",
+            project_id=project.id,
+            label="backend",
+            path="/b",
+            is_primary=False,
         )
         repo_a = ProjectRepo(
-            id="repo-a", project_id=project.id, label="api",
-            path="/a", is_primary=False,
+            id="repo-a",
+            project_id=project.id,
+            label="api",
+            path="/a",
+            is_primary=False,
         )
         repo_p = ProjectRepo(
-            id="repo-p", project_id=project.id, label="main",
-            path="/p", is_primary=True,
+            id="repo-p",
+            project_id=project.id,
+            label="main",
+            path="/p",
+            is_primary=True,
         )
         session.add_all([repo_b, repo_a, repo_p])
         session.flush()
@@ -288,7 +282,8 @@ class TestMigration:
         with Session(engine) as session:
             for i in range(3):
                 p = AutopilotProject(
-                    id=f"proj-mig-{i}", name=f"p{i}",
+                    id=f"proj-mig-{i}",
+                    name=f"p{i}",
                     base_dir=f"/tmp/mig{i}",
                 )
                 session.add(p)
@@ -308,9 +303,7 @@ class TestMigration:
     def test_migration_idempotent(self, engine):
         """REQ-05: running migration twice creates no additional rows."""
         with Session(engine) as session:
-            p = AutopilotProject(
-                id="proj-idem", name="p", base_dir="/tmp/idem"
-            )
+            p = AutopilotProject(id="proj-idem", name="p", base_dir="/tmp/idem")
             session.add(p)
             session.commit()
 
@@ -327,9 +320,7 @@ class TestMigration:
     def test_base_dir_unchanged_after_migration(self, engine):
         """REQ-05: base_dir values unchanged before/after migration."""
         with Session(engine) as session:
-            p = AutopilotProject(
-                id="proj-base", name="p", base_dir="/tmp/base"
-            )
+            p = AutopilotProject(id="proj-base", name="p", base_dir="/tmp/base")
             session.add(p)
             session.commit()
 
@@ -344,32 +335,41 @@ class TestMigration:
         # create_all already creates the repo_id column from the model.
         # Verify it works by inserting rows with repo_id=None.
         with Session(engine) as session:
-            p = AutopilotProject(
-                id="proj-col-test", name="p", base_dir="/tmp/col"
-            )
+            p = AutopilotProject(id="proj-col-test", name="p", base_dir="/tmp/col")
             session.add(p)
             session.flush()
 
             wf = Workflow(
-                id="wf-col-test", name="wf", status="active",
-                project_id="proj-col-test", phases_folder_path="/tmp",
+                id="wf-col-test",
+                name="wf",
+                status="active",
+                project_id="proj-col-test",
+                phases_folder_path="/tmp",
             )
             session.add(wf)
             session.flush()
 
             t = Task(
-                id="task-test", raw_description="d", done_definition="d",
-                status="pending", repo_id=None,
+                id="task-test",
+                raw_description="d",
+                done_definition="d",
+                status="pending",
+                repo_id=None,
             )
             session.add(t)
             session.flush()
             assert t.repo_id is None
 
             ticket = Ticket(
-                id="ticket-test", workflow_id="wf-col-test",
-                created_by_agent_id="a-1", title="t",
-                description="d", ticket_type="task",
-                priority="medium", status="open", repo_id=None,
+                id="ticket-test",
+                workflow_id="wf-col-test",
+                created_by_agent_id="a-1",
+                title="t",
+                description="d",
+                ticket_type="task",
+                priority="medium",
+                status="open",
+                repo_id=None,
             )
             session.add(ticket)
             session.flush()
@@ -378,24 +378,29 @@ class TestMigration:
     def test_historical_rows_have_null_repo_id(self, engine):
         """REQ-05: historical rows have repo_id IS NULL."""
         with Session(engine) as session:
-            p = AutopilotProject(
-                id="proj-hist", name="p", base_dir="/tmp/hist"
-            )
+            p = AutopilotProject(id="proj-hist", name="p", base_dir="/tmp/hist")
             session.add(p)
             session.flush()
 
             wf = Workflow(
-                id="wf-hist", name="wf", status="active",
-                project_id="proj-hist", phases_folder_path="/tmp",
+                id="wf-hist",
+                name="wf",
+                status="active",
+                project_id="proj-hist",
+                phases_folder_path="/tmp",
             )
             session.add(wf)
             session.flush()
 
             ticket = Ticket(
-                id="ticket-hist", workflow_id="wf-hist",
-                created_by_agent_id="a-1", title="t",
-                description="d", ticket_type="task",
-                priority="medium", status="open",
+                id="ticket-hist",
+                workflow_id="wf-hist",
+                created_by_agent_id="a-1",
+                title="t",
+                description="d",
+                ticket_type="task",
+                priority="medium",
+                status="open",
             )
             session.add(ticket)
             session.commit()
