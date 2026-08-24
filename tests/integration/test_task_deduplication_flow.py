@@ -71,26 +71,33 @@ class TestTaskDeduplicationFlow:
             # Initialize server state
             await server_state.initialize()
 
-            # Replace with mock services. server_state is a module-level
-            # singleton (src.mcp.server._shared.server_state), so these
-            # assignments outlive the fixture unless they are put back --
-            # every later test in the session would otherwise see Mocks
-            # where it expects real services, and the failure surfaces far
-            # from here as an unrelated test failing only in suite order.
-            _saved = (
-                server_state.embedding_service,
-                server_state.task_similarity_service,
-            )
-            server_state.embedding_service = Mock(spec=EmbeddingProvider)
-            server_state.task_similarity_service = Mock(spec=TaskSimilarityService)
+            # Mock phase_manager to have an active workflow so background
+            # task processing can dispatch agents
+            server_state.phase_manager.workflow_id = "wf-test-123"
 
-            try:
-                yield server_state
-            finally:
-                (
+            # Mock TaskEnrichmentService.resolve_phase_id to return a phase_id
+            # so background task processing can proceed
+            with patch("src.services.task_enrichment_service.TaskEnrichmentService.resolve_phase_id", return_value="phase-test-123"):
+                # Replace with mock services. server_state is a module-level
+                # singleton (src.mcp.server._shared.server_state), so these
+                # assignments outlive the fixture unless they are put back --
+                # every later test in the session would otherwise see Mocks
+                # where it expects real services, and the failure surfaces far
+                # from here as an unrelated test failing only in suite order.
+                _saved = (
                     server_state.embedding_service,
                     server_state.task_similarity_service,
-                ) = _saved
+                )
+                server_state.embedding_service = Mock(spec=EmbeddingProvider)
+                server_state.task_similarity_service = Mock(spec=TaskSimilarityService)
+
+                try:
+                    yield server_state
+                finally:
+                    (
+                        server_state.embedding_service,
+                        server_state.task_similarity_service,
+                    ) = _saved
 
     @pytest.fixture
     def client(self, initialized_server):
