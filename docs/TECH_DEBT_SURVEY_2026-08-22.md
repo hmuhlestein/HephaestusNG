@@ -15,6 +15,67 @@ real drift: §3 below.
 
 ---
 
+## Status: executed 2026-08-23
+
+**§1 mypy — plugin trial reverted (measured), scoped union-attr triage done.**
+The "cheap win" was tested exactly as this section suggested — re-running the
+count after adding `plugins = ["sqlalchemy.ext.mypy.plugin"]`. Result: it did
+NOT clear database.py's 108; the plugin expects SQLAlchemy 2.0 `Mapped[...]`
+typing, this codebase uses 1.x-style `relationship()`/`Column()` without
+annotations, so the plugin instead emitted 160 "please specify
+`Mapped[<type>]`" errors in that same file (1008 → 1131 total). Reverted;
+`pyproject.toml` now carries a NOTE explaining the measurement and that the
+plugin only becomes a win as part of a `Mapped[]` annotation migration. The
+`union-attr` triage was done for the named file, `workflow_execution_routes.py`
+(14 sites, 8 handlers): every site is provably non-None on the request path —
+`ServerState.startup()` assigns `db_manager`/`phase_manager`/`queue_service`
+unconditionally before the app accepts requests, so none was a silent gap and
+no speculative guards were added. The debt was paid with ten `assert ... is not
+None` narrowings (two inside the queued-task loops, where an empty queue means
+the attribute was never touched — placed loop-internal so a test fixture with
+an unset `queue_service` and empty queue keeps its 200). mypy 1008 → 994;
+`test_workflow_stop_cancel_tmux_offloading.py` + queue/guardrail suites 79/79.
+
+**§2 auth audit-log cluster — DONE.** `AuthService.authenticate` now takes
+`ip_address`/`user_agent` (defaulted, backward compatible) and the `/login`
+endpoint extracts them (first `X-Forwarded-For` hop else peer address, plus
+`User-Agent`); the six empty-string TODO sites (login-attempt ×2, session) and
+the login audit-log row now carry the real values. A new `_load_user_roles`
+replaces both `roles=[]` TODOs with the user's active role names (a grant
+whose `expires_at` has passed is not active) in both `authenticate` and
+`refresh_tokens`. Characterized by a new test in `tests/test_authentication.py`
+(`test_login_records_request_metadata_and_roles` — posts through the real
+router with headers, asserts all three row types + the JWT `roles` claim);
+suite 25/25.
+
+**§2 smaller items — one fixed, two deferred with rationale.**
+`ticket_service.py`'s list-view `comment_count`/`commit_count` placeholders are
+now real bulk group-by counts (two queries, not N+1); ticket suites 47 passed.
+Deferred: logout token blacklisting (`auth_api.py`) — it needs a design choice
+(access-token blacklist table vs revoking the user's refresh tokens, the latter
+wrong for multi-device) and a middleware check; that's a security-semantics
+decision, not a drive-by. And `tickets_api.py`'s `has_more=False` TODO — the
+route returns the full result set and has no pagination parameters, so
+`has_more=False` is correct for the current contract; "implement pagination" is
+an API-feature addition, not a placeholder bug.
+
+**§3 frontend — deferred, per the doc's own caveat.** `DesignQueuePanel.tsx`
+(1321 lines) was modified minutes before this execution started and
+`TaskDetailModal.tsx` (1425) is in the same active dark-mode workstream of the
+concurrent session — the doc says "re-check the line count before acting on
+it, it's a moving target." Restructuring either mid-edit by another session is
+the same write-conflict risk that deferred `phase_transitions.py`'s two retry
+functions. Additionally the `window.confirm`/`alert` replacement is a deliberate
+UX change (native dialogs → the app's modal system), a design decision the
+original finding itself flagged — the Playwright recipe removes the
+*verification* blocker, not the *decision*.
+
+**§4 residuals — unchanged by this execution**, still tracked in their home
+docs (the two deferred `phase_transitions.py` functions remain deferred for
+the reasons recorded there).
+
+---
+
 ## 1. mypy: 1003 errors across 118 files — configured but not enforced
 
 `pyproject.toml`'s `[tool.mypy]` section is real (confirmed working in

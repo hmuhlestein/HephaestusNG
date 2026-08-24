@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from sqlalchemy import func
+
 from src.core.database import (
     Agent,
     BoardConfig,
@@ -1115,6 +1117,19 @@ class TicketService:
 
             tickets = query.order_by(Ticket.created_at.desc()).all()
 
+            # Bulk per-ticket counts (two group-by queries, not one
+            # subquery per row) -- these used to be hardcoded 0 placeholders.
+            comment_counts = dict(
+                db.query(TicketComment.ticket_id, func.count(TicketComment.id))
+                .group_by(TicketComment.ticket_id)
+                .all()
+            )
+            commit_counts = dict(
+                db.query(TicketCommit.ticket_id, func.count(TicketCommit.id))
+                .group_by(TicketCommit.ticket_id)
+                .all()
+            )
+
             return [
                 {
                     "id": t.id,
@@ -1133,9 +1148,11 @@ class TicketService:
                     "started_at": t.started_at.isoformat() + "Z" if t.started_at else None,
                     "completed_at": t.completed_at.isoformat() + "Z" if t.completed_at else None,
                     "tags": t.tags or [],
-                    "comment_count": 0,  # TODO: Query actual count
-                    "commit_count": 0,  # TODO: Query actual count
-                    "is_blocked": bool(t.blocked_by_ticket_ids and len(t.blocked_by_ticket_ids) > 0),
+                    "comment_count": comment_counts.get(t.id, 0),
+                    "commit_count": commit_counts.get(t.id, 0),
+                    "is_blocked": bool(
+                        t.blocked_by_ticket_ids and len(t.blocked_by_ticket_ids) > 0
+                    ),
                     "blocked_by_ticket_ids": t.blocked_by_ticket_ids or [],
                     "is_resolved": t.is_resolved,
                 }

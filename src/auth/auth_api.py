@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
 
@@ -97,13 +97,30 @@ async def register(request: UserRegisterRequest):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+):
     """Login with email and password."""
     db_manager = get_db_manager()
 
+    # First hop of X-Forwarded-For when present (behind a proxy), else the
+    # direct peer address -- this is what the login-attempt/session/audit
+    # rows record as "from where".
+    forwarded = request.headers.get("x-forwarded-for", "")
+    client_ip = forwarded.split(",")[0].strip() or (
+        request.client.host if request.client else ""
+    )
+
     try:
         with db_manager.session_scope() as db:
-            tokens = AuthService.authenticate(db, form_data.username, form_data.password)
+            tokens = AuthService.authenticate(
+                db,
+                form_data.username,
+                form_data.password,
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", ""),
+            )
     except AuthError as e:
         raise HTTPException(
             status_code=e.status_code, detail=e.detail, headers=e.headers

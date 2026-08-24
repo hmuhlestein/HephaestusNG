@@ -177,6 +177,9 @@ async def list_workflow_definitions():
 @router.post("/api/workflow-definitions")
 async def register_workflow_definition(request: RegisterWorkflowDefinitionRequest):
     """Register a workflow definition."""
+    # Set unconditionally in ServerState.startup(), which runs before the
+    # app accepts requests; the `| None` reflects only the init window.
+    assert server_state.phase_manager is not None
     logger.info(f"Registering workflow definition: {request.id}")
     try:
         server_state.phase_manager.register_definition(
@@ -200,6 +203,7 @@ async def register_workflow_definition(request: RegisterWorkflowDefinitionReques
 @router.get("/api/workflow-executions")
 async def list_workflow_executions(status: str = "all"):
     """List all workflow executions."""
+    assert server_state.phase_manager is not None
     executions = server_state.phase_manager.list_active_executions(status)
     return {
         "executions": [
@@ -222,6 +226,7 @@ async def list_workflow_executions(status: str = "all"):
 @router.post("/api/workflow-executions")
 async def start_workflow_execution(request: StartWorkflowRequest):
     """Start a new workflow execution from a definition."""
+    assert server_state.phase_manager is not None
     logger.info(f"Starting workflow execution: definition={request.definition_id}, desc={request.description}, launch_params={request.launch_params}")
     try:
         # start_execution now returns (workflow_id, initial_task_info)
@@ -313,6 +318,7 @@ async def start_workflow_execution(request: StartWorkflowRequest):
 @router.get("/api/workflow-executions/{workflow_id}")
 async def get_workflow_execution(workflow_id: str):
     """Get details of a specific workflow execution."""
+    assert server_state.phase_manager is not None
     workflow = server_state.phase_manager.get_workflow(workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
@@ -379,6 +385,7 @@ async def complete_workflow_execution(workflow_id: str, request: Request):
     if client_host not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=403, detail="Only localhost can force-complete workflows")
 
+    assert server_state.db_manager is not None
     session = server_state.db_manager.get_session()
     try:
         from src.core.database import Workflow
@@ -397,6 +404,7 @@ async def complete_workflow_execution(workflow_id: str, request: Request):
 @router.post("/api/workflow-executions/{workflow_id}/stop")
 async def stop_workflow(workflow_id: str, request: Request):
     """Stop a workflow and terminate all its agents."""
+    assert server_state.db_manager is not None
     session = server_state.db_manager.get_session()
     try:
         from src.core.database import Workflow
@@ -449,6 +457,7 @@ async def stop_workflow(workflow_id: str, request: Request):
         # above so it isn't racing this session's own open transaction
         # (same ordering as cancel_workflow).
         for queued_task_id in queued_task_ids:
+            assert server_state.queue_service is not None
             server_state.queue_service.reset_queued_task_to_pending(queued_task_id)
 
         return {
@@ -462,6 +471,7 @@ async def stop_workflow(workflow_id: str, request: Request):
 @router.post("/api/workflow-executions/{workflow_id}/resume")
 async def resume_workflow(workflow_id: str, request: Request):
     """Resume a paused workflow."""
+    assert server_state.db_manager is not None
     session = server_state.db_manager.get_session()
     try:
         from src.autopilot.orchestrator.engine_client import resume_workflow as _resume_workflow_primitive
@@ -514,6 +524,7 @@ async def recover_workflows(workflow_id: Optional[str] = None, project_id: Optio
 @router.post("/api/workflow-executions/{workflow_id}/cancel")
 async def cancel_workflow(workflow_id: str, request: Request):
     """Terminate agents and mark workflow as cancelled."""
+    assert server_state.db_manager is not None
     session = server_state.db_manager.get_session()
     try:
         from src.core.database import Workflow
@@ -557,6 +568,7 @@ async def cancel_workflow(workflow_id: str, request: Request):
         # Each call opens its own locked session -- done after the commit
         # above so it isn't racing this session's own open transaction.
         for queued_task_id in queued_task_ids:
+            assert server_state.queue_service is not None
             server_state.queue_service.cancel_queued_task(
                 queued_task_id, reason="Workflow cancelled by user"
             )
