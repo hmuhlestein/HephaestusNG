@@ -207,6 +207,8 @@ async def bump_task_priority_endpoint(
         dispatch_context = await AgentDispatchService.build_dispatch_context(
             task_description_for_rag=task.enriched_description or task.raw_description,
             phase_id=task.phase_id,
+            workflow_id=task.workflow_id,
+            repo_id=task.repo_id,
         )
 
         # This endpoint's whole point is "start now, bypassing the global
@@ -801,6 +803,8 @@ async def restart_task_endpoint(
             dispatch_context = await AgentDispatchService.build_dispatch_context(
                 task_description_for_rag=task.enriched_description or task.raw_description,
                 phase_id=task.phase_id,
+                workflow_id=task.workflow_id,
+                repo_id=task.repo_id,
             )
 
             # Per-cli/model concurrency gate -- same reasoning as create_task's

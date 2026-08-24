@@ -130,6 +130,8 @@ class TaskEnrichmentService:
         requesting_agent_id: str,
         phase_context_str: str = "",
         phase_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """The RAG-memory + project-context half of enrich(), split out so a
         task that was already enriched once (its enriched_description is
@@ -140,11 +142,12 @@ class TaskEnrichmentService:
         enrich_task there would rewrite an already-good description a second
         time for no benefit and a real LLM-call cost.
 
-        phase_id: resolved to project_id/phase_name (Phase.workflow_id ->
-        Workflow.project_id) so get_project_context() can inject the
-        multi-repo section (REQ-17/18/21). None (the default) -- callers
-        with no phase_id in scope -- behaves exactly as before this param
-        existed.
+        workflow_id/repo_id: passed straight through to
+        get_project_context() for the multi-repo section (REQ-17/18/21).
+        workflow_id is resolved from phase_id when not given directly (some
+        callers only have a phase_id in scope). None/None (the defaults)
+        -- callers with neither in scope -- behaves exactly as before repo
+        awareness existed.
 
         Returns a dict with `context_memories` (list of RAG memory dicts)
         and `project_context` (str, with phase context appended).
@@ -153,19 +156,13 @@ class TaskEnrichmentService:
 
         server_state = get_app_state()
 
-        project_id = None
-        phase_name = None
-        if phase_id:
-            from src.core.database import Phase, Workflow
+        if not workflow_id and phase_id:
+            from src.core.database import Phase
 
             with server_state.db_manager.session_scope() as _session:
                 phase = _session.query(Phase).filter_by(id=phase_id).first()
                 if phase:
-                    phase_name = phase.name
-                    if phase.workflow_id:
-                        wf = _session.query(Workflow).filter_by(id=phase.workflow_id).first()
-                        if wf:
-                            project_id = wf.project_id
+                    workflow_id = phase.workflow_id
 
         # retrieve_for_task() (embedding + vector search) and
         # get_project_context() (DB reads) don't read each other's output --
@@ -175,7 +172,7 @@ class TaskEnrichmentService:
                 task_description=raw_description,
                 requesting_agent_id=requesting_agent_id,
             ),
-            server_state.agent_manager.get_project_context(project_id=project_id, phase_name=phase_name),
+            server_state.agent_manager.get_project_context(workflow_id=workflow_id, repo_id=repo_id),
         )
         if phase_context_str:
             project_context = f"{project_context}\n\n{phase_context_str}"
@@ -189,8 +186,13 @@ class TaskEnrichmentService:
         phase_context_str: str,
         requesting_agent_id: str,
         phase_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run the RAG + LLM enrichment pipeline for a task description.
+
+        workflow_id/repo_id: see gather_dispatch_context -- passed straight
+        through for the multi-repo prompt section (REQ-17/18/21).
 
         Returns a dict with:
             enriched_task: dict from llm_provider.enrich_task, normalized
@@ -202,7 +204,8 @@ class TaskEnrichmentService:
         server_state = get_app_state()
 
         dispatch_context = await TaskEnrichmentService.gather_dispatch_context(
-            raw_description, requesting_agent_id, phase_context_str, phase_id=phase_id
+            raw_description, requesting_agent_id, phase_context_str,
+            phase_id=phase_id, workflow_id=workflow_id, repo_id=repo_id,
         )
         context_memories = dispatch_context["context_memories"]
         project_context = dispatch_context["project_context"]

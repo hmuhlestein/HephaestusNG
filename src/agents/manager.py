@@ -440,6 +440,9 @@ class AgentManager:
     def _find_tmux_session(self, session_name: str):
         return self._output_capture._find_tmux_session(session_name)
 
+    def is_pane_dead(self, session_name: str) -> bool:
+        return self._output_capture.is_pane_dead(session_name)
+
     def _capture_pane_lines(self, session_name: str) -> Optional[List[str]]:
         return self._output_capture._capture_pane_lines(session_name)
 
@@ -513,6 +516,16 @@ class AgentManager:
                 None, self.tmux_server.has_session, agent.tmux_session_name
             )
             if not has_session:
+                return False
+            # remain-on-exit keeps a crashed pane's session alive for
+            # evidence, so has_session alone no longer implies "agent
+            # alive" -- without this, recovery keystrokes get silently
+            # sent into a dead pane instead of surfacing that the agent
+            # already exited and needs a real restart.
+            pane_dead = await loop.run_in_executor(
+                None, self.is_pane_dead, agent.tmux_session_name
+            )
+            if pane_dead:
                 return False
             keys = get_cli_agent(agent.cli_type).recovery_keystrokes()
             if not keys:
@@ -743,24 +756,69 @@ class AgentManager:
         finally:
             session.close()
 
+    @staticmethod
+    def _build_repo_context(session, project_id: Optional[str], repo_id: Optional[str]) -> str:
+        """Multi-repo project context for prompt injection (REQ-17/18).
+
+        Empty string whenever there's nothing to scope a repo list to
+        (no project_id) or the common single-repo case (<=1 ProjectRepo
+        row) -- REQ-21/NFR-01, no behavior change from before repo
+        awareness existed.
+
+        repo_id: the requesting task's own ProjectRepo, if known. When it
+        resolves to one of the project's repos, that repo is called out
+        as WRITABLE and every sibling as READ-ONLY (REQ-18) -- a stale/
+        unmatched repo_id degrades to the REQ-17-only repo list, same as
+        not passing one at all.
+        """
+        from src.core.repo_resolution import get_project_repos
+
+        if not project_id:
+            return ""
+        repos = get_project_repos(session, project_id)
+        if len(repos) <= 1:
+            return ""
+
+        context = "\n## PROJECT REPOSITORIES\nThis project spans multiple repos:\n"
+        for repo in repos:
+            context += f"- {repo.label}: {repo.path}\n"
+
+        if repo_id and any(repo.id == repo_id for repo in repos):
+            context += "\n## REPO ACCESS\n"
+            for repo in repos:
+                access = "WRITABLE" if repo.id == repo_id else "READ-ONLY"
+                context += f"- {repo.label}: {access}\n"
+
+        return context
+
     async def get_project_context(
-        self, project_id: Optional[str] = None, phase_name: Optional[str] = None
+        self, workflow_id: Optional[str] = None, repo_id: Optional[str] = None
     ) -> str:
         """Get current project context for task enrichment.
 
         Args:
-            project_id: AutopilotProject.id, when the caller has one in
-                scope (resolved from phase_id -> Phase.workflow_id ->
-                Workflow.project_id). When it doesn't resolve, behavior is
-                UNCHANGED from before this param existed (REQ-21) -- no new
-                text, since there's nothing to scope a repo list to anyway.
-            phase_name: Phase.name, when in scope. Only used to detect the
-                feature-architect phase (exact string match, see below) for
-                its extra hard-rule text.
+            workflow_id: Workflow.id, when the caller has one in scope --
+                resolved to AutopilotProject.id internally (Workflow.
+                project_id) so the multi-repo section (REQ-17/18/21) can be
+                scoped to it. When it doesn't resolve to a real workflow
+                (or that workflow has no project_id), behavior is
+                unchanged from before repo awareness existed -- no new
+                text, since there's nothing to scope a repo list to.
+            repo_id: the requesting task's own ProjectRepo.id, when known
+                -- see _build_repo_context for how it's used (REQ-18).
 
         Returns:
             Formatted project context string
         """
+        # Defensive sanitization: a caller passing a malformed/oversized
+        # id (never expected, but these ultimately trace back to
+        # user-influenced Task rows) degrades to "no id given" rather than
+        # failing a DB query or bloating the prompt.
+        if workflow_id and len(workflow_id) > 200:
+            workflow_id = None
+        if repo_id and len(repo_id) > 200:
+            repo_id = None
+
         session = self.db_manager.get_session()
         try:
             # Get active tasks
@@ -801,46 +859,25 @@ class AgentManager:
                 for task in recent_tasks:
                     context += f"- {(task.enriched_description or task.raw_description)[:100]}...\n"
 
-            # Multi-repo project support (REQ-17/18/19/20/21). No new text
-            # for the case that can't be scoped anyway (project_id doesn't
-            # resolve) or the common single-repo case (<=1 ProjectRepo row)
-            # -- byte-identical to before this param existed.
-            if project_id:
-                from src.core.repo_resolution import get_project_repos
+            # Multi-repo project support (REQ-17/18/21). Resolved from
+            # workflow_id, not passed as project_id directly -- the only
+            # thing every caller actually has in scope is a workflow or
+            # task, never a bare AutopilotProject.id.
+            if workflow_id:
+                from src.core.database import Workflow
 
-                repos = get_project_repos(session, project_id)
-                if len(repos) > 1:
-                    context += "\n## PROJECT REPOSITORIES\nThis project spans multiple repos:\n"
-                    for repo in repos:
-                        context += f"- {repo.label} (writable for {repo.label}-scoped tasks): {repo.path}\n"
-                    context += (
-                        "\nRULES:\n"
-                        "- Every task you create is scoped to exactly one repo (see repo_id below).\n"
-                        "- The repo a task is assigned to is WRITABLE; all other listed repos are\n"
-                        "  READ-ONLY reference for cross-stack context (read the API contract in\n"
-                        "  one repo while implementing its consumer in another) -- do not write to\n"
-                        "  a repo your task isn't assigned to.\n"
-                    )
-                    # Exact string match against the existing Phase.name
-                    # convention (config/workflows/feature_architect/01_feature_architect.yaml
-                    # sets name: feature_architect) -- not "or equivalent".
-                    if phase_name == "feature_architect":
-                        context += (
-                            "\nREPO ASSIGNMENT RULE (multi-repo project): every Feature you create "
-                            "must be bound to exactly ONE repo -- this is CODE-ENFORCED, not just a "
-                            "convention: every task you create under a feature is validated against "
-                            "that feature's assigned repo, and a mismatch is REJECTED. An API change "
-                            "and its UI consumer are TWO features (one per repo), never one feature "
-                            "spanning both. In your features.json entry for each feature, set "
-                            '"repo_label" to one of the repo labels listed above -- this is what gets '
-                            "validated. If you omit it, the system infers a repo from your feature's "
-                            '"files" list, but an explicit "repo_label" is preferred and required '
-                            "whenever a feature's files could plausibly span more than one repo. "
-                            "Express cross-repo ordering with the EXISTING Feature.depends_on "
-                            "mechanism (e.g. the frontend feature's depends_on includes the backend "
-                            "feature's feature_key) -- never a free-text ordering note in a feature's "
-                            "description.\n"
-                        )
+                project = (
+                    session.query(Workflow.project_id).filter_by(id=workflow_id).scalar()
+                )
+            else:
+                project = None
+            # Isolated: a failure building the repo section (e.g. a
+            # transient DB error) must not blow away the PROJECT STATUS/
+            # ACTIVE TASKS text already built above.
+            try:
+                context += self._build_repo_context(session, project, repo_id)
+            except Exception as e:
+                logger.warning(f"Failed to build repo context: {e}")
 
             return context
 
