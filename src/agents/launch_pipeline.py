@@ -994,6 +994,21 @@ class LaunchPipeline:
         except Exception:
             pass  # Non-critical
 
+        # tmux's default (remain-on-exit off) destroys the whole session the
+        # instant the pane's foreground process dies, for ANY reason --
+        # clean exit, crash, or an external kill (e.g. OOM). That destroys
+        # capture-pane's scrollback and any exit-status banner along with
+        # it, which is why a dead agent shows up to Guardian as a session
+        # that's simply gone rather than one with something inspectable in
+        # it. pipe-pane's durable transcript survives regardless, but this
+        # keeps the live session itself around long enough for
+        # capture-pane/health checks to see what actually happened.
+        # remain-on-exit is a window option, not a session option.
+        try:
+            session.attached_window.set_window_option("remain-on-exit", "on")
+        except Exception:
+            pass  # Non-critical
+
         # Continuously tee this session's output to a durable file via tmux's
         # pipe-pane, independent of history-limit and of how the session later
         # dies. terminate_agent() only captures a scrollback snapshot on its
@@ -1826,10 +1841,41 @@ class LaunchPipeline:
                 # Capture the task before terminating -- the primitive
                 # clears current_task_id as part of the invariant.
                 task_id = agent.current_task_id
+                tmux_session_name = agent.tmux_session_name
                 from src.autopilot.orchestrator.engine_client import terminate_agent
 
                 terminate_agent(agent.id, session=session)
                 session.commit()
+                # terminate_agent is DB-only -- it never touches the actual
+                # tmux session (see its own docstring). Every OTHER branch
+                # in this method that terminates an agent flushes and kills
+                # its session (see the normal-restart path below); this
+                # early-return one didn't, leaving the CLI process alive
+                # and unaware it had been terminated -- it can keep working
+                # for hours, finish real work, and later get rejected
+                # ("Agent not authenticated") when it tries to report,
+                # while a freshly-dispatched replacement redoes the same
+                # task. Same bug class independently found and fixed in
+                # OrphanSessionReaper.cleanup_orphaned_tmux_sessions.
+                if tmux_session_name:
+                    try:
+                        transcript_dir = self._output_capture._resolve_tmux_transcript_dir(agent)
+                        if transcript_dir:
+                            self._output_capture._flush_stable_transcript(
+                                tmux_session_name,
+                                transcript_dir / f"{tmux_session_name}.clean.log",
+                            )
+                    except Exception as e:
+                        logger.debug(f"[STABLE-TRANSCRIPT] Final flush before terminate failed: {e}")
+                    try:
+                        tmux_session = self._output_capture._find_tmux_session(tmux_session_name)
+                        if tmux_session:
+                            tmux_session.kill_session()
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to kill tmux session {tmux_session_name} "
+                            f"after exceeding max restarts: {e}"
+                        )
                 task = session.query(Task).filter_by(id=task_id).first()
                 if task and task.status not in ("done", "failed"):
                     task.status = "failed"
