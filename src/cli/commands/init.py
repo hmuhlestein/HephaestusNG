@@ -6,8 +6,9 @@ import sys
 from pathlib import Path
 
 from src.cli.utils import output
+from src.core.constants import HEPHAESTUS_INSTALL_DIR
 
-HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
+HEPHAESTUS_DIR = HEPHAESTUS_INSTALL_DIR
 
 
 def register(subparsers):

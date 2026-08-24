@@ -86,14 +86,14 @@ from src.autopilot.orchestrator.state import (
     _workflow_belongs_to_project,
 )
 from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree, _create_designs_folder, _create_integration_worktree
-from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, PHASE0_DEFINITION_IDS
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, HEPHAESTUS_INSTALL_DIR, PHASE0_DEFINITION_IDS
 from src.core.database import DatabaseManager, Workflow, get_db
 from src.core.simple_config import get_config
 
 # Module-level logger for persistent state operations
 logger = logging.getLogger(__name__)
 
-HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent  # one .parent deeper: now a package __init__
+HEPHAESTUS_DIR = HEPHAESTUS_INSTALL_DIR
 
 
 STUCK_THRESHOLD = 3
