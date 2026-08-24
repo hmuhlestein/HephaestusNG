@@ -46,6 +46,45 @@ class OrphanSessionReaper:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, lambda: self.agent_manager.tmux_server.sessions)
 
+    async def _kill_agent_session(self, session_name: str) -> bool:
+        """Flush the stability-tracked transcript, then kill a tmux session
+        by name. Shared by both places this file kills a session: an agent
+        just marked terminated in the DB (whose tmux process may still be
+        running -- that's exactly the gap this helper closes, see its
+        caller in cleanup_orphaned_tmux_sessions), and a session with no
+        matching Agent row at all. Returns whether a live session was
+        actually found and killed."""
+        try:
+            db_session = self.db_manager.get_session()
+            try:
+                from src.core.database import Agent as _Agent
+
+                last_agent = (
+                    db_session.query(_Agent)
+                    .filter_by(tmux_session_name=session_name)
+                    .first()
+                )
+            finally:
+                db_session.close()
+            if last_agent:
+                transcript_dir = self.agent_manager._resolve_tmux_transcript_dir(last_agent)
+                if transcript_dir:
+                    self.agent_manager._flush_stable_transcript(
+                        session_name, transcript_dir / f"{session_name}.clean.log",
+                    )
+        except Exception as e:
+            logger.debug(f"[STABLE-TRANSCRIPT] Final flush before kill failed: {e}")
+
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        for tmux_sess in await self._tmux_sessions():
+            if tmux_sess.name == session_name:
+                await loop.run_in_executor(None, tmux_sess.kill_session)
+                logger.info(f"Killed tmux session: {session_name}")
+                return True
+        return False
+
     async def cleanup_orphaned_tmux_sessions(self) -> None:
         """Clean up tmux sessions that don't have corresponding active agents.
         Also clean up orphaned agents (working but no active workflow)."""
@@ -171,6 +210,31 @@ class OrphanSessionReaper:
                                 f"Terminating orphaned agent {agent.id[:8]} - workflow {task.workflow_id[:8]} not active"
                             )
                             terminate_agent(agent.id, session=session)
+                            # terminate_agent (engine_client.py) is a DB-only
+                            # primitive -- it flips agent.status but never
+                            # touches the actual tmux session, and the
+                            # separate orphaned-tmux-session pass below can't
+                            # catch it either: its active_session_names
+                            # snapshot was taken BEFORE this loop ran, so it
+                            # still lists this exact session as belonging to
+                            # an active agent and skips it, and even a fresh
+                            # snapshot would still make it wait out this
+                            # file's unrelated 120s GRACE_PERIOD_SECONDS.
+                            # Left unkilled, the CLI process keeps running
+                            # unaware the DB now considers it dead, can
+                            # finish real work, and later gets correctly but
+                            # confusingly rejected ("Agent not authenticated")
+                            # when it tries to report -- while whatever
+                            # fresh agent got dispatched in its place redoes
+                            # the same task. Confirmed live: agents 12e657b5
+                            # and 15fbae32 both did a full adversarial review
+                            # of the same task for exactly this reason. Kill
+                            # it here, immediately -- this agent was just
+                            # independently justified as dead (workflow
+                            # inactive, no recent activity), so there's
+                            # nothing to wait for.
+                            if agent.tmux_session_name:
+                                await self._kill_agent_session(agent.tmux_session_name)
                 session.commit()
 
             finally:
@@ -253,50 +317,15 @@ class OrphanSessionReaper:
                 f"Found {len(orphaned_sessions)} orphaned tmux sessions (after grace period): {orphaned_sessions}"
             )
 
-            # Kill orphaned sessions
+            # Kill orphaned sessions (flush-then-kill via the same helper
+            # used when an orphaned AGENT is terminated above -- these
+            # sessions have no active Agent row by definition, so the
+            # helper's own lookup naturally finds none and skips the flush).
             killed_count = 0
             for session_name in orphaned_sessions:
                 try:
-                    # Final flush of the stability-tracked "clean"
-                    # transcript before the session (and its scrollback)
-                    # disappears -- this kill path bypasses
-                    # terminate_agent's own clean-shutdown flush entirely.
-                    # These sessions have no active Agent row by definition
-                    # (that's why they're "orphaned"), so look up whatever
-                    # Agent row this session name last belonged to (any
-                    # status) rather than requiring a live one.
-                    try:
-                        db_session = self.db_manager.get_session()
-                        try:
-                            from src.core.database import Agent as _Agent
-
-                            last_agent = (
-                                db_session.query(_Agent)
-                                .filter_by(tmux_session_name=session_name)
-                                .first()
-                            )
-                        finally:
-                            db_session.close()
-                        if last_agent:
-                            transcript_dir = self.agent_manager._resolve_tmux_transcript_dir(last_agent)
-                            if transcript_dir:
-                                self.agent_manager._flush_stable_transcript(
-                                    session_name,
-                                    transcript_dir / f"{session_name}.clean.log",
-                                )
-                    except Exception as e:
-                        logger.debug(f"[STABLE-TRANSCRIPT] Final flush before reap failed: {e}")
-
-                    # Find and kill the session
-                    for tmux_sess in await self._tmux_sessions():
-                        if tmux_sess.name == session_name:
-                            import asyncio
-
-                            loop = asyncio.get_event_loop()
-                            await loop.run_in_executor(None, tmux_sess.kill_session)
-                            logger.info(f"Killed orphaned tmux session: {session_name}")
-                            killed_count += 1
-                            break
+                    if await self._kill_agent_session(session_name):
+                        killed_count += 1
                 except Exception as e:
                     logger.warning(
                         f"Failed to kill orphaned session {session_name}: {e}"
