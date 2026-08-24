@@ -100,7 +100,7 @@ async def create_task(
         # Process the rest asynchronously
         async def process_task_async():
             try:
-                ctx = await _resolve_phase_and_enrich(request, agent_id)
+                ctx = await _resolve_phase_and_enrich(request, agent_id, task_id)
                 enriched_task = ctx["enriched_task"]
 
                 task_data = _apply_enrichment_to_task(

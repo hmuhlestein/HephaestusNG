@@ -269,7 +269,7 @@ def test_resolve_phase_and_enrich_closes_the_session_on_a_failed_query(
         patch.object(Session, "close", spy_close),
     ):
         with pytest.raises(OperationalError):
-            await_or_run(_resolve_phase_and_enrich(request, "agent-1"))
+            await_or_run(_resolve_phase_and_enrich(request, "agent-1", "task-1"))
 
     assert calls["close"] == 1, "the session must be closed even when the query raises"
 
