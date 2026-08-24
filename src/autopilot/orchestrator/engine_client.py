@@ -381,13 +381,23 @@ def resume_workflow(
         return False
 
 
-def pause_workflow_direct(workflow_id: str) -> bool:
+def pause_workflow_direct(workflow_id: str, reason: str = "system") -> bool:
     """Pause workflow directly in database (H-2 fix).
 
     Thin wrapper over pause_workflow for existing callers -- see that
     function for the shared invariant this closes.
+
+    Defaults to "system", not "user": every existing caller (pipeline.py's
+    duplicate-workflow guard, workflow cleanup, and project-orchestrator-
+    stop cascade) is an automated cleanup path, not an operator clicking
+    pause -- hardcoding "user" here mislabeled all of them, and
+    resume_workflow/_try_auto_resume_paused_workflow specifically treat
+    "user" as requiring an explicit forced resume while "system" is
+    eligible for the automatic retry-after-cooldown path. A workflow paused
+    this way sat stuck forever, permanently excluded from ever being
+    auto-recovered, misreported as if a human had paused it on purpose.
     """
-    return pause_workflow(workflow_id, reason="user")
+    return pause_workflow(workflow_id, reason=reason)
 
 
 def complete_workflow_direct(workflow_id: str) -> bool:

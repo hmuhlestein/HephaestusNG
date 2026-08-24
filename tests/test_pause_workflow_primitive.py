@@ -285,8 +285,27 @@ class TestHistoricalPauseSiteConsistency:
         with orch_db_env.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "paused"
-            assert wf.paused_by == "user"
+            # Defaults to "system", not "user" -- every caller (duplicate-
+            # workflow guard, workflow cleanup, project-orchestrator-stop
+            # cascade) is an automated cleanup path, not an operator
+            # clicking pause. "user" would make resume_workflow require
+            # force=True and exclude this workflow from
+            # _try_auto_resume_paused_workflow's cooldown-based retry
+            # forever.
+            assert wf.paused_by == "system"
             assert wf.paused_at is not None
+
+    def test_pause_workflow_direct_accepts_an_explicit_reason(self, orch_db_env):
+        from src.autopilot.orchestrator.engine_client import pause_workflow_direct
+        from src.core.database import Workflow
+
+        _make_workflow(orch_db_env, "wf-2")
+
+        assert pause_workflow_direct("wf-2", reason="user") is True
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-2").first()
+            assert wf.paused_by == "user"
 
     def test_pause_feature_for_review_skips_approved_feature(self, orch_db_env):
         """ce0c4a7: an already-approved feature must not get re-paused for
