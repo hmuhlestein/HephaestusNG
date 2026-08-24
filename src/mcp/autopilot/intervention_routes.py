@@ -5,7 +5,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -31,11 +31,18 @@ class HumanInputRequest(BaseModel):
     options: List[str]
     labels: Dict[str, str]
     project_id: Optional[str] = None
+    # Structured breakdown of an arbitration-deadlock escalation's actual
+    # attempt history (see arbitration.py's _build_arbitration_decision_
+    # context) -- None for every other kind of human-input request.
+    decision_context: Optional[Dict[str, Any]] = None
 
 class HumanInputResponse(BaseModel):
     request_id: str
     choice: str
     message: Optional[str] = None
+    # Required when choice == "g" (send an arbitration-deadlocked phase
+    # back to a specific phase for another attempt) -- ignored otherwise.
+    target_phase: Optional[str] = None
 
 def _find_pending_input() -> Optional[Path]:
     """Find the first non-stale input request file."""
@@ -82,8 +89,10 @@ async def get_human_input_request():
 @router.post("/input")
 async def submit_human_input(resp: HumanInputResponse):
     """Submit a human input response to the orchestrator."""
-    if resp.choice not in ("c", "s", "q", "m"):
-        raise HTTPException(400, "Invalid choice. Must be 'c', 's', 'q', or 'm'.")
+    if resp.choice not in ("c", "s", "q", "m", "g"):
+        raise HTTPException(400, "Invalid choice. Must be 'c', 's', 'q', 'm', or 'g'.")
+    if resp.choice == "g" and not resp.target_phase:
+        raise HTTPException(400, "target_phase is required when choice is 'g'.")
 
     # Verify the request still exists
     request_file = Path(AUTOPILOT_STATE_DIR) / f"input_request_{resp.request_id}.json"
@@ -101,6 +110,8 @@ async def submit_human_input(resp: HumanInputResponse):
     }
     if resp.message:
         payload["message"] = resp.message
+    if resp.target_phase:
+        payload["target_phase"] = resp.target_phase
     payload = json.dumps(payload)
     tmp = response_file.with_suffix(".tmp")
     tmp.write_text(payload)

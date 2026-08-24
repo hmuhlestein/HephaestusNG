@@ -859,6 +859,43 @@ class TestHumanInput:
         data = json.loads(response_file.read_text())
         assert data["choice"] == "c"
 
+    def test_submit_goto_choice_requires_target_phase(self, client, autopilot_dirs):
+        state_dir = autopilot_dirs["state"]
+        (state_dir / "input_request_g1.json").write_text(
+            json.dumps({
+                "id": "g1", "reason": "r",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "options": ["c", "s"], "labels": {},
+            })
+        )
+
+        resp = client.post(
+            "/api/autopilot/input",
+            json={"request_id": "g1", "choice": "g"},
+        )
+        assert resp.status_code == 400
+
+    def test_submit_goto_choice_with_target_phase_persists_it(self, client, autopilot_dirs):
+        state_dir = autopilot_dirs["state"]
+        (state_dir / "input_request_g2.json").write_text(
+            json.dumps({
+                "id": "g2", "reason": "r",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "options": ["c", "s"], "labels": {},
+            })
+        )
+
+        resp = client.post(
+            "/api/autopilot/input",
+            json={"request_id": "g2", "choice": "g", "target_phase": "architecture_design"},
+        )
+        assert resp.status_code == 200
+
+        response_file = state_dir / "input_response_g2.json"
+        data = json.loads(response_file.read_text())
+        assert data["choice"] == "g"
+        assert data["target_phase"] == "architecture_design"
+
     def test_submit_invalid_choice(self, client, autopilot_dirs):
         state_dir = autopilot_dirs["state"]
         (state_dir / "input_request_x.json").write_text(

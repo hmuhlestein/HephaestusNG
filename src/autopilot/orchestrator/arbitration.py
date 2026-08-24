@@ -19,6 +19,7 @@ them under their original names -- see that module's own comment).
 
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
@@ -514,6 +515,65 @@ def _trigger_arbitration(
 _ARBITRATION_ESCALATION_MARKER = "[ARBITRATION-ESCALATION:"
 
 
+def _build_arbitration_decision_context(db, workflow_id: str, phase_name: str) -> Dict[str, Any]:
+    """Reconstruct the actual disagreement behind an arbitration deadlock
+    from this phase's own arbitration task history, instead of surfacing
+    only the last "no reason given"-style status_reason. Each "Arbitrate
+    stuck phase: X" task's completion_notes IS the arbiter's freeform
+    decision + reasoning (see _build_arbitration_prompt's step 3) --
+    agents consistently write "Arbitration complete. Decision: <word>
+    [<phase>]. <reason>" because the prompt asks for exactly that shape,
+    so this is a best-effort parse of already-real data, not a guess.
+
+    Surfaced to the frontend's arbitration-decision UI so a human sees
+    what each attempt actually concluded (and where they disagreed with
+    each other) instead of a single flattened sentence.
+    """
+    tasks = (
+        db.query(Task)
+        .filter(
+            Task.workflow_id == workflow_id,
+            Task.created_by_agent_id == ARBITRATION_CREATED_BY,
+            Task.raw_description == f"Arbitrate stuck phase: {phase_name}",
+        )
+        .order_by(Task.created_at)
+        .all()
+    )
+    attempts = []
+    for t in tasks:
+        text = (t.completion_notes or t.failure_reason or "").strip()
+        m = re.match(r"Arbitration complete\.\s*Decision:\s*(\w+)(?:\s+(\w+))?\.\s*(.*)", text, re.DOTALL)
+        if m:
+            decision, target_phase, attempt_reason = m.group(1), m.group(2), m.group(3).strip()
+        else:
+            decision, target_phase, attempt_reason = None, None, text
+        attempts.append({
+            "at": t.created_at.isoformat() + "Z" if t.created_at else None,
+            "decision": decision,
+            "target_phase": target_phase,
+            "reason": attempt_reason,
+        })
+
+    # Distinct actionable options actually proposed across every attempt,
+    # de-duplicated by (decision, target_phase) -- repeating the same
+    # "goto architecture_design" 3 times in a row offers ONE button, not
+    # three identical ones.
+    seen = set()
+    distinct_options = []
+    for a in attempts:
+        if not a["decision"]:
+            continue
+        key = (a["decision"], a["target_phase"])
+        if key in seen:
+            continue
+        seen.add(key)
+        distinct_options.append({
+            "decision": a["decision"], "target_phase": a["target_phase"], "reason": a["reason"],
+        })
+
+    return {"phase_name": phase_name, "attempts": attempts, "distinct_options": distinct_options}
+
+
 def _escalate_arbitration_deadlock_to_human(
     db, workflow_id: str, phase_id: str, phase_name: str,
     prior_arbitrations: int, reason: str, project_id: str, logger: "OrchestratorLogger",
@@ -561,6 +621,7 @@ def _escalate_arbitration_deadlock_to_human(
     # written -- can still be auto-continued: the request file it would
     # otherwise have been read from no longer exists at that point.
     status_reason = f"{_ARBITRATION_ESCALATION_MARKER}{request_id}:{phase_id}] {reason}"
+    decision_context = _build_arbitration_decision_context(db, workflow_id, phase_name)
 
     payload = json.dumps(
         {
@@ -586,6 +647,11 @@ def _escalate_arbitration_deadlock_to_human(
                 "c": "Force continue (accept the current state, move to the next phase)",
                 "s": "Give up (mark this workflow failed)",
             },
+            # The richer, dedicated Decide UI (a separate modal from
+            # MessageCenter's generic 3-button response) reads this
+            # instead of the flattened "reason" string above -- see
+            # _build_arbitration_decision_context's docstring.
+            "decision_context": decision_context,
             "project_id": project_id,
             "workflow_id": workflow_id,
             "phase_id": phase_id,
@@ -660,6 +726,7 @@ def _maybe_resolve_human_arbitration_escalations(logger: "OrchestratorLogger") -
             data = json.loads(response_file.read_text())
             choice = (data.get("choice") or "").strip().lower()
             message = data.get("message", "")
+            target_phase = (data.get("target_phase") or "").strip() or None
         except Exception as e:
             logger.warning(f"[ARBITRATE] Failed to read response for escalation {request_id}: {e}")
             continue
@@ -686,7 +753,9 @@ def _maybe_resolve_human_arbitration_escalations(logger: "OrchestratorLogger") -
         # escalation -- the response file would sit unprocessed forever,
         # with no feedback that anything was wrong. Map it onto the same
         # "give up" outcome as "s" instead.
-        if choice not in ("c", "s", "q"):
+        if choice == "g" and not target_phase:
+            continue  # "g" without a target_phase is malformed -- leave for the next tick
+        if choice not in ("c", "s", "q", "g"):
             continue  # genuinely unrecognized -- leave both files for the next tick
         resolved_choice = "s" if choice == "q" else choice
 
@@ -697,22 +766,40 @@ def _maybe_resolve_human_arbitration_escalations(logger: "OrchestratorLogger") -
             logger.warning(f"[ARBITRATE] Failed to read request for escalation {request_id}: {e}")
             phase_id = None
 
-        _resolve_human_arbitration_choice(workflow_id, phase_id, resolved_choice, logger)
+        _resolve_human_arbitration_choice(workflow_id, phase_id, resolved_choice, logger, target_phase=target_phase)
         request_file.unlink(missing_ok=True)
         response_file.unlink(missing_ok=True)
 
 
 def _resolve_human_arbitration_choice(
     workflow_id: str, phase_id: Optional[str], choice: str, logger: "OrchestratorLogger",
+    target_phase: Optional[str] = None,
 ) -> None:
     """Apply the human's decision on an arbitration-deadlock escalation:
     "c" force-continues the deadlocked phase (mirrors the full-autopilot
-    fallback in _trigger_arbitration); "s" (or a dismissal, which reuses
-    "c" as its own auto-continue convention -- see this module's other
-    caller) gives up and fails the workflow, same as the pre-escalation
-    behavior."""
+    fallback in _trigger_arbitration); "g" sends it back to target_phase
+    for another attempt (mirrors the AI arbiter's own "goto" decision --
+    see _resolve_arbitration_outcome, reused here so a human's goto gets
+    identical phase/task bookkeeping to an AI arbiter's); "s" (or a
+    dismissal, which reuses "c" as its own auto-continue convention -- see
+    this module's other caller) gives up and fails the workflow, same as
+    the pre-escalation behavior."""
     from src.autopilot.orchestrator.engine_client import resume_workflow
     from src.autopilot.orchestrator.phase_transitions import _fire_phase_transition
+
+    if choice == "g":
+        with get_db() as db:
+            phase = db.query(Phase).filter_by(id=phase_id).first() if phase_id else None
+        if not phase:
+            logger.error(f"[ARBITRATE] Workflow {workflow_id[:8]}: escalation response has no resolvable phase -- cannot goto {target_phase}")
+            return
+        resume_workflow(workflow_id, force=True)
+        logger.warning(f"[ARBITRATE] Workflow {workflow_id[:8]}: human chose to send {phase.name} back to {target_phase}")
+        _resolve_arbitration_outcome(
+            workflow_id, phase.id, phase.name, "goto", target_phase,
+            f"Human chose to send back to {target_phase}", logger,
+        )
+        return
 
     if choice == "s":
         with get_db() as db:

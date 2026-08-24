@@ -30,6 +30,7 @@ import toast from 'react-hot-toast';
 import DesignDetailModal from './DesignDetailModal';
 import TaskDetailModal from '../TaskDetailModal';
 import FeatureRecordDetailModal from './FeatureRecordDetailModal';
+import ArbitrationDecisionModal from './ArbitrationDecisionModal';
 import RealTimeAgentOutput from '../RealTimeAgentOutput';
 import { Agent } from '@/types';
 import { CostDisplay, FeatureCostBadge } from '@/components/cost';
@@ -73,6 +74,20 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     enabled: !!projectId,
   });
   const reviewMode = projectStatus?.review_mode ?? false;
+
+  // Same query key MessageCenter uses for the identical endpoint -- react-
+  // query shares/dedupes the two, so this doesn't double the poll rate.
+  // Used to highlight whichever row's workflow the pipeline is actually
+  // waiting on a decision for, with a Decide button opening
+  // ArbitrationDecisionModal (same data as the Messages tab's own Reason
+  // box, plus the structured attempt-history breakdown for arbitration
+  // escalations specifically).
+  const { data: pendingInputRequest } = useQuery({
+    queryKey: ['autopilot-input', projectId],
+    queryFn: () => apiService.getAutopilotInput(),
+    refetchInterval: 5000,
+    enabled: !!projectId,
+  });
 
   // Fetch design statuses using React Query (M-5 fix)
   const { data: designStatuses = {}, refetch: refetchDesignStatuses } = useQuery({
@@ -318,7 +333,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
             type="text"
-            placeholder="Search designs..."
+            placeholder="Search specs..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500"
@@ -375,6 +390,11 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   features={designStatuses[item.filename]?.features ?? []}
                   onRefetchFeatures={refetchDesignStatuses}
                   statusReason={designStatuses[item.filename]?.statusReason}
+                  pendingInputRequest={
+                    pendingInputRequest && pendingInputRequest.workflow_id === designStatuses[item.filename]?.workflowId
+                      ? pendingInputRequest
+                      : undefined
+                  }
                   projectId={projectId}
                   onDetail={handleDetail}
                   onTaskClick={setSelectedTaskId}
@@ -566,9 +586,15 @@ interface SortableDesignItemProps {
   // per-row setInterval against the identical endpoint.
   features: any[];
   onRefetchFeatures?: () => void;
+  // Set only when this row's own workflow is the one the pipeline is
+  // currently waiting on a human decision for (see DesignQueuePanel's
+  // own query + workflow_id match). Drives the amber highlight + Decide
+  // button below.
+  pendingInputRequest?: any;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, workflowType, projectId, reviewMode, features, onRefetchFeatures }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, workflowType, statusReason, projectId, reviewMode, features, onRefetchFeatures, pendingInputRequest }) => {
+  const [showDecisionModal, setShowDecisionModal] = useState(false);
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -642,6 +668,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
         transition={{ delay: index * 0.03 }}
         className={`rounded-xl border shadow-sm transition-all ${
           isDragging ? 'shadow-lg border-violet-300 dark:border-violet-500 ring-2 ring-violet-200 dark:ring-violet-500' :
+          pendingInputRequest ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-700 ring-1 ring-amber-200 dark:ring-amber-800' :
           isActive ? 'bg-gradient-to-r from-violet-50 to-purple-50 dark:from-violet-900/30 dark:to-purple-900/30 border-violet-300 dark:border-violet-500 shadow-md ring-1 ring-violet-200 dark:ring-violet-500' :
           'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:shadow-md'
         }`}
@@ -695,9 +722,30 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                 {error}
               </p>
             )}
+            {pendingInputRequest ? (
+              <p className="text-xs text-amber-700 dark:text-amber-400 mt-1 truncate" title={pendingInputRequest.reason}>
+                {pendingInputRequest.decision_context
+                  ? `Decision needed: ${pendingInputRequest.decision_context.phase_name}`
+                  : pendingInputRequest.reason}
+              </p>
+            ) : (
+              status === 'failed' && statusReason && (
+                <p className="text-xs text-red-600 dark:text-red-400 mt-1 truncate" title={statusReason}>
+                  {statusReason}
+                </p>
+              )
+            )}
           </div>
 
           <div className="flex items-center gap-2">
+            {pendingInputRequest && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowDecisionModal(true); }}
+                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg transition-colors flex-shrink-0"
+              >
+                Decide
+              </button>
+            )}
             {costUnavailable ? (
               <span className="text-xs text-gray-400 dark:text-gray-500" title="Cost unavailable — status fetch failed">—</span>
             ) : (
@@ -791,6 +839,13 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
             </div>
           </motion.div>
         )}
+
+      {showDecisionModal && (
+        <ArbitrationDecisionModal
+          inputRequest={pendingInputRequest}
+          onClose={() => setShowDecisionModal(false)}
+        />
+      )}
     </div>
   );
 };
