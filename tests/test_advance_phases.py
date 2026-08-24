@@ -1593,6 +1593,49 @@ class TestCaseInProgressComplete:
             assert wf.paused_by is None
             assert wf.paused_at is None
 
+    def test_a_queued_sibling_task_counts_as_incomplete(self, db_manager, sample_workflow):
+        """Regression, found live: the "incomplete" check omitted "queued"
+        -- every OTHER "does this phase have real outstanding work" query
+        in this module (_create_phase_task's own existing-task check,
+        check_phase_sibling_active, the corrective-task path) already
+        includes it, this one didn't. An agent can spawn subtasks via
+        create_task for the remainder of its own assigned work and then
+        mark ITS OWN task done -- those subtasks can legitimately sit
+        "queued" (QueueService's own capacity-gated status, distinct from
+        "pending") waiting for a dispatch slot, not orphaned. Without this,
+        the phase was declared complete and the pipeline advanced past it
+        the moment the one dispatched task finished, leaving the queued
+        subtasks to sit forever (nothing re-checks a phase already
+        advanced past) while a LATER phase reviewed work that was never
+        actually finished. Confirmed live: task 4bf4518f (development)
+        completed having spawned 5 subtasks (C1 through C10); all 5 sat
+        "queued" while adversarial_review ran and completed against the
+        incomplete implementation."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-queued-subtask",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="C1+C2: remaining work the primary task delegated",
+                    done_definition="d",
+                    status="queued",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        assert result is None, "must not fire the completion transition while a sibling task is still queued"
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+
 
 class TestReleaseStaleTaskCreationClaims:
     """Regression, found live: _case_in_progress_complete's own claim check
