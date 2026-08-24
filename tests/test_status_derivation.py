@@ -78,6 +78,48 @@ class TestDeriveFeatureStatus:
             result = derive_feature_status(session, "feat-1")
         assert result == "paused"
 
+    def test_does_not_stay_paused_once_its_workflow_resumed(self, db_manager):
+        """A workflow can resume through paths that never call
+        resume_feature (the self-heal auto-resume sweep, a direct DB/admin
+        resume) -- Feature.status must not be trusted forever once that
+        happens, or the feature reports "paused" indefinitely while its
+        workflow is genuinely back to dispatching real tasks. Confirmed
+        live: feature feat-e1d649cf (WorktreeManager Parameterization)
+        showed "paused" in the UI while its development-phase task was
+        pending/in-flight, because its workflow had resumed without going
+        through resume_feature."""
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            # Workflow is active again, not paused -- e.g. resumed by the
+            # self-heal sweep or an admin action, bypassing resume_feature.
+            wf = Workflow(id="wf-1", name="Test", status="active", phases_folder_path="/tmp/phases")
+            session.add(wf)
+
+            feature = Feature(
+                id="feat-1",
+                design_id="design-1",
+                feature_key="test-feature",
+                name="Test Feature",
+                scope="Test scope",
+                workflow_id="wf-1",
+                status="paused",  # stale -- resume_feature never ran
+            )
+            session.add(feature)
+
+            # Real, in-flight work under the resumed workflow.
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", raw_description="Task 1",
+                done_definition="Done", status="done",
+            ))
+            session.add(Task(
+                id="task-2", workflow_id="wf-1", raw_description="Task 2",
+                done_definition="Done", status="pending",
+            ))
+
+        with db_manager.session_scope() as session:
+            result = derive_feature_status(session, "feat-1")
+        assert result == "active"
+
     def test_returns_completed_when_all_tasks_done(self, db_manager):
         """Should return 'completed' when all tasks are done."""
         with db_manager.session_scope() as session:

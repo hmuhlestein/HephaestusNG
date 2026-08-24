@@ -613,3 +613,21 @@ def client(autopilot_dirs):
                 with patch("src.autopilot.service.get_registry") as mock_reg:
                     mock_reg.return_value.running.return_value = []
                     yield TestClient(app)
+
+
+def pytest_configure(config):
+    """Read coverage_floor from hephaestus_config.yaml.
+
+    The primary enforcement path is .coveragerc's fail_under = 20 (read
+    by pytest-cov directly).  This hook exposes the YAML-configured value
+    on config so other plugins/scripts can access it programmatically.
+    Override on the CLI with: pytest --cov-fail-under=N
+    """
+    try:
+        from src.core.simple_config import get_config
+        cfg = get_config()
+        config._heph_coverage_floor = cfg.testing.coverage_floor
+        config._heph_new_code_coverage_floor = cfg.testing.new_code_coverage_floor
+    except Exception:
+        config._heph_coverage_floor = 20
+        config._heph_new_code_coverage_floor = 80

@@ -498,6 +498,35 @@ class TicketTrackingConfig(_ConfigSection):
         pass
 
 
+class TestingConfig(_ConfigSection):
+    """Test coverage thresholds and CI quality gates.
+
+    Two floors, read from hephaestus_config.yaml's `testing:` section:
+
+    - coverage_floor: the minimum overall (existing + new code combined)
+      coverage percentage.  Applied via pytest-cov's --cov-fail-under.
+      20 % is a deliberately low starter floor -- the repo has never had
+      a coverage gate, so jumping straight to 80 % would fail every CI
+      run.  Raise it as coverage improves.
+
+    - new_code_coverage_floor: the minimum coverage percentage for lines
+      changed in the current diff (vs. origin/main).  Enforced by
+      diff-cover in scripts/check_coverage.py.  80 % is the real bar --
+      every NEW line should be tested.
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        testing = config.get("testing", {})
+        self.coverage_floor = testing.get("coverage_floor", 20)
+        self.new_code_coverage_floor = testing.get("new_code_coverage_floor", 80)
+
+    def apply_env_overrides(self):
+        if os.getenv("COVERAGE_FLOOR"):
+            self.coverage_floor = int(os.getenv("COVERAGE_FLOOR"))
+        if os.getenv("NEW_CODE_COVERAGE_FLOOR"):
+            self.new_code_coverage_floor = int(os.getenv("NEW_CODE_COVERAGE_FLOOR"))
+
+
 _DOMAIN_CLASSES = {
     "server": ServerConfig,
     "paths": PathsConfig,
@@ -511,6 +540,7 @@ _DOMAIN_CLASSES = {
     "diagnostic_agent": DiagnosticAgentConfig,
     "autopilot": AutopilotConfig,
     "ticket_tracking": TicketTrackingConfig,
+    "testing": TestingConfig,
 }
 
 
