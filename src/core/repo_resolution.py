@@ -78,6 +78,16 @@ def resolve_repo(
         repo = session.query(ProjectRepo).filter_by(id=repo_id, project_id=project_id).first()
         if repo is not None:
             return repo
+        # Verify the repo_id exists at all (may belong to a different project)
+        other_repo = session.query(ProjectRepo).filter_by(id=repo_id).first()
+        if other_repo is not None:
+            logger.error(
+                "repo_id=%s belongs to project=%s, not project=%s — refusing cross-project resolution",
+                repo_id,
+                other_repo.project_id,
+                project_id,
+            )
+            return None  # Do NOT fall back — caller must handle None
         logger.warning(
             "repo_id=%s not found for project=%s, falling back to primary repo",
             repo_id,

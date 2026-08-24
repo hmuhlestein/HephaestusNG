@@ -69,7 +69,8 @@ def _resolve_repo_info_for_commit(
             if repo:
                 return repo.path, repo.label
             return None, None
-    except Exception:
+    except Exception as e:
+        logger.error("Failed to resolve repo info for commit %s: %s", commit_sha, e)
         return None, None
 
 

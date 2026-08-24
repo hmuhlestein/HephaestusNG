@@ -211,8 +211,8 @@ class TestResolveRepo:
         assert result.id == primary.id
         assert "repo_id=repo-nonexistent not found" in caplog.text
 
-    def test_repo_id_from_different_project_falls_back(self, session, caplog):
-        """Gotcha 2: cross-project repo_id must not resolve."""
+    def test_repo_id_from_different_project_returns_none(self, session, caplog):
+        """Gotcha 2: cross-project repo_id must not resolve — returns None."""
         proj_a = _make_project(session, project_id="proj-a", base_dir="/tmp/a")
         proj_b = _make_project(session, project_id="proj-b", base_dir="/tmp/b")
         ensure_primary_repo(session, proj_a)
@@ -220,13 +220,13 @@ class TestResolveRepo:
 
         repo_b = resolve_primary_repo(session, "proj-b")
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.ERROR):
             result = resolve_repo(session, "proj-a", repo_b.id)
 
-        # Must NOT return proj_b's repo — falls back to proj_a's primary
-        assert result is not None
-        assert result.project_id == "proj-a"
-        assert "not found for project=proj-a" in caplog.text
+        # Must NOT return proj_b's repo — returns None to prevent cross-project resolution
+        assert result is None
+        assert "belongs to project=proj-b" in caplog.text
+        assert "refusing cross-project resolution" in caplog.text
 
     def test_no_project_repos_returns_none(self, session):
         """Project with zero repos + repo_id=None → None."""

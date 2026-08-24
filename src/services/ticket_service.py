@@ -1357,18 +1357,22 @@ class TicketService:
                 ),
             )
             if proc.returncode != 0:
-                logger.warning(
-                    "Commit %s not found in repo %s (soft check, linking anyway)",
+                logger.error(
+                    "Commit %s not found in repo %s — refusing to link nonexistent commit",
                     commit_sha,
                     main_repo_path,
                 )
+                raise ValueError(f"Commit {commit_sha} not found in repo {main_repo_path}")
         except (OSError, Exception) as e:
-            logger.warning(
-                "git cat-file check failed for %s in %s: %s (treating as exists)",
+            if isinstance(e, ValueError):
+                raise
+            logger.error(
+                "git cat-file check failed for %s in %s: %s — refusing to link",
                 commit_sha,
                 main_repo_path,
                 e,
             )
+            raise ValueError(f"Cannot verify commit {commit_sha} exists: {e}") from e
 
         # _get_commit_stats shells out to `git show --numstat` --
         # blocking, offloaded so it doesn't stall the event loop.
