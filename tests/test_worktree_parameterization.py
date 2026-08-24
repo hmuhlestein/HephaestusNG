@@ -457,6 +457,6 @@ class TestWorktreeManagerParameterization:
         manager_explicit = WorktreeManager(db, repo_path=Path(temp_repo.working_dir))
         assert manager_explicit._explicit_repo_path
         assert str(temp_repo.working_dir) in str(manager_explicit.worktree_base)
-        assert override_path not in str(manager_explicit.worktree_base)
+        assert str(override_path) not in str(manager_explicit.worktree_base)
 
         shutil.rmtree(override_path, ignore_errors=True)
