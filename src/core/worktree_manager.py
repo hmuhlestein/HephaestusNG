@@ -132,6 +132,7 @@ class WorktreeManager:
         self._conflict_resolver = ConflictResolver()
         self._worktree_remover = WorktreeRemover()
         self._worktree_base_cache: Optional[Path] = None  # BLOCKER-1: reset in reload()
+        self._explicit_repo_path = (repo_path is not None)  # BLOCKER-1: track if repo_path was explicit
         self._ensure_excludes()
         logger.info(f"WorktreeManager initialized for repo: {self._project_root}")
 
@@ -165,16 +166,19 @@ class WorktreeManager:
         """Base directory for agent worktrees (``<repo>/.worktrees``).
 
         BLOCKER-1 fix: cache the result so reload() can invalidate it.
-        Without this, a global worktree_base_path config override would
-        silently redirect worktrees to the wrong project after reload().
+        When repo_path was explicitly provided, ignore the global config
+        override to prevent redirecting worktrees to the wrong project.
         """
         if self._worktree_base_cache is not None:
             return self._worktree_base_cache
-        override = getattr(self.config.paths, "worktree_base_path", None)
-        if override:
-            result = Path(override)
-        else:
-            result = self._project_root / WORKTREES_SUBDIR
+        # Only use config override when no explicit repo_path was given
+        if not self._explicit_repo_path:
+            override = getattr(self.config.paths, "worktree_base_path", None)
+            if override:
+                result = Path(override)
+                self._worktree_base_cache = result
+                return result
+        result = self._project_root / WORKTREES_SUBDIR
         self._worktree_base_cache = result
         return result
 

@@ -424,3 +424,39 @@ class TestWorktreeManagerParameterization:
         # Should fall back to primary (none set, so any repo)
         result = resolve_repo_path(db_session, "proj-multi", None)
         assert result == Path("/tmp/frontend")
+
+    def test_explicit_repo_path_ignores_config_override(self, temp_repo, monkeypatch):
+        """BLOCKER-1: Verify explicit repo_path ignores global worktree_base_path.
+
+        When repo_path is explicitly provided to the constructor, the global
+        config.paths.worktree_base_path override should be ignored to prevent
+        redirecting worktrees to the wrong project.
+        """
+        import src.core.simple_config
+
+        config = src.core.simple_config.Config()
+        config.git.main_repo_path = Path(temp_repo.working_dir)
+        # Set a global override that points to a different location
+        override_path = Path(tempfile.mkdtemp()) / "override_worktrees"
+        config.paths.worktree_base_path = override_path
+
+        monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
+        monkeypatch.setattr("src.core.worktree_manager.get_config", lambda: config)
+
+        from src.core.database import DatabaseManager
+
+        db = DatabaseManager(":memory:")
+        db.create_tables()
+
+        # Without explicit repo_path, should use override
+        manager_default = WorktreeManager(db)
+        assert manager_default.worktree_base == override_path
+        assert not manager_default._explicit_repo_path
+
+        # With explicit repo_path, should IGNORE override and use repo path
+        manager_explicit = WorktreeManager(db, repo_path=Path(temp_repo.working_dir))
+        assert manager_explicit._explicit_repo_path
+        assert str(temp_repo.working_dir) in str(manager_explicit.worktree_base)
+        assert override_path not in str(manager_explicit.worktree_base)
+
+        shutil.rmtree(override_path, ignore_errors=True)
