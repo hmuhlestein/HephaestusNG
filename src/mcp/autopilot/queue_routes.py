@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from src.autopilot.repair_service import repair_service
@@ -15,10 +15,12 @@ from src.core.constants import (
     DESIGN_WORKFLOW_DEFINITION_IDS,
 )
 from src.mcp.autopilot._shared import ALLOWED_EXTENSIONS, DesignQueueAdd, DesignQueueItem, _cached, _get_effective_queue_dir, _invalidate, _safe_path, _store
+from src.mcp.server._shared import verify_agent_authentication
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
 
 def _get_queue_order_path(project_id: Optional[str] = None) -> Optional[Path]:
     try:
@@ -31,6 +33,7 @@ def _get_queue_order_path(project_id: Optional[str] = None) -> Optional[Path]:
     except (FileNotFoundError, RuntimeError):
         return None
 
+
 def _load_queue_order(project_id: Optional[str] = None) -> List[str]:
     path = _get_queue_order_path(project_id)
     if path and path.exists():
@@ -40,14 +43,24 @@ def _load_queue_order(project_id: Optional[str] = None) -> List[str]:
             pass
     return []
 
+
 def _save_queue_order(order: List[str], project_id: Optional[str] = None):
     path = _get_queue_order_path(project_id)
     if path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(order))
 
+
 @router.get("/queue", response_model=List[DesignQueueItem])
-async def list_design_queue(project_id: Optional[str] = None):
+async def list_design_queue(
+    project_id: Optional[str] = None,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated queue list attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
+
     cache_key = f"queue:{project_id}" if project_id else "queue"
     cached = _cached(cache_key)
     if cached is not None:
@@ -87,12 +100,22 @@ async def list_design_queue(project_id: Optional[str] = None):
 
     return _store(cache_key, items)
 
+
 class QueueReorderRequest(BaseModel):
     filenames: List[str]
     project_id: Optional[str] = None
 
+
 @router.post("/queue/reorder")
-async def reorder_queue(req: QueueReorderRequest):
+async def reorder_queue(
+    req: QueueReorderRequest,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated queue reorder attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
+
     try:
         effective_dir = _get_effective_queue_dir(req.project_id)
     except (FileNotFoundError, RuntimeError) as e:
@@ -112,9 +135,18 @@ async def reorder_queue(req: QueueReorderRequest):
     _invalidate("queue", f"queue:{req.project_id}" if req.project_id else "queue")
     return {"order": req.filenames}
 
+
 @router.post("/queue/requeue")
-async def requeue_design(request: dict):
+async def requeue_design(
+    request: dict,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
     """Move a design to the front of the queue and pause its active workflow."""
+    # SECURITY: Verify agent authentication
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated requeue attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
+
     from src.core.database import Agent, Task, Workflow, get_db
 
     filename = request.get("filename")
@@ -174,11 +206,18 @@ async def requeue_design(request: dict):
                             db.query(Task)
                             .filter(
                                 Task.workflow_id == wf.id,
-                                Task.status.in_([
-                                    "pending", "queued", "assigned", "in_progress",
-                                    "blocked", "under_review", "validation_in_progress",
-                                    "needs_work",
-                                ]),
+                                Task.status.in_(
+                                    [
+                                        "pending",
+                                        "queued",
+                                        "assigned",
+                                        "in_progress",
+                                        "blocked",
+                                        "under_review",
+                                        "validation_in_progress",
+                                        "needs_work",
+                                    ]
+                                ),
                             )
                             .all()
                         )
@@ -247,6 +286,7 @@ async def requeue_design(request: dict):
                         # does -- that would strand every requeued design
                         # paused across the next restart.
                         from src.autopilot.orchestrator.engine_client import pause_workflow
+
                         pause_workflow(wf.id, reason="user", session=db)
                         paused_count += 1
                         all_queued_task_ids.extend(queued_task_ids)
@@ -273,9 +313,17 @@ async def requeue_design(request: dict):
         "paused_workflows": paused_count,
     }
 
+
 @router.post("/queue/rerun")
-async def rerun_design(request: dict):
+async def rerun_design(
+    request: dict,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
     """Rerun a design: stop everything, move to front, start pipeline."""
+    # SECURITY: Verify agent authentication
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated rerun attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
     filename = request.get("filename")
     if not filename:
         raise HTTPException(400, "filename is required")
@@ -292,11 +340,20 @@ async def rerun_design(request: dict):
         invalidate=_invalidate,
     )
 
+
 @router.post("/queue/repair")
-async def repair_design(request: dict):
+async def repair_design(
+    request: dict,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
     """Repair a design: spin up a recovery workflow and a review agent that checks
     and fixes stuck/incomplete tasks. (Branch reconciliation is obsolete under
     per-task worktree isolation — failed worktrees are discarded, never merged.)"""
+    # SECURITY: Verify agent authentication
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated repair attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
+
     filename = request.get("filename")
     if not filename:
         raise HTTPException(400, "filename is required")
@@ -307,17 +364,31 @@ async def repair_design(request: dict):
 
     return await repair_service.repair(project_path, filename)
 
+
 @router.get("/queue/repair/{repair_id}")
-async def get_repair_status(repair_id: str):
+async def get_repair_status(
+    repair_id: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
     """Get repair status and results."""
+    # SECURITY: Verify agent authentication
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated repair status attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
+
     return repair_service.get_repair_status(repair_id)
+
 
 class DesignAddByPath(BaseModel):
     file_path: str
     project_path: str
 
+
 @router.post("/designs/add")
-async def add_design_by_path(req: DesignAddByPath):
+async def add_design_by_path(
+    req: DesignAddByPath,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
     """Add a design document by file path.
 
     Validates file exists, finds/creates AutopilotProject, checks for duplicates,
@@ -326,6 +397,11 @@ async def add_design_by_path(req: DesignAddByPath):
     Returns:
         Design ID, name, and status
     """
+    # SECURITY: Verify agent authentication
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated add design by path attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
+
     import hashlib
     import uuid
 
@@ -367,10 +443,7 @@ async def add_design_by_path(req: DesignAddByPath):
             max_concurrent = get_config().autopilot.max_concurrent_projects
             want_active = active_count < max_concurrent
             if not want_active:
-                logger.warning(
-                    f"Not auto-activating new project {project_path.name!r}: "
-                    f"max_concurrent_projects ({max_concurrent}) already reached"
-                )
+                logger.warning(f"Not auto-activating new project {project_path.name!r}: max_concurrent_projects ({max_concurrent}) already reached")
             from src.services.system_settings import get_default_cost_limit
 
             # Apply the system default spend cap (settings:default_cost_limit_usd).
@@ -435,8 +508,17 @@ async def add_design_by_path(req: DesignAddByPath):
             "status": "pending",
         }
 
+
 @router.post("/queue", response_model=DesignQueueItem)
-async def add_to_queue(item: DesignQueueAdd):
+async def add_to_queue(
+    item: DesignQueueAdd,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated add to queue attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
+
     try:
         effective_dir = _get_effective_queue_dir(item.project_id)
     except (FileNotFoundError, RuntimeError) as e:
@@ -469,8 +551,18 @@ async def add_to_queue(item: DesignQueueAdd):
         extension=ext,
     )
 
+
 @router.delete("/queue/{filename}")
-async def remove_from_queue(filename: str, project_id: Optional[str] = None):
+async def remove_from_queue(
+    filename: str,
+    project_id: Optional[str] = None,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated remove from queue attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
+
     try:
         effective_dir = _get_effective_queue_dir(project_id)
     except (FileNotFoundError, RuntimeError) as e:
@@ -482,8 +574,18 @@ async def remove_from_queue(filename: str, project_id: Optional[str] = None):
     _invalidate("queue", f"queue:{project_id}" if project_id else "queue", "status")
     return {"removed": filename}
 
+
 @router.get("/queue/{filename}/content")
-async def get_queue_item_content(filename: str, project_id: Optional[str] = None):
+async def get_queue_item_content(
+    filename: str,
+    project_id: Optional[str] = None,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated queue content attempt from agent {agent_id}")
+        raise HTTPException(status_code=401, detail="Agent not authenticated.")
+
     try:
         effective_dir = _get_effective_queue_dir(project_id)
     except (FileNotFoundError, RuntimeError) as e:
