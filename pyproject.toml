@@ -63,6 +63,12 @@ python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
+# NOTE: sqlalchemy.ext.mypy.plugin was trialed 2026-08-22 and REVERTED --
+# it cleared database.py's 108 "Base is not valid as a type" errors but the
+# models use 1.x-style relationship()/Column() without Mapped[] annotations,
+# so the plugin instead emitted 160 "please specify Mapped[<type>]" errors
+# in the same file (1008 -> 1131 total). Re-enable only as part of a
+# Mapped[] annotation migration. See docs/TECH_DEBT_SURVEY_2026-08-22.md §1.
 
 [tool.ruff]
 line-length = 200
