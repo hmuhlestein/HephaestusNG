@@ -31,6 +31,13 @@ def status_env(tmp_path, monkeypatch):
     it directly), plus a seeded AutopilotProject/AutopilotDesign pair."""
     db_path = tmp_path / "test.db"
     monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+    # Mock authentication to always pass in tests (async function)
+    async def mock_verify_auth(agent_id):
+        return True
+    monkeypatch.setattr(
+        "src.mcp.server._shared.verify_agent_authentication",
+        mock_verify_auth,
+    )
 
     manager = DatabaseManager(str(db_path))
     manager.create_tables()
