@@ -95,7 +95,8 @@ class Terminator:
         """Poll capture-pane until it matches the CLI's own idle/ready
         pattern (CLIAgentInterface.get_health_check_pattern() -- the same
         "back at the input prompt" signal _wait_for_cli_ready polls for at
-        startup, e.g. Claude Code's "›") or agents.termination_delay
+        startup, e.g. Claude Code's "›") on two consecutive polls of only
+        the pane's LAST line, or agents.termination_delay
         (hephaestus_config.yaml) elapses, whichever comes first.
 
         The shutdown-side mirror of _wait_for_cli_ready's startup polling:
@@ -104,6 +105,21 @@ class Terminator:
         ready-for-the-first-prompt). agents.termination_delay is the
         ceiling here, not a flat wait -- an idle pattern match returns
         immediately, so a fast turn doesn't pay the full delay.
+
+        Both the last-line scoping and the two-consecutive-polls
+        requirement exist for the same reason: several CLIs' patterns
+        (pi/opencode/droid) include a bare ">" -- matching it against the
+        whole last-10-lines block (the original scope) means any stray ">"
+        anywhere in the agent's own just-rendered tool output (a diff, a
+        quote, a comparison) falsely declares it idle while it's still
+        actively finishing a turn. A single last-line match is stronger
+        but still not proof -- a turn can transiently render a line ending
+        in ">" mid-response before continuing -- so two consecutive polls
+        (poll_interval apart) must agree before this returns. Confirmed
+        live: agent e3720f9a's tmux session was killed while its
+        complete_my_task response was still in flight, surfacing to the
+        agent as "MCP extension session shutdown" even though the
+        underlying status update had already landed.
         """
         import re
 
@@ -120,14 +136,20 @@ class Terminator:
             return
 
         max_polls = max(1, int(timeout / poll_interval))
+        consecutive_idle = 0
         for _ in range(max_polls):
             try:
                 captured = pane.cmd("capture-pane", "-p", "-S", "-10")
-                text = "\n".join(captured.stdout) if captured.stdout else ""
+                lines = [line for line in captured.stdout if line.strip()] if captured.stdout else []
+                last_line = lines[-1] if lines else ""
             except Exception:
-                text = ""
-            if text and re.search(pattern, text):
-                return
+                last_line = ""
+            if last_line and re.search(pattern, last_line):
+                consecutive_idle += 1
+                if consecutive_idle >= 2:
+                    return
+            else:
+                consecutive_idle = 0
             time.sleep(poll_interval)
 
     def _terminate_agent_sync(self, agent_id: str) -> None:
