@@ -1820,6 +1820,23 @@ class PhaseManager:
                 )
                 return
 
+            # Archive this run's artifacts (including feature_report.html)
+            # into the permanent feature folder now, before deciding
+            # whether to pause for review or complete outright -- needed
+            # either way, and review mode's whole point is letting a human
+            # inspect the report BEFORE approving, not only after. This
+            # used to run only in the auto-complete branch below; under
+            # review mode _complete_workflow returned from the pause
+            # branch first, and review_feature's own approve branch
+            # (src/mcp/autopilot/feature_routes.py) never called this
+            # either -- so a review-mode feature's report was invisible
+            # both while pending review AND after approval. Safe to call
+            # here even though git_expert hasn't merged yet: the worktree
+            # (and its agent-written .hephaestus/ reports) already exists
+            # and is kept regardless of merge status, per this method's
+            # own docstring.
+            self._populate_feature_folder(session, workflow)
+
             # Every phase (including git_expert -- it dispatches like
             # any other phase now; the agent commits, pushes, and opens a
             # PR, but scripts/agent-safe-bin/git on its own PATH blocks
@@ -1851,7 +1868,6 @@ class PhaseManager:
 
             derive_workflow_status(session, self.workflow_id, write_back=True)
             logger.info(f"Workflow {self.workflow_id} completed (all phases done)")
-            self._populate_feature_folder(session, workflow)
 
             if workflow.definition_id in PHASE0_DEFINITION_IDS:
                 # Generic completion hook for phase0-type workflows, in
