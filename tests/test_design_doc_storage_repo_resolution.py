@@ -113,6 +113,116 @@ class TestAddProjectDesignRepoResolution:
         with pytest.raises(HTTPException):
             await add_project_design("proj-4", _make_request(destination="../../etc"), agent_id="test-agent")
 
+    @pytest.mark.asyncio
+    async def test_add_project_design_unknown_project_404s(self, db_manager, tmp_path):
+        from fastapi import HTTPException
+
+        from src.mcp.autopilot.design_file_routes import add_project_design
+
+        with pytest.raises(HTTPException) as exc_info:
+            await add_project_design("proj-nonexistent", _make_request(), agent_id="test-agent")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_add_project_design_invalid_name_rejected(self, db_manager, tmp_path):
+        from fastapi import HTTPException
+
+        from src.mcp.autopilot.design_file_routes import add_project_design
+
+        project_dir = tmp_path / "proj-invalid-name"
+        project_dir.mkdir()
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-5", name="p", base_dir=str(project_dir)))
+            session.add(ProjectRepo(id="repo-primary", project_id="proj-5", label="primary", path=str(project_dir), is_primary=True))
+
+        # Empty name after sanitization should be rejected
+        with pytest.raises(HTTPException) as exc_info:
+            await add_project_design("proj-5", _make_request(name="   "), agent_id="test-agent")
+        assert exc_info.value.status_code == 400
+
+
+class TestSyncProjectDesigns:
+    @pytest.mark.asyncio
+    async def test_sync_project_designs_auth_required(self, db_manager, tmp_path, monkeypatch):
+        from fastapi import HTTPException
+
+        import src.mcp.autopilot.design_file_routes as routes
+        from src.mcp.autopilot.design_file_routes import sync_project_designs
+
+        async def _deny(agent_id):
+            return False
+
+        monkeypatch.setattr(routes, "verify_agent_authentication", _deny)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await sync_project_designs("proj-1", agent_id="bad-agent")
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_sync_project_designs_unknown_project_404s(self, db_manager, tmp_path):
+        from fastapi import HTTPException
+
+        from src.mcp.autopilot.design_file_routes import sync_project_designs
+
+        with pytest.raises(HTTPException) as exc_info:
+            await sync_project_designs("proj-nonexistent", agent_id="test-agent")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_sync_project_designs_returns_design_list(self, db_manager, tmp_path):
+        from src.mcp.autopilot.design_file_routes import sync_project_designs
+
+        project_dir = tmp_path / "proj-sync"
+        project_dir.mkdir()
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-sync", name="p", base_dir=str(project_dir)))
+
+        result = await sync_project_designs("proj-sync", agent_id="test-agent")
+        assert isinstance(result, list)
+
+
+class TestReloadProjectDesigns:
+    @pytest.mark.asyncio
+    async def test_reload_project_designs_auth_required(self, db_manager, tmp_path, monkeypatch):
+        from fastapi import HTTPException
+
+        import src.mcp.autopilot.design_file_routes as routes
+        from src.mcp.autopilot.design_file_routes import reload_project_designs
+
+        async def _deny(agent_id):
+            return False
+
+        monkeypatch.setattr(routes, "verify_agent_authentication", _deny)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await reload_project_designs("proj-1", agent_id="bad-agent")
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_reload_project_designs_unknown_project_404s(self, db_manager, tmp_path):
+        from fastapi import HTTPException
+
+        from src.mcp.autopilot.design_file_routes import reload_project_designs
+
+        with pytest.raises(HTTPException) as exc_info:
+            await reload_project_designs("proj-nonexistent", agent_id="test-agent")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_reload_project_designs_returns_design_list(self, db_manager, tmp_path):
+        from src.mcp.autopilot.design_file_routes import reload_project_designs
+
+        project_dir = tmp_path / "proj-reload"
+        project_dir.mkdir()
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-reload", name="p", base_dir=str(project_dir)))
+
+        result = await reload_project_designs("proj-reload", agent_id="test-agent")
+        assert isinstance(result, list)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
