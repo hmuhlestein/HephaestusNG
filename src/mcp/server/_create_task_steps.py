@@ -392,7 +392,7 @@ async def _apply_ticket_blocking_if_needed(request: CreateTaskRequest, task_id: 
     }
 
 
-async def _resolve_phase_and_enrich(request: CreateTaskRequest, agent_id: str) -> Dict[str, Any]:
+async def _resolve_phase_and_enrich(request: CreateTaskRequest, agent_id: str, task_id: str) -> Dict[str, Any]:
     """Determine phase (if a workflow is active), working directory, and run
     LLM enrichment (shared with process_queue -- see TaskEnrichmentService).
     Returns a dict of the values later steps need."""
@@ -431,12 +431,27 @@ async def _resolve_phase_and_enrich(request: CreateTaskRequest, agent_id: str) -
     if not working_directory:
         working_directory = os.getcwd()
 
+    # _persist_new_task already resolved+validated+persisted this task's
+    # repo_id (_resolve_task_repo_id) before this function ever runs --
+    # read it back rather than re-running that resolution (which can
+    # backfill Feature.repo_id under a lock; safe to call twice but
+    # wasteful and redundant). Needed so enrichment gets the multi-repo
+    # prompt section (REQ-17/18) scoped to the task's own repo, not just
+    # the project's generic repo list.
+    session = server_state.db_manager.get_session()
+    try:
+        persisted_repo_id = session.query(Task.repo_id).filter_by(id=task_id).scalar()
+    finally:
+        session.close()
+
     enrichment_result = await TaskEnrichmentService.enrich(
         raw_description=request.task_description,
         done_definition=request.done_definition,
         phase_context_str=phase_context_str,
         requesting_agent_id=agent_id,
         phase_id=phase_id,
+        workflow_id=workflow_id or request.workflow_id,
+        repo_id=persisted_repo_id,
     )
 
     return {
