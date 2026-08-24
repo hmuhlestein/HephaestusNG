@@ -381,13 +381,23 @@ def resume_workflow(
         return False
 
 
-def pause_workflow_direct(workflow_id: str) -> bool:
+def pause_workflow_direct(workflow_id: str, reason: str = "system") -> bool:
     """Pause workflow directly in database (H-2 fix).
 
     Thin wrapper over pause_workflow for existing callers -- see that
     function for the shared invariant this closes.
+
+    Defaults to "system", not "user": every existing caller (pipeline.py's
+    duplicate-workflow guard, workflow cleanup, and project-orchestrator-
+    stop cascade) is an automated cleanup path, not an operator clicking
+    pause -- hardcoding "user" here mislabeled all of them, and
+    resume_workflow/_try_auto_resume_paused_workflow specifically treat
+    "user" as requiring an explicit forced resume while "system" is
+    eligible for the automatic retry-after-cooldown path. A workflow paused
+    this way sat stuck forever, permanently excluded from ever being
+    auto-recovered, misreported as if a human had paused it on purpose.
     """
-    return pause_workflow(workflow_id, reason="user")
+    return pause_workflow(workflow_id, reason=reason)
 
 
 def complete_workflow_direct(workflow_id: str) -> bool:
@@ -585,11 +595,29 @@ def check_phase_sibling_active(
     # the plainly-active statuses -- a sibling task mid-review or mid-
     # validation still owns this phase; missing it here means a second
     # task/agent can get spawned onto the same phase concurrently.
+    #
+    # Deliberately does NOT include "queued": that status means no agent
+    # has been dispatched yet, so a queued sibling is no evidence another
+    # dispatch is in flight -- the actual race this guard defends against
+    # (two callers both reaching a live agent for this phase) is already
+    # caught by "assigned"/"in_progress" below, since QueueService's own
+    # get_next_queued_task flips a task to "assigned" BEFORE this guard
+    # ever runs against it. Including "queued" instead created a livelock:
+    # when an agent splits its own remaining work into several sibling
+    # subtasks via create_task (a documented, legitimate pattern -- see
+    # create_agent_for_task_direct's identical carve-out below) and
+    # QueueService's capacity limits mean they can't all dispatch at once,
+    # EVERY one of them finds another still sitting "queued" and refuses
+    # -- none can ever go first, since none can leave "queued" without
+    # itself being dispatched. Confirmed live: 5 development subtasks
+    # (workflow b7bd02cc) stuck "queued" for over a day, QueueService
+    # re-attempting dispatch every ~60s and hitting this exact deadlock
+    # every time.
     query = session.query(_Task).filter(
         _Task.phase_id == phase_id,
         _Task.id != task_id,
         _Task.status.in_([
-            "pending", "assigned", "in_progress", "queued",
+            "pending", "assigned", "in_progress",
             "under_review", "validation_in_progress", "needs_work",
         ]),
     )

@@ -3834,7 +3834,9 @@ class TestCleanupStaleWorktrees:
             instances.append(inst)
             return inst
 
-        with patch("src.core.worktree_manager.WorktreeManager", side_effect=_make_instance):
+        with patch("src.core.worktree_manager.WorktreeManager", side_effect=_make_instance), patch(
+            "src.core.repo_resolution.get_project_repos", return_value=[]
+        ):
             await make_monitoring_loop._cleanup_stale_worktrees()
 
         assert len(instances) == 2
@@ -3879,7 +3881,40 @@ class TestCleanupStaleWorktrees:
             inst.cleanup_all_stale_branches.return_value = {"worktrees_cleaned": 0}
             return inst
 
-        with patch("src.core.worktree_manager.WorktreeManager", side_effect=_make_instance):
+        with patch("src.core.worktree_manager.WorktreeManager", side_effect=_make_instance), patch(
+            "src.core.repo_resolution.get_project_repos", return_value=[]
+        ):
             await make_monitoring_loop._cleanup_stale_worktrees()
 
         assert calls == ["/path/fails", "/path/ok"]
+
+    @pytest.mark.asyncio
+    async def test_sweeps_every_repo_of_a_multi_repo_project(
+        self, make_monitoring_loop, mock_db
+    ):
+        """A project with more than one ProjectRepo must have EVERY repo
+        swept, not just AutopilotProject.base_dir."""
+        fake_session = MagicMock()
+        proj1 = MagicMock(id="proj-multi", base_dir="/path/primary")
+        fake_session.query.return_value.filter_by.return_value.all.return_value = [proj1]
+        mock_db.session_scope.return_value.__enter__.return_value = fake_session
+
+        backend_repo = MagicMock(path="/path/primary")
+        frontend_repo = MagicMock(path="/path/frontend")
+
+        instances = []
+
+        def _make_instance(*a, **kw):
+            inst = MagicMock()
+            inst.cleanup_all_stale_branches.return_value = {"worktrees_cleaned": 0}
+            instances.append(inst)
+            return inst
+
+        with patch("src.core.worktree_manager.WorktreeManager", side_effect=_make_instance), patch(
+            "src.core.repo_resolution.get_project_repos", return_value=[backend_repo, frontend_repo]
+        ):
+            await make_monitoring_loop._cleanup_stale_worktrees()
+
+        assert len(instances) == 2
+        reloaded_to = {i.reload.call_args[0][0] for i in instances}
+        assert reloaded_to == {"/path/primary", "/path/frontend"}

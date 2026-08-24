@@ -74,6 +74,19 @@ async def _resume_interrupted_workflows(
         # monitor re-drives it (and the scan below restarts any orphaned agents).
         if reactivate:
             for wf in active:
+                if wf.status == "paused" and wf.paused_by == "review":
+                    # A "review" pause means a human decision (approve/
+                    # request changes) is outstanding -- only review_feature
+                    # (POST /features/{id}/review) may clear it, since it's
+                    # the only endpoint that records feature.review_status/
+                    # reviewed_at. This on-demand Retry/reactivate path used
+                    # to force through it like any other pause, letting a
+                    # design's "Resume" click (or the project Play button's
+                    # already-running fallback) silently clear a pending
+                    # human review with no approval ever recorded. Same bug
+                    # class as resume_feature's identical fix.
+                    logger.info(f"[RESUME] Workflow {wf.id[:8]} is review-paused — skipping reactivate")
+                    continue
                 if wf.status in ("paused", "failed"):
                     if wf.status == "paused":
                         # cascade_to_feature=False: the Feature handling a

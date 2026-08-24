@@ -1,6 +1,6 @@
 default_cli_tool: claude
 default_model: sonnet
-default_thinking_level: low
+default_thinking_level: high
 fallback_cli_tool: pi
 fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
 

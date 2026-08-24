@@ -23,13 +23,9 @@ from sqlalchemy import (
     create_engine,
     event,
 )
-from sqlalchemy import (
-    exc as sqlalchemy_exc,
-)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import backref, relationship, sessionmaker
 from sqlalchemy.pool import QueuePool, StaticPool
-from sqlalchemy.sql import text
 
 Base = declarative_base()
 logger = logging.getLogger(__name__)
@@ -305,9 +301,7 @@ class Task(Base):
     # Ticket tracking integration
     ticket_id = Column(String, ForeignKey("tickets.id"))  # Associated ticket (required when ticket tracking enabled)
     related_ticket_ids = Column(JSON)  # List of related ticket IDs for context
-
-    # Repo tracking (REQ-02) -- nullable, no backfill of historical rows (REQ-05)
-    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
+    repo_id = Column(String, ForeignKey("project_repos.id"))  # ProjectRepo this task is scoped to (multi-repo projects)
 
     # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
     cost_total_usd = Column(Float, default=0.0, nullable=False)
@@ -622,6 +616,7 @@ class AgentWorktree(Base):
     __tablename__ = "agent_worktrees"
 
     agent_id = Column(String, ForeignKey("agents.id"), primary_key=True)
+    repo_id = Column(String, ForeignKey("project_repos.id"))  # ProjectRepo this worktree is scoped to (multi-repo projects)
     worktree_path = Column(Text, nullable=False)
     branch_name = Column(String, unique=True, nullable=False)
     parent_agent_id = Column(String, ForeignKey("agents.id"))
@@ -637,9 +632,6 @@ class AgentWorktree(Base):
     )
     merge_commit_sha = Column(String)
     disk_usage_mb = Column(Integer)
-
-    # Repo tracking (REQ-02)
-    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
 
     # Relationships
     agent = relationship("Agent", foreign_keys=[agent_id], backref="worktree")
@@ -963,8 +955,7 @@ class Ticket(Base):
     parent_ticket_id = Column(String, ForeignKey("tickets.id"))
     task_id = Column(String, ForeignKey("tasks.id"))  # Primary task this ticket relates to
     phase_id = Column(String, ForeignKey("phases.id"))  # Phase where this ticket was created
-    # Repo tracking (REQ-02)
-    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
+    repo_id = Column(String, ForeignKey("project_repos.id"))  # ProjectRepo this ticket is scoped to (multi-repo projects)
     related_task_ids = Column(JSON)  # List of related task IDs
     related_ticket_ids = Column(JSON)  # List of related ticket IDs for context
     tags = Column(JSON)  # List of tags
@@ -1069,14 +1060,12 @@ class TicketCommit(Base):
     id = Column(String, primary_key=True)  # Format: tc-{uuid}
     ticket_id = Column(String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
     agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
+    repo_id = Column(String, ForeignKey("project_repos.id"))  # ProjectRepo this commit belongs to (multi-repo projects)
 
     # Commit Information
     commit_sha = Column(String(40), nullable=False)
     commit_message = Column(Text, nullable=False)
     commit_timestamp = Column(DateTime, nullable=False)
-
-    # Repo tracking (REQ-02)
-    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
 
     # Change Stats
     files_changed = Column(Integer)
@@ -1158,30 +1147,24 @@ class AutopilotProject(Base):
 
 
 class ProjectRepo(Base):
-    """A single git repo belonging to an AutopilotProject.
-
-    Every AutopilotProject has >=1 ProjectRepo after migration -- exactly
-    one is_primary=True. Single-repo projects (the common case) have
-    exactly one row; get_project_context() and the feature architect treat
-    count==1 as "no multi-repo awareness needed" (REQ-21).
-    """
+    """One git repo belonging to a project. A project spans N sibling repos;
+    the primary repo (is_primary=True) is what single-repo projects have
+    always had via AutopilotProject.base_dir."""
 
     __tablename__ = "project_repos"
 
     id = Column(String, primary_key=True)  # Format: repo-{uuid}
-    project_id = Column(
-        String, ForeignKey("autopilot_projects.id", ondelete="CASCADE"), nullable=False
-    )
+    project_id = Column(String, ForeignKey("autopilot_projects.id", ondelete="CASCADE"), nullable=False)
     label = Column(String(100), nullable=False)  # "backend", "frontend"
-    path = Column(Text, nullable=False)  # absolute; need not be under base_dir
+    path = Column(Text, nullable=False)  # absolute path, not required under base_dir
     is_primary = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     project = relationship("AutopilotProject", back_populates="repos")
 
     __table_args__ = (
-        UniqueConstraint("project_id", "path", name="uq_project_repo_path"),
-        UniqueConstraint("project_id", "label", name="uq_project_repo_label"),
+        UniqueConstraint("project_id", "path", name="uq_project_repos_project_path"),
+        UniqueConstraint("project_id", "label", name="uq_project_repos_project_label"),
     )
 
 
@@ -1249,6 +1232,7 @@ class Feature(Base):
     id = Column(String, primary_key=True)  # feat-<uuid8>
     design_id = Column(String, ForeignKey("autopilot_designs.id"), nullable=False)
     feature_key = Column(String(100), nullable=False)  # slug from features.json "id" field
+    repo_id = Column(String, ForeignKey("project_repos.id"))  # ProjectRepo this feature is scoped to (multi-repo projects)
     name = Column(String, nullable=False)
     scope = Column(Text, nullable=False)  # one-paragraph summary
     files = Column(JSON, nullable=True)  # list of file paths owned
@@ -1266,8 +1250,6 @@ class Feature(Base):
         default="pending",
     )
     workflow_id = Column(String, ForeignKey("workflows.id"), nullable=True)
-    # Repo tracking (REQ-02/REQ-19): every Feature bound to exactly one repo
-    repo_id = Column(String, ForeignKey("project_repos.id"), nullable=True)
     scope_doc_path = Column(Text, nullable=True)  # abs path to scope.md in permanent record
     feature_record_path = Column(Text, nullable=True)  # abs path to designs/.../features/<key>/
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

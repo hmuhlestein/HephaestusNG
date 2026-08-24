@@ -12,9 +12,7 @@ from src.core.database import (
     Agent,
     AgentLog,
     DatabaseManager,
-    ProjectRepo,
     Task,
-    Workflow,
 )
 from src.core.simple_config import get_config
 from src.core.worktree_manager import WorktreeManager
@@ -25,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 class PhaseConfig(NamedTuple):
     """Resolved phase configuration for agent creation."""
-
     cli_type: str
     # The raw (derived-or-caller) phase tool, before the global-default
     # fallback applied for cli_type. The model-preference gate downstream
@@ -42,7 +39,6 @@ class PhaseConfig(NamedTuple):
 
 class WorktreeResolution(NamedTuple):
     """Result of worktree resolution."""
-
     branch_path: str
     branch_name: Optional[str]
     context_files: Dict[str, str]
@@ -106,18 +102,15 @@ class AgentManager:
 
         # Launch-pipeline collaborator (decomposition).
         from src.agents.launch_pipeline import LaunchPipeline
-
         self._launch = LaunchPipeline(self)
 
         # Terminator collaborator (decomposition).
         from src.agents.terminator import Terminator
-
         self._terminator = Terminator(self)
 
         # Output-capture collaborator (decomposition) -- transcript reading,
         # stable-transcript polling, and live capture-pane snapshots.
         from src.agents.output_capture import AgentOutputCapture
-
         self._output_capture = AgentOutputCapture(self.db_manager, self.tmux_server)
 
     def _build_glm_env_vars(
@@ -129,6 +122,7 @@ class AgentManager:
     ) -> Optional[Dict[str, str]]:
         return self._launch._build_glm_env_vars(model, glm_token_env, agent_id, label)
 
+
     def _resolve_mcp_timeout_ms(
         self,
         cli_type: str,
@@ -137,11 +131,14 @@ class AgentManager:
     ) -> Optional[int]:
         return self._launch._resolve_mcp_timeout_ms(cli_type, task_workflow_id, label)
 
+
     def _resolve_project_base_dir(self, workflow_id: Optional[str]) -> Optional[Path]:
         return self._launch._resolve_project_base_dir(workflow_id)
 
+
     def _scoped_worktree_manager(self, workflow_id: Optional[str]) -> WorktreeManager:
         return self._launch._scoped_worktree_manager(workflow_id)
+
 
     def _ensure_codegraph_initialized(self, working_directory: str) -> None:
         # The extraction that produced these delegators renamed the real first
@@ -150,16 +147,24 @@ class AgentManager:
         # string. Currently uncalled, so it never surfaced.
         return self._launch._ensure_codegraph_initialized(working_directory)
 
-    async def _check_termination_race(self, agent_id: str, task_id: str, session_name: str, agent_id_to_return: str) -> Optional[object]:
+
+    async def _check_termination_race(
+        self, agent_id: str, task_id: str, session_name: str, agent_id_to_return: str
+    ) -> Optional[object]:
         return await self._launch._check_termination_race(agent_id, task_id, session_name, agent_id_to_return)
 
-    def _detect_launch_failure(self, pane, cli_agent, cli_type: str, session_name: str) -> None:
+
+    def _detect_launch_failure(
+        self, pane, cli_agent, cli_type: str, session_name: str
+    ) -> None:
         return self._launch._detect_launch_failure(pane, cli_agent, cli_type, session_name)
+
 
     # ── Shared step methods for create_agent_for_task / restart_agent ────
 
     def _check_duplicate_active_agent(self, task: Task) -> Optional[Agent]:
         return self._launch._check_duplicate_active_agent(task)
+
 
     def _resolve_phase_config(
         self,
@@ -171,6 +176,7 @@ class AgentManager:
         phase_thinking_level: Optional[str],
     ) -> PhaseConfig:
         return self._launch._resolve_phase_config(task, cli_type, phase_cli_tool, phase_cli_model, phase_glm_token_env, phase_thinking_level)
+
 
     def _resolve_worktree(
         self,
@@ -190,6 +196,7 @@ class AgentManager:
             context_files=context_files,
         )
 
+
     def _resolve_env_and_model(
         self,
         cli_type: str,
@@ -202,9 +209,8 @@ class AgentManager:
         phase_glm_token_env: Optional[str] = None,
         agent_cli_model: Optional[str] = None,
     ) -> Tuple[Dict[str, str], str, Any]:
-        return self._launch._resolve_env_and_model(
-            cli_type, task, agent_id, label, phase_cli_model=phase_cli_model, phase_cli_tool=phase_cli_tool, phase_glm_token_env=phase_glm_token_env, agent_cli_model=agent_cli_model
-        )
+        return self._launch._resolve_env_and_model(cli_type, task, agent_id, label, phase_cli_model=phase_cli_model, phase_cli_tool=phase_cli_tool, phase_glm_token_env=phase_glm_token_env, agent_cli_model=agent_cli_model)
+
 
     def _resolve_phase_name_and_thinking(
         self,
@@ -212,6 +218,7 @@ class AgentManager:
         phase_thinking_override: Optional[str],
     ) -> Tuple[Optional[str], str, Optional[str]]:
         return self._launch._resolve_phase_name_and_thinking(task, phase_thinking_override)
+
 
     def _resolve_session_id(
         self,
@@ -223,7 +230,10 @@ class AgentManager:
         excluded_types: Tuple[str, ...],
     ) -> str:
         # excluded_types is keyword-only on the target.
-        return self._launch._resolve_session_id(task, agent_type, phase_name, model, excluded_types=excluded_types)
+        return self._launch._resolve_session_id(
+            task, agent_type, phase_name, model, excluded_types=excluded_types
+        )
+
 
     def _prepare_launch_environment(
         self,
@@ -236,6 +246,7 @@ class AgentManager:
         prewarm_codegraph: bool = True,
     ) -> "libtmux.Session":
         return self._launch._prepare_launch_environment(session_name, working_directory, env_vars, task, phase_name, cli_agent, prewarm_codegraph)
+
 
     async def _build_and_send_launch_command(
         self,
@@ -274,6 +285,7 @@ class AgentManager:
             label=label,
         )
 
+
     async def _deliver_initial_prompt(
         self,
         pane,
@@ -309,25 +321,15 @@ class AgentManager:
         phase_thinking_level: Optional[str] = None,
         assign_to_task: bool = False,
     ) -> Agent:
-        return await self._launch.create_agent_for_task(
-            task,
-            enriched_data,
-            memories,
-            project_context,
-            cli_type,
-            working_directory,
-            agent_type,
-            use_existing_worktree,
-            commit_sha,
-            phase_cli_tool,
-            phase_cli_model,
-            phase_glm_token_env,
-            phase_thinking_level,
-            assign_to_task,
-        )
+        return await self._launch.create_agent_for_task(task, enriched_data, memories, project_context, cli_type, working_directory, agent_type, use_existing_worktree, commit_sha, phase_cli_tool, phase_cli_model, phase_glm_token_env, phase_thinking_level, assign_to_task)
 
-    def _wait_for_shell_ready(self, pane, timeout: float = 2.0, poll_interval: float = 0.1) -> None:
+
+
+    def _wait_for_shell_ready(
+        self, pane, timeout: float = 2.0, poll_interval: float = 0.1
+    ) -> None:
         return self._launch._wait_for_shell_ready(pane, timeout, poll_interval)
+
 
     def _create_tmux_session(
         self,
@@ -337,31 +339,43 @@ class AgentManager:
     ) -> libtmux.Session:
         return self._launch._create_tmux_session(session_name, working_directory, env_vars)
 
-    async def _export_env_vars_and_verify(self, tmux_session, pane, env_vars: Optional[Dict[str, str]], label: str) -> None:
+
+    async def _export_env_vars_and_verify(
+        self, tmux_session, pane, env_vars: Optional[Dict[str, str]], label: str
+    ) -> None:
         return await self._launch._export_env_vars_and_verify(tmux_session, pane, env_vars, label)
 
-    def _write_task_instructions(self, worktree_path: str, task_id: str, content: str) -> str:
+
+    def _write_task_instructions(
+        self, worktree_path: str, task_id: str, content: str
+    ) -> str:
         return self._launch._write_task_instructions(worktree_path, task_id, content)
 
+
     def _build_instructions_pointer(
-        self,
-        task_id: str,
-        instructions_rel_path: str,
-        restarted: bool = False,
+        self, task_id: str, instructions_rel_path: str, restarted: bool = False,
         agent_name: str = None,
     ) -> str:
         # Same mangled extraction as _ensure_codegraph_initialized above:
         # launch_pipeline's first parameter is task_id, not the manager.
         return self._launch._build_instructions_pointer(task_id, instructions_rel_path, restarted, agent_name)
 
-    async def _send_goal_command(self, pane, cli_agent, task: Task, agent_type: str) -> None:
+
+    async def _send_goal_command(
+        self, pane, cli_agent, task: Task, agent_type: str
+    ) -> None:
         return await self._launch._send_goal_command(pane, cli_agent, task, agent_type)
 
-    async def _verify_instructions_file_read(self, pane, instructions_rel_path: str, agent_id: str) -> None:
+
+    async def _verify_instructions_file_read(
+        self, pane, instructions_rel_path: str, agent_id: str
+    ) -> None:
         return await self._launch._verify_instructions_file_read(pane, instructions_rel_path, agent_id)
+
 
     def _gather_worktree_context(self, task: Task) -> Dict[str, str]:
         return self._launch._gather_worktree_context(task)
+
 
     def _format_initial_message(
         self,
@@ -373,11 +387,19 @@ class AgentManager:
     ) -> str:
         return self._launch._format_initial_message(task, agent_id, branch_path, agent_type, enriched_data)
 
-    async def _verify_prompt_delivery(self, pane, verification_string: str, wait_seconds: int = 10) -> bool:
+
+
+    async def _verify_prompt_delivery(
+        self, pane, verification_string: str, wait_seconds: int = 10
+    ) -> bool:
         return await self._launch._verify_prompt_delivery(pane, verification_string, wait_seconds)
 
-    async def _record_cli_session(self, cli_agent, session_id: str, working_directory: Optional[str], launched_at: float) -> None:
+
+    async def _record_cli_session(
+        self, cli_agent, session_id: str, working_directory: Optional[str], launched_at: float
+    ) -> None:
         return await self._launch._record_cli_session(cli_agent, session_id, working_directory, launched_at)
+
 
     async def _send_initial_prompt_with_retry(
         self,
@@ -392,14 +414,19 @@ class AgentManager:
     ) -> None:
         return await self._launch._send_initial_prompt_with_retry(pane, cli_agent, cli_type, initial_message, agent_id, task_id, max_retries, verify_delivery)
 
+
     async def terminate_agent(self, agent_id: str):
         return await self._terminator.terminate_agent(agent_id)
+
 
     def _commit_wip_in_shared_worktree(self, agent_id: str, task_id: Optional[str]) -> None:
         return self._terminator._commit_wip_in_shared_worktree(agent_id, task_id)
 
+
     async def restart_agent(self, agent_id: str, reason: str = ""):
         return await self._launch.restart_agent(agent_id, reason)
+
+
 
     def get_agent_output(self, agent_id: str, lines: int = 200) -> str:
         return self._output_capture.get_agent_output(agent_id, lines)
@@ -419,7 +446,6 @@ class AgentManager:
     @staticmethod
     def _append_lines(path: Path, new_lines: List[str]) -> None:
         from src.agents.output_capture import AgentOutputCapture
-
         AgentOutputCapture._append_lines(path, new_lines)
 
     def _poll_stable_transcript(self, session_name: str, clean_path: Path) -> None:
@@ -430,6 +456,7 @@ class AgentManager:
 
     def _get_orchestrator_output(self, agent, lines: int) -> str:
         return self._output_capture._get_orchestrator_output(agent, lines)
+
 
     def get_active_agents(self) -> List[Agent]:
         """Get all active agents.
@@ -477,17 +504,25 @@ class AgentManager:
 
         session = self.db_manager.get_session()
         try:
-            agent = await loop.run_in_executor(None, lambda: session.query(Agent).filter_by(id=agent_id).first())
+            agent = await loop.run_in_executor(
+                None, lambda: session.query(Agent).filter_by(id=agent_id).first()
+            )
             if not agent or not agent.tmux_session_name:
                 return False
-            has_session = await loop.run_in_executor(None, self.tmux_server.has_session, agent.tmux_session_name)
+            has_session = await loop.run_in_executor(
+                None, self.tmux_server.has_session, agent.tmux_session_name
+            )
             if not has_session:
                 return False
             keys = get_cli_agent(agent.cli_type).recovery_keystrokes()
             if not keys:
                 return False
             tmux_session = next(
-                (s for s in self.tmux_server.sessions if s.name == agent.tmux_session_name),
+                (
+                    s
+                    for s in self.tmux_server.sessions
+                    if s.name == agent.tmux_session_name
+                ),
                 None,
             )
             if not tmux_session:
@@ -500,10 +535,50 @@ class AgentManager:
                     functools.partial(pane.send_keys, k, enter=False, literal=False),
                 )
                 await asyncio.sleep(0.3)
-            logger.info(f"[RECOVERY] Sent {keys} to agent {agent_id[:8]} ({agent.cli_type}) to break stuck TUI")
+            logger.info(
+                f"[RECOVERY] Sent {keys} to agent {agent_id[:8]} ({agent.cli_type}) to break stuck TUI"
+            )
             return True
         except Exception as e:
-            logger.warning(f"[RECOVERY] Failed to send recovery keys to {agent_id[:8]}: {e}")
+            logger.warning(
+                f"[RECOVERY] Failed to send recovery keys to {agent_id[:8]}: {e}"
+            )
+            return False
+        finally:
+            await loop.run_in_executor(None, session.close)
+
+    async def send_raw_key(self, agent_id: str, key: str) -> bool:
+        """Send a single literal tmux key name (e.g. "Escape") to an
+        agent's pane, unlike send_message_to_agent which sends text
+        followed by Enter. Same tmux-lookup shape as
+        send_recovery_keystrokes above, but user-triggered (tmux viewer's
+        Esc button) rather than mechanical-recovery-triggered, and for
+        exactly one key rather than a CLI-specific sequence."""
+        import functools
+
+        loop = asyncio.get_event_loop()
+        session = self.db_manager.get_session()
+        try:
+            agent = await loop.run_in_executor(
+                None, lambda: session.query(Agent).filter_by(id=agent_id).first()
+            )
+            if not agent or not agent.tmux_session_name:
+                return False
+            tmux_session = await loop.run_in_executor(
+                None, self._find_tmux_session, agent.tmux_session_name
+            )
+            if not tmux_session:
+                return False
+            pane = tmux_session.attached_window.attached_pane
+            # literal=False so tmux interprets the key name instead of
+            # typing it as text (matches send_recovery_keystrokes above).
+            await loop.run_in_executor(
+                None,
+                functools.partial(pane.send_keys, key, enter=False, literal=False),
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to send key {key!r} to agent {agent_id[:8]}: {e}")
             return False
         finally:
             await loop.run_in_executor(None, session.close)
@@ -515,9 +590,13 @@ class AgentManager:
         method here since guardian.py, monitor.py, and others depend on
         AgentManager exposing this directly.
         """
-        return await self._messenger.send_message_to_agent(agent_id, message, session=session)
+        return await self._messenger.send_message_to_agent(
+            agent_id, message, session=session
+        )
 
-    async def broadcast_message_to_all_agents(self, sender_agent_id: str, message: str) -> int:
+    async def broadcast_message_to_all_agents(
+        self, sender_agent_id: str, message: str
+    ) -> int:
         """Broadcast a message to all active agents except the sender.
 
         Args:
@@ -539,20 +618,30 @@ class AgentManager:
         session = self.db_manager.get_session()
         try:
             # Get all active agents except the sender
-            active_agents = session.query(Agent).filter(Agent.status != "terminated", Agent.id != sender_agent_id).all()
+            active_agents = (
+                session.query(Agent)
+                .filter(Agent.status != "terminated", Agent.id != sender_agent_id)
+                .all()
+            )
 
             if not active_agents:
-                logger.info(f"No active agents to broadcast to (excluding sender {sender_agent_id})")
+                logger.info(
+                    f"No active agents to broadcast to (excluding sender {sender_agent_id})"
+                )
                 return 0
 
             # Format message with broadcast prefix
-            formatted_message = f"\n[AGENT {sender_agent_id[:8]} BROADCAST]: {message}\n"
+            formatted_message = (
+                f"\n[AGENT {sender_agent_id[:8]} BROADCAST]: {message}\n"
+            )
 
             # Send to all active agents
             recipient_count = 0
             for agent in active_agents:
                 try:
-                    await self.send_message_to_agent(agent.id, formatted_message, session=session)
+                    await self.send_message_to_agent(
+                        agent.id, formatted_message, session=session
+                    )
                     recipient_count += 1
 
                     # Log the broadcast
@@ -573,7 +662,9 @@ class AgentManager:
                     logger.error(f"Failed to send broadcast to agent {agent.id}: {e}")
 
             session.commit()
-            logger.info(f"Broadcast from {sender_agent_id[:8]} sent to {recipient_count} agents")
+            logger.info(
+                f"Broadcast from {sender_agent_id[:8]} sent to {recipient_count} agents"
+            )
             return recipient_count
 
         except Exception as e:
@@ -583,7 +674,9 @@ class AgentManager:
         finally:
             session.close()
 
-    async def send_direct_message(self, sender_agent_id: str, recipient_agent_id: str, message: str) -> bool:
+    async def send_direct_message(
+        self, sender_agent_id: str, recipient_agent_id: str, message: str
+    ) -> bool:
         """Send a direct message from one agent to another.
 
         Args:
@@ -598,7 +691,9 @@ class AgentManager:
         for the same reason as broadcast_message_to_all_agents above — it
         calls self.send_message_to_agent, which tests patch at this level.
         """
-        logger.info(f"Sending message from agent {sender_agent_id[:8]} to {recipient_agent_id[:8]}")
+        logger.info(
+            f"Sending message from agent {sender_agent_id[:8]} to {recipient_agent_id[:8]}"
+        )
 
         session = self.db_manager.get_session()
         try:
@@ -616,7 +711,9 @@ class AgentManager:
             formatted_message = f"\n[AGENT {sender_agent_id[:8]} TO AGENT {recipient_agent_id[:8]}]: {message}\n"
 
             # Send the message
-            await self.send_message_to_agent(recipient_agent_id, formatted_message, session=session)
+            await self.send_message_to_agent(
+                recipient_agent_id, formatted_message, session=session
+            )
 
             # Log the communication
             log_entry = AgentLog(
@@ -634,7 +731,9 @@ class AgentManager:
             session.add(log_entry)
             session.commit()
 
-            logger.info(f"Direct message sent from {sender_agent_id[:8]} to {recipient_agent_id[:8]}")
+            logger.info(
+                f"Direct message sent from {sender_agent_id[:8]} to {recipient_agent_id[:8]}"
+            )
             return True
 
         except Exception as e:
@@ -645,51 +744,45 @@ class AgentManager:
             session.close()
 
     async def get_project_context(
-        self,
-        workflow_id: Optional[str] = None,
-        repo_id: Optional[str] = None,
+        self, project_id: Optional[str] = None, phase_name: Optional[str] = None
     ) -> str:
         """Get current project context for task enrichment.
 
         Args:
-            workflow_id: the calling task's Workflow.id, if known. Used to
-                resolve the owning AutopilotProject and its ProjectRepo rows.
-                None reproduces pre-change output exactly (REQ-21).
-            repo_id: the calling task's assigned ProjectRepo.id (Task.repo_id),
-                if known. Only meaningful together with workflow_id. Marks
-                that repo writable and every sibling ProjectRepo read-only
-                in the output (REQ-18).
+            project_id: AutopilotProject.id, when the caller has one in
+                scope (resolved from phase_id -> Phase.workflow_id ->
+                Workflow.project_id). When it doesn't resolve, behavior is
+                UNCHANGED from before this param existed (REQ-21) -- no new
+                text, since there's nothing to scope a repo list to anyway.
+            phase_name: Phase.name, when in scope. Only used to detect the
+                feature-architect phase (exact string match, see below) for
+                its extra hard-rule text.
 
         Returns:
-            Formatted project context string. Never raises -- DB/query
-            errors are caught and logged, degrading to the existing
-            "Project context unavailable" string.
+            Formatted project context string
         """
         session = self.db_manager.get_session()
         try:
-            # Validate input lengths to prevent abuse
-            if workflow_id and len(workflow_id) > 200:
-                logger.warning(f"workflow_id exceeds max length ({len(workflow_id)} > 200), ignoring")
-                workflow_id = None
-            if repo_id and len(repo_id) > 200:
-                logger.warning(f"repo_id exceeds max length ({len(repo_id)} > 200), ignoring")
-                repo_id = None
-
-            # Resolve project_id from workflow_id (REQ-17/18)
-            project_id = None
-            if workflow_id:
-                wf = session.query(Workflow).filter_by(id=workflow_id).first()
-                if wf and wf.project_id:
-                    project_id = wf.project_id
-
             # Get active tasks
-            active_tasks = session.query(Task).filter(Task.status.in_(["pending", "assigned", "in_progress"])).all()
+            active_tasks = (
+                session.query(Task)
+                .filter(Task.status.in_(["pending", "assigned", "in_progress"]))
+                .all()
+            )
 
             # Get recent completions
-            recent_tasks = session.query(Task).filter(Task.status == "done").order_by(Task.completed_at.desc()).limit(5).all()
+            recent_tasks = (
+                session.query(Task)
+                .filter(Task.status == "done")
+                .order_by(Task.completed_at.desc())
+                .limit(5)
+                .all()
+            )
 
             # Get active agents
-            active_agents = session.query(Agent).filter(Agent.status != "terminated").all()
+            active_agents = (
+                session.query(Agent).filter(Agent.status != "terminated").all()
+            )
 
             # Format context
             context = f"""
@@ -708,13 +801,46 @@ class AgentManager:
                 for task in recent_tasks:
                     context += f"- {(task.enriched_description or task.raw_description)[:100]}...\n"
 
-            # Append repo context for multi-repo projects (REQ-17/18)
-            try:
-                repo_context = AgentManager._build_repo_context(session, project_id, repo_id)
-                if repo_context:
-                    context += repo_context
-            except Exception as e:
-                logger.warning(f"Failed to build repo context (degrading to no-repo output): {e}")
+            # Multi-repo project support (REQ-17/18/19/20/21). No new text
+            # for the case that can't be scoped anyway (project_id doesn't
+            # resolve) or the common single-repo case (<=1 ProjectRepo row)
+            # -- byte-identical to before this param existed.
+            if project_id:
+                from src.core.repo_resolution import get_project_repos
+
+                repos = get_project_repos(session, project_id)
+                if len(repos) > 1:
+                    context += "\n## PROJECT REPOSITORIES\nThis project spans multiple repos:\n"
+                    for repo in repos:
+                        context += f"- {repo.label} (writable for {repo.label}-scoped tasks): {repo.path}\n"
+                    context += (
+                        "\nRULES:\n"
+                        "- Every task you create is scoped to exactly one repo (see repo_id below).\n"
+                        "- The repo a task is assigned to is WRITABLE; all other listed repos are\n"
+                        "  READ-ONLY reference for cross-stack context (read the API contract in\n"
+                        "  one repo while implementing its consumer in another) -- do not write to\n"
+                        "  a repo your task isn't assigned to.\n"
+                    )
+                    # Exact string match against the existing Phase.name
+                    # convention (config/workflows/feature_architect/01_feature_architect.yaml
+                    # sets name: feature_architect) -- not "or equivalent".
+                    if phase_name == "feature_architect":
+                        context += (
+                            "\nREPO ASSIGNMENT RULE (multi-repo project): every Feature you create "
+                            "must be bound to exactly ONE repo -- this is CODE-ENFORCED, not just a "
+                            "convention: every task you create under a feature is validated against "
+                            "that feature's assigned repo, and a mismatch is REJECTED. An API change "
+                            "and its UI consumer are TWO features (one per repo), never one feature "
+                            "spanning both. In your features.json entry for each feature, set "
+                            '"repo_label" to one of the repo labels listed above -- this is what gets '
+                            "validated. If you omit it, the system infers a repo from your feature's "
+                            '"files" list, but an explicit "repo_label" is preferred and required '
+                            "whenever a feature's files could plausibly span more than one repo. "
+                            "Express cross-repo ordering with the EXISTING Feature.depends_on "
+                            "mechanism (e.g. the frontend feature's depends_on includes the backend "
+                            "feature's feature_key) -- never a free-text ordering note in a feature's "
+                            "description.\n"
+                        )
 
             return context
 
@@ -723,71 +849,3 @@ class AgentManager:
             return "Project context unavailable"
         finally:
             session.close()
-
-    @staticmethod
-    def _sanitize_for_prompt(value: str, max_len: int = 200) -> str:
-        """Sanitize a user-controlled string before interpolating into an LLM prompt.
-
-        Strips control characters and truncates to prevent prompt injection
-        via crafted repo labels or paths (e.g. a label like\n'\nIgnore all previous instructions...').
-        """
-        import re
-        # Remove control chars (\n, \r, \t, etc.) except space
-        sanitized = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', value)
-        # Collapse whitespace runs to single space
-        sanitized = re.sub(r'\s+', ' ', sanitized).strip()
-        return sanitized[:max_len]
-
-    @staticmethod
-    def _build_repo_context(
-        session,
-        project_id: Optional[str],
-        repo_id: Optional[str],
-    ) -> str:
-        """Build the PROJECT REPOSITORIES / REPO ACCESS text block.
-
-        Args:
-            session: open SQLAlchemy session (caller owns lifecycle).
-            project_id: AutopilotProject.id resolved from workflow_id, or
-                None if workflow_id wasn't given / didn't resolve.
-            repo_id: ProjectRepo.id of the calling task's assigned repo,
-                or None.
-
-        Returns:
-            "" if project_id is None, or the project has <=1 ProjectRepo
-            row (REQ-21/NFR-01). Otherwise a "\n## PROJECT REPOSITORIES\n"
-            block listing every repo's label+path (REQ-17), followed by a
-            "\n## REPO ACCESS\n" block naming repo_id's repo WRITABLE and
-            every other repo READ-ONLY reference (REQ-18), only when
-            repo_id is not None and matches one of the project's repos.
-        """
-        if not project_id:
-            return ""
-
-        repos = session.query(ProjectRepo).filter_by(project_id=project_id).order_by(ProjectRepo.label).all()
-
-        # 0 or 1 repo: no multi-repo section (REQ-21/NFR-01)
-        if len(repos) <= 1:
-            return ""
-
-        # REQ-17: list all repos — sanitize label/path to prevent prompt injection
-        lines = ["\n## PROJECT REPOSITORIES\n"]
-        for repo in repos:
-            safe_label = AgentManager._sanitize_for_prompt(repo.label, 100)
-            safe_path = AgentManager._sanitize_for_prompt(repo.path, 500)
-            lines.append(f"- {safe_label}: {safe_path}")
-
-        # REQ-18: writable vs read-only framing
-        if repo_id:
-            matched = [r for r in repos if r.id == repo_id]
-            if matched:
-                lines.append("\n## REPO ACCESS\n")
-                for repo in repos:
-                    safe_label = AgentManager._sanitize_for_prompt(repo.label, 100)
-                    if repo.id == repo_id:
-                        lines.append(f"- {safe_label}: WRITABLE (your assigned repo)")
-                    else:
-                        safe_path = AgentManager._sanitize_for_prompt(repo.path, 500)
-                        lines.append(f"- {safe_label}: READ-ONLY reference ({safe_path})")
-
-        return "\n".join(lines) + "\n"

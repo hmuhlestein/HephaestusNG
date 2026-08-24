@@ -403,6 +403,120 @@ class TestAuthenticationAPI:
         assert response.status_code == 401
         assert "Invalid refresh token" in response.json()["detail"]
 
+    def test_login_records_request_metadata_and_roles(self, test_client, test_session):
+        """Characterization (tech-debt survey 2026-08-22, section 2): the
+        six `ip_address=""`/`user_agent=""` TODO sites and two `roles=[]`
+        TODO sites in AuthService.authenticate now record the actual
+        request metadata (first X-Forwarded-For hop, user agent) in the
+        login-attempt, user-session, and audit-log rows, and the JWT
+        carries the user's active role names instead of a hardcoded empty
+        list."""
+        from src.core.user_models import (
+            AuditLog,
+            LoginAttempt,
+            Role,
+            User as UserModel,
+            UserRole,
+            UserSession,
+        )
+
+        user = UserModel(
+            id=str(uuid.uuid4()),
+            email="audited@example.com",
+            username="audited",
+            password_hash=hash_password("TestPassword123!"),
+            status="active",
+            email_verified=True,
+        )
+        role = Role(id=str(uuid.uuid4()), name="admin")
+        test_session.add_all([user, role])
+        test_session.commit()
+        test_session.add(UserRole(user_id=user.id, role_id=role.id))
+        test_session.commit()
+
+        response = test_client.post(
+            "/api/auth/login",
+            data={"username": "audited@example.com", "password": "TestPassword123!"},
+            headers={
+                "x-forwarded-for": "203.0.113.7, 10.0.0.1",
+                "user-agent": "pytest-agent/1.0",
+            },
+        )
+
+        assert response.status_code == 200
+
+        attempt = (
+            test_session.query(LoginAttempt)
+            .filter(LoginAttempt.email == "audited@example.com")
+            .first()
+        )
+        assert attempt is not None
+        assert attempt.success is True
+        assert attempt.ip_address == "203.0.113.7"
+        assert attempt.user_agent == "pytest-agent/1.0"
+
+        session_row = (
+            test_session.query(UserSession)
+            .filter(UserSession.user_id == user.id)
+            .first()
+        )
+        assert session_row is not None
+        assert session_row.ip_address == "203.0.113.7"
+        assert session_row.user_agent == "pytest-agent/1.0"
+
+        audit = (
+            test_session.query(AuditLog)
+            .filter(AuditLog.user_id == user.id, AuditLog.action == "login")
+            .first()
+        )
+        assert audit is not None
+        assert audit.ip_address == "203.0.113.7"
+        assert audit.user_agent == "pytest-agent/1.0"
+
+        payload = verify_access_token(response.json()["access_token"])
+        assert payload is not None
+        assert payload.get("roles") == ["admin"]
+
+    def test_load_user_roles_excludes_expired_grants(self, test_session):
+        """_load_user_roles's own docstring claims a grant with a past
+        expires_at is not active -- test_login_records_request_metadata_and_roles
+        only covers a grant with no expiry set at all, so this is the one
+        actual claim (the exclusion, not just the happy path) with no
+        coverage until now."""
+        from datetime import datetime, timedelta
+
+        from src.auth.auth_service import AuthService
+        from src.core.user_models import Role, User as UserModel, UserRole
+
+        user = UserModel(
+            id=str(uuid.uuid4()),
+            email="roles@example.com",
+            username="roles",
+            password_hash=hash_password("TestPassword123!"),
+            status="active",
+            email_verified=True,
+        )
+        active_role = Role(id=str(uuid.uuid4()), name="active-role")
+        expired_role = Role(id=str(uuid.uuid4()), name="expired-role")
+        test_session.add_all([user, active_role, expired_role])
+        test_session.commit()
+        test_session.add_all(
+            [
+                UserRole(user_id=user.id, role_id=active_role.id, expires_at=None),
+                UserRole(
+                    user_id=user.id,
+                    role_id=expired_role.id,
+                    expires_at=datetime.utcnow() - timedelta(days=1),
+                ),
+            ]
+        )
+        test_session.commit()
+        test_session.refresh(user)
+
+        roles = AuthService._load_user_roles(test_session, user)
+
+        assert roles == ["active-role"]
+
 
 class TestAuthDbManagerSharedAccessor:
     """Regression: auth_api.py and auth_middleware.py each independently

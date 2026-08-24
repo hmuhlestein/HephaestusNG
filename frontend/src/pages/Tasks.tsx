@@ -17,6 +17,8 @@ import TaskFilterBar, { TaskFilters } from '@/components/TaskFilterBar';
 import { useDebounce } from '@/hooks/useDebounce';
 import BlockedTasksView from '@/components/BlockedTasksView';
 import { useTheme } from '@/context/ThemeContext';
+import { useTaskDetails } from '@/hooks/useTaskDetails';
+import { cn } from '@/lib/utils';
 
 const TaskRow: React.FC<{
   task: Task;
@@ -26,6 +28,10 @@ const TaskRow: React.FC<{
   const [isExpanded, setIsExpanded] = useState(false);
   const { theme } = useTheme();
   const highlightColor = theme === 'dark' ? '#1e3a5f' : '#DBEAFE';
+  // Only fetched once the row is actually expanded -- task.assigned_agent_id
+  // (all this row otherwise has) is overwritten on every retry/restart, so
+  // it alone can't show a task's full agent history.
+  const { taskDetails } = useTaskDetails(isExpanded ? task.id : null);
 
   return (
     <motion.div
@@ -159,6 +165,60 @@ const TaskRow: React.FC<{
                   </div>
                 )}
               </div>
+
+              {taskDetails?.agent_history && taskDetails.agent_history.length > 0 && (
+                <div className="mt-4">
+                  <p className="text-gray-600 dark:text-gray-400 font-medium text-sm mb-2">
+                    Agent History ({taskDetails.agent_history.length})
+                  </p>
+                  <div className="space-y-2">
+                    {taskDetails.agent_history.map((agent) => (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onViewDetails?.(task.id);
+                        }}
+                        title="View task details"
+                        className={cn(
+                          'w-full text-left rounded-lg p-2 border text-xs transition-colors',
+                          agent.id === taskDetails.agent_info?.id
+                            ? 'bg-violet-50 dark:bg-violet-900/20 border-violet-200 dark:border-violet-700 hover:bg-violet-100 dark:hover:bg-violet-900/30'
+                            : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700'
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <span title={agent.outcome_detail || undefined}>
+                              <StatusBadge status={agent.outcome} size="sm" />
+                            </span>
+                            <span className="font-mono text-gray-700 dark:text-gray-300">
+                              {agent.id.slice(0, 12)}...
+                            </span>
+                            <span className="text-gray-500 dark:text-gray-400">
+                              ({agent.cli_type}{agent.cli_model ? ` / ${agent.cli_model}` : ''})
+                            </span>
+                            {agent.id === taskDetails.agent_info?.id && (
+                              <span className="font-medium text-violet-600 dark:text-violet-400">
+                                current
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-gray-500 dark:text-gray-400">
+                            {agent.created_at && (
+                              <span>Created {formatDistanceToNow(new Date(agent.created_at), { addSuffix: true })}</span>
+                            )}
+                            {agent.terminated_at && (
+                              <span className="ml-2">· Terminated {formatDistanceToNow(new Date(agent.terminated_at), { addSuffix: true })}</span>
+                            )}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </motion.div>
         )}

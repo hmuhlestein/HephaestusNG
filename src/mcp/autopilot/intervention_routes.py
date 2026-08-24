@@ -5,7 +5,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -31,20 +31,55 @@ class HumanInputRequest(BaseModel):
     options: List[str]
     labels: Dict[str, str]
     project_id: Optional[str] = None
+    # Present on an arbitration-deadlock escalation (written by
+    # _escalate_arbitration_deadlock_to_human), absent on every other kind
+    # of request -- BaseModel silently drops any field not declared here,
+    # so without these the frontend's row-correlation (which workflow is
+    # this request for?) never receives them even though the request file
+    # on disk always has them.
+    workflow_id: Optional[str] = None
+    phase_id: Optional[str] = None
+    # Structured breakdown of an arbitration-deadlock escalation's actual
+    # attempt history (see arbitration.py's _build_arbitration_decision_
+    # context) -- None for every other kind of human-input request.
+    decision_context: Optional[Dict[str, Any]] = None
 
 class HumanInputResponse(BaseModel):
     request_id: str
     choice: str
     message: Optional[str] = None
+    # Required when choice == "g" (send an arbitration-deadlocked phase
+    # back to a specific phase for another attempt) -- ignored otherwise.
+    target_phase: Optional[str] = None
 
 def _find_pending_input() -> Optional[Path]:
-    """Find the first non-stale input request file."""
+    """Find the first non-stale input request file.
+
+    "arbitration_escalation" requests (see arbitration.py's
+    _escalate_arbitration_deadlock_to_human) are exempt from the
+    staleness cutoff below -- that function's own docstring is explicit
+    that it "deliberately does NOT time out," because auto-continuing
+    past a confirmed, unresolved architectural BLOCKER with no actual
+    decision defeats the entire point of escalating it to a human in the
+    first place. Before this exemption, this cleanup silently deleted an
+    arbitration escalation's request file once it crossed
+    STALE_INPUT_SECONDS regardless of kind -- and
+    _maybe_resolve_human_arbitration_escalations treats a missing request
+    file with no response as an explicit dismissal (the same convention
+    prompt_human's other callers use for a real UI X-button click),
+    auto-continuing the deadlocked phase as if a human had actually
+    chosen to. Observed live: an arbitration escalation nobody ever
+    answered force-continued itself past design_review after silently
+    expiring, with no visible sign anything had happened.
+    """
     input_dir = Path(AUTOPILOT_STATE_DIR)
     if not input_dir.exists():
         return None
     for f in sorted(input_dir.glob("input_request_*.json")):
         try:
             data = json.loads(f.read_text())
+            if data.get("kind") == "arbitration_escalation":
+                return f
             ts = datetime.fromisoformat(data["timestamp"])
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
@@ -82,8 +117,10 @@ async def get_human_input_request():
 @router.post("/input")
 async def submit_human_input(resp: HumanInputResponse):
     """Submit a human input response to the orchestrator."""
-    if resp.choice not in ("c", "s", "q", "m"):
-        raise HTTPException(400, "Invalid choice. Must be 'c', 's', 'q', or 'm'.")
+    if resp.choice not in ("c", "s", "q", "m", "g"):
+        raise HTTPException(400, "Invalid choice. Must be 'c', 's', 'q', 'm', or 'g'.")
+    if resp.choice == "g" and not resp.target_phase:
+        raise HTTPException(400, "target_phase is required when choice is 'g'.")
 
     # Verify the request still exists
     request_file = Path(AUTOPILOT_STATE_DIR) / f"input_request_{resp.request_id}.json"
@@ -101,6 +138,8 @@ async def submit_human_input(resp: HumanInputResponse):
     }
     if resp.message:
         payload["message"] = resp.message
+    if resp.target_phase:
+        payload["target_phase"] = resp.target_phase
     payload = json.dumps(payload)
     tmp = response_file.with_suffix(".tmp")
     tmp.write_text(payload)

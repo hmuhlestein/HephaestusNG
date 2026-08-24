@@ -30,6 +30,7 @@ import toast from 'react-hot-toast';
 import DesignDetailModal from './DesignDetailModal';
 import TaskDetailModal from '../TaskDetailModal';
 import FeatureRecordDetailModal from './FeatureRecordDetailModal';
+import ArbitrationDecisionModal from './ArbitrationDecisionModal';
 import RealTimeAgentOutput from '../RealTimeAgentOutput';
 import { Agent } from '@/types';
 import { CostDisplay, FeatureCostBadge } from '@/components/cost';
@@ -73,6 +74,20 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     enabled: !!projectId,
   });
   const reviewMode = projectStatus?.review_mode ?? false;
+
+  // Same query key MessageCenter uses for the identical endpoint -- react-
+  // query shares/dedupes the two, so this doesn't double the poll rate.
+  // Used to highlight whichever row's workflow the pipeline is actually
+  // waiting on a decision for, with a Decide button opening
+  // ArbitrationDecisionModal (same data as the Messages tab's own Reason
+  // box, plus the structured attempt-history breakdown for arbitration
+  // escalations specifically).
+  const { data: pendingInputRequest } = useQuery({
+    queryKey: ['autopilot-input', projectId],
+    queryFn: () => apiService.getAutopilotInput(),
+    refetchInterval: 5000,
+    enabled: !!projectId,
+  });
 
   // Fetch design statuses using React Query (M-5 fix)
   const { data: designStatuses = {}, refetch: refetchDesignStatuses } = useQuery({
@@ -318,7 +333,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
             type="text"
-            placeholder="Search designs..."
+            placeholder="Search specs..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500"
@@ -375,6 +390,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   features={designStatuses[item.filename]?.features ?? []}
                   onRefetchFeatures={refetchDesignStatuses}
                   statusReason={designStatuses[item.filename]?.statusReason}
+                  pendingInputRequest={pendingInputRequest}
                   projectId={projectId}
                   onDetail={handleDetail}
                   onTaskClick={setSelectedTaskId}
@@ -566,9 +582,14 @@ interface SortableDesignItemProps {
   // per-row setInterval against the identical endpoint.
   features: any[];
   onRefetchFeatures?: () => void;
+  // The pipeline's one global pending human-input request (if any) --
+  // passed through unchanged to each FeatureRow below, which does its own
+  // workflow_id correlation (a design's features each have their own
+  // workflow, so the match can't be made at this design level).
+  pendingInputRequest?: any;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, workflowType, projectId, reviewMode, features, onRefetchFeatures }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, workflowType, statusReason, projectId, reviewMode, features, onRefetchFeatures, pendingInputRequest }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -576,7 +597,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
       try {
         const expandedSet = new Set(JSON.parse(saved));
         const isExpanded = expandedSet.has(item.filename);
-        console.log('[DesignQueuePanel] Restoring expanded state:', { filename: item.filename, isExpanded, savedItems: [...expandedSet] });
+        // console.log('[DesignQueuePanel] Restoring expanded state:', { filename: item.filename, isExpanded, savedItems: [...expandedSet] });
         return isExpanded;
       } catch { return false; }
     }
@@ -695,6 +716,11 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                 {error}
               </p>
             )}
+            {status === 'failed' && statusReason && (
+              <p className="text-xs text-red-600 dark:text-red-400 mt-1 truncate" title={statusReason}>
+                {statusReason}
+              </p>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -780,6 +806,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                       projectId={projectId ?? undefined}
                       onFeatureUpdate={() => onRefetchFeatures?.()}
                       reviewMode={reviewMode}
+                      pendingInputRequest={pendingInputRequest}
                     />
                   ))}
                 </div>
@@ -827,7 +854,13 @@ const FeatureRow: React.FC<{
   projectId?: string;
   onFeatureUpdate?: () => void;
   reviewMode?: boolean;
-}> = ({ feature, onTaskClick, onSelectFeature, onReviewFeature, onFeatureUpdate, reviewMode }) => {
+  // The pipeline's one global pending human-input request (if any) --
+  // this row only surfaces it (highlight + Decision button) when it's
+  // actually for THIS feature's own workflow.
+  pendingInputRequest?: any;
+}> = ({ feature, onTaskClick, onSelectFeature, onReviewFeature, onFeatureUpdate, reviewMode, pendingInputRequest }) => {
+  const [showDecisionModal, setShowDecisionModal] = useState(false);
+  const hasPendingDecision = !!pendingInputRequest && pendingInputRequest.workflow_id === feature.workflow_id;
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-features');
@@ -929,7 +962,9 @@ const FeatureRow: React.FC<{
 
   return (
     <div className={`rounded-lg border overflow-hidden transition-colors ${
-      highlightForReview
+      hasPendingDecision
+        ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-700 ring-1 ring-amber-200 dark:ring-amber-800'
+        : highlightForReview
         ? 'bg-amber-50 dark:bg-amber-900/20 border-l-4 border-amber-400 border-t-amber-200 dark:border-t-amber-800 border-b-amber-200 dark:border-b-amber-800 border-r-amber-200 dark:border-r-amber-800'
         : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700'
     }`}>
@@ -1000,6 +1035,14 @@ const FeatureRow: React.FC<{
               Review
             </span>
           )}
+          {hasPendingDecision && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowDecisionModal(true); }}
+              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg transition-colors flex-shrink-0"
+            >
+              Decision
+            </button>
+          )}
           <RowActionIcons
             size="sm"
             canPause={hasWorkflow && feature.status === 'active'}
@@ -1058,6 +1101,13 @@ const FeatureRow: React.FC<{
             ))}
           </div>
         </div>
+      )}
+
+      {showDecisionModal && (
+        <ArbitrationDecisionModal
+          inputRequest={pendingInputRequest}
+          onClose={() => setShowDecisionModal(false)}
+        />
       )}
     </div>
   );

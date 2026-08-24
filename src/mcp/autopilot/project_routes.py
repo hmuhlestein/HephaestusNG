@@ -569,10 +569,7 @@ async def update_project(
                     # force=True: raising/clearing the cost limit is an
                     # explicit override of the budget pause, same as this
                     # endpoint's pre-existing unconditional clear.
-                    # cascade_to_feature=False preserves this endpoint's
-                    # existing behavior exactly -- it has never touched
-                    # Feature.status here.
-                    resume_workflow(wf.id, force=True, cascade_to_feature=False, session=db)
+                    resume_workflow(wf.id, force=True, session=db)
                 db.flush()
                 logger.info(f"Cleared budget pause on {len(budget_paused)} workflow(s) for project {project_id[:8]}")
 

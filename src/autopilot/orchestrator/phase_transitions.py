@@ -43,6 +43,9 @@ from src.autopilot.orchestrator.arbitration import (
     _maybe_resolve_arbitration as _maybe_resolve_arbitration,
 )
 from src.autopilot.orchestrator.arbitration import (
+    _maybe_resolve_human_arbitration_escalations as _maybe_resolve_human_arbitration_escalations,
+)
+from src.autopilot.orchestrator.arbitration import (
     _phase_currently_passes as _phase_currently_passes,
 )
 from src.autopilot.orchestrator.arbitration import (
@@ -71,6 +74,7 @@ from src.core.constants import (
 from src.core.database import (
     Agent,
     DatabaseManager,
+    Feature,
     Phase,
     PhaseExecution,
     Task,
@@ -116,7 +120,7 @@ def _clear_stale_task_creation_claim(db, phase_id: str, *, repair_status: bool =
     )
     if cleared and repair_status:
         execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
-        if execution and execution.status in ("pending", "completed"):
+        if execution and execution.status in ("pending", "completed", "skipped"):
             latest_task = (
                 db.query(Task)
                 .filter_by(phase_id=phase_id)
@@ -155,6 +159,24 @@ def reset_stale_executions_on_goto(
     cycle-scoped query (Task.created_at >= started_at) exclude the
     phase's own freshly-created task, silently stalling it forever.
 
+    Excludes any candidate phase that currently has a live task
+    (assigned/in_progress) — same "live task" definition
+    _release_pending_phases_with_orphaned_task already uses elsewhere in
+    this file. Without this, a REDUNDANT goto evaluation of the SAME
+    already-handled completion (a distinct race: mark_phase_complete can
+    get entered twice for one task completion, e.g. once from
+    fire_spec_gate_if_ready's synchronous path and once from the
+    periodic sweep) blindly wipes a downstream phase's started_at/status
+    even though it isn't stale at all -- a real task is actively
+    dispatched and running under it right now. Observed live: a
+    development-phase task legitimately in_progress had its
+    PhaseExecution reset to started_at=None mid-flight by a second,
+    redundant "goto development" from adversarial_review; started_at was
+    later re-derived from an unrelated duplicate task created after the
+    real one, permanently excluding the real (later-completing) task
+    from the cycle-scoped completion check and stalling the phase
+    forever.
+
     Returns the number of rows reset.
     """
     stale = (
@@ -168,6 +190,17 @@ def reset_stale_executions_on_goto(
         )
         .all()
     )
+    if stale:
+        live_phase_ids = {
+            row[0]
+            for row in db.query(Task.phase_id)
+            .filter(
+                Task.phase_id.in_([s.phase_id for s in stale]),
+                Task.status.in_(["assigned", "in_progress"]),
+            )
+            .all()
+        }
+        stale = [s for s in stale if s.phase_id not in live_phase_ids]
     for s in stale:
         s.status = "pending"
         s.completed_at = None
@@ -659,6 +692,13 @@ def _retry_exhausted_paused_workflows(logger: "OrchestratorLogger") -> int:
                 wf.status_reason = None
                 wf.paused_at = None
                 wf.paused_retry_count = 0
+                # Sync feature status -- this function bypasses
+                # resume_workflow() (which has its own cascade), so the
+                # feature row stays "paused" in the DB and the UI's
+                # review-mode highlight misses it. Observed live:
+                # worktree-manager-parameterization on proj-540541ed.
+                for feat in db.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
+                    feat.status = "active"
                 logger.warning(
                     f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} was system-exhausted but has "
                     f"{len(stuck_tasks)} stuck task(s) in in_progress phase -- retrying"
@@ -682,6 +722,10 @@ def _retry_exhausted_paused_workflows(logger: "OrchestratorLogger") -> int:
             wf.status_reason = None
             wf.paused_at = None
             wf.paused_retry_count = (wf.paused_retry_count or 0) + 1
+            # Sync feature status -- same reasoning as the system-exhausted
+            # branch above.
+            for feat in db.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
+                feat.status = "active"
             logger.warning(
                 f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} past its exhausted-"
                 f"retry cooldown -- reset retry_count on {len(failed_tasks)} "
@@ -1213,7 +1257,7 @@ def _release_phase_task_creation_claim(db, phase_id: str) -> None:
     execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).populate_existing().first()
     if not execution:
         return
-    if execution.status in ("pending", "completed"):
+    if execution.status in ("pending", "completed", "skipped"):
         execution.status = "in_progress"
         earliest_task = (
             db.query(Task)
@@ -1498,7 +1542,28 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             db.query(Task)
             .filter(
                 Task.phase_id == phase.id,
-                Task.status.in_(["pending", "assigned", "in_progress"]),
+                # "queued" included alongside "pending"/"assigned"/
+                # "in_progress" -- every other query in this module that
+                # asks "does this phase have real outstanding work"
+                # (_create_phase_task's own existing-task check,
+                # check_phase_sibling_active, the corrective-task path)
+                # already does; this one didn't. A subtask an agent creates
+                # via create_task can sit "queued" (QueueService's own
+                # capacity-gated status, distinct from "pending") for real,
+                # legitimate reasons -- a busy per-cli/model concurrency
+                # slot, not an orphan. Omitting it here meant a phase whose
+                # own dispatched task finished, while it still had sibling
+                # subtasks sitting "queued" and never dispatched, was
+                # wrongly declared complete and the pipeline advanced past
+                # it -- the queued subtasks then sat orphaned forever
+                # (nothing re-checks a phase already advanced past), and a
+                # later phase reviewed work that was never actually
+                # finished. Confirmed live: task 4bf4518f (development)
+                # completed having spawned 5 subtasks (C1 through C10) for
+                # the remainder of its own assigned work; all 5 sat
+                # "queued" while adversarial_review ran and completed
+                # against the incomplete implementation.
+                Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
                 ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
                 *cycle_filter,
             )
@@ -2492,10 +2557,23 @@ def _create_phase_task(
             task_id = task.id
 
 
-            # Update phase execution to in_progress
+            # Update phase execution to in_progress. "skipped" is included
+            # alongside "pending"/"completed" -- a phase the pipeline
+            # originally skipped (e.g. adversarial_review under some
+            # workflow.yaml configs) can still be the target of a real task
+            # later (a goto/redo cycle sending work back through it). Left
+            # at "skipped", derive_workflow_status's phase-completeness
+            # check (which treats "skipped" as terminal, same as
+            # "completed") sees nothing incomplete and marks the whole
+            # workflow "completed" while this task is still actively
+            # running -- which then gets the task itself killed as a false
+            # "Orphaned: workflow already completed", and lets the design
+            # queue advance to the next feature before this redo cycle (and
+            # any pending human review of it) ever finished. Confirmed
+            # live: task 860508ac (adversarial_review, workflow ca539a75).
             execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
             if execution:
-                if execution.status in ("pending", "completed"):
+                if execution.status in ("pending", "completed", "skipped"):
                     reopen_phase_execution(execution, status="in_progress", started_at="now")
                 else:
                     # Always release the claim once the task it was guarding
@@ -2648,6 +2726,10 @@ def _create_corrective_task_body(
             return None
         if wf.status != "active":
             wf.status = "active"
+            # Sync feature status -- same class of bug as the sweep gaps.
+            from src.core.database import Feature
+            for feat in db.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
+                feat.status = "active"
 
         execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
         if execution and execution.status != "in_progress":
@@ -2844,6 +2926,13 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: "OrchestratorLogger")
             resume_workflow(workflow_id, force=True, session=db)
         elif wf.status == "failed":
             wf.status = "active"
+            # Sync feature status -- a failed workflow's feature may have
+            # been cascaded to "paused" or left as "failed" by
+            # derive_feature_status; either way, resuming the workflow
+            # should also resume its feature.
+            from src.core.database import Feature
+            for feat in db.query(Feature).filter_by(workflow_id=wf.id).filter(Feature.status != "active").all():
+                feat.status = "active"
 
         candidates = (
             db.query(Task)

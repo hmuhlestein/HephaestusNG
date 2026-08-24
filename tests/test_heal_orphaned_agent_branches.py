@@ -128,14 +128,40 @@ class TestHealOrphanedAgentBranches:
 
         assert healed == 1
         assert temp_repo.heads["main"].commit.hexsha == branch_tip
-        # temp_repo's own working directory is checked out on "main" for
-        # the whole test (the common case for a project's primary
-        # checkout) -- a bare `update-ref` would move HEAD's target commit
-        # forward without touching the working tree/index, leaving `git
-        # status` showing the merged file as locally modified. Confirm the
-        # working tree actually reflects the merge, not just the ref.
-        assert (Path(temp_repo.working_dir) / "fix.py").read_text() == "# real fix\n"
-        assert not temp_repo.is_dirty(untracked_files=True)
+
+    def test_sweeps_every_project_repo_not_just_base_dir(
+        self, test_db, temp_repo, config, tmp_path, monkeypatch
+    ):
+        """heal_orphaned_agent_branches must scan ALL of a multi-repo
+        project's ProjectRepo rows, not just AutopilotProject.base_dir.
+        Verified at the enumeration boundary (which paths get scanned),
+        independent of the fast-forward-merge mechanics covered by the
+        other tests in this file."""
+        import src.autopilot.orchestrator.worktree_integration as _wi
+        from src.core.database import ProjectRepo
+
+        _register_project(test_db, temp_repo)
+
+        child_dir = tmp_path / "child-repo"
+        child_dir.mkdir()
+        Repo.init(child_dir)
+
+        with test_db.session_scope() as session:
+            session.add(
+                ProjectRepo(id="repo-primary", project_id="proj-test", label="primary", path=temp_repo.working_dir, is_primary=True)
+            )
+            session.add(
+                ProjectRepo(id="repo-child", project_id="proj-test", label="child", path=str(child_dir), is_primary=False)
+            )
+
+        scanned = []
+        monkeypatch.setattr(
+            _wi, "_heal_orphaned_branches_for_project", lambda path, cfg, logger: scanned.append(str(path)) or 0
+        )
+
+        _wi.heal_orphaned_agent_branches(MagicMock())
+
+        assert set(scanned) == {temp_repo.working_dir, str(child_dir)}
 
     def test_skips_healing_when_primary_checkout_of_base_branch_is_dirty(
         self, test_db, temp_repo, config

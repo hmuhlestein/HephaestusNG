@@ -96,14 +96,29 @@ class WorktreeRemover:
                 )
                 return
 
+        # Every refusal branch above logs why -- but until now, a
+        # SUCCESSFUL removal (the actually destructive outcome) logged
+        # nothing at all. A caller hitting "worktree is missing or not a
+        # valid git worktree" later has no way to answer its own logged
+        # advice ("find out what deleted it") -- there was nothing to
+        # find. logger.stack_info=True: the caller (cleanup sweep? discard-
+        # agent? orphan reclaim?) is exactly the missing piece of this
+        # picture, and every caller of this method goes through several
+        # layers of indirection (WorktreeManager._remove_worktree, etc.)
+        # that a bare log message can't disambiguate on its own.
         try:
             main_repo.git.worktree("remove", worktree_path, "--force")
+            logger.info(f"[WORKTREE] Removed {worktree_path}", stack_info=True)
         except GitCommandError:
             # Fall back to manual removal + prune
             try:
                 if Path(worktree_path).exists():
                     shutil.rmtree(worktree_path, ignore_errors=True)
                 main_repo.git.worktree("prune")
+                logger.info(
+                    f"[WORKTREE] Removed {worktree_path} (fallback rmtree+prune)",
+                    stack_info=True,
+                )
             except Exception as e:
                 logger.warning(
                     f"[WORKTREE] Could not remove worktree {worktree_path}: {e}"

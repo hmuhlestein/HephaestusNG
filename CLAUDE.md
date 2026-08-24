@@ -336,6 +336,89 @@
     <!-- ================================================================ -->
     <project_learnings>
         <!-- Add project-specific rules here as they are discovered. -->
+
+        <!-- ============================================================ -->
+        <!-- Quick task/workflow debugging playbook                       -->
+        <!-- ============================================================ -->
+        <debugging_playbook>
+            <intent>
+                When given a stuck/failed/misbehaving task or workflow ID
+                (e.g. "why is X stuck", "task Y said done but nothing
+                happened"), go straight to the DB and logs instead of
+                guessing from code alone — the live state almost always
+                answers "why" in 2-3 queries. Read the whole chain before
+                proposing a fix; the proximate symptom (a task stuck
+                "queued", a workflow "failed") is rarely the root cause.
+            </intent>
+            <step n="1" name="identify the task">
+                `sqlite3 hephaestus.db` (or a `python3 -c` one-liner) —
+                `SELECT * FROM tasks WHERE id=?`. Get workflow_id, phase_id,
+                status, action/action_target_phase, completion_notes,
+                failure_reason, created_by_agent_id, assigned_agent_id,
+                created_at/started_at/completed_at. completion_notes and
+                failure_reason usually state the actual finding in plain
+                English — read them before anything else.
+            </step>
+            <step n="2" name="check the workflow">
+                `SELECT status, paused_by, status_reason, project_id FROM
+                workflows WHERE id=?`. status_reason frequently already
+                names the root cause (arbitration exhaustion, a review-pause
+                marker, etc.) — check it before digging further.
+            </step>
+            <step n="3" name="read the whole phase timeline">
+                Join `phases`/`phase_executions` for the WHOLE workflow,
+                ordered by phase `"order"`. Look for a phase stuck
+                "in_progress" while a LATER-ordered phase already shows
+                "completed" — that combination means a phase was declared
+                done while it still had real work outstanding (see the
+                "queued" status-list gap below for the recurring cause).
+            </step>
+            <step n="4" name="check sibling tasks on the same phase">
+                `SELECT * FROM tasks WHERE phase_id=? ORDER BY created_at`.
+                Reveals duplicate/queued/stuck siblings a single task's own
+                row won't show. Multiple "queued" tasks for one phase with
+                assigned_agent_id all NULL is the signature of the
+                dispatch-livelock class below, not 5 unrelated things
+                happening at once.
+            </step>
+            <step n="5" name="grep the logs — mind rotation and timezone">
+                `~/.hephaestus/logs/backend.log` rotates DAILY to
+                `backend.log.YYYY-MM-DD` — grep the dated file for
+                anything more than a few hours old, not just the live one.
+                Log timestamps are LOCAL time; every DB timestamp
+                (created_at/started_at/etc.) is UTC
+                (`datetime.utcnow()`, see the utc-only invariant above) — do
+                not compare clock values directly, use LOG LINE ORDER
+                within one grep to reconstruct sequence, and expect several
+                hours' apparent offset when eyeballing "does this log line
+                match this DB row." Search by workflow_id/phase_id/task_id
+                (8-char prefixes as logged), not by guessed timestamp.
+            </step>
+            <step n="6" name="check for a known status-list gap">
+                A recurring bug class in this codebase: a task-status
+                filter list (e.g. `["pending", "assigned", "in_progress"]`)
+                omits "queued" (QueueService's capacity-gated status,
+                distinct from "pending") relative to sibling checks
+                elsewhere that DO include it. Confirm by grepping for the
+                exact status tuple across the file and comparing — an
+                inconsistent list at one call site, with several correct
+                siblings elsewhere, is usually the actual bug, not a novel
+                one. Consequences run both directions: omitting "queued"
+                from a completeness check lets a phase finish early with
+                real work still outstanding; including "queued" in a
+                sibling-active dispatch guard can livelock several
+                legitimate queued siblings against each other forever.
+            </step>
+            <step n="7" name="remember code changes need a restart">
+                The backend runs as a plain long-lived process (no
+                hot-reload) — a source fix does not take effect until
+                `heph restart`. Restarting affects every currently-running
+                agent/workflow system-wide, not just the one under
+                investigation, so confirm with the user before restarting
+                (terminate_agent's WIP-commit-before-kill preserves
+                in-flight work either way).
+            </step>
+        </debugging_playbook>
     </project_learnings>
 </system_prompt>
 ```

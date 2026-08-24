@@ -449,12 +449,20 @@ class TestOrphanSessionReaper:
 
         mock_db_session.query.side_effect = query_side_effect
 
-        # Agent's tmux session matches active agent session name, so it won't be killed as orphan
-        # But agent should be terminated due to inactive workflow
         await reaper.cleanup_orphaned_tmux_sessions()
 
-        # Agent should be terminated
+        # Agent should be terminated in the DB...
         assert mock_agent.status == "terminated"
+        # ...and its tmux session actually killed, not just left running.
+        # The separate orphaned-tmux-session pass below can't catch this
+        # session itself: its active_session_names snapshot is taken
+        # BEFORE this termination, so it still lists this session as
+        # belonging to an active agent. Without an explicit kill right
+        # here, the CLI process keeps running unaware it's been
+        # terminated, can finish real work, and later gets rejected
+        # ("Agent not authenticated") when it tries to report -- while a
+        # freshly-dispatched replacement agent redoes the same task.
+        mock_tmux_sess.kill_session.assert_called_once()
 
 
 class TestActiveAgentStatusFilter:

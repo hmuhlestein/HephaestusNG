@@ -40,6 +40,20 @@ export const api = axios.create({
   },
 });
 
+// Log 500 errors with response body so we can see what the backend is returning.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response) {
+      const { status, data, config } = error.response;
+      console.error(`[ApiDiag] ${config.method?.toUpperCase()} ${config.url} → ${status}:`, typeof data === 'string' ? data.slice(0, 500) : data);
+    } else if (error.request) {
+      console.error(`[ApiDiag] ${error.config?.method?.toUpperCase()} ${error.config?.url} → no response (network error or timeout)`);
+    }
+    return Promise.reject(error);
+  },
+);
+
 export const apiService = {
   // Workflow Definitions and Executions
   listWorkflowDefinitions: async (): Promise<WorkflowDefinition[]> => {
@@ -304,6 +318,14 @@ export const apiService = {
         },
       }
     );
+    return data;
+  },
+
+  sendAgentKey: async (
+    agentId: string,
+    key: string
+  ): Promise<{ sent: boolean; agent_id: string }> => {
+    const { data } = await api.post(`/agents/${agentId}/send_key`, { key });
     return data;
   },
 
@@ -790,8 +812,13 @@ export const apiService = {
     return data;
   },
 
-  submitAutopilotInput: async (requestId: string, choice: string, message?: string): Promise<void> => {
-    await api.post('/autopilot/input', { request_id: requestId, choice, message });
+  submitAutopilotInput: async (
+    requestId: string,
+    choice: string,
+    message?: string,
+    targetPhase?: string
+  ): Promise<void> => {
+    await api.post('/autopilot/input', { request_id: requestId, choice, message, target_phase: targetPhase });
   },
 
   dismissAutopilotInput: async (requestId: string): Promise<void> => {
@@ -944,6 +971,21 @@ export const apiService = {
 
   updateProject: async (projectId: string, updates: Record<string, any>): Promise<any> => {
     const { data } = await api.put(`/autopilot/projects/${encodeURIComponent(projectId)}`, updates);
+    return data;
+  },
+
+  // Project repos (multi-repo projects) — add/list only, no update/delete in v1.
+  getProjectRepos: async (projectId: string): Promise<any[]> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/repos`);
+    return data;
+  },
+
+  addProjectRepo: async (projectId: string, label: string, path: string): Promise<any> => {
+    const { data } = await api.post(
+      `/autopilot/projects/${encodeURIComponent(projectId)}/repos`,
+      { label, path },
+      { headers: { 'X-Agent-ID': 'ui-user' } }
+    );
     return data;
   },
 
