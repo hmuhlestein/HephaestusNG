@@ -2317,6 +2317,7 @@ class TestProjectDesigns:
 
         from src.core.database import (
             Agent,
+            AgentLog,
             AutopilotDesign,
             Feature,
             Task,
@@ -2344,6 +2345,10 @@ class TestProjectDesigns:
             db.add(Task(
                 id="task-cli-1", workflow_id="wf-cli-1", raw_description="x", done_definition="x",
                 status="in_progress", assigned_agent_id="agent-cli-1",
+            ))
+            db.add(AgentLog(
+                agent_id="agent-cli-1", log_type="created", message="x",
+                details={"cli_type": "pi", "task_id": "task-cli-1"},
             ))
 
         resp = client.get(f"/api/autopilot/projects/{pid}/designs/cli-design.md/status")

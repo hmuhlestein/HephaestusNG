@@ -19,6 +19,7 @@ from src.core.constants import (
 from src.core.database import (
     Agent,
     AgentBranch,
+    AgentLog,
     AutopilotDesign,
     Feature,
     Phase,
@@ -28,6 +29,61 @@ from src.core.database import (
 )
 from src.mcp.autopilot._shared import _extract_pr_url
 from src.mcp.autopilot.feature_routes import _find_archived_feature_report
+
+
+def _resolve_latest_agent_per_task(db, task_ids) -> Dict[str, Agent]:
+    """Batch-resolve each task's MOST RECENT agent -- via AgentLog's
+    durable "created" record (details.task_id), not Task.assigned_agent_id.
+
+    assigned_agent_id gets cleared on termination/failure (the documented
+    invariant -- see database.py's Agent.current_task_id comment) and
+    reassigned on every retry, so a task that finished after several CLI
+    fallbacks (e.g. claude -> pi -> a local pi model) either shows no cli_type
+    at all once it's done/failed, or shows whichever agent happened to be
+    assigned at read time rather than the one that actually did the work.
+    AgentLog's "created" entries survive every reassignment, so the latest
+    one is the correct source for "what CLI actually ran this task."
+    """
+    task_ids = [t for t in task_ids if t]
+    if not task_ids:
+        return {}
+
+    logs = (
+        db.query(AgentLog)
+        .filter(
+            AgentLog.log_type == "created",
+            AgentLog.details["task_id"].as_string().in_(task_ids),
+        )
+        .order_by(AgentLog.timestamp)
+        .all()
+    )
+    # SQLite JSON extraction via as_string() can miss rows (see
+    # task_service.py's identical fallback for the same query shape) --
+    # re-check in Python if the indexed query came up empty.
+    if not logs:
+        logs = [
+            log
+            for log in db.query(AgentLog).filter(AgentLog.log_type == "created").all()
+            if log.details and log.details.get("task_id") in task_ids
+        ]
+        logs.sort(key=lambda log: log.timestamp)
+
+    # Ascending timestamp order means the last write for a given task_id
+    # wins -- exactly "most recent agent".
+    latest_agent_id_by_task: Dict[str, str] = {}
+    for log in logs:
+        task_id = (log.details or {}).get("task_id")
+        if task_id and log.agent_id:
+            latest_agent_id_by_task[task_id] = log.agent_id
+
+    agent_ids = list(set(latest_agent_id_by_task.values()))
+    agents_by_id = {a.id: a for a in db.query(Agent).filter(Agent.id.in_(agent_ids)).all()} if agent_ids else {}
+
+    return {
+        task_id: agents_by_id[agent_id]
+        for task_id, agent_id in latest_agent_id_by_task.items()
+        if agent_id in agents_by_id
+    }
 
 
 async def get_design_status(
@@ -82,15 +138,12 @@ async def get_design_status(
         if workflow_ids:
             tasks = db.query(Task).filter(Task.workflow_id.in_(workflow_ids)).order_by(Task.created_at).all()
 
-            # Bulk-fetch agents to avoid N+1
-            agent_ids = list(set(t.assigned_agent_id for t in tasks if t.assigned_agent_id))
-            agents_map = {}
-            if agent_ids:
-                agents_list = db.query(Agent).filter(Agent.id.in_(agent_ids)).all()
-                agents_map = {a.id: a for a in agents_list}
+            # Bulk-fetch each task's latest agent (not necessarily the
+            # currently-assigned one -- see _resolve_latest_agent_per_task).
+            latest_agent_by_task = _resolve_latest_agent_per_task(db, [t.id for t in tasks])
 
             for t in tasks:
-                agent = agents_map.get(t.assigned_agent_id) if t.assigned_agent_id else None
+                agent = latest_agent_by_task.get(t.id)
                 all_tasks.append(
                     {
                         "id": t.id,
@@ -140,8 +193,9 @@ async def get_design_status(
                     )
 
             # Also include full agent details (not just branch info)
+            agents_by_id = {a.id: a for a in db.query(Agent).filter(Agent.id.in_(agent_ids)).all()} if agent_ids else {}
             for agent_id in agent_ids:
-                agent = agents_map.get(agent_id)
+                agent = agents_by_id.get(agent_id)
                 if agent:
                     # Avoid duplicates
                     if not any(a.get("agent_id") == agent.id for a in all_agents):
@@ -301,14 +355,14 @@ async def get_design_status(
                 # "Execute {phase}: " label and, for goto/retry tasks, the
                 # GOTO_REASON_PREFIX block below).
                 phase_description_map = {p.id: p.description for p in phases_q}
+                # Bulk-fetch each task's latest agent (not necessarily the
+                # currently-assigned one -- see _resolve_latest_agent_per_task).
+                latest_agent_by_wf_task = _resolve_latest_agent_per_task(db, [t.id for t in wf_tasks])
 
                 for t in wf_tasks:
-                    agent_status = None
-                    agent_cli_type = None
-                    if t.assigned_agent_id:
-                        agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
-                        agent_status = agent.status if agent else None
-                        agent_cli_type = agent.cli_type if agent else None
+                    agent = latest_agent_by_wf_task.get(t.id)
+                    agent_status = agent.status if agent else None
+                    agent_cli_type = agent.cli_type if agent else None
                     # The full (untruncated) text -- goto_reason is parsed
                     # out of this, not the 200-char-truncated `description`
                     # below, since a long phase description could otherwise
