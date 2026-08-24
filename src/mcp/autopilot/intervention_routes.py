@@ -53,13 +53,33 @@ class HumanInputResponse(BaseModel):
     target_phase: Optional[str] = None
 
 def _find_pending_input() -> Optional[Path]:
-    """Find the first non-stale input request file."""
+    """Find the first non-stale input request file.
+
+    "arbitration_escalation" requests (see arbitration.py's
+    _escalate_arbitration_deadlock_to_human) are exempt from the
+    staleness cutoff below -- that function's own docstring is explicit
+    that it "deliberately does NOT time out," because auto-continuing
+    past a confirmed, unresolved architectural BLOCKER with no actual
+    decision defeats the entire point of escalating it to a human in the
+    first place. Before this exemption, this cleanup silently deleted an
+    arbitration escalation's request file once it crossed
+    STALE_INPUT_SECONDS regardless of kind -- and
+    _maybe_resolve_human_arbitration_escalations treats a missing request
+    file with no response as an explicit dismissal (the same convention
+    prompt_human's other callers use for a real UI X-button click),
+    auto-continuing the deadlocked phase as if a human had actually
+    chosen to. Observed live: an arbitration escalation nobody ever
+    answered force-continued itself past design_review after silently
+    expiring, with no visible sign anything had happened.
+    """
     input_dir = Path(AUTOPILOT_STATE_DIR)
     if not input_dir.exists():
         return None
     for f in sorted(input_dir.glob("input_request_*.json")):
         try:
             data = json.loads(f.read_text())
+            if data.get("kind") == "arbitration_escalation":
+                return f
             ts = datetime.fromisoformat(data["timestamp"])
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)

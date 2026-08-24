@@ -994,6 +994,35 @@ class TestHumanInput:
         assert resp.json() is None
         assert not request_file.exists()
 
+    def test_arbitration_escalation_is_never_cleaned_up_as_stale(self, client, autopilot_dirs):
+        """Regression: arbitration.py's _escalate_arbitration_deadlock_to_
+        human docstring is explicit that it "deliberately does NOT time
+        out" -- auto-continuing past an unresolved arbitration deadlock
+        with no actual human decision defeats the point of escalating it.
+        Before this fix, the generic 1-hour staleness cleanup below
+        deleted an arbitration escalation's request file regardless of
+        kind, and the orchestrator sweep treats a missing request file
+        with no response as an explicit dismissal -- silently force-
+        continuing a deadlocked phase nobody ever actually decided on."""
+        state_dir = autopilot_dirs["state"]
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        request_file = state_dir / "input_request_arb1.json"
+        request_file.write_text(
+            json.dumps({
+                "id": "arb1", "reason": "design_review deadlocked",
+                "timestamp": old_ts, "options": ["c", "s"], "labels": {},
+                "kind": "arbitration_escalation",
+                "workflow_id": "wf-1", "phase_id": "phase-1",
+            })
+        )
+
+        resp = client.get("/api/autopilot/input")
+        assert resp.status_code == 200
+        assert resp.json() is not None
+        assert resp.json()["id"] == "arb1"
+        assert request_file.exists()
+
 
 # ── Pipeline Status ──────────────────────────────────────────────
 
