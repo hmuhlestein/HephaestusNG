@@ -1498,6 +1498,13 @@ class LaunchPipeline:
                     "you've hit your weekly limit",
                     "you've hit your monthly limit",
                     "too many requests, please slow down",
+                    # Claude Code's rolling-usage-window banner ("Usage
+                    # limit reached · continuing automatically at 3:10pm")
+                    # -- same failure class, but auto-continues instead of
+                    # erroring, so it needs its own indicator (see
+                    # patterns.py's _USAGE_LIMIT_RE for the mid-task
+                    # equivalent of this same gap).
+                    "usage limit reached",
                 ):
                     if indicator in output_lower:
                         raise Exception(f"CLI session limit detected: '{indicator}' found in output")
