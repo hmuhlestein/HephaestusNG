@@ -1,1 +1,22 @@
-# Empty - coverage measured by --cov flag
+[run]
+source = src
+omit =
+    tests/*
+    frontend/*
+    scripts/*
+    .worktrees/*
+    lib/*
+    */__pycache__/*
+
+[report]
+show_missing = true
+precision = 1
+# Default floor -- overridden at runtime by conftest.py's pytest_configure
+# hook which reads testing.coverage_floor from hephaestus_config.yaml.
+fail_under = 20
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if TYPE_CHECKING:
+    if __name__ == .__main__.:
+    raise NotImplementedError

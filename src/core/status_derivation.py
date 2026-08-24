@@ -73,9 +73,33 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
         logger.warning(f"Feature {feature_id} not found")
         return "unknown"
 
-    # Respect paused status - user explicitly paused
+    # Respect paused status - user explicitly paused -- but only while the
+    # underlying workflow is still actually paused. A workflow can resume
+    # through paths that never call resume_feature (the self-heal auto-
+    # resume sweep, a direct DB/admin resume): trusting this cached flag
+    # unconditionally left the feature reporting "paused" forever even
+    # after its workflow was back to dispatching real tasks. Mirrors the
+    # same live-workflow guard derive_design_status already applies to its
+    # own cached "paused" flag, just inverted (design-level: stay paused
+    # only if a workflow is STILL active-or-paused; feature-level: stay
+    # paused only if ITS workflow is still paused).
     if feature.status == FeatureStatus.PAUSED:
-        return FeatureStatus.PAUSED
+        # Local import, not the module-level one: derive_feature_status
+        # also re-imports Workflow further down (see below), which makes
+        # every reference to the bare name local to the whole function
+        # body in Python's scoping -- referencing the module-level import
+        # here would raise UnboundLocalError before that later import runs.
+        from src.core.database import Workflow as _Workflow
+
+        wf_still_paused = (
+            feature.workflow_id
+            and db.query(_Workflow.status).filter_by(id=feature.workflow_id).scalar() == "paused"
+        )
+        if wf_still_paused:
+            return FeatureStatus.PAUSED
+        # else: workflow moved on without going through resume_feature --
+        # fall through to real derivation below instead of trusting the
+        # stale cached value.
 
     # Respect skipped status
     if feature.status == FeatureStatus.SKIPPED:

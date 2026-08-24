@@ -178,4 +178,13 @@ ticket_tracking:
     model: BAAI/bge-small-en-v1.5
     dimensions: 384
     backend: fastembed
+testing:
+  # Minimum overall coverage percentage (existing + new code combined).
+  # Applied via pytest-cov's --cov-fail-under.  20 % is a starter floor --
+  # raise it as coverage improves.
+  coverage_floor: 20
+  # Minimum coverage for lines changed in the current diff (vs. origin/main).
+  # Enforced by scripts/check_coverage.py via diff-cover.  80 % is the real
+  # bar -- every NEW line should be tested.
+  new_code_coverage_floor: 80
 
