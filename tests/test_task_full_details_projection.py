@@ -191,6 +191,35 @@ class TestGetTaskFullDetailsProjectionShapes:
         assert by_id["agent-new"]["outcome"] == "failed"
 
     @pytest.mark.asyncio
+    async def test_agent_info_survives_assigned_agent_id_being_cleared(
+        self, task_service, db_manager
+    ):
+        """assigned_agent_id is cleared on termination (see the
+        agent-termination invariant) -- a completed/failed task must still
+        show its actual (latest) agent in agent_info, reconstructed from
+        AgentLog the same way agent_history is, instead of going blank."""
+        session = db_manager.get_session()
+        try:
+            agent = Agent(
+                id="agent-done", system_prompt="sys", cli_type="pi",
+                status="terminated",
+            )
+            session.add(agent)
+            _add_task(session, id="t1", status="done", assigned_agent_id=None)
+            session.add(AgentLog(
+                agent_id="agent-done", log_type="created", details={"task_id": "t1"},
+            ))
+            session.commit()
+        finally:
+            session.close()
+
+        result = await task_service.get_task_full_details("t1")
+
+        assert result["agent_info"] is not None
+        assert result["agent_info"]["id"] == "agent-done"
+        assert result["agent_info"]["cli_type"] == "pi"
+
+    @pytest.mark.asyncio
     async def test_agent_history_surfaces_session_limit_reason_for_a_past_agent(
         self, task_service, db_manager
     ):
