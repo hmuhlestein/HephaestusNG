@@ -158,6 +158,24 @@ def reset_stale_executions_on_goto(
     cycle-scoped query (Task.created_at >= started_at) exclude the
     phase's own freshly-created task, silently stalling it forever.
 
+    Excludes any candidate phase that currently has a live task
+    (assigned/in_progress) — same "live task" definition
+    _release_pending_phases_with_orphaned_task already uses elsewhere in
+    this file. Without this, a REDUNDANT goto evaluation of the SAME
+    already-handled completion (a distinct race: mark_phase_complete can
+    get entered twice for one task completion, e.g. once from
+    fire_spec_gate_if_ready's synchronous path and once from the
+    periodic sweep) blindly wipes a downstream phase's started_at/status
+    even though it isn't stale at all -- a real task is actively
+    dispatched and running under it right now. Observed live: a
+    development-phase task legitimately in_progress had its
+    PhaseExecution reset to started_at=None mid-flight by a second,
+    redundant "goto development" from adversarial_review; started_at was
+    later re-derived from an unrelated duplicate task created after the
+    real one, permanently excluding the real (later-completing) task
+    from the cycle-scoped completion check and stalling the phase
+    forever.
+
     Returns the number of rows reset.
     """
     stale = (
@@ -171,6 +189,17 @@ def reset_stale_executions_on_goto(
         )
         .all()
     )
+    if stale:
+        live_phase_ids = {
+            row[0]
+            for row in db.query(Task.phase_id)
+            .filter(
+                Task.phase_id.in_([s.phase_id for s in stale]),
+                Task.status.in_(["assigned", "in_progress"]),
+            )
+            .all()
+        }
+        stale = [s for s in stale if s.phase_id not in live_phase_ids]
     for s in stale:
         s.status = "pending"
         s.completed_at = None

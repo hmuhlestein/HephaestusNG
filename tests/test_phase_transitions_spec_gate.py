@@ -380,3 +380,51 @@ class TestFireSpecGateIfReadyGoto:
             dev_exec = session.query(PhaseExecution).filter_by(phase_id="phase-dev").first()
             assert dev_exec.status == "pending"
             assert n >= 1
+
+    @pytest.mark.asyncio
+    async def test_goto_reset_does_not_clobber_a_phase_with_a_live_task(self, gate_db, tmp_path):
+        """Root-cause regression: a REDUNDANT goto evaluation of the same
+        already-handled completion (mark_phase_complete entered twice for
+        one task completion) must not wipe a downstream phase's
+        PhaseExecution while a real task is actively in_progress under it.
+
+        Observed live: development had a task genuinely in_progress
+        (dispatched, doing real work) when a second, redundant "goto
+        development" from adversarial_review reset development's
+        PhaseExecution.started_at to None mid-flight. started_at was later
+        re-derived from an unrelated task, permanently excluding the real
+        (later-completing) task from the cycle-scoped completion check --
+        stalling the phase forever, since the pipeline never advanced past
+        development even after that real task finished.
+        """
+        from src.autopilot.orchestrator.phase_transitions import reset_stale_executions_on_goto
+        from src.core.database import PhaseExecution, Task
+
+        self._seed(gate_db, tmp_path)
+        with gate_db.session_scope() as session:
+            adv_exec = session.query(PhaseExecution).filter_by(phase_id="phase-adv").first()
+            adv_exec.status = "completed"
+            session.add(PhaseExecution(
+                id="exec-dev", phase_id="phase-dev", workflow_execution_id="wf-1",
+                status="in_progress",
+            ))
+            # A real task actively being worked on in development right now.
+            session.add(
+                Task(
+                    id="task-dev-live", raw_description="r", done_definition="d",
+                    status="in_progress", phase_id="phase-dev", workflow_id="wf-1",
+                )
+            )
+
+        # A redundant goto-reset re-fires targeting development (order 4).
+        with gate_db.session_scope() as session:
+            n = reset_stale_executions_on_goto(
+                session, "wf-1", 4, exclude_phase_id="phase-adv",
+            )
+
+        # development's execution must be left untouched -- it has a live
+        # task, so it is not stale and must not be reset.
+        with gate_db.session_scope() as session:
+            dev_exec = session.query(PhaseExecution).filter_by(phase_id="phase-dev").first()
+            assert dev_exec.status == "in_progress"
+        assert n == 0
