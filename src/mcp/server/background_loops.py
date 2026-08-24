@@ -119,7 +119,8 @@ async def process_queue(project_id: Optional[str] = None):
                 done_definition=next_task.done_definition,
                 phase_context_str=phase_context_str,
                 requesting_agent_id="system",
-                phase_id=resolved_phase_id,
+                workflow_id=workflow_id,
+                repo_id=next_task.repo_id,
             )
             enriched_task = enrichment_result["enriched_task"]
 
@@ -214,6 +215,8 @@ async def process_queue(project_id: Optional[str] = None):
                 task_description_for_rag=task_description_for_rag,
                 phase_id=task_for_agent.phase_id,
                 requesting_agent_id="system",
+                workflow_id=task_for_agent.workflow_id,
+                repo_id=task_for_agent.repo_id,
             )
 
         # QueueService.get_next_queued_task set this when the phase's

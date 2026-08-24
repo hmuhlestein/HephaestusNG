@@ -52,42 +52,39 @@ class AgentDispatchService:
         phase_id: Optional[str],
         requesting_agent_id: str = "system",
         explicit_working_directory: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Gather everything needed to create an agent for a task.
 
         explicit_working_directory takes precedence over the phase's
         working_directory (used by create_task, which honors an
         explicit request.cwd before falling back to the phase).
+
+        workflow_id/repo_id: passed straight through to
+        get_project_context() for the multi-repo section (REQ-17/18/21).
+        workflow_id is resolved from phase_id when not given directly (a
+        separate, short-lived query -- not the session
+        _assemble_dispatch_dict opens further down, since that runs AFTER
+        this gather() and project_context must already be built by then).
         """
         from src.core.app_context import get_app_state
 
         server_state = get_app_state()
 
-        # Resolve project_id/phase_name from phase_id -> Phase.workflow_id ->
-        # Workflow.project_id so get_project_context() can inject the
-        # multi-repo section (REQ-17/18/21). A separate, short-lived query --
-        # not the session _assemble_dispatch_dict opens further down, since
-        # that runs AFTER this gather() and project_context must already be
-        # built by then.
-        project_id = None
-        phase_name = None
-        if phase_id:
-            from src.core.database import Phase, Workflow
+        if not workflow_id and phase_id:
+            from src.core.database import Phase
 
             with server_state.db_manager.session_scope() as _session:
                 phase = _session.query(Phase).filter_by(id=phase_id).first()
                 if phase:
-                    phase_name = phase.name
-                    if phase.workflow_id:
-                        wf = _session.query(Workflow).filter_by(id=phase.workflow_id).first()
-                        if wf:
-                            project_id = wf.project_id
+                    workflow_id = phase.workflow_id
 
         # get_project_context() (DB reads) and retrieve_for_task() (embedding
         # + vector search) don't read each other's output -- the phase-context
         # merge below only needs project_context, and is itself synchronous.
         project_context, context_memories = await asyncio.gather(
-            server_state.agent_manager.get_project_context(project_id=project_id, phase_name=phase_name),
+            server_state.agent_manager.get_project_context(workflow_id=workflow_id, repo_id=repo_id),
             server_state.rag_system.retrieve_for_task(
                 task_description=task_description_for_rag,
                 requesting_agent_id=requesting_agent_id,
