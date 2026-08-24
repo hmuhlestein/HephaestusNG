@@ -39,6 +39,12 @@ def db_manager(tmp_path, monkeypatch):
     db_path = str(tmp_path / "test_ticket_mcp.db")
     monkeypatch.setenv("HEPHAESTUS_TEST_DB", db_path)
 
+    # Mock git cat-file to succeed (commit exists) for tests that link commits
+    import subprocess
+    def fake_run(*args, **kwargs):
+        return type("Proc", (), {"returncode": 0})()
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
     manager = DatabaseManager(db_path)
     manager.create_tables()
     yield manager

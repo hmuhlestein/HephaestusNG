@@ -21,7 +21,7 @@ from src.monitoring.guardian_dispatch import GuardianDispatcher
 @pytest.fixture
 def dispatcher():
     config = MagicMock()
-    config.guardian_min_agent_age_seconds = 60
+    config.monitoring.guardian_min_agent_age_seconds = 60
     return GuardianDispatcher(
         db_manager=MagicMock(),
         agent_manager=MagicMock(),
