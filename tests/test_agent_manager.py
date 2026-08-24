@@ -1602,6 +1602,38 @@ class TestSendInitialPromptSessionLimitCheck:
                 )
 
     @pytest.mark.asyncio
+    async def test_raises_on_claude_usage_limit_banner(self, mock_agent_manager):
+        """Claude Code's rolling-usage-window banner ("Usage limit reached
+        · continuing automatically at 3:10pm · esc or type to cancel") is
+        worded differently from every other indicator in this list -- it
+        was missing entirely, so an agent hitting it at initial-prompt
+        time reported as launched "successfully" and just sat idle until
+        the periodic monitor's own equivalent gap (patterns.py's
+        _USAGE_LIMIT_RE) was fixed."""
+        pane = MagicMock()
+        pane.cmd.return_value = MagicMock(
+            stdout=[
+                "some earlier output",
+                "Usage limit reached · continuing automatically at 3:10pm · esc or type to cancel",
+                "...",
+            ]
+        )
+        cli_agent = MagicMock()
+        cli_agent.needs_chunked_delivery = False
+        cli_agent.format_message = MagicMock(return_value="formatted prompt")
+
+        with patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(Exception, match="CLI session limit detected"):
+                await mock_agent_manager._send_initial_prompt_with_retry(
+                    pane=pane,
+                    cli_agent=cli_agent,
+                    cli_type="claude",
+                    initial_message="do the task",
+                    agent_id="a1",
+                    task_id="t1",
+                )
+
+    @pytest.mark.asyncio
     async def test_no_raise_on_normal_output(self, mock_agent_manager):
         pane = MagicMock()
         pane.cmd.return_value = MagicMock(
