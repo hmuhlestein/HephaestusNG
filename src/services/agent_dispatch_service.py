@@ -73,6 +73,7 @@ class AgentDispatchService:
                 requesting_agent_id=requesting_agent_id,
             ),
         )
+
         # get_phase_context (a Phase query) and _assemble_dispatch_dict (its
         # own Phase query, for cli config) are both plain synchronous
         # SQLAlchemy calls -- offloaded together since neither is async I/O
@@ -83,9 +84,7 @@ class AgentDispatchService:
             if phase_id and server_state.phase_manager:
                 phase_context = server_state.phase_manager.get_phase_context(phase_id)
                 if phase_context:
-                    final_project_context = (
-                        f"{project_context}\n\n{phase_context.to_prompt_context()}"
-                    )
+                    final_project_context = f"{project_context}\n\n{phase_context.to_prompt_context()}"
 
             # FIX #6: Pass explicit_working_directory (may be None) to the assembler
             # so the phase's configured working_directory can be used as fallback.
@@ -119,11 +118,7 @@ class AgentDispatchService:
             cli_config = AgentDispatchService.get_phase_cli_config(session, phase_id)
 
         # Phase working_directory is a fallback if caller didn't provide one
-        effective_working_directory = (
-            working_directory
-            or cli_config["working_directory"]
-            or os.getcwd()
-        )
+        effective_working_directory = working_directory or cli_config["working_directory"] or os.getcwd()
 
         return {
             "project_context": project_context,
@@ -216,3 +211,42 @@ class AgentDispatchService:
         finally:
             if owns_session:
                 session.close()
+
+    @staticmethod
+    def resolve_task_project_context(task, session=None) -> str:
+        """Resolve project context for a task, including repo awareness.
+
+        Consolidates the workflow.project_id + task.repo_id → get_project_context(...)
+        resolve into one place, reused by every dispatch call site.
+
+        Returns the project context string. Never raises — failures degrade
+        to the no-args get_project_context() call.
+        """
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
+
+        workflow_id = getattr(task, "workflow_id", None)
+        repo_id = getattr(task, "repo_id", None)
+
+        try:
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in an async context, can't use run_until_complete
+                # Fall back to no-args version
+                return loop.run_until_complete(server_state.agent_manager.get_project_context())
+            else:
+                return loop.run_until_complete(
+                    server_state.agent_manager.get_project_context(
+                        workflow_id=workflow_id,
+                        repo_id=repo_id,
+                    )
+                )
+        except Exception as e:
+            logger.warning(f"Failed to resolve task project context: {e}")
+            try:
+                return loop.run_until_complete(server_state.agent_manager.get_project_context())
+            except Exception:
+                return "Project context unavailable"
