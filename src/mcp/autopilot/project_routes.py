@@ -359,6 +359,18 @@ async def create_project(
         db.add(proj)
         db.flush()
 
+        # Create primary ProjectRepo for the new project (REQ-01, REQ-04)
+        from src.core.database import ProjectRepo
+        primary_repo = ProjectRepo(
+            id=f"repo-{uuid.uuid4()}",
+            project_id=proj.id,
+            label="primary",
+            path=resolved,
+            is_primary=True,
+        )
+        db.add(primary_repo)
+        db.flush()
+
         # Sync designs in the SAME session — no nested get_db()
         designs = _sync_project_designs(proj.id, resolved, db)
 
