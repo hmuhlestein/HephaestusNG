@@ -940,6 +940,42 @@ class TestProjectScopedWorktreeManager:
             is mock_agent_manager.branch_manager
         )
 
+    @pytest.mark.asyncio
+    async def test_resolves_workflow_feature_repo_id_for_multi_repo_project(
+        self, mock_agent_manager, db_manager
+    ):
+        """A workflow bound to a Feature scoped to a child repo (REQ-19/REQ-20's
+        "feature -> repo" mapping) must resolve THAT repo's path, not the
+        project's primary repo."""
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, ProjectRepo
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-multi", name="Multi", base_dir="/tmp/multi-repo-project"))
+            session.add(
+                ProjectRepo(id="repo-primary", project_id="proj-multi", label="backend", path="/tmp/multi-repo-project/backend", is_primary=True)
+            )
+            session.add(
+                ProjectRepo(id="repo-frontend", project_id="proj-multi", label="frontend", path="/tmp/multi-repo-project/frontend", is_primary=False)
+            )
+            session.add(
+                AutopilotDesign(id="design-1", project_id="proj-multi", filename="d.md", name="d")
+            )
+            session.add(Feature(id="feat-fe", design_id="design-1", feature_key="fe", name="FE", scope="s", repo_id="repo-frontend"))
+            session.add(
+                Workflow(
+                    id="wf-multi",
+                    name="Multi Workflow",
+                    status="active",
+                    phases_folder_path="/tmp",
+                    project_id="proj-multi",
+                    feature_id="feat-fe",
+                )
+            )
+
+        assert mock_agent_manager._resolve_project_base_dir("wf-multi") == Path(
+            "/tmp/multi-repo-project/frontend"
+        )
+
 
 class TestCreateAgentForTaskFallback:
     """When a phase configures fallback_cli_tool and the primary CLI fails,
@@ -2465,3 +2501,71 @@ class TestCreateAgentForTaskHandlesNullEnrichedDescription:
             )
             assert log_entry is not None
             assert "do another lint check" in log_entry.message
+
+
+class TestGetProjectContextRepoAwareness:
+    """REQ-17/18/19/20/21: get_project_context(project_id, phase_name)
+    injects a PROJECT REPOSITORIES section only for multi-repo projects,
+    with an extra hard-rule block for the feature-architect phase."""
+
+    @pytest.mark.asyncio
+    async def test_no_project_id_is_byte_identical_to_before(self, mock_agent_manager):
+        without_param = await mock_agent_manager.get_project_context()
+        with_none = await mock_agent_manager.get_project_context(project_id=None)
+        assert without_param == with_none
+        assert "PROJECT REPOSITORIES" not in without_param
+
+    @pytest.mark.asyncio
+    async def test_single_repo_project_emits_no_extra_text(self, mock_agent_manager, db_manager):
+        from src.core.database import AutopilotProject, ProjectRepo
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-single", name="p", base_dir="/tmp/single"))
+            session.add(ProjectRepo(id="repo-single", project_id="proj-single", label="primary", path="/tmp/single", is_primary=True))
+
+        context = await mock_agent_manager.get_project_context(project_id="proj-single")
+        assert "PROJECT REPOSITORIES" not in context
+
+    @pytest.mark.asyncio
+    async def test_multi_repo_project_lists_repos_and_rules(self, mock_agent_manager, db_manager):
+        from src.core.database import AutopilotProject, ProjectRepo
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-multi", name="p", base_dir="/tmp/multi"))
+            session.add(ProjectRepo(id="repo-be", project_id="proj-multi", label="backend", path="/repo/backend", is_primary=True))
+            session.add(ProjectRepo(id="repo-fe", project_id="proj-multi", label="frontend", path="/repo/frontend"))
+
+        context = await mock_agent_manager.get_project_context(project_id="proj-multi")
+        assert "PROJECT REPOSITORIES" in context
+        assert "backend" in context and "/repo/backend" in context
+        assert "frontend" in context and "/repo/frontend" in context
+        assert "READ-ONLY reference" in context
+        assert "REPO ASSIGNMENT RULE" not in context  # not the feature-architect phase
+
+    @pytest.mark.asyncio
+    async def test_feature_architect_phase_gets_the_extra_hard_rule(self, mock_agent_manager, db_manager):
+        from src.core.database import AutopilotProject, ProjectRepo
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-multi2", name="p", base_dir="/tmp/multi2"))
+            session.add(ProjectRepo(id="repo-be2", project_id="proj-multi2", label="backend", path="/repo/be2", is_primary=True))
+            session.add(ProjectRepo(id="repo-fe2", project_id="proj-multi2", label="frontend", path="/repo/fe2"))
+
+        context = await mock_agent_manager.get_project_context(project_id="proj-multi2", phase_name="feature_architect")
+        assert "REPO ASSIGNMENT RULE" in context
+        assert "repo_label" in context
+
+    @pytest.mark.asyncio
+    async def test_non_matching_phase_name_does_not_get_the_hard_rule(self, mock_agent_manager, db_manager):
+        """Exact string match against Phase.name == 'feature_architect' --
+        not 'or equivalent' (WARNING-2)."""
+        from src.core.database import AutopilotProject, ProjectRepo
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-multi3", name="p", base_dir="/tmp/multi3"))
+            session.add(ProjectRepo(id="repo-be3", project_id="proj-multi3", label="backend", path="/repo/be3", is_primary=True))
+            session.add(ProjectRepo(id="repo-fe3", project_id="proj-multi3", label="frontend", path="/repo/fe3"))
+
+        context = await mock_agent_manager.get_project_context(project_id="proj-multi3", phase_name="development")
+        assert "PROJECT REPOSITORIES" in context
+        assert "REPO ASSIGNMENT RULE" not in context

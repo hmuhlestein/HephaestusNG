@@ -5,15 +5,19 @@ import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import git as _git
 
+from src.autopilot.orchestrator.state import (
+    DesignEntry,
+)
 from src.core.constants import (
     CONTEXT_DIR_NAME,
 )
 from src.core.database import (
     Agent,
+    Feature,
     Phase,
     PhaseExecution,
     Task,
@@ -21,12 +25,6 @@ from src.core.database import (
     get_db,
 )
 from src.core.simple_config import get_config
-
-from src.autopilot.orchestrator.state import (
-    DesignEntry,
-)
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -124,14 +122,12 @@ def _create_integration_worktree(
             logger.info(f"Created integration worktree: {wt_path} (branch: {branch})")
             return wt_path
         finally:
-            session = getattr(db, "_session", None) or getattr(db, "session", None)
-            if session is not None:
-                try:
-                    session.close()
-                except Exception:
-                    pass
+            try:
+                db.close()
+            except Exception:
+                pass
     except Exception as e:
-        logger.warning(f"Failed to create integration worktree: {e}")
+        logger.error(f"[WORKTREE] Failed to create integration worktree for {project_path} (branch: {branch}): {e}", exc_info=True)
         return None
 
 
@@ -189,9 +185,7 @@ def _cleanup_worktree(
             if worktree.exists():
                 wt_mgr._remove_worktree(str(worktree), require_clean=True)
                 if worktree.exists():
-                    logger.warning(
-                        f"Worktree not removed (uncommitted changes or removal error): {worktree}"
-                    )
+                    logger.warning(f"Worktree not removed (uncommitted changes or removal error): {worktree}")
                 else:
                     logger.info(f"Removed worktree: {worktree}")
 
@@ -233,12 +227,10 @@ def _cleanup_worktree(
                 except Exception as e:
                     logger.warning(f"Failed to clear workflow working_directory: {e}")
         finally:
-            session = getattr(db, "_session", None) or getattr(db, "session", None)
-            if session is not None:
-                try:
-                    session.close()
-                except Exception:
-                    pass
+            try:
+                db.close()
+            except Exception:
+                pass
     except Exception as e:
         logger.warning(f"Failed to cleanup worktree: {e}")
 
@@ -305,11 +297,7 @@ def sweep_completed_workflow_worktrees(logger: "OrchestratorLogger") -> int:
                 }
                 for wf_id, _, _ in targets:
                     if wf_id in live_workflow_ids:
-                        logger.warning(
-                            f"[SWEEP] Skipping worktree removal for completed "
-                            f"workflow {wf_id[:8]} -- a live agent is still "
-                            "working an in-progress task under it"
-                        )
+                        logger.warning(f"[SWEEP] Skipping worktree removal for completed workflow {wf_id[:8]} -- a live agent is still working an in-progress task under it")
                 targets = [t for t in targets if t[0] not in live_workflow_ids]
 
         for wf_id, working_directory, launch_params in targets:
@@ -320,11 +308,7 @@ def sweep_completed_workflow_worktrees(logger: "OrchestratorLogger") -> int:
             lp = launch_params if isinstance(launch_params, dict) else {}
             project_path_str = lp.get("project_path")
             if not project_path_str:
-                logger.warning(
-                    f"[SWEEP] Workflow {wf_id[:8]} has an orphaned worktree "
-                    f"{worktree} but no launch_params.project_path to scope "
-                    "cleanup to -- skipping rather than guessing"
-                )
+                logger.warning(f"[SWEEP] Workflow {wf_id[:8]} has an orphaned worktree {worktree} but no launch_params.project_path to scope cleanup to -- skipping rather than guessing")
                 continue
 
             try:
@@ -332,21 +316,16 @@ def sweep_completed_workflow_worktrees(logger: "OrchestratorLogger") -> int:
             except Exception:
                 branch = ""
 
-            logger.info(
-                f"[SWEEP] Cleaning up orphaned worktree for completed "
-                f"workflow {wf_id[:8]}: {worktree}"
-            )
+            logger.info(f"[SWEEP] Cleaning up orphaned worktree for completed workflow {wf_id[:8]}: {worktree}")
             _cleanup_worktree(worktree, branch, Path(project_path_str), logger)
             removed += 1
     except Exception as e:
         logger.warning(f"[SWEEP] Failed to sweep completed-workflow worktrees: {e}")
     finally:
-        session = getattr(db, "_session", None) or getattr(db, "session", None)
-        if session is not None:
-            try:
-                session.close()
-            except Exception:
-                pass
+        try:
+            db.close()
+        except Exception:
+            pass
     return removed
 
 
@@ -390,17 +369,18 @@ def heal_orphaned_agent_branches(logger: "OrchestratorLogger") -> int:
     """
     from src.core.database import AutopilotProject
     from src.core.database import DatabaseManager as DbManager
+    from src.core.repo_resolution import get_project_repos
 
     cfg = get_config()
     db = DbManager(str(cfg.paths.database_path))
     healed = 0
     try:
         with db.session_scope() as session:
-            project_dirs = {
-                proj.base_dir
-                for proj in session.query(AutopilotProject).all()
-                if proj.base_dir and Path(proj.base_dir).is_dir()
-            }
+            project_dirs = set()
+            for proj in session.query(AutopilotProject).all():
+                repos = get_project_repos(session, proj.id)
+                paths = [repo.path for repo in repos] if repos else [proj.base_dir]
+                project_dirs.update(p for p in paths if p and Path(p).is_dir())
 
         for project_dir in project_dirs:
             try:
@@ -415,7 +395,8 @@ def heal_orphaned_agent_branches(logger: "OrchestratorLogger") -> int:
 def _heal_orphaned_branches_for_project(project_dir: Path, cfg, logger: "OrchestratorLogger") -> int:
     try:
         repo = _git.Repo(project_dir)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[BRANCH-HEAL] Could not open repo at {project_dir}: {e}")
         return 0
 
     base_branch = cfg.git.base_branch
@@ -439,7 +420,7 @@ def _heal_orphaned_branches_for_project(project_dir: Path, cfg, logger: "Orchest
     current_path = None
     for line in porcelain.splitlines():
         if line.startswith("worktree "):
-            current_path = line[len("worktree "):]
+            current_path = line[len("worktree ") :]
         elif line.startswith("branch ") and current_path:
             branch_name = line.split(" ", 1)[1].removeprefix("refs/heads/")
             checked_out_branches[branch_name] = current_path
@@ -497,10 +478,7 @@ def _heal_orphaned_branches_for_project(project_dir: Path, cfg, logger: "Orchest
                     )
                     continue
                 base_repo.git.merge(name, "--ff-only")
-                logger.info(
-                    f"[BRANCH-HEAL] Fast-forwarded {base_branch} to {branch_sha[:8]} "
-                    f"({ahead} commit(s) from orphaned branch {name}, project {project_dir})"
-                )
+                logger.info(f"[BRANCH-HEAL] Fast-forwarded {base_branch} to {branch_sha[:8]} ({ahead} commit(s) from orphaned branch {name}, project {project_dir})")
                 healed += 1
             except Exception as e:
                 logger.warning(f"[BRANCH-HEAL] FAILED to heal {name} in {project_dir}: {e}")
@@ -512,10 +490,7 @@ def _heal_orphaned_branches_for_project(project_dir: Path, cfg, logger: "Orchest
                 # still exactly base_sha, so this can't clobber a commit
                 # that landed on it between the read above and this write).
                 repo.git.update_ref(f"refs/heads/{base_branch}", branch_sha, base_sha)
-                logger.info(
-                    f"[BRANCH-HEAL] Fast-forwarded {base_branch} to {branch_sha[:8]} "
-                    f"({ahead} commit(s) from orphaned branch {name}, project {project_dir})"
-                )
+                logger.info(f"[BRANCH-HEAL] Fast-forwarded {base_branch} to {branch_sha[:8]} ({ahead} commit(s) from orphaned branch {name}, project {project_dir})")
                 healed += 1
             except Exception as e:
                 logger.warning(f"[BRANCH-HEAL] FAILED to heal {name} in {project_dir}: {e}")
@@ -585,6 +560,7 @@ def _recover_abandoned_workflows_missing_worktree(logger: "OrchestratorLogger") 
     instead of looping forever.
     """
     from src.core.database import AutopilotDesign, AutopilotProject, Feature
+    from src.core.repo_resolution import RepoNotFoundError, resolve_repo_path
 
     max_recovery_attempts = 2
     recovered = 0
@@ -608,6 +584,10 @@ def _recover_abandoned_workflows_missing_worktree(logger: "OrchestratorLogger") 
             project = db.query(AutopilotProject).filter_by(id=design.project_id).first()
             if not project or not project.base_dir:
                 continue
+            try:
+                repo_path = resolve_repo_path(db, design.project_id, feature.repo_id)
+            except (RepoNotFoundError, ValueError):
+                repo_path = Path(project.base_dir)
 
             # Scoped to the CURRENTLY in_progress phase only -- a workflow
             # that's been through several goto cycles can carry old,
@@ -642,7 +622,7 @@ def _recover_abandoned_workflows_missing_worktree(logger: "OrchestratorLogger") 
                 continue
 
             branch = f"feature/{feature.design_id[:8]}/{feature.feature_key}"
-            wt_path = _create_integration_worktree(Path(project.base_dir), feature.design_id, branch, logger)
+            wt_path = _create_integration_worktree(repo_path, feature.design_id, branch, logger)
             if not wt_path:
                 logger.warning(f"[WORKFLOW-RECOVERY] Could not rebuild worktree for workflow {wf.id[:8]} (branch {branch}) -- leaving failed")
                 continue
@@ -659,6 +639,11 @@ def _recover_abandoned_workflows_missing_worktree(logger: "OrchestratorLogger") 
             wf.working_directory = str(wt_path)
             wf.status = "active"
             wf.status_reason = None
+            # Sync feature status -- same class of bug as
+            # _retry_exhausted_paused_workflows: this function bypasses
+            # resume_workflow(), so the feature row stays "paused".
+            for feat in db.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
+                feat.status = "active"
             recovered += 1
         if recovered:
             db.commit()
@@ -705,11 +690,7 @@ def _recover_abandoned_workflows_with_completed_phase(logger: "OrchestratorLogge
         )
         for wf in candidates:
             in_progress_phase_ids = {
-                pid
-                for (pid,) in db.query(PhaseExecution.phase_id)
-                .join(Phase, PhaseExecution.phase_id == Phase.id)
-                .filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress")
-                .all()
+                pid for (pid,) in db.query(PhaseExecution.phase_id).join(Phase, PhaseExecution.phase_id == Phase.id).filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress").all()
             }
             if not in_progress_phase_ids:
                 continue  # nothing in_progress -- not this function's case
@@ -725,11 +706,7 @@ def _recover_abandoned_workflows_with_completed_phase(logger: "OrchestratorLogge
             if unfinished > 0:
                 continue  # something genuinely still active -- leave it alone
 
-            has_done = (
-                db.query(Task)
-                .filter(Task.phase_id.in_(in_progress_phase_ids), Task.status == "done")
-                .count()
-            )
+            has_done = db.query(Task).filter(Task.phase_id.in_(in_progress_phase_ids), Task.status == "done").count()
             if not has_done:
                 continue  # nothing completed yet either -- not evaluable
 
@@ -741,6 +718,10 @@ def _recover_abandoned_workflows_with_completed_phase(logger: "OrchestratorLogge
             )
             wf.status = "active"
             wf.status_reason = None
+            # Sync feature status -- same reasoning as
+            # _recover_abandoned_workflows_missing_worktree.
+            for feat in db.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
+                feat.status = "active"
             recovered += 1
         if recovered:
             db.commit()

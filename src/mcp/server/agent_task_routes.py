@@ -308,6 +308,14 @@ async def _update_task_status_once(
                 termination_scheduled=False,  # Agent kept alive for validation feedback
             )
         else:
+            # Terminal outcome log: the entry line above records the
+            # REQUEST, this records the COMMITTED result (done or failed),
+            # which is the event downstream phase advancement keys on and
+            # which otherwise has no log line of its own.
+            logger.info(
+                f"Task {request.task_id[:8]} finalized as '{task.status}' "
+                f"(requested '{request.status}') -- agent {agent_id[:8]} termination scheduled"
+            )
             return UpdateTaskStatusResponse(
                 success=True,
                 message=f"Task {request.status} successfully",

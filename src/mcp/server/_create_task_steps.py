@@ -11,6 +11,7 @@ in sequence.
 
 import logging
 import os
+import threading
 from difflib import SequenceMatcher
 from typing import Any, Dict, Optional
 
@@ -27,6 +28,20 @@ from src.mcp.server._shared import (
 )
 
 logger = logging.getLogger("src.mcp.server._create_task_steps")
+
+# Per-feature lock for serializing concurrent repo_id backfill operations.
+# Without this, two concurrent create_task calls for the same feature can
+# both read feature.repo_id is None and both backfill with different values.
+_feature_repo_id_locks: Dict[str, threading.Lock] = {}
+_feature_repo_id_lock_guard = threading.Lock()
+
+
+def _get_feature_lock(feature_id: str) -> threading.Lock:
+    """Get or create a per-feature lock for serializing repo_id backfill."""
+    with _feature_repo_id_lock_guard:
+        if feature_id not in _feature_repo_id_locks:
+            _feature_repo_id_locks[feature_id] = threading.Lock()
+        return _feature_repo_id_locks[feature_id]
 
 
 def _enforce_ticket_tracking_requirement(agent_id: str, request: CreateTaskRequest) -> None:
@@ -205,6 +220,75 @@ def _guard_phase_ownership(agent_id: str, request: CreateTaskRequest, dedup_phas
             _s.close()
 
 
+def _resolve_task_repo_id(session, request: CreateTaskRequest) -> Optional[str]:
+    """Resolve + validate this task's repo_id (REQ-19/WARNING-1/BLOCKER --
+    see architecture.md's "Feature.repo_id + create_task repo/feature
+    validation" component). Never guesses across projects: an explicit
+    repo_id is validated to belong to the task's own project BEFORE the
+    Task row is persisted, and a Feature/task repo_id mismatch is rejected
+    outright. Returns the resolved repo_id (possibly None -- single-repo
+    projects/no workflow are unaffected, byte-identical to before this
+    change). Raises HTTPException(400) on any validation failure.
+    """
+    from src.core.database import Feature, Workflow
+    from src.core.repo_resolution import RepoNotFoundError, repo_id_for_path, resolve_repo_path
+
+    if not request.workflow_id:
+        return request.repo_id
+
+    wf = session.query(Workflow).filter_by(id=request.workflow_id).first()
+    if not wf or not wf.project_id:
+        return request.repo_id
+    project_id = wf.project_id
+
+    resolved_repo_id = request.repo_id
+    if resolved_repo_id is None and request.cwd:
+        resolved_repo_id = repo_id_for_path(session, project_id, request.cwd)
+
+    if resolved_repo_id is not None:
+        try:
+            resolve_repo_path(session, project_id, resolved_repo_id)
+        except RepoNotFoundError:
+            raise HTTPException(400, "repo_id does not belong to this project")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    feature = None
+    if wf.feature_id:
+        feature = session.query(Feature).filter_by(id=wf.feature_id).first()
+
+    if feature is not None:
+        if feature.repo_id and resolved_repo_id and feature.repo_id != resolved_repo_id:
+            raise HTTPException(
+                400,
+                f"task repo_id {resolved_repo_id} conflicts with this feature's assigned repo {feature.repo_id} -- every task under one Feature must share its repo (REQ-19)",
+            )
+        if feature.repo_id and not resolved_repo_id:
+            resolved_repo_id = feature.repo_id
+        elif not feature.repo_id and resolved_repo_id:
+            # WARNING-1 fix: use per-feature lock to serialize concurrent
+            # repo_id backfill operations. Without this, two concurrent
+            # create_task calls can both read feature.repo_id is None and
+            # both backfill with different values -- last committer wins.
+            lock = _get_feature_lock(feature.id)
+            with lock:
+                # Re-read feature inside the lock to get current state
+                session.refresh(feature)
+                if feature.repo_id is None:
+                    feature.repo_id = resolved_repo_id
+                    session.flush()
+                elif feature.repo_id != resolved_repo_id:
+                    raise HTTPException(
+                        400,
+                        f"task repo_id {resolved_repo_id} conflicts with this feature's "
+                        f"assigned repo {feature.repo_id} (set by a concurrent task creation) "
+                        f"-- every task under one Feature must share its repo (REQ-19)",
+                    )
+                # else: feature.repo_id == resolved_repo_id, already set correctly
+
+    return resolved_repo_id
+
+
 def _persist_new_task(agent_id: str, request: CreateTaskRequest, task_id: str) -> None:
     """Create the initial task row (pending status), auto-creating the
     created_by_agent_id Agent FK row if it doesn't exist yet."""
@@ -231,6 +315,7 @@ def _persist_new_task(agent_id: str, request: CreateTaskRequest, task_id: str) -
                 )
             )
             session.flush()
+        resolved_repo_id = _resolve_task_repo_id(session, request)
         task = Task(
             id=task_id,
             raw_description=request.task_description,
@@ -247,6 +332,7 @@ def _persist_new_task(agent_id: str, request: CreateTaskRequest, task_id: str) -
             depends_on=request.depends_on,
             parallel_group=request.parallel_group,
             max_concurrent=request.max_concurrent or 1,
+            repo_id=resolved_repo_id,
         )
         session.add(task)
         session.commit()
@@ -350,7 +436,7 @@ async def _resolve_phase_and_enrich(request: CreateTaskRequest, agent_id: str) -
         done_definition=request.done_definition,
         phase_context_str=phase_context_str,
         requesting_agent_id=agent_id,
-        workflow_id=workflow_id,
+        phase_id=phase_id,
     )
 
     return {
@@ -570,7 +656,6 @@ async def _dispatch_ready_dependents(completed_task_id: str, workflow_id: Option
                     "done_definition": t.done_definition,
                     "phase_id": t.phase_id,
                     "workflow_id": t.workflow_id,
-                    "repo_id": t.repo_id,
                     "created_by_agent_id": t.created_by_agent_id,
                 }
             )
@@ -623,8 +708,6 @@ async def _dispatch_or_queue_promoted_task(task_data: dict) -> None:
     dispatch_context = await TaskEnrichmentService.gather_dispatch_context(
         raw_description=task_data["raw_description"],
         requesting_agent_id=agent_id,
-        workflow_id=task_data.get("workflow_id"),
-        repo_id=task_data.get("repo_id"),
     )
 
     enriched_task = {"enriched_description": task_data["enriched_description"]}
@@ -675,9 +758,21 @@ async def _dispatch_agent_for_task(
         done_definition=task_data["done_definition"],
         phase_id=task_data["phase_id"],
         workflow_id=task_data["workflow_id"],
-        repo_id=task_data.get("repo_id"),
         created_by_agent_id=agent_id,
     )
+
+    # REQ-18: for a task with repo_id already resolved (see
+    # _resolve_task_repo_id/_persist_new_task), state plainly which repo is
+    # writable for THIS task -- task-specific, so it belongs here rather
+    # than in the task-agnostic get_project_context().
+    with server_state.db_manager.session_scope() as _repo_session:
+        db_task = _repo_session.query(Task).filter_by(id=task_id).first()
+        if db_task and db_task.repo_id:
+            from src.core.database import ProjectRepo
+
+            repo = _repo_session.query(ProjectRepo).filter_by(id=db_task.repo_id).first()
+            if repo:
+                project_context = f"{project_context}\n\nYour assigned repo for this task: {repo.label} ({repo.path}) -- write here. Other listed repos are read-only reference."
 
     # Dispatch reuses the RAG memories/project context already fetched
     # during enrichment above (unlike process_queue, which re-fetches

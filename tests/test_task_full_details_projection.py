@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.core.database import Agent, DatabaseManager, Task
+from src.core.database import Agent, AgentLog, DatabaseManager, Task
 from src.mcp.frontend.task_service import TaskService, _task_summary_dict
 
 
@@ -147,6 +147,106 @@ class TestGetTaskFullDetailsProjectionShapes:
         assert set(result["parent_task"].keys()) == {
             "id", "description", "status", "created_at",
         }
+
+    @pytest.mark.asyncio
+    async def test_agent_history_includes_terminated_agents_from_prior_attempts(
+        self, task_service, db_manager
+    ):
+        """A retried/restarted task has task.assigned_agent_id overwritten
+        by the newest agent, so agent_history must reconstruct earlier
+        attempts from AgentLog's "created" entries instead."""
+        session = db_manager.get_session()
+        try:
+            old_agent = Agent(
+                id="agent-old", system_prompt="sys", cli_type="claude",
+                status="terminated", terminated_at=None,
+            )
+            new_agent = Agent(
+                id="agent-new", system_prompt="sys", cli_type="codex", status="working",
+            )
+            session.add_all([old_agent, new_agent])
+            _add_task(session, id="t1", status="failed", assigned_agent_id="agent-new")
+            session.add(AgentLog(
+                agent_id="agent-old", log_type="created", details={"task_id": "t1"},
+            ))
+            session.add(AgentLog(
+                agent_id="agent-new", log_type="created", details={"task_id": "t1"},
+            ))
+            session.commit()
+        finally:
+            session.close()
+
+        result = await task_service.get_task_full_details("t1")
+
+        assert {a["id"] for a in result["agent_history"]} == {"agent-old", "agent-new"}
+        assert result["agent_info"]["id"] == "agent-new"
+
+        by_id = {a["id"]: a for a in result["agent_history"]}
+        # The earlier agent was replaced before it saw the task through --
+        # its own reason for stopping isn't recorded anywhere, but "an
+        # agent came after it" is enough to know it didn't finish the job.
+        assert by_id["agent-old"]["outcome"] == "superseded"
+        # The most recent agent's attempt IS reflected in the task's own
+        # (currently "failed") status.
+        assert by_id["agent-new"]["outcome"] == "failed"
+
+    @pytest.mark.asyncio
+    async def test_agent_history_surfaces_session_limit_reason_for_a_past_agent(
+        self, task_service, db_manager
+    ):
+        """mechanical_recovery's session/spend-limit handler leaves a
+        durable AgentLog ("session_limit_terminated") before resetting the
+        task for the next attempt -- unlike the generic "superseded"
+        fallback, a past agent with one of these gets its actual reason
+        surfaced instead of a blank guess."""
+        session = db_manager.get_session()
+        try:
+            old_agent = Agent(
+                id="agent-old", system_prompt="sys", cli_type="pi", status="terminated",
+            )
+            new_agent = Agent(
+                id="agent-new", system_prompt="sys", cli_type="pi", status="working",
+            )
+            session.add_all([old_agent, new_agent])
+            _add_task(session, id="t1", assigned_agent_id="agent-new")
+            session.add(AgentLog(
+                agent_id="agent-old", log_type="created", details={"task_id": "t1"},
+            ))
+            session.add(AgentLog(
+                agent_id="agent-old", log_type="session_limit_terminated",
+                message="Hit session limit (pi) — terminated and redispatched to pi/other-model",
+                details={"task_id": "t1", "limit_kind": "session limit"},
+            ))
+            session.add(AgentLog(
+                agent_id="agent-new", log_type="created", details={"task_id": "t1"},
+            ))
+            session.commit()
+        finally:
+            session.close()
+
+        result = await task_service.get_task_full_details("t1")
+
+        by_id = {a["id"]: a for a in result["agent_history"]}
+        assert by_id["agent-old"]["outcome"] == "session_limit"
+        assert by_id["agent-old"]["outcome_detail"] == (
+            "Hit session limit (pi) — terminated and redispatched to pi/other-model"
+        )
+        assert by_id["agent-new"]["outcome_detail"] is None
+
+    @pytest.mark.asyncio
+    async def test_agent_history_empty_when_no_creation_logs(
+        self, task_service, db_manager
+    ):
+        session = db_manager.get_session()
+        try:
+            _add_task(session, id="t1")
+            session.commit()
+        finally:
+            session.close()
+
+        result = await task_service.get_task_full_details("t1")
+
+        assert result["agent_history"] == []
 
     @pytest.mark.asyncio
     async def test_duplicated_tasks_include_created_by_agent_id_not_priority(

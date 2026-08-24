@@ -52,8 +52,6 @@ class AgentDispatchService:
         phase_id: Optional[str],
         requesting_agent_id: str = "system",
         explicit_working_directory: Optional[str] = None,
-        workflow_id: Optional[str] = None,
-        repo_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Gather everything needed to create an agent for a task.
 
@@ -65,20 +63,36 @@ class AgentDispatchService:
 
         server_state = get_app_state()
 
+        # Resolve project_id/phase_name from phase_id -> Phase.workflow_id ->
+        # Workflow.project_id so get_project_context() can inject the
+        # multi-repo section (REQ-17/18/21). A separate, short-lived query --
+        # not the session _assemble_dispatch_dict opens further down, since
+        # that runs AFTER this gather() and project_context must already be
+        # built by then.
+        project_id = None
+        phase_name = None
+        if phase_id:
+            from src.core.database import Phase, Workflow
+
+            with server_state.db_manager.session_scope() as _session:
+                phase = _session.query(Phase).filter_by(id=phase_id).first()
+                if phase:
+                    phase_name = phase.name
+                    if phase.workflow_id:
+                        wf = _session.query(Workflow).filter_by(id=phase.workflow_id).first()
+                        if wf:
+                            project_id = wf.project_id
+
         # get_project_context() (DB reads) and retrieve_for_task() (embedding
         # + vector search) don't read each other's output -- the phase-context
         # merge below only needs project_context, and is itself synchronous.
         project_context, context_memories = await asyncio.gather(
-            server_state.agent_manager.get_project_context(
-                workflow_id=workflow_id,
-                repo_id=repo_id,
-            ),
+            server_state.agent_manager.get_project_context(project_id=project_id, phase_name=phase_name),
             server_state.rag_system.retrieve_for_task(
                 task_description=task_description_for_rag,
                 requesting_agent_id=requesting_agent_id,
             ),
         )
-
         # get_phase_context (a Phase query) and _assemble_dispatch_dict (its
         # own Phase query, for cli config) are both plain synchronous
         # SQLAlchemy calls -- offloaded together since neither is async I/O
@@ -89,7 +103,9 @@ class AgentDispatchService:
             if phase_id and server_state.phase_manager:
                 phase_context = server_state.phase_manager.get_phase_context(phase_id)
                 if phase_context:
-                    final_project_context = f"{project_context}\n\n{phase_context.to_prompt_context()}"
+                    final_project_context = (
+                        f"{project_context}\n\n{phase_context.to_prompt_context()}"
+                    )
 
             # FIX #6: Pass explicit_working_directory (may be None) to the assembler
             # so the phase's configured working_directory can be used as fallback.
@@ -123,7 +139,11 @@ class AgentDispatchService:
             cli_config = AgentDispatchService.get_phase_cli_config(session, phase_id)
 
         # Phase working_directory is a fallback if caller didn't provide one
-        effective_working_directory = working_directory or cli_config["working_directory"] or os.getcwd()
+        effective_working_directory = (
+            working_directory
+            or cli_config["working_directory"]
+            or os.getcwd()
+        )
 
         return {
             "project_context": project_context,

@@ -27,6 +27,7 @@ from src.autopilot.spec import (
     consume_gate_artifacts,
     read_okf_report,
     resolve_declared_output_path,
+    resolve_phase_input,
     suffixed_output_name,
 )
 
@@ -195,3 +196,77 @@ class TestConsumeGateArtifactsSuffix:
         result, _ = read_okf_report(tmp_path, "qa.md", phase_name="qa_validation")
 
         assert result is None
+
+
+class TestResolvePhaseInputSuffix:
+    """Regression: resolve_phase_input (the consumer-side lookup that backs
+    build_input_manifest's "INPUTS AVAILABLE TO YOU THIS RUN" block) only
+    ever checked the bare declared name -- every producing phase writes a
+    task-id-suffixed filename instead, so a downstream phase's manifest
+    silently reported the producer's report [MISSING] even when it existed,
+    for every phase that already used the suffix convention (adversarial.md,
+    qa.md, security.md, review.md, challenge.md, validation.md) and every
+    phase this fix newly adds it to (architecture.md, requirements.md,
+    forensics.md, docs.md, summary.md, deploy.md)."""
+
+    def test_finds_suffixed_file_in_producer_subdirectory(self, tmp_path, monkeypatch):
+        import src.autopilot.spec as spec_module
+
+        monkeypatch.setattr(spec_module, "input_producer_phases", lambda wf_id, name: ["adversarial_review"])
+        d = tmp_path / ".hephaestus" / "adversarial_review"
+        d.mkdir(parents=True)
+        (d / "adversarial-a1b2c3d4.md").write_text("findings")
+
+        found = resolve_phase_input(str(tmp_path), "adversarial.md", workflow_id="wf-1")
+
+        assert found == d / "adversarial-a1b2c3d4.md"
+
+    def test_finds_suffixed_file_at_flat_location(self, tmp_path, monkeypatch):
+        import src.autopilot.spec as spec_module
+
+        monkeypatch.setattr(spec_module, "input_producer_phases", lambda wf_id, name: [])
+        (tmp_path / ".hephaestus" / "requirements-a1b2c3d4.md").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".hephaestus" / "requirements-a1b2c3d4.md").write_text("reqs")
+
+        found = resolve_phase_input(str(tmp_path), "requirements.md", workflow_id="wf-1")
+
+        assert found == tmp_path / ".hephaestus" / "requirements-a1b2c3d4.md"
+
+    def test_exact_bare_name_still_preferred_over_suffixed(self, tmp_path, monkeypatch):
+        """Backward compat: an older/test fixture that wrote the bare name
+        directly must still be found, and takes priority over the glob
+        fallback (checked first)."""
+        import src.autopilot.spec as spec_module
+
+        monkeypatch.setattr(spec_module, "input_producer_phases", lambda wf_id, name: ["adversarial_review"])
+        d = tmp_path / ".hephaestus" / "adversarial_review"
+        d.mkdir(parents=True)
+        (d / "adversarial.md").write_text("bare")
+        (d / "adversarial-a1b2c3d4.md").write_text("suffixed")
+
+        found = resolve_phase_input(str(tmp_path), "adversarial.md", workflow_id="wf-1")
+
+        assert found == d / "adversarial.md"
+
+    def test_does_not_match_a_wildcard_at_the_worktree_root(self, tmp_path, monkeypatch):
+        """Same worktree-root exclusion as resolve_declared_output_path's
+        own glob fallback -- the worktree root is real project source, not
+        an exclusively-Hephaestus location, so a wildcard glob must never
+        run there."""
+        import src.autopilot.spec as spec_module
+
+        monkeypatch.setattr(spec_module, "input_producer_phases", lambda wf_id, name: [])
+        (tmp_path / "requirements-notes.md").write_text("an unrelated real project file")
+
+        found = resolve_phase_input(str(tmp_path), "requirements.md", workflow_id="wf-1")
+
+        assert found is None
+
+    def test_returns_none_when_nothing_exists(self, tmp_path, monkeypatch):
+        import src.autopilot.spec as spec_module
+
+        monkeypatch.setattr(spec_module, "input_producer_phases", lambda wf_id, name: ["adversarial_review"])
+
+        found = resolve_phase_input(str(tmp_path), "adversarial.md", workflow_id="wf-1")
+
+        assert found is None

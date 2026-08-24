@@ -68,10 +68,15 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   const navigate = useNavigate();
   const { selectExecution } = useWorkflow();
   const [showAgentOutput, setShowAgentOutput] = useState(false);
+  // null = the current/latest agent (taskDetails.agent_info) -- set when a
+  // past entry in Agent History is clicked, so Output can show THAT
+  // agent's own transcript instead of always the latest one.
+  const [viewingAgentId, setViewingAgentId] = useState<string | null>(null);
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const { expanded: expandedSections, toggle: toggleSection } = useDisclosure({
     prompts: true,
     phase: false,
+    agentHistory: false,
     linkedTasks: false,
     trajectory: true,
     steering: false,
@@ -88,6 +93,7 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   // previous task's expanded-output toggle carried over.
   useEffect(() => {
     setShowAgentOutput(false);
+    setViewingAgentId(null);
     setSelectedTicketId(null);
   }, [taskId]);
 
@@ -101,6 +107,31 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     relatedTicketsLoading,
     originalTask,
   } = useTaskDetails(taskId);
+
+  // The agent Output should actually show: a past entry clicked in Agent
+  // History, or -- when none was clicked -- the current/latest agent.
+  // agent_history entries don't carry terminated_at as their live status,
+  // so fall back to agent_info's own fields when it happens to be the
+  // same agent (fresher last_activity, etc.).
+  const viewedAgent = viewingAgentId
+    ? (viewingAgentId === taskDetails?.agent_info?.id
+        ? taskDetails.agent_info
+        : taskDetails?.agent_history?.find((a) => a.id === viewingAgentId)) ?? null
+    : taskDetails?.agent_info ?? null;
+
+  // The immediately preceding agent's outcome -- e.g. "Session Limit" with
+  // the actual redispatch reason -- surfaced as a header badge so it's
+  // visible without expanding Agent History. The CURRENT agent's own
+  // outcome is always identical to taskDetails.status (see task_service.py),
+  // so it would just duplicate the status badge already shown here; the
+  // previous attempt's reason is the piece that isn't otherwise visible.
+  const previousAgentEntry = (() => {
+    const history = taskDetails?.agent_history;
+    if (!history || history.length < 2) return null;
+    const currentId = taskDetails?.agent_info?.id;
+    const previous = [...history].reverse().find((a) => a.id !== currentId);
+    return previous ?? null;
+  })();
 
   const runtime = useTaskRuntime(
     taskDetails?.started_at || null,
@@ -214,6 +245,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
   return (
     <AnimatePresence>
       <motion.div
+        key="task-detail-modal"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
@@ -247,6 +279,15 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                 {taskDetails && (
                   <>
                     <StatusBadge status={taskDetails.status} />
+                    {previousAgentEntry && (
+                      <span
+                        className="flex items-center gap-1"
+                        title={previousAgentEntry.outcome_detail || 'Previous attempt'}
+                      >
+                        <span className="text-xs text-gray-500 dark:text-gray-400">Prev:</span>
+                        <StatusBadge status={previousAgentEntry.outcome} size="sm" />
+                      </span>
+                    )}
                     {taskDetails.action === 'goto' && (
                       <span className="px-2 py-1 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 rounded-full">
                         ↩ goto{taskDetails.action_target_phase ? ` (${taskDetails.action_target_phase})` : ''}
@@ -345,7 +386,10 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                 {taskDetails?.agent_info && (
                   <>
                     <button
-                      onClick={() => setShowAgentOutput(true)}
+                      onClick={() => {
+                        setViewingAgentId(null);
+                        setShowAgentOutput(true);
+                      }}
                       className="flex items-center px-2 py-1 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded hover:bg-blue-200 dark:hover:bg-blue-900/60 transition-colors text-xs font-medium"
                       title="View live agent output"
                     >
@@ -863,6 +907,83 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                   </div>
                 )}
 
+                {/* Agent History */}
+                {taskDetails.agent_history && taskDetails.agent_history.length > 0 && (
+                  <div className="space-y-4">
+                    <button
+                      onClick={() => toggleSection('agentHistory')}
+                      className="flex items-center space-x-2 text-lg font-semibold text-gray-800 dark:text-white hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                    >
+                      <Bot className="w-5 h-5 text-violet-500" />
+                      <span>Agent History ({taskDetails.agent_history.length})</span>
+                      {expandedSections.agentHistory ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </button>
+
+                    <AnimatePresence>
+                      {expandedSections.agentHistory && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          className="space-y-2"
+                        >
+                          {taskDetails.agent_history.map((agent) => (
+                            <div
+                              key={agent.id}
+                              className={cn(
+                                'rounded-lg p-3 border text-sm',
+                                agent.id === taskDetails.agent_info?.id
+                                  ? 'bg-violet-50 dark:bg-violet-900/20 border-violet-200 dark:border-violet-700'
+                                  : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700'
+                              )}
+                            >
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <div className="flex items-center gap-2">
+                                  <span title={agent.outcome_detail || undefined}>
+                                    <StatusBadge status={agent.outcome} size="sm" />
+                                  </span>
+                                  <span className="font-mono text-gray-700 dark:text-gray-300">
+                                    {agent.id.slice(0, 12)}...
+                                  </span>
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                                    ({agent.cli_type}{agent.cli_model ? ` / ${agent.cli_model}` : ''})
+                                  </span>
+                                  {agent.id === taskDetails.agent_info?.id && (
+                                    <span className="text-xs font-medium text-violet-600 dark:text-violet-400">
+                                      current
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                                    {agent.created_at && (
+                                      <span>Created {formatDistanceToNow(new Date(agent.created_at), { addSuffix: true })}</span>
+                                    )}
+                                    {agent.terminated_at && (
+                                      <span className="ml-2">· Terminated {formatDistanceToNow(new Date(agent.terminated_at), { addSuffix: true })}</span>
+                                    )}
+                                  </span>
+                                  <button
+                                    onClick={() => {
+                                      setViewingAgentId(agent.id);
+                                      setShowAgentOutput(true);
+                                    }}
+                                    className="flex items-center px-2 py-1 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded hover:bg-blue-200 dark:hover:bg-blue-900/60 transition-colors text-xs font-medium"
+                                    title="View this agent's output"
+                                  >
+                                    <Eye className="w-3 h-3 mr-1" />
+                                    Output
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
+
                 {/* Steering Interventions */}
                 {steeringInterventions && steeringInterventions.length > 0 && (
                   <div className="space-y-4">
@@ -1272,23 +1393,23 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
       </motion.div>
 
       {/* Agent Output Modal */}
-      {showAgentOutput && taskDetails?.agent_info && (
+      {showAgentOutput && viewedAgent && (
         <RealTimeAgentOutput
           agent={{
-            id: taskDetails.agent_info.id,
-            status: taskDetails.agent_info.status as any,
+            id: viewedAgent.id,
+            status: viewedAgent.status as any,
             agent_type: 'phase',
-            cli_type: taskDetails.agent_info.cli_type,
-            cli_model: taskDetails.agent_info.cli_model,
-            current_task_id: taskDetails.id,
+            cli_type: viewedAgent.cli_type,
+            cli_model: viewedAgent.cli_model,
+            current_task_id: taskDetails!.id,
             tmux_session_name: null,
             health_check_failures: 0,
-            created_at: taskDetails.agent_info.created_at || '',
-            terminated_at: null,
-            last_activity: taskDetails.agent_info.last_activity,
+            created_at: viewedAgent.created_at || '',
+            terminated_at: (viewedAgent as { terminated_at?: string | null }).terminated_at ?? null,
+            last_activity: viewedAgent.last_activity,
           }}
           onClose={() => setShowAgentOutput(false)}
-          fallbackPhaseName={taskDetails.phase_info?.name}
+          fallbackPhaseName={taskDetails!.phase_info?.name}
         />
       )}
 

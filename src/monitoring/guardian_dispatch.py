@@ -95,6 +95,19 @@ class GuardianDispatcher:
                 has_missing_session = not await loop.run_in_executor(
                     None, self.agent_manager.tmux_server.has_session, agent.tmux_session_name
                 )
+                # Sessions are created with remain-on-exit on (see
+                # _create_tmux_session) so a crashed/killed agent process
+                # leaves a dead pane behind instead of destroying the whole
+                # session -- that's what preserves capture-pane/pipe-pane
+                # evidence of what happened. But it also means has_session
+                # alone no longer detects a dead agent: the session lives
+                # on forever with nothing left to do in it. Check the pane
+                # itself so a dead agent still gets recreated instead of
+                # silently hanging forever.
+                if not has_missing_session:
+                    has_missing_session = await loop.run_in_executor(
+                        None, self._is_pane_dead, agent.tmux_session_name
+                    )
             if has_missing_session:
                 # Check if task is already done before restarting
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
@@ -440,6 +453,23 @@ class GuardianDispatcher:
             )
             session.add(summary_log)
 
+
+    def _is_pane_dead(self, session_name: str) -> bool:
+        """True if session_name's pane has a dead process in it (tmux's
+        own #{pane_dead} format variable). remain-on-exit keeps a crashed
+        pane's session alive for evidence -- see handle_missing_tmux_session
+        and the analyze() call site -- so this is what actually detects
+        "agent needs restarting" now that has_session can't. Treats any
+        lookup failure as "not dead" (don't restart on a transient error)."""
+        tmux_session = self.agent_manager._find_tmux_session(session_name)
+        if not tmux_session:
+            return False
+        try:
+            pane = tmux_session.attached_window.attached_pane
+            result = pane.cmd("display-message", "-p", "#{pane_dead}").stdout
+            return bool(result) and result[0].strip() == "1"
+        except Exception:
+            return False
 
     async def handle_missing_tmux_session(self, agent: Agent):
         """Handle an agent with a missing tmux session by restarting it.

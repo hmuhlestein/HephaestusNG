@@ -285,8 +285,27 @@ class TestHistoricalPauseSiteConsistency:
         with orch_db_env.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "paused"
-            assert wf.paused_by == "user"
+            # Defaults to "system", not "user" -- every caller (duplicate-
+            # workflow guard, workflow cleanup, project-orchestrator-stop
+            # cascade) is an automated cleanup path, not an operator
+            # clicking pause. "user" would make resume_workflow require
+            # force=True and exclude this workflow from
+            # _try_auto_resume_paused_workflow's cooldown-based retry
+            # forever.
+            assert wf.paused_by == "system"
             assert wf.paused_at is not None
+
+    def test_pause_workflow_direct_accepts_an_explicit_reason(self, orch_db_env):
+        from src.autopilot.orchestrator.engine_client import pause_workflow_direct
+        from src.core.database import Workflow
+
+        _make_workflow(orch_db_env, "wf-2")
+
+        assert pause_workflow_direct("wf-2", reason="user") is True
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-2").first()
+            assert wf.paused_by == "user"
 
     def test_pause_feature_for_review_skips_approved_feature(self, orch_db_env):
         """ce0c4a7: an already-approved feature must not get re-paused for
@@ -1022,6 +1041,41 @@ class TestReviewAndResumeReuseOldPendingTasks:
         assert result["success"] is True
 
         spawn_mock.assert_called_once_with("task-needs-work", "wf-1-dev")
+
+    @pytest.mark.asyncio
+    async def test_resume_feature_does_not_clear_a_review_pause(self, orch_db_env, monkeypatch):
+        """Regression: resume_feature used to force-resume ANY paused
+        workflow (force=True, matching every other pause reason), including
+        one paused_by="review" -- clicking the generic Resume button (e.g.
+        to recover this needs_work/dead-agent task) silently cleared the
+        review gate itself, with no approve/request_changes decision ever
+        recorded on the feature. The workflow then ran to completion again
+        and derive_workflow_status's own completeness self-heal marked it
+        "completed" directly, bypassing PhaseManager._complete_workflow's
+        review-mode pause -- letting the design queue start the next
+        feature with the human review never actually resolved. Confirmed
+        live: feature feat-f47c93ba on workflow ca539a75.
+
+        The task recovery itself must still work while paused for review --
+        only the review_feature endpoint (approve/request_changes) may
+        clear paused_by="review"."""
+        self._seed_review_mode_project_and_workflow(orch_db_env)
+        self._seed_needs_work_task_with_terminated_agent(orch_db_env)
+
+        from src.mcp.autopilot import feature_routes
+        spawn_mock = AsyncMock()
+        monkeypatch.setattr(feature_routes, "_spawn_agent_for_task", spawn_mock)
+
+        from src.mcp.autopilot.feature_routes import resume_feature
+        result = await resume_feature("feat-1")
+        assert result["success"] is True
+        spawn_mock.assert_called_once_with("task-needs-work", "wf-1-dev")
+
+        from src.core.database import Workflow
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "review"
 
 
 class TestReviewFeatureApproveLocalMergeFallback:

@@ -253,6 +253,16 @@ async def _spawn_validation_for_task(session, task: Task, agent_id: str, request
 
     from src.services.task_completion_service import TaskCompletionService
 
+    # Terminal-state transition log: the task is now under_review and the
+    # reporting agent is deliberately kept alive -- without this line the
+    # only trace of "why is this agent still running after claiming done"
+    # is the response payload sent back to the agent itself.
+    logger.info(
+        f"Task {task.id[:8]} flipped to under_review (validation iteration "
+        f"{task_validation_iteration}); agent {agent_id[:8]} kept alive for "
+        "validation feedback"
+    )
+
     spawn_background_task(
         TaskCompletionService.spawn_validation(
             agent_id=agent_id,

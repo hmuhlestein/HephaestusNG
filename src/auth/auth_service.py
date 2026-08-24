@@ -150,6 +150,23 @@ class AuthService:
         db.commit()
 
     @staticmethod
+    def _load_user_roles(db: Session, user: User) -> list:
+        """Load the user's active role names for the JWT payload.
+
+        Replaces the hardcoded `roles=[]` placeholder: a grant with a
+        non-null past expires_at is not an active role, and a user with
+        no (or only expired) grants gets [] -- the previous behavior, now
+        derived from the database instead of assumed.
+        """
+        now = datetime.utcnow()
+        return [
+            grant.role.name
+            for grant in user.roles
+            if grant.role is not None
+            and (grant.expires_at is None or grant.expires_at >= now)
+        ]
+
+    @staticmethod
     def _check_login_attempts(db: Session, email: str) -> bool:
         """Check if user has exceeded login attempt limit.
 
@@ -250,13 +267,21 @@ class AuthService:
         return user
 
     @staticmethod
-    def authenticate(db: Session, email: str, password: str) -> dict:
+    def authenticate(
+        db: Session,
+        email: str,
+        password: str,
+        ip_address: str = "",
+        user_agent: str = "",
+    ) -> dict:
         """Verify credentials, mint tokens, and record a session for a successful login.
 
         Args:
             db: Database session
             email: Login email (passed as OAuth2PasswordRequestForm's username field)
             password: Plaintext password to verify
+            ip_address: Caller's IP for the login-attempt/session/audit rows
+            user_agent: Caller's user agent for the same rows
 
         Returns:
             Token dict from create_token_pair (access_token, refresh_token, token_type)
@@ -275,8 +300,8 @@ class AuthService:
             AuthService._record_login_attempt(
                 db=db,
                 email=email,
-                ip_address="",  # TODO: Get from request
-                user_agent="",  # TODO: Get from request
+                ip_address=ip_address,
+                user_agent=user_agent,
                 success=False,
                 failure_reason="Invalid credentials",
             )
@@ -288,8 +313,8 @@ class AuthService:
         AuthService._record_login_attempt(
             db=db,
             email=email,
-            ip_address="",  # TODO: Get from request
-            user_agent="",  # TODO: Get from request
+            ip_address=ip_address,
+            user_agent=user_agent,
             success=True,
         )
 
@@ -299,7 +324,7 @@ class AuthService:
         tokens = create_token_pair(
             user_id=user.id,
             email=user.email,
-            roles=[],  # TODO: Load user roles
+            roles=AuthService._load_user_roles(db, user),
         )
 
         refresh_token_record = AuthToken(
@@ -315,8 +340,8 @@ class AuthService:
             id=str(uuid.uuid4()),
             user_id=user.id,
             session_token_hash=generate_secure_token(),
-            ip_address="",  # TODO: Get from request
-            user_agent="",  # TODO: Get from request
+            ip_address=ip_address,
+            user_agent=user_agent,
             expires_at=datetime.utcnow() + timedelta(minutes=config.session_timeout_minutes),
         )
         db.add(session)
@@ -328,6 +353,8 @@ class AuthService:
             resource_type="user",
             resource_id=user.id,
             status_result="success",
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
 
         db.commit()
@@ -383,7 +410,7 @@ class AuthService:
         tokens = create_token_pair(
             user_id=user.id,
             email=user.email,
-            roles=[],  # TODO: Load user roles
+            roles=AuthService._load_user_roles(db, user),
         )
 
         # Optionally revoke old refresh token and store new one

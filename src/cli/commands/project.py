@@ -4,8 +4,9 @@ import uuid
 from pathlib import Path
 
 from src.cli.utils import api_delete, api_get, api_post
+from src.core.constants import HEPHAESTUS_INSTALL_DIR
 
-HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
+HEPHAESTUS_DIR = HEPHAESTUS_INSTALL_DIR
 
 
 def register(subparsers):

@@ -12,6 +12,7 @@ import {
   DollarSign,
   AlertTriangle,
   Edit3,
+  GitBranch,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { apiService } from '@/services/api';
@@ -66,6 +67,7 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [editingBudget, setEditingBudget] = useState<string | null>(null);
   const [budgetValue, setBudgetValue] = useState('');
+  const [expandedReposProjectId, setExpandedReposProjectId] = useState<string | null>(null);
 
   const { data: projects, isLoading } = useQuery({
     queryKey: ['projects'],
@@ -325,8 +327,8 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
               ) : projects && projects.length > 0 ? (
                 <div className="space-y-2">
                   {projects.map((project: any) => (
+                    <div key={project.id}>
                     <div
-                      key={project.id}
                       className={`flex items-center justify-between p-4 rounded-lg border transition-colors ${
                         project.is_active
                           ? 'bg-violet-50 dark:bg-violet-900/30 border-violet-200 dark:border-violet-700'
@@ -438,6 +440,17 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                             Set Budget
                           </button>
                         )}
+                        <button
+                          onClick={() =>
+                            setExpandedReposProjectId(
+                              expandedReposProjectId === project.id ? null : project.id
+                            )
+                          }
+                          className="p-2 text-gray-400 dark:text-gray-500 hover:text-violet-600 dark:hover:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 rounded-lg transition-colors"
+                          title="Manage repos"
+                        >
+                          <GitBranch className="w-4 h-4" />
+                        </button>
                         {deleteConfirm === project.id ? (
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-red-600 dark:text-red-400">Delete?</span>
@@ -470,6 +483,10 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                         )}
                       </div>
                     </div>
+                    {expandedReposProjectId === project.id && (
+                      <ProjectReposSection projectId={project.id} />
+                    )}
+                    </div>
                   ))}
                 </div>
               ) : (
@@ -483,6 +500,93 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
         </motion.div>
       </motion.div>
     </AnimatePresence>
+  );
+};
+
+// Minimal addition for multi-repo projects (REQ-24): add/list child repos.
+// No update/delete in v1, and no bespoke new page -- lives inline inside
+// the existing project row here in Project Settings.
+const ProjectReposSection: React.FC<{ projectId: string }> = ({ projectId }) => {
+  const queryClient = useQueryClient();
+  const [newLabel, setNewLabel] = useState('');
+  const [newPath, setNewPath] = useState('');
+
+  const { data: repos, isLoading } = useQuery({
+    queryKey: ['project-repos', projectId],
+    queryFn: () => apiService.getProjectRepos(projectId),
+  });
+
+  const addRepoMutation = useMutation({
+    mutationFn: () => apiService.addProjectRepo(projectId, newLabel, newPath),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project-repos', projectId] });
+      toast.success('Repo added');
+      setNewLabel('');
+      setNewPath('');
+    },
+    onError: (error: any) => {
+      toast.error(error?.response?.data?.detail || 'Failed to add repo');
+    },
+  });
+
+  const handleAdd = () => {
+    if (!newLabel.trim() || !newPath.trim()) {
+      toast.error('Label and path are required');
+      return;
+    }
+    addRepoMutation.mutate();
+  };
+
+  return (
+    <div className="mt-2 mb-2 ml-4 p-3 rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/50">
+      <h5 className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-2 flex items-center gap-1.5">
+        <GitBranch className="w-3.5 h-3.5" />
+        Repos
+      </h5>
+      {isLoading ? (
+        <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+      ) : (
+        <div className="space-y-1 mb-3">
+          {(repos || []).map((repo: any) => (
+            <div key={repo.id} className="flex items-center gap-2 text-xs">
+              <span className="font-medium text-gray-700 dark:text-gray-300">{repo.label}</span>
+              {repo.is_primary && (
+                <span className="px-1.5 py-0.5 bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-full">
+                  primary
+                </span>
+              )}
+              <span className="text-gray-500 dark:text-gray-400 font-mono truncate">{repo.path}</span>
+            </div>
+          ))}
+          {(!repos || repos.length === 0) && (
+            <p className="text-xs text-gray-400 dark:text-gray-500">No repos added yet</p>
+          )}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={newLabel}
+          onChange={(e) => setNewLabel(e.target.value)}
+          placeholder="label (e.g. backend)"
+          className="w-32 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
+        />
+        <input
+          type="text"
+          value={newPath}
+          onChange={(e) => setNewPath(e.target.value)}
+          placeholder="/absolute/path/to/repo"
+          className="flex-1 px-2 py-1 text-xs font-mono border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
+        />
+        <button
+          onClick={handleAdd}
+          disabled={addRepoMutation.isPending}
+          className="px-2 py-1 text-xs bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-50"
+        >
+          {addRepoMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Add'}
+        </button>
+      </div>
+    </div>
   );
 };
 

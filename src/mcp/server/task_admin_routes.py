@@ -692,7 +692,7 @@ async def restart_task_endpoint(
                 from src.core.database import PhaseExecution, Workflow
 
                 wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
-                if wf and wf.status == "paused":
+                if wf and wf.status == "paused" and wf.paused_by != "review":
                     # A restartable task can be "blocked" -- exactly what
                     # pause_feature sets on a paused workflow's in-flight
                     # tasks -- so this is reachable on a genuinely paused
@@ -700,11 +700,26 @@ async def restart_task_endpoint(
                     # wf.status = "active" here would leave paused_by/
                     # paused_at stale, the same bug class as this item's
                     # other resume-side fixes.
+                    #
+                    # paused_by == "review" is excluded from the force-
+                    # resume itself -- only review_feature (POST
+                    # /features/{id}/review) may clear that pause, since
+                    # it's the only endpoint that records feature.
+                    # review_status/reviewed_at. The task-level reopen
+                    # below still runs regardless, so restarting a task
+                    # still works while under review; it just no longer
+                    # silently clears the review gate as a side effect.
+                    # Same bug class as resume_feature's identical fix.
                     from src.autopilot.orchestrator.engine_client import resume_workflow
 
                     resume_workflow(task.workflow_id, force=True, session=session)
-                elif wf and wf.status != "active":
+                elif wf and wf.status != "active" and wf.paused_by != "review":
                     wf.status = "active"
+                    # Sync feature status -- same class of bug as the
+                    # sweep/worktree-recovery gaps.
+                    from src.core.database import Feature
+                    for feat in session.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
+                        feat.status = "active"
                 if task.phase_id:
                     execution = session.query(PhaseExecution).filter_by(phase_id=task.phase_id).first()
                     if execution and execution.status != "in_progress":
@@ -888,7 +903,23 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str = None):
         return
     await websocket.accept()
     server_state.active_websockets.append(websocket)
+    logger.info(f"WebSocket client connected (total: {len(server_state.active_websockets)})")
 
+    # Launch a keepalive ping task alongside the receive loop -- without
+    # application-level traffic the reverse proxy (or OS) can silently
+    # close an idle WebSocket after its own idle timeout (typically ~60-120s;
+    # observed as a full page reload every 2 minutes in the dashboard when
+    # no file saves happen). The ping/payload keeps the connection warm.
+    async def _keepalive():
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await websocket.send_json({"type": "ping"})
+            except Exception as e:
+                logger.warning(f"WebSocket keepalive send failed: {e}")
+                break
+
+    keepalive_task = asyncio.create_task(_keepalive())
     try:
         while True:
             # Keep connection alive and handle any incoming messages
@@ -896,9 +927,15 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str = None):
             # Echo back or handle commands
             await websocket.send_json({"type": "echo", "data": data})
 
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as e:
+        logger.info(f"WebSocket client disconnected: code={e.code} (total: {len(server_state.active_websockets) - 1})")
         server_state.active_websockets.remove(websocket)
-        logger.info("WebSocket client disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {type(e).__name__}: {e}")
+        if websocket in server_state.active_websockets:
+            server_state.active_websockets.remove(websocket)
+    finally:
+        keepalive_task.cancel()
 
 
 @router.get("/health")

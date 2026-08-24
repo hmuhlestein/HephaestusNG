@@ -85,6 +85,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [sendStatus, setSendStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [sendErrorMessage, setSendErrorMessage] = useState('');
+  const [isSendingEscape, setIsSendingEscape] = useState(false);
 
   const outputRef = useRef<HTMLPreElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
@@ -306,6 +307,38 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     }
   };
 
+  // Send a literal Escape keypress -- unlike handleSendMessage, no text is
+  // typed and no Enter follows. Reuses sendStatus/sendErrorMessage (shared
+  // with the message form below) so a failure -- e.g. the agent's tmux
+  // session is already gone -- is visible instead of silently doing
+  // nothing, same as a failed message send.
+  const handleSendEscape = async () => {
+    if (!agent || isSendingEscape || currentStatus === 'terminated') return;
+    setIsSendingEscape(true);
+    setSendStatus('idle');
+    try {
+      const response = await apiService.sendAgentKey(agent.id, 'Escape');
+      if (!response.sent) {
+        setSendStatus('error');
+        setSendErrorMessage('Failed to send Escape key');
+        setTimeout(() => {
+          setSendStatus('idle');
+          setSendErrorMessage('');
+        }, 3000);
+      }
+    } catch (error) {
+      console.error('Failed to send Escape key:', error);
+      setSendStatus('error');
+      setSendErrorMessage('Failed to send Escape key');
+      setTimeout(() => {
+        setSendStatus('idle');
+        setSendErrorMessage('');
+      }, 3000);
+    } finally {
+      setIsSendingEscape(false);
+    }
+  };
+
   // Collapse carriage returns (\r) first, then filter
   const processedOutput = useMemo(() => {
     if (!output) return '';
@@ -417,6 +450,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   return (
     <AnimatePresence>
       <motion.div
+        key="agent-output-modal"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
@@ -653,6 +687,14 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
                     </motion.div>
                   )}
                 </div>
+                <button
+                  onClick={handleSendEscape}
+                  disabled={isSendingEscape}
+                  className="px-2.5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                  title="Send Escape key"
+                >
+                  <span className="text-xs font-medium">Esc</span>
+                </button>
                 <button
                   onClick={handleSendMessage}
                   disabled={isSending || !messageText.trim()}

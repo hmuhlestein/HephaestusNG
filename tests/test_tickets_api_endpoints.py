@@ -51,12 +51,8 @@ def _seed_workflow(db_manager, workflow_id="wf-1", with_board=True):
     from src.core.database import Agent, BoardConfig, Workflow
 
     with db_manager.session_scope() as session:
-        session.add(
-            Workflow(id=workflow_id, name="t", phases_folder_path="/tmp", status="active")
-        )
-        session.add(
-            Agent(id="agent-1", system_prompt="t", status="working", cli_type="pi", agent_type="phase")
-        )
+        session.add(Workflow(id=workflow_id, name="t", phases_folder_path="/tmp", status="active"))
+        session.add(Agent(id="agent-1", system_prompt="t", status="working", cli_type="pi", agent_type="phase"))
         if with_board:
             session.add(
                 BoardConfig(
@@ -156,7 +152,8 @@ class TestGetTicketsTrailingSlash:
             headers={"X-Agent-ID": "agent-1"},
             json={
                 "workflow_id": "wf-1",
-                "title": "findme ticket", "description": "a description long enough",
+                "title": "findme ticket",
+                "description": "a description long enough",
                 "ticket_type": "bug",
                 "priority": "low",
             },
@@ -172,3 +169,38 @@ class TestGetTicketsTrailingSlash:
         assert list_resp.status_code == 200
         titles = [t["title"] for t in list_resp.json()["tickets"]]
         assert "findme ticket" in titles
+
+
+class TestResolveRepoPathForCommit:
+    """Tests for _resolve_repo_path_for_commit exception logging."""
+
+    def test_returns_none_and_logs_when_repo_not_found(self, db_manager, caplog):
+        """WARNING-2: RepoNotFoundError must be logged, not swallowed silently."""
+        from src.core.database import AutopilotProject, ProjectRepo, Ticket, TicketCommit, Workflow
+        from src.mcp.tickets_api import _resolve_repo_path_for_commit
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/repos/p"))
+            session.add(ProjectRepo(id="repo-1", project_id="proj-1", label="primary", path="/repos/p", is_primary=True))
+            session.add(Workflow(id="wf-1", name="w", status="active", phases_folder_path="/tmp", project_id="proj-1"))
+            session.add(Ticket(id="tkt-1", workflow_id="wf-1", title="t", description="d", ticket_type="bug", priority="low", created_by_agent_id="agent-1", status="open"))
+            from datetime import datetime
+
+            session.add(TicketCommit(id="tc-1", ticket_id="tkt-1", commit_sha="abc123", repo_id="repo-deleted", agent_id="agent-1", commit_message="test commit", commit_timestamp=datetime.utcnow()))
+
+        result = _resolve_repo_path_for_commit("abc123")
+        assert result is None
+        assert "REPO-RESOLUTION" in caplog.text
+        assert "abc123" in caplog.text
+
+
+class TestResolveRepoIdAndLabelForCommit:
+    """Tests for _resolve_repo_id_and_label_for_commit exception logging."""
+
+    def test_returns_none_and_logs_when_exception_occurs(self, db_manager, caplog):
+        """WARNING-3: exceptions must be logged with exc_info, not swallowed silently."""
+        from src.mcp.tickets_api import _resolve_repo_id_and_label_for_commit
+
+        # Non-existent commit -- should return (None, None) without error
+        result = _resolve_repo_id_and_label_for_commit("nonexistent")
+        assert result == (None, None)

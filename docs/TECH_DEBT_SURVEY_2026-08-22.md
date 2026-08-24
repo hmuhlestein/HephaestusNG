@@ -15,6 +15,67 @@ real drift: §3 below.
 
 ---
 
+## Status: executed 2026-08-23
+
+**§1 mypy — plugin trial reverted (measured), scoped union-attr triage done.**
+The "cheap win" was tested exactly as this section suggested — re-running the
+count after adding `plugins = ["sqlalchemy.ext.mypy.plugin"]`. Result: it did
+NOT clear database.py's 108; the plugin expects SQLAlchemy 2.0 `Mapped[...]`
+typing, this codebase uses 1.x-style `relationship()`/`Column()` without
+annotations, so the plugin instead emitted 160 "please specify
+`Mapped[<type>]`" errors in that same file (1008 → 1131 total). Reverted;
+`pyproject.toml` now carries a NOTE explaining the measurement and that the
+plugin only becomes a win as part of a `Mapped[]` annotation migration. The
+`union-attr` triage was done for the named file, `workflow_execution_routes.py`
+(14 sites, 8 handlers): every site is provably non-None on the request path —
+`ServerState.startup()` assigns `db_manager`/`phase_manager`/`queue_service`
+unconditionally before the app accepts requests, so none was a silent gap and
+no speculative guards were added. The debt was paid with ten `assert ... is not
+None` narrowings (two inside the queued-task loops, where an empty queue means
+the attribute was never touched — placed loop-internal so a test fixture with
+an unset `queue_service` and empty queue keeps its 200). mypy 1008 → 994;
+`test_workflow_stop_cancel_tmux_offloading.py` + queue/guardrail suites 79/79.
+
+**§2 auth audit-log cluster — DONE.** `AuthService.authenticate` now takes
+`ip_address`/`user_agent` (defaulted, backward compatible) and the `/login`
+endpoint extracts them (first `X-Forwarded-For` hop else peer address, plus
+`User-Agent`); the six empty-string TODO sites (login-attempt ×2, session) and
+the login audit-log row now carry the real values. A new `_load_user_roles`
+replaces both `roles=[]` TODOs with the user's active role names (a grant
+whose `expires_at` has passed is not active) in both `authenticate` and
+`refresh_tokens`. Characterized by a new test in `tests/test_authentication.py`
+(`test_login_records_request_metadata_and_roles` — posts through the real
+router with headers, asserts all three row types + the JWT `roles` claim);
+suite 25/25.
+
+**§2 smaller items — one fixed, two deferred with rationale.**
+`ticket_service.py`'s list-view `comment_count`/`commit_count` placeholders are
+now real bulk group-by counts (two queries, not N+1); ticket suites 47 passed.
+Deferred: logout token blacklisting (`auth_api.py`) — it needs a design choice
+(access-token blacklist table vs revoking the user's refresh tokens, the latter
+wrong for multi-device) and a middleware check; that's a security-semantics
+decision, not a drive-by. And `tickets_api.py`'s `has_more=False` TODO — the
+route returns the full result set and has no pagination parameters, so
+`has_more=False` is correct for the current contract; "implement pagination" is
+an API-feature addition, not a placeholder bug.
+
+**§3 frontend — deferred, per the doc's own caveat.** `DesignQueuePanel.tsx`
+(1321 lines) was modified minutes before this execution started and
+`TaskDetailModal.tsx` (1425) is in the same active dark-mode workstream of the
+concurrent session — the doc says "re-check the line count before acting on
+it, it's a moving target." Restructuring either mid-edit by another session is
+the same write-conflict risk that deferred `phase_transitions.py`'s two retry
+functions. Additionally the `window.confirm`/`alert` replacement is a deliberate
+UX change (native dialogs → the app's modal system), a design decision the
+original finding itself flagged — the Playwright recipe removes the
+*verification* blocker, not the *decision*.
+
+**§4 residuals — unchanged by this execution**, still tracked in their home
+docs (the two deferred `phase_transitions.py` functions remain deferred for
+the reasons recorded there).
+
+---
+
 ## 1. mypy: 1003 errors across 118 files — configured but not enforced
 
 `pyproject.toml`'s `[tool.mypy]` section is real (confirmed working in
@@ -163,6 +224,88 @@ duplicates of anything above:
   this survey. Tracked deliberately (per-setting owner decision, not an
   oversight — see `docs/SOLID_OO_REVIEW_UPDATE_2026-08-21.md` §2 core-infra
   findings), not a new discovery, just re-confirmed still-open.
+
+---
+
+---
+
+## 5. Follow-up sweep, 2026-08-24 — four more findings
+
+Different angles than §1-4: deprecated API usage, a duplicated construction
+pattern with a known fix already proven in one corner of the codebase, N+1
+query candidates found the same way `ticket_service.py`'s were (§2, now
+fixed), and untested high-blast-radius modules.
+
+### 5a. `datetime.utcnow()`: 182 call sites across 58 files, deprecated since Python 3.12
+
+Every test run this whole session has printed this warning dozens of times;
+never previously counted or written down. This one is genuinely tricky, not
+a find-and-replace: `CLAUDE.md`'s own critical invariant mandates
+`datetime.utcnow()` specifically over `datetime.now()`, root-caused to a real
+incident (a staleness check comparing a `utcnow()`-stamped value against a
+`now()`-based cutoff, silently never firing). The correct migration is
+`datetime.now(timezone.utc)`, not a blind revert to `datetime.now()` — but
+that produces a **timezone-aware** datetime, and this codebase's DB columns
+and comparisons are written assuming naive UTC throughout. Swapping one call
+site at a time risks a naive/aware comparison `TypeError` at the boundary
+between migrated and un-migrated code. Not attempted here — flagging the
+scale (58 files) and the specific hazard (naive vs. aware, not just a
+deprecation warning) rather than a mechanical fix.
+
+### 5b. `DatabaseManager(None)` constructed independently at 14 more sites — the fix pattern already exists, just not generalized
+
+`src/auth/auth_db.py`'s own docstring documents this exact problem and its
+own fix: "each file independently constructed its own `DatabaseManager(None)`
+... fragile in exactly the way `SOLID_OO_REVIEW_UPDATE_2026-08-19.md`
+found" — and solves it with one shared `get_db_manager()` accessor, but only
+for `src/auth/`'s own two call sites. The same raw `DatabaseManager(None)`
+construction still exists at 14 other sites (verified by direct grep, not
+estimated):
+`prompts/assembler.py` (×2), `autopilot/spec.py` (×4),
+`orchestrator/agent_registration.py`, `orchestrator/phase_transitions.py`
+(×3), `orchestrator/pipeline.py`, `orchestrator/arbitration.py` (×3),
+`services/task_blocking_service.py`. **Not a performance bug** —
+`DatabaseManager.__init__` caches engines by resolved path
+(`_engines`/`_sessions` class dicts), so repeated construction is cheap, not
+N duplicate connection pools. It's the same "N-th independent
+implementation of a primitive" shape this whole refactor effort has spent
+weeks closing elsewhere (task-creation-claim, agent-termination, pause-state
+— see `AUTOPILOT_REFACTOR_PLAN.md` §4), just never extended past `src/auth/`
+to the rest of the codebase.
+
+### 5c. Two real N+1 query candidates, same shape as `ticket_service.py`'s (now fixed in `1e72c4ef`)
+
+- `src/services/agent_communication.py:58-59` — fetches a workflow's
+  child agents in one bulk query, then queries `Task` individually per
+  agent in a loop (`session.query(Task).filter_by(id=child.current_task_id)`)
+  instead of one `Task.id.in_(...)` bulk query. A workflow with many
+  concurrent agents pays one query per agent instead of one query total.
+- `src/services/ticket_service.py:273-275` — a *different* site than the one
+  already fixed today: iterating `blocked_by_ticket_ids` and querying
+  `Ticket` once per ID. Lower urgency (blocking-ticket lists are typically
+  small, single digits), but the exact same fixable shape.
+
+Not fixed here — flagged as two more instances of a pattern this session
+already has a proven fix template for (§2's bulk `group_by` rewrite).
+
+### 5d. Two high-blast-radius modules with zero dedicated test coverage
+
+- **`src/prompts/assembler.py` (596 lines) — genuinely zero test coverage,
+  not even indirect.** No test file imports it, references
+  `assemble_prompt`, or exercises it through an integration path. This is
+  the module that builds the actual prompt text sent to every dispatched
+  agent — arguably the single highest-blast-radius untested file in the
+  repo, since a bug here doesn't crash anything, it just silently changes
+  or corrupts what every agent is told to do.
+- **`src/mcp/frontend/dashboard_service.py` (1418 lines) — one loose test
+  reference, no dedicated test file.** Backs the main dashboard's data;
+  `get_results` (233 lines) and `get_graph_data` (199 lines) — both
+  previously checked in §"Not flagged" below and found not to be
+  god-functions — have no direct test coverage either.
+
+Neither reviewed for *what* to test (that needs domain understanding of
+each function's contract) — this is a coverage-gap finding, not a
+test-writing plan.
 
 ---
 

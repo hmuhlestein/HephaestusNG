@@ -264,6 +264,22 @@ export interface TaskFullDetails {
     created_at: string | null;
     last_activity: string | null;
   } | null;
+  agent_history?: Array<{
+    id: string;
+    status: string;
+    cli_type: string;
+    cli_model: string | null;
+    created_at: string | null;
+    last_activity: string | null;
+    terminated_at: string | null;
+    // The task's own status if this was the most recent agent; else
+    // "session_limit" when a durable reason was recorded for why this
+    // agent stopped, or "superseded" when nothing more specific survived
+    // (an earlier agent was, by definition, replaced by a later one).
+    outcome: string;
+    // Human-readable detail backing a "session_limit" outcome (null otherwise).
+    outcome_detail?: string | null;
+  }>;
   parent_task: {
     id: string;
     description: string;
@@ -428,6 +444,8 @@ export interface CommitDiff {
   total_insertions: number;
   total_deletions: number;
   total_files: number;
+  repo_id?: string | null;
+  repo_label?: string | null;
 }
 
 export interface TicketSearchResult {

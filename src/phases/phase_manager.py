@@ -1724,7 +1724,7 @@ class PhaseManager:
                 session.query(PhaseExecution).filter_by(phase_id=next_phase.id).first()
             )
 
-            if execution and execution.status in ("pending", "completed"):
+            if execution and execution.status in ("pending", "completed", "skipped"):
                 # Fresh start for this cycle: stamp started_at now, and
                 # reset the task-creation/evaluation claim (see
                 # orchestrator.py's _claim_phase_task_creation) -- it's a
@@ -1732,6 +1732,17 @@ class PhaseManager:
                 # this reset, a phase re-run after goto reconvergence
                 # would find its claim already set from the PREVIOUS
                 # cycle and never let a new task get created for it.
+                #
+                # "skipped" included alongside "pending"/"completed" --
+                # same gap already fixed in phase_transitions.py's
+                # _create_phase_task/_release_phase_task_creation_claim/
+                # _clear_stale_task_creation_claim: a phase previously
+                # skipped (e.g. an optional review phase) can still become
+                # next_phase later (a goto/retry targeting it directly).
+                # Left "skipped", derive_workflow_status's phase-
+                # completeness check treats it as terminal and can mark
+                # the whole workflow "completed" while this phase is
+                # actually about to start real work.
                 _reopen_phase_execution(execution, status="in_progress", started_at="now")
                 session.commit()
 
@@ -1809,6 +1820,23 @@ class PhaseManager:
                 )
                 return
 
+            # Archive this run's artifacts (including feature_report.html)
+            # into the permanent feature folder now, before deciding
+            # whether to pause for review or complete outright -- needed
+            # either way, and review mode's whole point is letting a human
+            # inspect the report BEFORE approving, not only after. This
+            # used to run only in the auto-complete branch below; under
+            # review mode _complete_workflow returned from the pause
+            # branch first, and review_feature's own approve branch
+            # (src/mcp/autopilot/feature_routes.py) never called this
+            # either -- so a review-mode feature's report was invisible
+            # both while pending review AND after approval. Safe to call
+            # here even though git_expert hasn't merged yet: the worktree
+            # (and its agent-written .hephaestus/ reports) already exists
+            # and is kept regardless of merge status, per this method's
+            # own docstring.
+            self._populate_feature_folder(session, workflow)
+
             # Every phase (including git_expert -- it dispatches like
             # any other phase now; the agent commits, pushes, and opens a
             # PR, but scripts/agent-safe-bin/git on its own PATH blocks
@@ -1840,7 +1868,6 @@ class PhaseManager:
 
             derive_workflow_status(session, self.workflow_id, write_back=True)
             logger.info(f"Workflow {self.workflow_id} completed (all phases done)")
-            self._populate_feature_folder(session, workflow)
 
             if workflow.definition_id in PHASE0_DEFINITION_IDS:
                 # Generic completion hook for phase0-type workflows, in

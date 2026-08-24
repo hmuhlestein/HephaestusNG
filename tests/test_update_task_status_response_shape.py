@@ -236,7 +236,7 @@ class TestGateResultSchemaFloor:
         task_id, agent_id = _seed_qa_validation(test_db, tmp_path)
         docs = tmp_path / ".hephaestus" / "qa_validation"
         docs.mkdir(parents=True)
-        (docs / "qa.md").write_text(
+        (docs / f"qa-{task_id[:8]}.md").write_text(
             "---\n"
             "overall_status: PASS\n"
             "test_results:\n"
@@ -266,7 +266,7 @@ class TestGateResultSchemaFloor:
         task_id, agent_id = _seed_qa_validation(test_db, tmp_path)
         docs = tmp_path / ".hephaestus" / "qa_validation"
         docs.mkdir(parents=True)
-        (docs / "qa.md").write_text(
+        (docs / f"qa-{task_id[:8]}.md").write_text(
             "---\n"
             "type: qa_validation\n"
             "failed_tests: 0\n"

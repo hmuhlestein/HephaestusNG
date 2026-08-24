@@ -830,6 +830,30 @@ class TestHumanInput:
         assert data["id"] == "abc123"
         assert data["reason"] == "Test impasse"
 
+    def test_read_surfaces_workflow_id_and_decision_context(self, client, autopilot_dirs):
+        """Regression: HumanInputRequest didn't declare workflow_id/phase_id,
+        so BaseModel silently dropped them from the response even though
+        arbitration.py's escalation request file always writes them --
+        the frontend's row-correlation (which design/workflow is this
+        request for?) never received them."""
+        state_dir = autopilot_dirs["state"]
+        (state_dir / "input_request_wf1.json").write_text(
+            json.dumps({
+                "id": "wf1", "reason": "r",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "options": ["c", "s"], "labels": {},
+                "workflow_id": "wf-abc", "phase_id": "phase-xyz",
+                "decision_context": {"phase_name": "design_review", "attempts": [], "distinct_options": []},
+            })
+        )
+
+        resp = client.get("/api/autopilot/input")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["workflow_id"] == "wf-abc"
+        assert data["phase_id"] == "phase-xyz"
+        assert data["decision_context"]["phase_name"] == "design_review"
+
     def test_submit_response(self, client, autopilot_dirs):
         state_dir = autopilot_dirs["state"]
         request_file = state_dir / "input_request_def456.json"
@@ -858,6 +882,43 @@ class TestHumanInput:
         assert response_file.exists()
         data = json.loads(response_file.read_text())
         assert data["choice"] == "c"
+
+    def test_submit_goto_choice_requires_target_phase(self, client, autopilot_dirs):
+        state_dir = autopilot_dirs["state"]
+        (state_dir / "input_request_g1.json").write_text(
+            json.dumps({
+                "id": "g1", "reason": "r",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "options": ["c", "s"], "labels": {},
+            })
+        )
+
+        resp = client.post(
+            "/api/autopilot/input",
+            json={"request_id": "g1", "choice": "g"},
+        )
+        assert resp.status_code == 400
+
+    def test_submit_goto_choice_with_target_phase_persists_it(self, client, autopilot_dirs):
+        state_dir = autopilot_dirs["state"]
+        (state_dir / "input_request_g2.json").write_text(
+            json.dumps({
+                "id": "g2", "reason": "r",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "options": ["c", "s"], "labels": {},
+            })
+        )
+
+        resp = client.post(
+            "/api/autopilot/input",
+            json={"request_id": "g2", "choice": "g", "target_phase": "architecture_design"},
+        )
+        assert resp.status_code == 200
+
+        response_file = state_dir / "input_response_g2.json"
+        data = json.loads(response_file.read_text())
+        assert data["choice"] == "g"
+        assert data["target_phase"] == "architecture_design"
 
     def test_submit_invalid_choice(self, client, autopilot_dirs):
         state_dir = autopilot_dirs["state"]
@@ -932,6 +993,35 @@ class TestHumanInput:
         assert resp.status_code == 200
         assert resp.json() is None
         assert not request_file.exists()
+
+    def test_arbitration_escalation_is_never_cleaned_up_as_stale(self, client, autopilot_dirs):
+        """Regression: arbitration.py's _escalate_arbitration_deadlock_to_
+        human docstring is explicit that it "deliberately does NOT time
+        out" -- auto-continuing past an unresolved arbitration deadlock
+        with no actual human decision defeats the point of escalating it.
+        Before this fix, the generic 1-hour staleness cleanup below
+        deleted an arbitration escalation's request file regardless of
+        kind, and the orchestrator sweep treats a missing request file
+        with no response as an explicit dismissal -- silently force-
+        continuing a deadlocked phase nobody ever actually decided on."""
+        state_dir = autopilot_dirs["state"]
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        request_file = state_dir / "input_request_arb1.json"
+        request_file.write_text(
+            json.dumps({
+                "id": "arb1", "reason": "design_review deadlocked",
+                "timestamp": old_ts, "options": ["c", "s"], "labels": {},
+                "kind": "arbitration_escalation",
+                "workflow_id": "wf-1", "phase_id": "phase-1",
+            })
+        )
+
+        resp = client.get("/api/autopilot/input")
+        assert resp.status_code == 200
+        assert resp.json() is not None
+        assert resp.json()["id"] == "arb1"
+        assert request_file.exists()
 
 
 # ── Pipeline Status ──────────────────────────────────────────────
@@ -1252,7 +1342,10 @@ class TestMessages:
     def test_messages_with_events(self, client, autopilot_dirs):
         """Events are DB-backed (AutopilotPipelineEvent rows), not an
         events.jsonl file -- message_routes.py's /messages reads them
-        directly, oldest first (matching the old file-tail's order)."""
+        directly, most recent first, so the message list (and the pulsing
+        "Waiting on you" badge for a fresh human_input_required row) shows
+        newest activity at the top without the frontend needing its own
+        sort."""
         from datetime import datetime
 
         from src.core.database import AutopilotPipelineEvent, get_db
@@ -1278,7 +1371,8 @@ class TestMessages:
 
         resp = client.get("/api/autopilot/messages?limit=10")
         assert len(resp.json()) == 2
-        assert resp.json()[0]["type"] == "design_started"
+        assert resp.json()[0]["type"] == "design_completed"
+        assert resp.json()[1]["type"] == "design_started"
 
 
 # ── Logs ─────────────────────────────────────────────────────────
