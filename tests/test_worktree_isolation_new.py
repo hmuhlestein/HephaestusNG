@@ -36,6 +36,11 @@ def temp_repo():
         repo.git.branch("-M", "main")
     except Exception:
         pass
+    # Create review_approved marker so agent-safe-bin/git wrapper
+    # allows merges in this test repo.
+    marker_dir = Path(temp_dir) / ".hephaestus"
+    marker_dir.mkdir(exist_ok=True)
+    (marker_dir / "review_approved").write_text("test")
     yield repo
     shutil.rmtree(temp_dir, ignore_errors=True)
 

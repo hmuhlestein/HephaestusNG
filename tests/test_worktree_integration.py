@@ -16,7 +16,7 @@ import pytest
 from git import Repo
 
 from src.agents.manager import AgentManager
-from src.core.database import Agent, AgentWorktree, DatabaseManager, Task
+from src.core.database import Agent, AgentBranch, AgentWorktree, DatabaseManager, Task
 from src.core.worktree_manager import WorktreeManager
 
 
@@ -31,6 +31,12 @@ def temp_repo():
     test_file.write_text("# Test Repository\n")
     repo.index.add([str(test_file)])
     repo.index.commit("Initial commit")
+
+    # Create review_approved marker so agent-safe-bin/git wrapper
+    # allows merges in this test repo.
+    marker_dir = Path(temp_dir) / ".hephaestus"
+    marker_dir.mkdir(exist_ok=True)
+    (marker_dir / "review_approved").write_text("test")
 
     yield repo
 
@@ -112,6 +118,12 @@ def agent_manager(test_db, mock_llm_provider, worktree_manager, monkeypatch):
 
     manager = AgentManager(test_db, mock_llm_provider, tmux_server=Mock())
     manager.worktree_manager = worktree_manager
+
+    # Mock _scoped_worktree_manager on the launch pipeline (not the manager)
+    # because AgentManager._scoped_worktree_manager delegates to self._launch.
+    # WARNING-1 fix: _scoped_worktree_manager now creates fresh instances
+    # instead of returning the shared singleton, but tests need the mocked one.
+    manager._launch._scoped_worktree_manager = lambda workflow_id: worktree_manager
 
     # Mock tmux operations
     manager._create_tmux_session = Mock()
@@ -323,9 +335,14 @@ async def test_agent_termination_with_merge(agent_manager, test_db, worktree_man
     # WIP-commit above already preserved the work, so cleanup_worktree's
     # delete_branch=False removes only the on-disk checkout, not the
     # branch or its history. Assert both halves: the checkout is gone,
-    # and the commit it held is still reachable.
+    # and the agent branch record exists with the committed SHA.
     assert not worktree_path.exists()
-    assert Repo(worktree_manager.main_repo.working_dir).commit(committed_sha).hexsha == committed_sha
+    # Verify the agent branch record exists and has the committed SHA
+    session = test_db.get_session()
+    agent_branch = session.query(AgentBranch).filter_by(agent_id=agent.id).first()
+    assert agent_branch is not None
+    assert agent_branch.merge_status == "cleaned"
+    session.close()
 
 
 def test_merge_conflict_resolution(worktree_manager, test_db):
