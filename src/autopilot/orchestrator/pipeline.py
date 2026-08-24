@@ -2074,11 +2074,7 @@ def _resolve_feature_project_path(
         with get_db() as db:
             feat_record = db.query(Feature).filter_by(design_id=design_id, feature_key=feature_key).first()
             if feat_record is None:
-                logger.warning(
-                    "Feature %s not found for design %s, using design project path",
-                    feature_key,
-                    design_id,
-                )
+                logger.warning(f"Feature {feature_key} not found for design {design_id}, using design project path")
                 return design_project_path
 
             repo = resolve_repo(db, project_id, feat_record.repo_id)
@@ -2086,11 +2082,7 @@ def _resolve_feature_project_path(
                 return Path(repo.path)
             return design_project_path
     except Exception as e:
-        logger.warning(
-            "Failed to resolve feature project path for %s: %s, using design project path",
-            feature_key,
-            e,
-        )
+        logger.warning(f"Failed to resolve feature project path for {feature_key}: {e}, using design project path")
         return design_project_path
 
 
