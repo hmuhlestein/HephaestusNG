@@ -239,13 +239,15 @@ class LaunchPipeline:
         instance still races against another thread's reload landing in
         between reload() and the git operations that follow it.
 
-        Falls back to self.branch_manager, unreloaded, when workflow_id
-        doesn't resolve to a project -- preserves today's default/
-        single-project behavior for that edge case rather than erroring.
+        Falls back to creating a fresh WorktreeManager with default config
+        path when workflow_id doesn't resolve to a project -- avoids
+        returning the shared singleton which would race under concurrent
+        dispatch (MAX_PARALLEL_FEATURES=4).
         """
         base_dir = self._resolve_project_base_dir(workflow_id)
         if base_dir is None:
-            return self.branch_manager
+            # WARNING-1: Create fresh instance instead of returning shared singleton
+            base_dir = Path(self.config.git.main_repo_path)
         wt_mgr = WorktreeManager(db_manager=self.db_manager, repo_path=base_dir)
         return wt_mgr
 
