@@ -53,6 +53,10 @@ class ProcessWatchdog:
         # healthy, creating an infinite restart loop.
         self._backend_restart_grace = 120
         self._backend_last_restart = 0.0
+        # Port the backend listens on -- set to the actual value by the
+        # caller (run_watchdog.py) so _check_services can reconcile the
+        # PID file against port listeners before restarting.
+        self._backend_port: Optional[int] = None
 
     def register_service(self, name: str, restart_callback: callable) -> None:
         """Register a service with its restart callback."""
@@ -88,8 +92,51 @@ class ProcessWatchdog:
         for name, callback in self._restart_callbacks.items():
             pid = read_pid(name)
             if pid and not is_process_running(pid):
+                # For backend: before concluding it died, check if the port
+                # is already occupied by a live (untracked) process. This
+                # catches the PID-file-stale scenario: the real backend is
+                # alive on the port, but the PID file points to an old
+                # process. Restarting blindly would spawn a new backend that
+                # hits _exit_if_port_in_use, dies within seconds, and wastes
+                # the restart budget. Instead, reconcile the PID file.
+                if name == "backend":
+                    backend_port = getattr(self, "_backend_port", None)
+                    if backend_port and self._reconcile_backend_pid(backend_port, pid):
+                        continue  # PID file fixed, no restart needed
                 logger.warning(f"Process {name} (PID {pid}) died unexpectedly")
                 self._maybe_restart(name, callback)
+
+    def _reconcile_backend_pid(self, port: int, stale_pid: int) -> bool:
+        """If the backend PID is stale but a live process owns the port,
+        update the PID file and return True. Returns False if no live
+        process can be found on the port."""
+        from src.cli.utils.ports import get_port_listeners
+
+        try:
+            pids = get_port_listeners(port, {"python", "uvicorn"})
+        except Exception:
+            return False
+
+        if not pids:
+            return False
+
+        # Pick the oldest (lowest PID) — most likely the original backend.
+        live_pid = min(pids)
+        if live_pid == stale_pid:
+            return False
+
+        logger.warning(
+            f"Backend PID {stale_pid} is dead but PID {live_pid} owns port "
+            f"{port} — reconciling PID file (no restart needed)"
+        )
+        save_pid("backend", live_pid)
+        # Clear any phantom restart accounting accumulated while the
+        # stale PID file kept triggering false "died unexpectedly" cycles.
+        self.restart_counts.pop("backend", None)
+        self.last_restarts.pop("backend", None)
+        self._backend_health_failures = 0
+        self._backend_last_restart = 0.0
+        return True
 
     def _kill_duplicates(self, service_name: str, pids: list[int], context: str) -> None:
         """Kill every pid in `pids` except the one tracked for `service_name`.
