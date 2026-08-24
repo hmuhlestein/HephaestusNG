@@ -309,8 +309,10 @@ def _merge_design_branch_into_main(
         from src.core.worktree_manager import WorktreeManager
 
         cfg = get_config()
-        wt_mgr = WorktreeManager(db_manager=DbManager(str(cfg.paths.database_path)))
-        wt_mgr.reload(Path(project_path))
+        wt_mgr = WorktreeManager(
+            db_manager=DbManager(str(cfg.paths.database_path)),
+            repo_path=Path(project_path),
+        )
 
         # Ensure main is clean
         wt_mgr.main_repo.heads[wt_mgr.config.git.base_branch].checkout()
