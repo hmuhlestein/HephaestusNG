@@ -1,6 +1,6 @@
 """Tests for phases/phase_manager.py — pure utilities + key methods."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -2095,6 +2095,29 @@ class TestCompleteWorkflowPausesForReviewMode:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "paused"
             assert wf.paused_by == "review"
+
+    def test_populates_the_feature_folder_before_pausing_for_review(self, review_mode_env):
+        """Regression: _populate_feature_folder (archives feature_report.html
+        and the rest of this run's artifacts into the permanent feature
+        record) used to run only in the auto-complete branch below the
+        review-mode pause-and-return -- so under review mode it never ran
+        at all, not while pending review and not even after approval
+        (review_feature's own approve branch never called it either). The
+        whole point of review mode is letting a human inspect the report
+        BEFORE approving, so this must fire before the pause, not only on
+        the (never-reached, under review mode) auto-complete path."""
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=review_mode_env)
+        pm.workflow_id = "wf-1"
+        with patch.object(PhaseManager, "_populate_feature_folder") as mock_populate:
+            session = review_mode_env.get_session()
+            try:
+                pm._complete_workflow(session, current_phase_id="phase-doc")
+            finally:
+                session.close()
+
+        mock_populate.assert_called_once()
 
     def test_still_completes_normally_when_review_mode_is_off(self, real_db):
         """No AutopilotProject/review_mode involved at all -- must behave
