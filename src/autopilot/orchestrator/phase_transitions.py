@@ -1501,7 +1501,28 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             db.query(Task)
             .filter(
                 Task.phase_id == phase.id,
-                Task.status.in_(["pending", "assigned", "in_progress"]),
+                # "queued" included alongside "pending"/"assigned"/
+                # "in_progress" -- every other query in this module that
+                # asks "does this phase have real outstanding work"
+                # (_create_phase_task's own existing-task check,
+                # check_phase_sibling_active, the corrective-task path)
+                # already does; this one didn't. A subtask an agent creates
+                # via create_task can sit "queued" (QueueService's own
+                # capacity-gated status, distinct from "pending") for real,
+                # legitimate reasons -- a busy per-cli/model concurrency
+                # slot, not an orphan. Omitting it here meant a phase whose
+                # own dispatched task finished, while it still had sibling
+                # subtasks sitting "queued" and never dispatched, was
+                # wrongly declared complete and the pipeline advanced past
+                # it -- the queued subtasks then sat orphaned forever
+                # (nothing re-checks a phase already advanced past), and a
+                # later phase reviewed work that was never actually
+                # finished. Confirmed live: task 4bf4518f (development)
+                # completed having spawned 5 subtasks (C1 through C10) for
+                # the remainder of its own assigned work; all 5 sat
+                # "queued" while adversarial_review ran and completed
+                # against the incomplete implementation.
+                Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
                 ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
                 *cycle_filter,
             )

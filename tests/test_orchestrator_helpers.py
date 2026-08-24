@@ -7918,3 +7918,39 @@ class TestCheckPhaseSiblingActive:
             )
             assert sibling is not None
             assert sibling.id == "t-sibling"
+
+    def test_does_not_see_a_queued_sibling(self, orch_db_env):
+        """Regression, found live: "queued" means no agent has been
+        dispatched yet, so a queued sibling is no evidence another
+        dispatch is in flight -- the actual race this guard defends
+        against (two callers both reaching a live agent for this phase)
+        is already caught by "assigned"/"in_progress", since
+        QueueService's own get_next_queued_task flips a task to "assigned"
+        BEFORE this guard ever runs against it. Including "queued"
+        created a livelock: when an agent splits its own remaining work
+        into several sibling subtasks via create_task (a documented,
+        legitimate pattern) and QueueService's capacity limits mean they
+        can't all dispatch at once, EVERY one of them found another
+        still sitting "queued" and refused -- none could ever go first.
+        Confirmed live: 5 development subtasks (workflow b7bd02cc) stuck
+        "queued" for over a day, re-attempting dispatch every ~60s and
+        hitting this exact deadlock every time."""
+        from src.autopilot.orchestrator.engine_client import check_phase_sibling_active
+        from src.core.database import Phase, Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(Workflow(id="wf-1", name="w", phases_folder_path="/tmp", status="active"))
+            session.add(Phase(
+                id="phase-1", workflow_id="wf-1", order=1, name="development",
+                description="d", done_definitions=["d"],
+            ))
+            session.add(Task(
+                id="t-sibling", workflow_id="wf-1", phase_id="phase-1",
+                raw_description="x", done_definition="x", status="queued",
+            ))
+
+        with orch_db_env.session_scope() as session:
+            sibling = check_phase_sibling_active(
+                session, "t-new", "phase-1", created_by_filter=False,
+            )
+            assert sibling is None
