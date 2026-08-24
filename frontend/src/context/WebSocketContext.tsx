@@ -168,19 +168,21 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         }
       };
 
-      websocket.onerror = () => {
+      websocket.onerror = (event) => {
         // Suppress error toasts during initial retry backoff —
         // the backend is often not ready on first page load.
         // Only show error after several failed attempts.
         if (!isActive || wsRef.current !== websocket) return;
+        console.warn('[WebSocketContext] onerror:', event);
         retryCountRef.current += 1;
         if (retryCountRef.current > 3) {
           toast.error('Connection error');
         }
       };
 
-      websocket.onclose = () => {
+      websocket.onclose = (event) => {
         if (!isActive || wsRef.current !== websocket) return;
+        console.warn('[WebSocketContext] onclose:', { code: event.code, reason: event.reason, wasClean: event.wasClean });
         setIsConnected(false);
 
         if (retryCountRef.current <= 3) {

@@ -40,6 +40,20 @@ export const api = axios.create({
   },
 });
 
+// Log 500 errors with response body so we can see what the backend is returning.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response) {
+      const { status, data, config } = error.response;
+      console.error(`[ApiDiag] ${config.method?.toUpperCase()} ${config.url} → ${status}:`, typeof data === 'string' ? data.slice(0, 500) : data);
+    } else if (error.request) {
+      console.error(`[ApiDiag] ${error.config?.method?.toUpperCase()} ${error.config?.url} → no response (network error or timeout)`);
+    }
+    return Promise.reject(error);
+  },
+);
+
 export const apiService = {
   // Workflow Definitions and Executions
   listWorkflowDefinitions: async (): Promise<WorkflowDefinition[]> => {

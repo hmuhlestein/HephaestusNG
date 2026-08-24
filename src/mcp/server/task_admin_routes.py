@@ -711,6 +711,11 @@ async def restart_task_endpoint(
                     resume_workflow(task.workflow_id, force=True, session=session)
                 elif wf and wf.status != "active" and wf.paused_by != "review":
                     wf.status = "active"
+                    # Sync feature status -- same class of bug as the
+                    # sweep/worktree-recovery gaps.
+                    from src.core.database import Feature
+                    for feat in session.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
+                        feat.status = "active"
                 if task.phase_id:
                     execution = session.query(PhaseExecution).filter_by(phase_id=task.phase_id).first()
                     if execution and execution.status != "in_progress":
@@ -893,7 +898,23 @@ async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time updates."""
     await websocket.accept()
     server_state.active_websockets.append(websocket)
+    logger.info(f"WebSocket client connected (total: {len(server_state.active_websockets)})")
 
+    # Launch a keepalive ping task alongside the receive loop -- without
+    # application-level traffic the reverse proxy (or OS) can silently
+    # close an idle WebSocket after its own idle timeout (typically ~60-120s;
+    # observed as a full page reload every 2 minutes in the dashboard when
+    # no file saves happen). The ping/payload keeps the connection warm.
+    async def _keepalive():
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await websocket.send_json({"type": "ping"})
+            except Exception as e:
+                logger.warning(f"WebSocket keepalive send failed: {e}")
+                break
+
+    keepalive_task = asyncio.create_task(_keepalive())
     try:
         while True:
             # Keep connection alive and handle any incoming messages
@@ -901,9 +922,15 @@ async def websocket_endpoint(websocket: WebSocket):
             # Echo back or handle commands
             await websocket.send_json({"type": "echo", "data": data})
 
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as e:
+        logger.info(f"WebSocket client disconnected: code={e.code} (total: {len(server_state.active_websockets) - 1})")
         server_state.active_websockets.remove(websocket)
-        logger.info("WebSocket client disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {type(e).__name__}: {e}")
+        if websocket in server_state.active_websockets:
+            server_state.active_websockets.remove(websocket)
+    finally:
+        keepalive_task.cancel()
 
 @router.get("/health")
 async def health_check():

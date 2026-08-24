@@ -597,7 +597,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
       try {
         const expandedSet = new Set(JSON.parse(saved));
         const isExpanded = expandedSet.has(item.filename);
-        console.log('[DesignQueuePanel] Restoring expanded state:', { filename: item.filename, isExpanded, savedItems: [...expandedSet] });
+        // console.log('[DesignQueuePanel] Restoring expanded state:', { filename: item.filename, isExpanded, savedItems: [...expandedSet] });
         return isExpanded;
       } catch { return false; }
     }

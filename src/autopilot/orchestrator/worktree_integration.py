@@ -17,6 +17,7 @@ from src.core.constants import (
 )
 from src.core.database import (
     Agent,
+    Feature,
     Phase,
     PhaseExecution,
     Task,
@@ -638,6 +639,11 @@ def _recover_abandoned_workflows_missing_worktree(logger: "OrchestratorLogger") 
             wf.working_directory = str(wt_path)
             wf.status = "active"
             wf.status_reason = None
+            # Sync feature status -- same class of bug as
+            # _retry_exhausted_paused_workflows: this function bypasses
+            # resume_workflow(), so the feature row stays "paused".
+            for feat in db.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
+                feat.status = "active"
             recovered += 1
         if recovered:
             db.commit()
@@ -712,6 +718,10 @@ def _recover_abandoned_workflows_with_completed_phase(logger: "OrchestratorLogge
             )
             wf.status = "active"
             wf.status_reason = None
+            # Sync feature status -- same reasoning as
+            # _recover_abandoned_workflows_missing_worktree.
+            for feat in db.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
+                feat.status = "active"
             recovered += 1
         if recovered:
             db.commit()
