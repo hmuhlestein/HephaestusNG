@@ -484,6 +484,7 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     )
     from src.autopilot.orchestrator.phase_transitions import (
         _maybe_resolve_arbitration,
+        _maybe_resolve_human_arbitration_escalations,
         _retry_exhausted_paused_workflows,
         _retry_failed_tasks,
         _try_advance_phases,
@@ -546,6 +547,16 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         _retry_exhausted_paused_workflows(sweep_logger)
     except Exception as e:
         logger.error(f"[PHASE-SWEEP] Paused-workflow retry error: {e}")
+
+    # Workflow-wide, not scoped to any one workflow -- same reasoning as
+    # the feature/design-status syncs above: the target set here is
+    # "every paused workflow with a pending arbitration-deadlock human
+    # escalation," found by its own DB query, not driven by the
+    # active/paused snapshot the per-workflow loop below iterates.
+    try:
+        _maybe_resolve_human_arbitration_escalations(sweep_logger)
+    except Exception as e:
+        logger.error(f"[PHASE-SWEEP] Arbitration-escalation resolve error: {e}")
 
     session = server_state.db_manager.get_session()
     try:

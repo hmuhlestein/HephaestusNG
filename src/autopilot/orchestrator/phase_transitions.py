@@ -43,6 +43,9 @@ from src.autopilot.orchestrator.arbitration import (
     _maybe_resolve_arbitration as _maybe_resolve_arbitration,
 )
 from src.autopilot.orchestrator.arbitration import (
+    _maybe_resolve_human_arbitration_escalations as _maybe_resolve_human_arbitration_escalations,
+)
+from src.autopilot.orchestrator.arbitration import (
     _phase_currently_passes as _phase_currently_passes,
 )
 from src.autopilot.orchestrator.arbitration import (

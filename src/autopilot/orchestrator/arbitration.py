@@ -229,6 +229,35 @@ def _trigger_arbitration(
     )
 
     with get_db() as db:
+        # Already escalated to a human and genuinely still waiting -- don't
+        # re-evaluate. This phase's task is "done" and its PhaseExecution
+        # stays "in_progress" (nothing here ever completes/fails it), so
+        # without this guard _case_in_progress_complete re-fires this exact
+        # gate evaluation on EVERY sweep tick (~20s) regardless of the
+        # workflow-level pause -- design_review isn't an "unrelated"
+        # in-progress phase _advance_phases's own "review" carve-out is
+        # meant to keep flowing, it's the ONE phase that caused the pause.
+        # Each re-fire would land back here, re-exhaust the cap again, and
+        # overwrite Workflow.status_reason with a BRAND NEW request_id --
+        # orphaning the request/response file pair a human may already be
+        # looking at or mid-response to, with no way to ever resolve the
+        # abandoned one. Deliberately not relying on the task_creation_
+        # claimed_at claim for this (the below-cap dispatch path's own
+        # mechanism): that claim is self-healed as stale after 8 minutes
+        # (_release_stale_task_creation_claims), which would silently
+        # re-open the door long before a human paying attention to review
+        # mode is expected to have responded.
+        wf_for_reentry_check = db.query(Workflow).filter_by(id=workflow_id).first()
+        if (
+            wf_for_reentry_check
+            and wf_for_reentry_check.paused_by == "review"
+            and wf_for_reentry_check.status_reason
+            and wf_for_reentry_check.status_reason.startswith(f"{_ARBITRATION_ESCALATION_MARKER}")
+            and f":{phase_id}]" in wf_for_reentry_check.status_reason
+        ):
+            logger.info(f"[ARBITRATE] {phase_name} already escalated to a human and still awaiting a response -- skipping")
+            return False
+
         # Only count arbitrations since the workflow's last on-demand Retry
         # (Workflow.gotos_reset_at) -- historical arbitration Task rows are
         # never deleted, so counting all-time would mean a workflow that
@@ -323,23 +352,44 @@ def _trigger_arbitration(
                         f"({fresh_reason}) -- advancing instead of failing the workflow."
                     )
                     return _fire_phase_transition(workflow_id, phase_id, phase_name, logger, force_continue=True)
-            logger.error(f"[ARBITRATE] {phase_name} has already been arbitrated {prior_arbitrations} times without converging -- failing the workflow instead of arbitrating again")
-            wf = db.query(Workflow).filter_by(id=workflow_id).first()
-            if wf:
-                wf.status = "failed"
-                wf.status_reason = f"{phase_name}: arbitrated {prior_arbitrations} times without converging (last reason: {reason})"
-                # See the matching fix in phase_transitions.py's retry-cap
-                # exhaustion path: a concurrent, unrelated phase's review
-                # gate can leave paused_by="review" set here, which then
-                # permanently blocks resume_workflow (requires
-                # status=="paused") while feature_routes' approve handler
-                # doesn't check its return value -- silent no-op Approve,
-                # workflow stuck "failed" forever with a stale "review"
-                # marker.
-                wf.paused_by = None
-                wf.paused_at = None
-                db.commit()
-            return False
+            arbitration_exhausted_reason = (
+                f"{phase_name}: arbitrated {prior_arbitrations} times without "
+                f"converging (last reason: {reason})"
+            )
+            logger.error(f"[ARBITRATE] {arbitration_exhausted_reason}")
+
+            # Genuinely deadlocked: the phase never converged across the full
+            # retry + arbitration budget, and its current output still
+            # doesn't pass fresh. What happens next depends on whether a
+            # human is expected to be watching this project.
+            from src.core.database import resolve_project_for_workflow
+
+            project_id, _ = resolve_project_for_workflow(workflow_id)
+            from src.autopilot.orchestrator.pipeline import _should_pause_for_review
+
+            if project_id and _should_pause_for_review(project_id):
+                return _escalate_arbitration_deadlock_to_human(
+                    db, workflow_id, phase_id, phase_name,
+                    prior_arbitrations, arbitration_exhausted_reason, project_id, logger,
+                )
+
+            # Full autopilot: no human is expected to be watching this
+            # project, and the whole point of autopilot mode is that it
+            # never blocks waiting on one. Force the phase through with
+            # whatever it currently has rather than failing the workflow --
+            # the deadlock is real (an unresolved BLOCKER may still be
+            # sitting in the report), but a stalled pipeline serves nobody
+            # here; downstream review phases still run and can catch
+            # whatever this phase couldn't resolve.
+            logger.warning(
+                f"[ARBITRATE] {phase_name} exhausted its arbitration budget in full-autopilot "
+                "mode (no human expected to be watching) -- forcing continue instead of failing."
+            )
+            return _fire_phase_transition(
+                workflow_id, phase_id, phase_name, logger,
+                force_continue=True,
+                completion_summary=f"Forced past unresolved arbitration deadlock: {arbitration_exhausted_reason}",
+            )
 
         if not _claim_phase_task_creation(db, phase_id):
             logger.info(f"[ARBITRATE] {phase_name} already has arbitration in flight -- skipping")
@@ -459,6 +509,242 @@ def _trigger_arbitration(
 
     logger.warning(f"[ARBITRATE] Dispatched arbitration agent {agent_data.get('agent_id', '?')[:8]} for {phase_name}")
     return True
+
+
+_ARBITRATION_ESCALATION_MARKER = "[ARBITRATION-ESCALATION:"
+
+
+def _escalate_arbitration_deadlock_to_human(
+    db, workflow_id: str, phase_id: str, phase_name: str,
+    prior_arbitrations: int, reason: str, project_id: str, logger: "OrchestratorLogger",
+) -> bool:
+    """Pause the workflow and surface a human-input request instead of
+    silently failing, when a phase's arbitration budget is exhausted and
+    the project is in review mode.
+
+    Non-blocking by design -- this is reached from the shared
+    background_phase_advancement_sweep, which processes every active/
+    paused workflow sequentially in one thread per tick; a blocking wait
+    here (see human_escalation.prompt_human, which the file format below
+    mirrors) would freeze phase advancement for every OTHER workflow in
+    the system for as long as the human takes to respond. The request/
+    response file pair is the same mechanism prompt_human uses, which
+    already drives the pulsing "Waiting on you" badge in the frontend's
+    MessageCenter -- no frontend change needed. A separate sweep step,
+    _maybe_resolve_human_arbitration_escalations, resolves it later once a
+    response (or a dismissal) exists.
+
+    Deliberately does NOT time out -- unlike prompt_human's other callers
+    (credit exhaustion, stuck-agent detection), where auto-continuing past
+    a transient condition is safe, review mode means a human is expected
+    to be supervising, and auto-continuing past a confirmed, unresolved
+    architectural BLOCKER with no actual decision would defeat the entire
+    point of review mode.
+    """
+    import os
+    from datetime import datetime
+
+    from src.autopilot.orchestrator.engine_client import pause_workflow
+    from src.core.constants import AUTOPILOT_STATE_DIR
+
+    request_id = str(uuid.uuid4())[:8]
+    input_dir = Path(AUTOPILOT_STATE_DIR)
+    input_dir.mkdir(parents=True, exist_ok=True)
+    request_file = input_dir / f"input_request_{request_id}.json"
+
+    # Embedded in Workflow.status_reason so the resolution sweep can find
+    # this workflow's pending request AND which phase to act on without a
+    # separate DB column -- status_reason is otherwise just informational
+    # text, and this is the one place any caller needs to parse it back
+    # out. phase_id is included here (not only in the request file's own
+    # JSON) so a dismissed request -- deleted with no response ever
+    # written -- can still be auto-continued: the request file it would
+    # otherwise have been read from no longer exists at that point.
+    status_reason = f"{_ARBITRATION_ESCALATION_MARKER}{request_id}:{phase_id}] {reason}"
+
+    payload = json.dumps(
+        {
+            "id": request_id,
+            "reason": (
+                f"{phase_name} could not converge after {prior_arbitrations} "
+                f"arbitration attempts and needs a decision: {reason} "
+                "(Continue = force this phase through as-is and move on. "
+                "Skip or Stop = give up and mark this workflow failed.)"
+            ),
+            "timestamp": datetime.utcnow().isoformat(),
+            # MessageCenter's response UI is generic across every
+            # human_input_required message -- it always renders all three
+            # buttons (Continue/Skip/Stop) and doesn't read options/labels
+            # at all, so these are informational only (kept for any future
+            # reader that does honor them; see the "reason" text above for
+            # what's actually shown today, and _maybe_resolve_human_
+            # arbitration_escalations' own handling of "q" as a "give up"
+            # synonym so the always-visible Stop button is never a dead
+            # click).
+            "options": ["c", "s"],
+            "labels": {
+                "c": "Force continue (accept the current state, move to the next phase)",
+                "s": "Give up (mark this workflow failed)",
+            },
+            "project_id": project_id,
+            "workflow_id": workflow_id,
+            "phase_id": phase_id,
+            "kind": "arbitration_escalation",
+        },
+        indent=2,
+    )
+    tmp = request_file.with_suffix(".tmp")
+    tmp.write_text(payload)
+    os.rename(tmp, request_file)
+
+    logger.event("human_input_required", {"reason": reason, "request_id": request_id})
+
+    pause_workflow(workflow_id, reason="review", status_reason=status_reason, session=db)
+    db.commit()
+    logger.warning(
+        f"[ARBITRATE] {phase_name} paused for human decision (request {request_id}) -- "
+        "waiting indefinitely for a response."
+    )
+    return False
+
+
+def _maybe_resolve_human_arbitration_escalations(logger: "OrchestratorLogger") -> None:
+    """Check every workflow paused on an arbitration-deadlock human
+    escalation (see _escalate_arbitration_deadlock_to_human) for a
+    response, and act on it. Called once per sweep tick -- workflow-wide,
+    not per-workflow like _maybe_resolve_arbitration, since the target set
+    here is "every paused workflow with this specific marker," not "every
+    phase of ONE workflow."
+    """
+    from src.core.constants import AUTOPILOT_STATE_DIR
+
+    with get_db() as db:
+        pending = (
+            db.query(Workflow)
+            .filter(
+                Workflow.status == "paused",
+                Workflow.paused_by == "review",
+                Workflow.status_reason.like(f"{_ARBITRATION_ESCALATION_MARKER}%"),
+            )
+            .all()
+        )
+        targets = [(wf.id, wf.status_reason) for wf in pending]
+
+    input_dir = Path(AUTOPILOT_STATE_DIR)
+    for workflow_id, status_reason in targets:
+        try:
+            marker_body = status_reason[len(_ARBITRATION_ESCALATION_MARKER):].split("]", 1)[0]
+            request_id, phase_id = marker_body.split(":", 1)
+        except Exception:
+            continue
+        request_file = input_dir / f"input_request_{request_id}.json"
+        response_file = input_dir / f"input_response_{request_id}.json"
+
+        if not request_file.exists():
+            # Dismissed via the UI's X button, with no response ever
+            # written -- same convention prompt_human uses for a dismissed
+            # request: auto-continue rather than leave the workflow paused
+            # forever with nothing left to answer. phase_id comes from the
+            # status_reason marker (not the now-missing request file) --
+            # see _escalate_arbitration_deadlock_to_human's own comment on
+            # why it's embedded there too.
+            logger.warning(f"[ARBITRATE] Human escalation {request_id} was dismissed -- auto-continuing")
+            _resolve_human_arbitration_choice(workflow_id, phase_id, "c", logger)
+            response_file.unlink(missing_ok=True)
+            continue
+
+        if not response_file.exists():
+            continue  # still waiting -- no timeout, see this function's own docstring
+
+        try:
+            data = json.loads(response_file.read_text())
+            choice = (data.get("choice") or "").strip().lower()
+            message = data.get("message", "")
+        except Exception as e:
+            logger.warning(f"[ARBITRATE] Failed to read response for escalation {request_id}: {e}")
+            continue
+
+        if choice == "m" and message:
+            # Mirrors prompt_human's own "m" handling: log it and keep
+            # waiting for an actual decision, don't resolve yet.
+            logger.info(f"[ARBITRATE] Human message on escalation {request_id}: {message}")
+            logger.event(
+                "human_input",
+                {"choice": "m", "message": message, "request_id": request_id, "source": "web"},
+            )
+            response_file.unlink(missing_ok=True)
+            continue
+
+        # "q" is not one of this escalation's own declared options (only
+        # "c"/"s" are, see _escalate_arbitration_deadlock_to_human) -- but
+        # MessageCenter's response UI is generic across every
+        # human_input_required message and always renders all three
+        # buttons (Continue/Skip/Stop) regardless of what a request's own
+        # options/labels declare; it doesn't read those fields at all.
+        # Treating "q" as unrecognized here would make that visible,
+        # clickable "Stop" button a dead click for this specific
+        # escalation -- the response file would sit unprocessed forever,
+        # with no feedback that anything was wrong. Map it onto the same
+        # "give up" outcome as "s" instead.
+        if choice not in ("c", "s", "q"):
+            continue  # genuinely unrecognized -- leave both files for the next tick
+        resolved_choice = "s" if choice == "q" else choice
+
+        try:
+            request_data = json.loads(request_file.read_text())
+            phase_id = request_data.get("phase_id")
+        except Exception as e:
+            logger.warning(f"[ARBITRATE] Failed to read request for escalation {request_id}: {e}")
+            phase_id = None
+
+        _resolve_human_arbitration_choice(workflow_id, phase_id, resolved_choice, logger)
+        request_file.unlink(missing_ok=True)
+        response_file.unlink(missing_ok=True)
+
+
+def _resolve_human_arbitration_choice(
+    workflow_id: str, phase_id: Optional[str], choice: str, logger: "OrchestratorLogger",
+) -> None:
+    """Apply the human's decision on an arbitration-deadlock escalation:
+    "c" force-continues the deadlocked phase (mirrors the full-autopilot
+    fallback in _trigger_arbitration); "s" (or a dismissal, which reuses
+    "c" as its own auto-continue convention -- see this module's other
+    caller) gives up and fails the workflow, same as the pre-escalation
+    behavior."""
+    from src.autopilot.orchestrator.engine_client import resume_workflow
+    from src.autopilot.orchestrator.phase_transitions import _fire_phase_transition
+
+    if choice == "s":
+        with get_db() as db:
+            wf = db.query(Workflow).filter_by(id=workflow_id).first()
+            if not wf:
+                return
+            phase = db.query(Phase).filter_by(id=phase_id).first() if phase_id else None
+            wf.status = "failed"
+            wf.status_reason = (
+                f"{phase.name if phase else 'workflow'}: human declined to continue "
+                "past the arbitration deadlock"
+            )
+            wf.paused_by = None
+            wf.paused_at = None
+            db.commit()
+        logger.warning(f"[ARBITRATE] Workflow {workflow_id[:8]}: human chose to give up -- workflow failed")
+        return
+
+    # "c" -- force continue.
+    with get_db() as db:
+        phase = db.query(Phase).filter_by(id=phase_id).first() if phase_id else None
+    if not phase:
+        logger.error(f"[ARBITRATE] Workflow {workflow_id[:8]}: escalation response has no resolvable phase -- cannot force continue")
+        return
+
+    resume_workflow(workflow_id, force=True)
+    logger.warning(f"[ARBITRATE] Workflow {workflow_id[:8]}: human chose to force continue past {phase.name}")
+    _fire_phase_transition(
+        workflow_id, phase.id, phase.name, logger,
+        force_continue=True,
+        completion_summary="Forced past arbitration deadlock by human decision",
+    )
 
 
 def _maybe_resolve_arbitration(workflow_id: str, logger: "OrchestratorLogger") -> None:
