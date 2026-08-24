@@ -209,8 +209,8 @@ class LaunchPipeline:
                     try:
                         repo = resolve_project_repo(session, wf.project_id, repo_id)
                         return Path(repo.path)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Could not resolve repo_id {repo_id} for workflow {workflow_id}: {e}")
                 # Fallback to primary repo (REQ-06)
                 proj = session.query(AutopilotProject).filter_by(id=wf.project_id).first()
                 if not proj or not proj.base_dir:

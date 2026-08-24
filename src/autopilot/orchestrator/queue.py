@@ -118,8 +118,8 @@ def is_design_fully_complete(workflow_id: str, logger: "OrchestratorLogger") -> 
                 _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
                 if _wf:
                     project_id = _wf.project_id
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to get workflow for branch check: {e}")
 
         if not project_id:
             return False, "Cannot determine project for branch check"
