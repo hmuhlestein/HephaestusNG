@@ -1395,14 +1395,19 @@ def _pause_feature_for_review(feature_id: str, logger: "OrchestratorLogger") -> 
                     return
                 wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
                 if wf and wf.paused_by != "review" and wf.status != "failed":
-                    # Double-check: don't pause if the workflow was already
-                    # completed (all phases done) — the review gate should
-                    # only fire once, not on every re-entry of
-                    # _run_one_feature. Without this, a completed workflow
-                    # gets re-paused on every sweep tick.
-                    if wf.status == "completed":
-                        logger.debug(f"[REVIEW] Feature {feature_id} workflow already completed — skipping review pause")
-                        return
+                    # NOTE: do NOT gate on wf.status == "completed" here to
+                    # avoid re-pausing an already-reviewed workflow -- the
+                    # feat.review_status == "approved" check above already
+                    # covers that, deliberately, via a value only the
+                    # approval endpoint ever sets. wf.status can be flipped
+                    # to "completed" by an unrelated, review-mode-blind
+                    # writer (derive_workflow_status(write_back=True), polled
+                    # every ~10s by /design-status) in the narrow window
+                    # after the last phase finishes but before this function
+                    # (or _complete_workflow's own pause branch) gets to
+                    # pause it -- trusting that value here would silently
+                    # skip the review gate for a feature that was never
+                    # actually reviewed.
                     from src.autopilot.orchestrator.engine_client import pause_workflow
 
                     # cascade_to_feature=False: this function already owns

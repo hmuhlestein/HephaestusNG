@@ -258,14 +258,15 @@ def pause_workflow(
             from src.core.database import Feature, FeatureStatus
 
             # Only pause work that is actually still in flight. A feature
-            # in a terminal state has nothing left to pause, and pausing
-            # it is not recoverable: derive_feature_status returns early
-            # on PAUSED (it is the one status it never re-derives), so
-            # nothing ever repairs the row, and resume_workflow's mirror
-            # cascade sends every paused feature to "active" -- turning a
-            # completed feature into live-looking work. This is ce0c4a7's
-            # bug class ("re-paused an already-approved feature"), which
-            # this primitive exists to make unrepresentable.
+            # in a terminal state has nothing left to pause -- pausing it
+            # anyway would misreport it as "paused" until its workflow
+            # un-pauses and derive_feature_status's own live-workflow
+            # guard (status_derivation.py) repairs the row back -- and
+            # resume_workflow's mirror cascade sends every paused feature
+            # to "active" in the meantime, turning a completed feature
+            # into live-looking work. This is ce0c4a7's bug class
+            # ("re-paused an already-approved feature"), which this
+            # primitive exists to make unrepresentable.
             cascadable = (FeatureStatus.PENDING, FeatureStatus.ACTIVE)
             for feature in (
                 s.query(Feature)

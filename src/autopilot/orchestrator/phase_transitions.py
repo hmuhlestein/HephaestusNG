@@ -2931,7 +2931,7 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: "OrchestratorLogger")
             # derive_feature_status; either way, resuming the workflow
             # should also resume its feature.
             from src.core.database import Feature
-            for feat in db.query(Feature).filter_by(workflow_id=wf.id).filter(Feature.status != "active").all():
+            for feat in db.query(Feature).filter_by(workflow_id=wf.id).filter(Feature.status.in_(["paused", "failed"])).all():
                 feat.status = "active"
 
         candidates = (
