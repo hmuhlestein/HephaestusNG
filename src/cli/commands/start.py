@@ -32,6 +32,7 @@ class ProcessWatchdog:
         max_restarts: int = 3,
         restart_window: int = 300,
         unresponsive_threshold: int = 3,
+        backend_port: Optional[int] = None,
     ):
         self.check_interval = check_interval
         self.max_restarts = max_restarts
@@ -53,10 +54,10 @@ class ProcessWatchdog:
         # healthy, creating an infinite restart loop.
         self._backend_restart_grace = 120
         self._backend_last_restart = 0.0
-        # Port the backend listens on -- set to the actual value by the
-        # caller (run_watchdog.py) so _check_services can reconcile the
-        # PID file against port listeners before restarting.
-        self._backend_port: Optional[int] = None
+        # Port the backend listens on -- passed by the caller (run_watchdog.py)
+        # so _check_services can reconcile the PID file against port
+        # listeners before restarting.
+        self._backend_port = backend_port
 
     def register_service(self, name: str, restart_callback: callable) -> None:
         """Register a service with its restart callback."""
@@ -100,8 +101,7 @@ class ProcessWatchdog:
                 # hits _exit_if_port_in_use, dies within seconds, and wastes
                 # the restart budget. Instead, reconcile the PID file.
                 if name == "backend":
-                    backend_port = getattr(self, "_backend_port", None)
-                    if backend_port and self._reconcile_backend_pid(backend_port, pid):
+                    if self._backend_port and self._reconcile_backend_pid(self._backend_port, pid):
                         continue  # PID file fixed, no restart needed
                 logger.warning(f"Process {name} (PID {pid}) died unexpectedly")
                 self._maybe_restart(name, callback)
