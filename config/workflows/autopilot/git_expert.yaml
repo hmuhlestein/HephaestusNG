@@ -184,9 +184,10 @@ additional_notes: |
   git push $REMOTE $DEFAULT_BRANCH  # skip if no remote
   ```
 
-  Pull --rebase in local main to sync with any concurrent changes:
+  Pull --rebase in local main to sync with any concurrent changes, then push:
   ```bash
   git pull --rebase $REMOTE $DEFAULT_BRANCH
+  git push $REMOTE $DEFAULT_BRANCH
   ```
 
   CREATE A PR (mandatory — the review modal links to it):
