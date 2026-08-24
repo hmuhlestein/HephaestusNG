@@ -1,7 +1,5 @@
 """Tests for C5+C6+C7+C8: Commit-Link Validation, Doc Storage, Commit Resolution, Recovery."""
 
-import logging
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,24 +29,34 @@ def _seed_project_with_repo(session, project_id="proj-1", base_dir="/tmp/proj1")
     session.flush()
 
     repo = ProjectRepo(
-        id="repo-main", project_id=project_id, label="main",
-        path=base_dir, is_primary=True,
+        id="repo-main",
+        project_id=project_id,
+        label="main",
+        path=base_dir,
+        is_primary=True,
     )
     session.add(repo)
     session.flush()
 
     wf = Workflow(
-        id="wf-1", name="wf", status="active",
-        project_id=project_id, phases_folder_path="/tmp",
+        id="wf-1",
+        name="wf",
+        status="active",
+        project_id=project_id,
+        phases_folder_path="/tmp",
     )
     session.add(wf)
     session.flush()
 
     ticket = Ticket(
-        id="ticket-1", workflow_id="wf-1",
-        created_by_agent_id="a-1", title="t",
-        description="d", ticket_type="task",
-        priority="medium", status="open",
+        id="ticket-1",
+        workflow_id="wf-1",
+        created_by_agent_id="a-1",
+        title="t",
+        description="d",
+        ticket_type="task",
+        priority="medium",
+        status="open",
     )
     session.add(ticket)
     session.flush()
@@ -64,8 +72,11 @@ class TestCommitResolution:
         with Session(engine) as session:
             _seed_project_with_repo(session, base_dir="/repo/main")
             tc = TicketCommit(
-                id="tc-1", ticket_id="ticket-1", agent_id="a-1",
-                commit_sha="abc123", commit_message="m",
+                id="tc-1",
+                ticket_id="ticket-1",
+                agent_id="a-1",
+                commit_sha="abc123",
+                commit_message="m",
                 commit_timestamp=__import__("datetime").datetime.utcnow(),
                 repo_id="repo-main",
             )
@@ -94,8 +105,11 @@ class TestCommitResolution:
         with Session(engine) as session:
             _seed_project_with_repo(session, base_dir="/repo/main")
             tc = TicketCommit(
-                id="tc-2", ticket_id="ticket-1", agent_id="a-1",
-                commit_sha="def456", commit_message="m",
+                id="tc-2",
+                ticket_id="ticket-1",
+                agent_id="a-1",
+                commit_sha="def456",
+                commit_message="m",
                 commit_timestamp=__import__("datetime").datetime.utcnow(),
                 repo_id="repo-main",
             )
@@ -141,12 +155,18 @@ class TestRecoveryRepoScoping:
             session.flush()
 
             repo1 = ProjectRepo(
-                id="r1", project_id="p1", label="main",
-                path="/tmp", is_primary=True,
+                id="r1",
+                project_id="p1",
+                label="main",
+                path="/tmp",
+                is_primary=True,
             )
             repo2 = ProjectRepo(
-                id="r2", project_id="p1", label="backend",
-                path="/code/backend", is_primary=False,
+                id="r2",
+                project_id="p1",
+                label="backend",
+                path="/code/backend",
+                is_primary=False,
             )
             session.add_all([repo1, repo2])
             session.commit()
