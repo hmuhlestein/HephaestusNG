@@ -4,7 +4,9 @@ These tests address the critical test coverage gap identified in ARCHITECTURE_RE
 "_advance_phases has no test referencing it anywhere in tests/"
 """
 
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
@@ -3395,23 +3397,34 @@ class TestTriggerArbitration:
         assert "requirements" in prompt
         assert "implementation" in prompt  # sample_workflow's phase-2
 
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
     @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
-    def test_caps_repeated_arbitration_and_fails_workflow(
-        self, mock_create_agent, db_manager, sample_workflow
+    def test_caps_repeated_arbitration_forces_continue_with_no_project_to_check(
+        self, mock_create_agent, mock_create_agent_pt, db_manager, sample_workflow
     ):
         """A persistently-confused arbiter that keeps choosing "goto" back
         into a phase that keeps re-exhausting its budget must not be able
         to cycle forever (5 real attempts, arbitrate, goto, 5 more,
-        arbitrate again...). Past MAX_ARBITRATIONS_PER_PHASE, fail instead
-        of spawning yet another arbitration agent -- "never pause for a
-        human" doesn't mean "never terminate"."""
+        arbitrate again...). Past MAX_ARBITRATIONS_PER_PHASE, this used to
+        unconditionally fail the workflow -- now it forces the phase
+        through instead (see the review-mode-escalation and full-autopilot
+        tests below for the two real outcomes); sample_workflow has no
+        project_id, so review mode can't be determined and this defaults
+        to the same full-autopilot "force continue" behavior a project
+        with review_mode=False would get."""
         from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
         from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
 
         mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+        mock_create_agent_pt.side_effect = _agent_row_side_effect("next-phase-agent")
 
-        # 3 prior arbitration tasks already exist for this phase.
+        # 3 prior arbitration tasks already exist for this phase, plus the
+        # next phase's own PhaseExecution row -- sample_workflow only seeds
+        # one for phase-1, but a real workflow has one for every phase from
+        # initialization, and _create_phase_task's claim is a no-op UPDATE
+        # (0 rows matched, not an error) against a phase with none at all.
         with db_manager.session_scope() as session:
+            session.add(PhaseExecution(id="exec-2", phase_id="phase-2", workflow_execution_id="wf-1", status="pending"))
             for i in range(3):
                 session.add(
                     Task(
@@ -3430,33 +3443,38 @@ class TestTriggerArbitration:
             "wf-1", "phase-1", "requirements", "still not converging", MagicMock()
         )
 
-        assert result is False
-        mock_create_agent.assert_not_called()
+        assert result is True
         with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "completed"
             wf = session.query(Workflow).filter_by(id="wf-1").first()
-            assert wf.status == "failed"
-            assert "requirements" in wf.status_reason
-            assert "3 times" in wf.status_reason
+            assert wf.status != "failed"
 
     @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
-    def test_caps_repeated_arbitration_clears_a_stale_review_pause(
+    def test_caps_repeated_arbitration_escalates_to_human_in_review_mode(
         self, mock_create_agent, db_manager, sample_workflow
     ):
-        """Regression, found live: same gap as phase_transitions' retry-cap
-        exhaustion path -- this sets wf.status = "failed" directly,
-        bypassing pause_workflow's shared status/paused_by/paused_at
-        primitive. If an unrelated, concurrent phase's review gate had
-        already set paused_by="review" on this workflow, it survived the
-        "failed" write untouched, permanently blocking resume_workflow
-        (requires status=="paused") while feature_routes' approve handler
-        doesn't check that return value -- Approve becomes a silent no-op,
-        workflow stuck "failed" forever."""
+        """When the project has review_mode enabled, an exhausted
+        arbitration budget must pause for a human decision instead of
+        silently failing OR silently forcing through -- creates the same
+        request-file pulsing notification prompt_human uses (no frontend
+        change needed), and pauses non-blocking (paused_by="review") since
+        this can be reached from the shared background sweep, which would
+        otherwise be frozen for every other workflow by an inline
+        blocking wait."""
+        import glob
+        import json as _json
+
         from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
         from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
+        from src.core.constants import AUTOPILOT_STATE_DIR
 
         mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
         with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-review", name="p", base_dir="/tmp", review_mode=True))
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.project_id = "proj-review"
             for i in range(3):
                 session.add(
                     Task(
@@ -3470,20 +3488,106 @@ class TestTriggerArbitration:
                         action="arbitrate",
                     )
                 )
-            wf = session.query(Workflow).filter_by(id="wf-1").first()
-            wf.paused_by = "review"
-            wf.paused_at = datetime.utcnow()
 
-        result = _trigger_arbitration(
-            "wf-1", "phase-1", "requirements", "still not converging", MagicMock()
-        )
+        before = set(glob.glob(f"{AUTOPILOT_STATE_DIR}/input_request_*.json"))
+        try:
+            result = _trigger_arbitration(
+                "wf-1", "phase-1", "requirements", "still not converging", MagicMock()
+            )
 
-        assert result is False
+            assert result is False
+            mock_create_agent.assert_not_called()
+            with db_manager.session_scope() as session:
+                wf = session.query(Workflow).filter_by(id="wf-1").first()
+                assert wf.status == "paused"
+                assert wf.paused_by == "review"
+                assert "ARBITRATION-ESCALATION" in wf.status_reason
+                assert "requirements" in wf.status_reason
+
+            after = set(glob.glob(f"{AUTOPILOT_STATE_DIR}/input_request_*.json"))
+            new_files = after - before
+            assert len(new_files) == 1
+            data = _json.loads(Path(new_files.pop()).read_text())
+            assert data["workflow_id"] == "wf-1"
+            assert data["phase_id"] == "phase-1"
+            assert data["kind"] == "arbitration_escalation"
+            assert set(data["options"]) == {"c", "s"}
+        finally:
+            for f in glob.glob(f"{AUTOPILOT_STATE_DIR}/input_request_*.json"):
+                if f not in before:
+                    Path(f).unlink(missing_ok=True)
+
+    @patch("src.autopilot.orchestrator.arbitration.create_agent_for_task_direct")
+    def test_re_evaluating_an_already_escalated_phase_does_not_create_a_second_request(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Regression: this phase's task is "done" and its PhaseExecution
+        stays "in_progress" forever (nothing here ever completes/fails
+        it) -- without a durable guard, _case_in_progress_complete re-
+        fires this exact gate evaluation on EVERY sweep tick (~20s)
+        regardless of the workflow-level pause, since design_review isn't
+        an "unrelated" in-progress phase the "review" pause carve-out is
+        meant to keep flowing past -- it's the one phase that caused the
+        pause. Each re-fire landing back in _trigger_arbitration must not
+        create a SECOND request/overwrite status_reason with a new
+        request_id -- that would orphan the first request/response file
+        pair a human may already be mid-response to, with no way to ever
+        resolve the abandoned one. Confirmed by calling _trigger_arbitration
+        twice for the same still-exhausted, still-unresolved phase."""
+        import glob
+
+        from src.autopilot.orchestrator.phase_transitions import ARBITRATION_CREATED_BY
+        from src.autopilot.orchestrator.phase_transitions import _trigger_arbitration
+        from src.core.constants import AUTOPILOT_STATE_DIR
+
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
+
         with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-review", name="p", base_dir="/tmp", review_mode=True))
             wf = session.query(Workflow).filter_by(id="wf-1").first()
-            assert wf.status == "failed"
-            assert wf.paused_by is None
-            assert wf.paused_at is None
+            wf.project_id = "proj-review"
+            for i in range(3):
+                session.add(
+                    Task(
+                        id=f"prior-arb-{i}",
+                        raw_description="Arbitrate stuck phase: requirements",
+                        done_definition="x",
+                        status="done",
+                        phase_id="phase-1",
+                        workflow_id="wf-1",
+                        created_by_agent_id=ARBITRATION_CREATED_BY,
+                        action="arbitrate",
+                    )
+                )
+
+        before = set(glob.glob(f"{AUTOPILOT_STATE_DIR}/input_request_*.json"))
+        try:
+            result1 = _trigger_arbitration(
+                "wf-1", "phase-1", "requirements", "still not converging", MagicMock()
+            )
+            with db_manager.session_scope() as session:
+                status_reason_after_first = session.query(Workflow).filter_by(id="wf-1").first().status_reason
+
+            # A later sweep tick re-evaluates the SAME still-in-progress,
+            # still-exhausted phase again -- same call, nothing resolved
+            # in between.
+            result2 = _trigger_arbitration(
+                "wf-1", "phase-1", "requirements", "still not converging", MagicMock()
+            )
+
+            assert result1 is False
+            assert result2 is False
+            with db_manager.session_scope() as session:
+                wf = session.query(Workflow).filter_by(id="wf-1").first()
+                assert wf.status_reason == status_reason_after_first, "must not overwrite the pending request's marker"
+
+            after = set(glob.glob(f"{AUTOPILOT_STATE_DIR}/input_request_*.json"))
+            new_files = after - before
+            assert len(new_files) == 1, "a second call must not create a second request file"
+        finally:
+            for f in glob.glob(f"{AUTOPILOT_STATE_DIR}/input_request_*.json"):
+                if f not in before:
+                    Path(f).unlink(missing_ok=True)
 
     @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
     @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
@@ -3706,6 +3810,222 @@ class TestTriggerArbitration:
             assert task.status == "failed"
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status_reason is not None
+
+
+class TestResolveHumanArbitrationChoice:
+    """Unit tests for _resolve_human_arbitration_choice, the half of the
+    human-escalation flow that applies a decision once one exists --
+    "c" force-continues the deadlocked phase, "s" gives up and fails the
+    workflow. See TestMaybeResolveHumanArbitrationEscalations for the
+    file-polling half that finds a decision to apply."""
+
+    def test_give_up_fails_workflow_and_clears_a_stale_review_pause(
+        self, db_manager, sample_workflow
+    ):
+        """Regression, mirrors the pre-escalation fix this replaces: must
+        go through the pause_workflow-equivalent triad (status/paused_by/
+        paused_at together), not a partial write that leaves paused_by
+        stale -- a stale paused_by="review" survives untouched otherwise,
+        permanently blocking resume_workflow (requires status=="paused")
+        while the review-approve handler doesn't check its own return
+        value, so Approve becomes a silent no-op and the workflow stays
+        stuck "failed" forever."""
+        from src.autopilot.orchestrator.arbitration import _resolve_human_arbitration_choice
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.status = "paused"
+            wf.paused_by = "review"
+            wf.paused_at = datetime.utcnow()
+            wf.status_reason = "[ARBITRATION-ESCALATION:abc12345] requirements: ..."
+
+        _resolve_human_arbitration_choice("wf-1", "phase-1", "s", MagicMock())
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "failed"
+            assert wf.paused_by is None
+            assert wf.paused_at is None
+            assert "requirements" in wf.status_reason
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_force_continue_dispatches_the_next_phase(self, mock_create_agent, db_manager, sample_workflow):
+        from src.autopilot.orchestrator.arbitration import _resolve_human_arbitration_choice
+
+        mock_create_agent.side_effect = _agent_row_side_effect("next-phase-agent")
+
+        with db_manager.session_scope() as session:
+            session.add(PhaseExecution(id="exec-2", phase_id="phase-2", workflow_execution_id="wf-1", status="pending"))
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.status = "paused"
+            wf.paused_by = "review"
+            wf.paused_at = datetime.utcnow()
+            wf.status_reason = "[ARBITRATION-ESCALATION:abc12345] requirements: ..."
+
+        _resolve_human_arbitration_choice("wf-1", "phase-1", "c", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "completed"
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status != "failed"
+
+
+class TestMaybeResolveHumanArbitrationEscalations:
+    """Tests for _maybe_resolve_human_arbitration_escalations, the sweep
+    step that finds a response (or a dismissal) to a pending arbitration-
+    deadlock escalation and applies it -- see
+    _escalate_arbitration_deadlock_to_human for the write side."""
+
+    def _paused_workflow(self, db_manager, request_id="abc12345", phase_id="phase-1"):
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.status = "paused"
+            wf.paused_by = "review"
+            wf.paused_at = datetime.utcnow()
+            wf.status_reason = f"[ARBITRATION-ESCALATION:{request_id}:{phase_id}] requirements: still not converging"
+
+    def _write_request(self, state_dir, request_id="abc12345", phase_id="phase-1"):
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / f"input_request_{request_id}.json").write_text(json.dumps({
+            "id": request_id, "reason": "r", "timestamp": datetime.utcnow().isoformat(),
+            "options": ["c", "s"], "labels": {"c": "Continue", "s": "Give up"},
+            "workflow_id": "wf-1", "phase_id": phase_id, "kind": "arbitration_escalation",
+        }))
+
+    def _write_response(self, state_dir, choice, request_id="abc12345", message=None):
+        payload = {"request_id": request_id, "choice": choice}
+        if message:
+            payload["message"] = message
+        (state_dir / f"input_response_{request_id}.json").write_text(json.dumps(payload))
+
+    def test_no_response_yet_leaves_the_workflow_paused(self, db_manager, sample_workflow, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.core.constants.AUTOPILOT_STATE_DIR", str(tmp_path))
+        from src.autopilot.orchestrator.arbitration import _maybe_resolve_human_arbitration_escalations
+
+        self._paused_workflow(db_manager)
+        self._write_request(tmp_path)
+
+        _maybe_resolve_human_arbitration_escalations(MagicMock())
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+        assert (tmp_path / "input_request_abc12345.json").exists()
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_continue_response_resolves_and_cleans_up_files(
+        self, mock_create_agent, db_manager, sample_workflow, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("src.core.constants.AUTOPILOT_STATE_DIR", str(tmp_path))
+        from src.autopilot.orchestrator.arbitration import _maybe_resolve_human_arbitration_escalations
+
+        mock_create_agent.side_effect = _agent_row_side_effect("next-phase-agent")
+
+        with db_manager.session_scope() as session:
+            session.add(PhaseExecution(id="exec-2", phase_id="phase-2", workflow_execution_id="wf-1", status="pending"))
+        self._paused_workflow(db_manager)
+        self._write_request(tmp_path)
+        self._write_response(tmp_path, "c")
+
+        _maybe_resolve_human_arbitration_escalations(MagicMock())
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status != "failed"
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "completed"
+        assert not (tmp_path / "input_request_abc12345.json").exists()
+        assert not (tmp_path / "input_response_abc12345.json").exists()
+
+    def test_give_up_response_fails_workflow_and_cleans_up_files(
+        self, db_manager, sample_workflow, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("src.core.constants.AUTOPILOT_STATE_DIR", str(tmp_path))
+        from src.autopilot.orchestrator.arbitration import _maybe_resolve_human_arbitration_escalations
+
+        self._paused_workflow(db_manager)
+        self._write_request(tmp_path)
+        self._write_response(tmp_path, "s")
+
+        _maybe_resolve_human_arbitration_escalations(MagicMock())
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "failed"
+            assert wf.paused_by is None
+        assert not (tmp_path / "input_request_abc12345.json").exists()
+        assert not (tmp_path / "input_response_abc12345.json").exists()
+
+    def test_stop_response_is_treated_as_give_up_not_a_dead_click(
+        self, db_manager, sample_workflow, tmp_path, monkeypatch
+    ):
+        """Regression: this escalation only ever declares options ["c", "s"]
+        in its own request JSON, but MessageCenter's response UI is generic
+        across every human_input_required message -- it always renders all
+        three buttons (Continue/Skip/Stop) and never reads a request's own
+        options/labels fields at all. A human clicking the always-visible
+        "Stop" button (choice="q") must not leave the response file
+        unprocessed forever with the workflow stuck paused and no feedback
+        that the click did nothing -- it must resolve the same as "Give
+        up" (choice="s")."""
+        monkeypatch.setattr("src.core.constants.AUTOPILOT_STATE_DIR", str(tmp_path))
+        from src.autopilot.orchestrator.arbitration import _maybe_resolve_human_arbitration_escalations
+
+        self._paused_workflow(db_manager)
+        self._write_request(tmp_path)
+        self._write_response(tmp_path, "q")
+
+        _maybe_resolve_human_arbitration_escalations(MagicMock())
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "failed"
+            assert wf.paused_by is None
+        assert not (tmp_path / "input_request_abc12345.json").exists()
+        assert not (tmp_path / "input_response_abc12345.json").exists()
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_dismissed_request_auto_continues(
+        self, mock_create_agent, db_manager, sample_workflow, tmp_path, monkeypatch
+    ):
+        """Mirrors human_escalation.prompt_human's own dismiss convention:
+        a request deleted via the UI's X button with no response ever
+        written must not leave the workflow paused forever with nothing
+        left to answer."""
+        monkeypatch.setattr("src.core.constants.AUTOPILOT_STATE_DIR", str(tmp_path))
+        from src.autopilot.orchestrator.arbitration import _maybe_resolve_human_arbitration_escalations
+
+        mock_create_agent.side_effect = _agent_row_side_effect("next-phase-agent")
+
+        with db_manager.session_scope() as session:
+            session.add(PhaseExecution(id="exec-2", phase_id="phase-2", workflow_execution_id="wf-1", status="pending"))
+        self._paused_workflow(db_manager)
+        # No request file written -- simulates dismissal.
+
+        _maybe_resolve_human_arbitration_escalations(MagicMock())
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status != "failed"
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "completed"
+
+    def test_message_only_response_keeps_waiting(self, db_manager, sample_workflow, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.core.constants.AUTOPILOT_STATE_DIR", str(tmp_path))
+        from src.autopilot.orchestrator.arbitration import _maybe_resolve_human_arbitration_escalations
+
+        self._paused_workflow(db_manager)
+        self._write_request(tmp_path)
+        self._write_response(tmp_path, "m", message="checking on this now")
+
+        _maybe_resolve_human_arbitration_escalations(MagicMock())
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+        assert (tmp_path / "input_request_abc12345.json").exists()
+        assert not (tmp_path / "input_response_abc12345.json").exists()
 
 
 class TestReadArbitrationResult:
