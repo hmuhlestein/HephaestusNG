@@ -92,8 +92,7 @@ def _create_integration_worktree(
         cfg = get_config()
         db = DbManager(str(cfg.paths.database_path))
         try:
-            wt_mgr = WorktreeManager(db_manager=db)
-            wt_mgr.reload(project_path)
+            wt_mgr = WorktreeManager(db_manager=db, repo_path=project_path)
 
             # Create branch from main if it doesn't exist
             try:
@@ -157,8 +156,7 @@ def _cleanup_worktree(
         cfg = get_config()
         db = DbManager(str(cfg.paths.database_path))
         try:
-            wt_mgr = WorktreeManager(db_manager=db)
-            wt_mgr.reload(project_path)
+            wt_mgr = WorktreeManager(db_manager=db, repo_path=project_path)
 
             # Archive tmux transcripts before the worktree (and everything in
             # it) is deleted -- .hephaestus/ is git-excluded, so it doesn't
