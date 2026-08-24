@@ -94,7 +94,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     queryKey: ['autopilot-design-statuses', projectId, designs?.length],
     queryFn: async () => {
       if (!projectId || !designs || designs.length === 0) return {};
-      const statuses: Record<string, { status: string; workflowId?: string; workflowIds?: string[]; error?: string | null; costTotal: number; costUnavailable?: boolean; pausedBy?: string | null; statusReason?: string | null; workflowType?: string; features: any[] }> = {};
+      const statuses: Record<string, { status: string; workflowId?: string; error?: string | null; costTotal: number; costUnavailable?: boolean; pausedBy?: string | null; statusReason?: string | null; workflowType?: string; features: any[] }> = {};
       await Promise.all(
         designs.map(async (d: any) => {
           try {
@@ -102,14 +102,6 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
             statuses[d.filename] = {
               status: status.status || 'pending',
               workflowId: status.workflows?.[0]?.id,
-              // A design can accumulate many historical workflow executions
-              // (retries/reruns) over time -- workflows?.[0] is just "the
-              // first one returned," not necessarily the one a pending
-              // human-input request belongs to. Kept alongside the
-              // existing single workflowId (other call sites depend on
-              // that one) so the Decide-button correlation below can check
-              // every workflow this design has, not just the first.
-              workflowIds: (status.workflows || []).map((w: any) => w.id),
               error: status.error || null,
               costTotal: status.cost_total_usd ?? 0,
               pausedBy: status.paused_by || null,
@@ -398,12 +390,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   features={designStatuses[item.filename]?.features ?? []}
                   onRefetchFeatures={refetchDesignStatuses}
                   statusReason={designStatuses[item.filename]?.statusReason}
-                  pendingInputRequest={
-                    pendingInputRequest &&
-                    (designStatuses[item.filename]?.workflowIds || []).includes(pendingInputRequest.workflow_id)
-                      ? pendingInputRequest
-                      : undefined
-                  }
+                  pendingInputRequest={pendingInputRequest}
                   projectId={projectId}
                   onDetail={handleDetail}
                   onTaskClick={setSelectedTaskId}
@@ -595,15 +582,14 @@ interface SortableDesignItemProps {
   // per-row setInterval against the identical endpoint.
   features: any[];
   onRefetchFeatures?: () => void;
-  // Set only when this row's own workflow is the one the pipeline is
-  // currently waiting on a human decision for (see DesignQueuePanel's
-  // own query + workflow_id match). Drives the amber highlight + Decide
-  // button below.
+  // The pipeline's one global pending human-input request (if any) --
+  // passed through unchanged to each FeatureRow below, which does its own
+  // workflow_id correlation (a design's features each have their own
+  // workflow, so the match can't be made at this design level).
   pendingInputRequest?: any;
 }
 
 const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, workflowType, statusReason, projectId, reviewMode, features, onRefetchFeatures, pendingInputRequest }) => {
-  const [showDecisionModal, setShowDecisionModal] = useState(false);
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -677,7 +663,6 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
         transition={{ delay: index * 0.03 }}
         className={`rounded-xl border shadow-sm transition-all ${
           isDragging ? 'shadow-lg border-violet-300 dark:border-violet-500 ring-2 ring-violet-200 dark:ring-violet-500' :
-          pendingInputRequest ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-700 ring-1 ring-amber-200 dark:ring-amber-800' :
           isActive ? 'bg-gradient-to-r from-violet-50 to-purple-50 dark:from-violet-900/30 dark:to-purple-900/30 border-violet-300 dark:border-violet-500 shadow-md ring-1 ring-violet-200 dark:ring-violet-500' :
           'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:shadow-md'
         }`}
@@ -731,30 +716,14 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                 {error}
               </p>
             )}
-            {pendingInputRequest ? (
-              <p className="text-xs text-amber-700 dark:text-amber-400 mt-1 truncate" title={pendingInputRequest.reason}>
-                {pendingInputRequest.decision_context
-                  ? `Decision needed: ${pendingInputRequest.decision_context.phase_name}`
-                  : pendingInputRequest.reason}
+            {status === 'failed' && statusReason && (
+              <p className="text-xs text-red-600 dark:text-red-400 mt-1 truncate" title={statusReason}>
+                {statusReason}
               </p>
-            ) : (
-              status === 'failed' && statusReason && (
-                <p className="text-xs text-red-600 dark:text-red-400 mt-1 truncate" title={statusReason}>
-                  {statusReason}
-                </p>
-              )
             )}
           </div>
 
           <div className="flex items-center gap-2">
-            {pendingInputRequest && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setShowDecisionModal(true); }}
-                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg transition-colors flex-shrink-0"
-              >
-                Decide
-              </button>
-            )}
             {costUnavailable ? (
               <span className="text-xs text-gray-400 dark:text-gray-500" title="Cost unavailable — status fetch failed">—</span>
             ) : (
@@ -837,6 +806,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                       projectId={projectId ?? undefined}
                       onFeatureUpdate={() => onRefetchFeatures?.()}
                       reviewMode={reviewMode}
+                      pendingInputRequest={pendingInputRequest}
                     />
                   ))}
                 </div>
@@ -848,13 +818,6 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
             </div>
           </motion.div>
         )}
-
-      {showDecisionModal && (
-        <ArbitrationDecisionModal
-          inputRequest={pendingInputRequest}
-          onClose={() => setShowDecisionModal(false)}
-        />
-      )}
     </div>
   );
 };
@@ -891,7 +854,13 @@ const FeatureRow: React.FC<{
   projectId?: string;
   onFeatureUpdate?: () => void;
   reviewMode?: boolean;
-}> = ({ feature, onTaskClick, onSelectFeature, onReviewFeature, onFeatureUpdate, reviewMode }) => {
+  // The pipeline's one global pending human-input request (if any) --
+  // this row only surfaces it (highlight + Decision button) when it's
+  // actually for THIS feature's own workflow.
+  pendingInputRequest?: any;
+}> = ({ feature, onTaskClick, onSelectFeature, onReviewFeature, onFeatureUpdate, reviewMode, pendingInputRequest }) => {
+  const [showDecisionModal, setShowDecisionModal] = useState(false);
+  const hasPendingDecision = !!pendingInputRequest && pendingInputRequest.workflow_id === feature.workflow_id;
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-features');
@@ -993,7 +962,9 @@ const FeatureRow: React.FC<{
 
   return (
     <div className={`rounded-lg border overflow-hidden transition-colors ${
-      highlightForReview
+      hasPendingDecision
+        ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-700 ring-1 ring-amber-200 dark:ring-amber-800'
+        : highlightForReview
         ? 'bg-amber-50 dark:bg-amber-900/20 border-l-4 border-amber-400 border-t-amber-200 dark:border-t-amber-800 border-b-amber-200 dark:border-b-amber-800 border-r-amber-200 dark:border-r-amber-800'
         : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700'
     }`}>
@@ -1064,6 +1035,14 @@ const FeatureRow: React.FC<{
               Review
             </span>
           )}
+          {hasPendingDecision && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowDecisionModal(true); }}
+              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg transition-colors flex-shrink-0"
+            >
+              Decision
+            </button>
+          )}
           <RowActionIcons
             size="sm"
             canPause={hasWorkflow && feature.status === 'active'}
@@ -1122,6 +1101,13 @@ const FeatureRow: React.FC<{
             ))}
           </div>
         </div>
+      )}
+
+      {showDecisionModal && (
+        <ArbitrationDecisionModal
+          inputRequest={pendingInputRequest}
+          onClose={() => setShowDecisionModal(false)}
+        />
       )}
     </div>
   );
