@@ -106,7 +106,7 @@ class GuardianDispatcher:
                 # silently hanging forever.
                 if not has_missing_session:
                     has_missing_session = await loop.run_in_executor(
-                        None, self._is_pane_dead, agent.tmux_session_name
+                        None, self.agent_manager.is_pane_dead, agent.tmux_session_name
                     )
             if has_missing_session:
                 # Check if task is already done before restarting
@@ -452,24 +452,6 @@ class GuardianDispatcher:
                 },  # Reference to the full analysis
             )
             session.add(summary_log)
-
-
-    def _is_pane_dead(self, session_name: str) -> bool:
-        """True if session_name's pane has a dead process in it (tmux's
-        own #{pane_dead} format variable). remain-on-exit keeps a crashed
-        pane's session alive for evidence -- see handle_missing_tmux_session
-        and the analyze() call site -- so this is what actually detects
-        "agent needs restarting" now that has_session can't. Treats any
-        lookup failure as "not dead" (don't restart on a transient error)."""
-        tmux_session = self.agent_manager._find_tmux_session(session_name)
-        if not tmux_session:
-            return False
-        try:
-            pane = tmux_session.attached_window.attached_pane
-            result = pane.cmd("display-message", "-p", "#{pane_dead}").stdout
-            return bool(result) and result[0].strip() == "1"
-        except Exception:
-            return False
 
     async def handle_missing_tmux_session(self, agent: Agent):
         """Handle an agent with a missing tmux session by restarting it.

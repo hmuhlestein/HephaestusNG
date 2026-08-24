@@ -562,6 +562,24 @@ class AgentOutputCapture:
                 return tmux_sess
         return None
 
+    def is_pane_dead(self, session_name: str) -> bool:
+        """True if session_name's pane has a dead process in it (tmux's
+        own #{pane_dead} format variable). remain-on-exit keeps a crashed
+        pane's session alive for evidence, so has_session alone no longer
+        implies "agent alive" -- callers that used to treat has_session as
+        sufficient (send a message, send recovery keystrokes) must also
+        check this or they'll silently act on a dead pane. Treats any
+        lookup failure as "not dead" (don't act on a transient error)."""
+        tmux_session = self._find_tmux_session(session_name)
+        if not tmux_session:
+            return False
+        try:
+            pane = tmux_session.attached_window.attached_pane
+            result = pane.cmd("display-message", "-p", "#{pane_dead}").stdout
+            return bool(result) and result[0].strip() == "1"
+        except Exception:
+            return False
+
     def _capture_pane_lines(self, session_name: str) -> Optional[List[str]]:
         """capture-pane the full available scrollback (bounded by the
         session's own history-limit -- see launch_pipeline.py's

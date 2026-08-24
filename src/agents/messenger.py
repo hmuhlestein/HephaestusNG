@@ -117,6 +117,17 @@ class AgentMessenger:
                 logger.warning(f"Tmux session {agent.tmux_session_name} not found")
                 return
 
+            # remain-on-exit keeps a crashed pane's session alive for
+            # evidence, so has_session alone no longer implies "agent
+            # alive" -- without this, a message gets silently sent into a
+            # dead pane instead of surfacing that the agent is gone.
+            pane_dead = await loop.run_in_executor(
+                None, self.agent_manager.is_pane_dead, agent.tmux_session_name
+            )
+            if pane_dead:
+                logger.warning(f"Tmux session {agent.tmux_session_name}'s pane is dead -- agent process has exited")
+                return
+
             logger.debug(
                 f"Finding session by iteration for message: {agent.tmux_session_name}"
             )
