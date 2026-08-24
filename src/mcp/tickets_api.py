@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
 
+async def _verify_agent_auth(agent_id: str) -> bool:
+    """Lazy-import wrapper to break circular import with _shared.py.
+
+    _shared.py imports tickets_api.router at module scope, so tickets_api
+    cannot import from _shared at module scope. Instead, import on first
+    call (module already loaded by then) and cache.
+    """
+    from src.mcp.server._shared import verify_agent_authentication
+
+    return await verify_agent_authentication(agent_id)
+
+
 def _get_workflow_id_for_ticket(ticket_id: str) -> Optional[str]:
     """Resolve a ticket's workflow_id for broadcast project-tagging.
     Never raises -- a lookup failure just means the broadcast goes out
@@ -394,6 +406,13 @@ async def create_ticket_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Create a new ticket in the workflow tracking system."""
+    # SECURITY: verify agent is authenticated before allowing ticket mutation
+    if not await _verify_agent_auth(agent_id):
+        logger.warning(f"Unauthenticated ticket create attempt from agent {agent_id[:8]}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     # Use agent_id from request if provided, otherwise use header
     # Note: request.agent_id is the agent_id from the payload, agent_id is from X-Agent-ID header
     created_by_agent_id = request.agent_id or agent_id
@@ -489,6 +508,13 @@ async def update_ticket_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Update ticket fields (excluding status changes)."""
+    # SECURITY: verify agent is authenticated before allowing ticket mutation
+    if not await _verify_agent_auth(agent_id):
+        logger.warning(f"Unauthenticated ticket update attempt from agent {agent_id[:8]}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     logger.info(f"Agent {agent_id} updating ticket {request.ticket_id}")
 
     try:
@@ -526,6 +552,13 @@ async def change_ticket_status_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Move ticket to a different status column."""
+    # SECURITY: verify agent is authenticated before allowing ticket mutation
+    if not await _verify_agent_auth(agent_id):
+        logger.warning(f"Unauthenticated ticket status change attempt from agent {agent_id[:8]}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     logger.info(f"Agent {agent_id} changing status of ticket {request.ticket_id} to {request.new_status}")
 
     try:
@@ -566,6 +599,13 @@ async def add_comment_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Add a comment to a ticket."""
+    # SECURITY: verify agent is authenticated before allowing mutation
+    if not await _verify_agent_auth(agent_id):
+        logger.warning(f"Unauthenticated ticket comment attempt from agent {agent_id[:8]}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     logger.info(f"Agent {agent_id} adding comment to ticket {request.ticket_id}")
 
     try:
@@ -954,6 +994,13 @@ async def resolve_ticket_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Mark ticket as resolved and automatically unblock dependent tickets."""
+    # SECURITY: verify agent is authenticated before allowing mutation
+    if not await _verify_agent_auth(agent_id):
+        logger.warning(f"Unauthenticated ticket resolve attempt from agent {agent_id[:8]}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     logger.info(f"Agent {agent_id} resolving ticket {request.ticket_id}")
 
     try:
@@ -991,6 +1038,13 @@ async def link_commit_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Manually link a git commit to a ticket."""
+    # SECURITY: verify agent is authenticated before allowing mutation
+    if not await _verify_agent_auth(agent_id):
+        logger.warning(f"Unauthenticated commit link attempt from agent {agent_id[:8]}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     logger.info(f"Agent {agent_id} linking commit {request.commit_sha} to ticket {request.ticket_id}")
 
     try:
@@ -1072,15 +1126,24 @@ class CommitDiffResponse(BaseModel):
 @router.post("/approve", response_model=ApproveTicketResponse)
 async def approve_ticket_endpoint(
     request: Request,
-    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+    agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """
     Approve a pending ticket.
 
-    Body: {"ticket_id": "ticket-uuid"}
+    SECURITY: Changed default from "ui-user" to required header. The old
+    default meant a missing X-Agent-ID header silently identified as the
+    trusted system user "ui-user", bypassing all auth checks.
     """
     from src.core.app_context import get_app_state
 
+    # SECURITY: verify agent is authenticated before allowing mutation
+    if not await _verify_agent_auth(agent_id):
+        logger.warning(f"Unauthenticated ticket approve attempt from agent {agent_id[:8]}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     logger.info(f"[APPROVE_TICKET] Agent {agent_id} approving ticket")
 
     try:
@@ -1128,15 +1191,23 @@ async def approve_ticket_endpoint(
 @router.post("/reject", response_model=RejectTicketResponse)
 async def reject_ticket_endpoint(
     request: Request,
-    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+    agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """
     Reject a pending ticket.
 
-    Body: {"ticket_id": "ticket-uuid", "rejection_reason": "..."}
+    SECURITY: Changed default from "ui-user" to required header. Same
+    fix as approve_ticket_endpoint.
     """
     from src.core.app_context import get_app_state
 
+    # SECURITY: verify agent is authenticated before allowing mutation
+    if not await _verify_agent_auth(agent_id):
+        logger.warning(f"Unauthenticated ticket reject attempt from agent {agent_id[:8]}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     logger.info(f"[REJECT_TICKET] Agent {agent_id} rejecting ticket")
 
     try:

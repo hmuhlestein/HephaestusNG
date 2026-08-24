@@ -716,23 +716,39 @@ async def add_project_repo(
     req: AddProjectRepoRequest,
     agent_id: str = Header("ui-user", alias="X-Agent-ID"),
 ):
-    """Add a child repo to a project."""
+    """Add a child repo to a project.
+
+    SECURITY: Validates agent identity before allowing repo mutation.
+    Without this check, any HTTP client with X-Agent-ID: ui-user can
+    add repos to any project.
+    """
     from src.core.database import ProjectRepo, get_db
+
+    # SECURITY FIX: verify agent is authenticated before allowing mutation
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated add_project_repo attempt from agent {agent_id}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
 
     # Validate label
     label = req.label.strip()
     if not label:
         raise HTTPException(400, "Label must not be empty")
 
-    # Validate path is absolute
+    # Validate path is absolute and resolve to prevent traversal
     if not os.path.isabs(req.path):
         raise HTTPException(400, "Path must be absolute")
+    resolved_path = os.path.realpath(req.path)
+    if not os.path.isdir(resolved_path):
+        raise HTTPException(400, f"Path does not exist or is not a directory: {req.path}")
 
     # Validate path is a git repo
     try:
         import git as gitpython
 
-        gitpython.Repo(req.path)
+        gitpython.Repo(resolved_path)
     except Exception:
         raise HTTPException(400, f"Path is not a valid git repository: {req.path}")
 
@@ -745,7 +761,7 @@ async def add_project_repo(
             raise HTTPException(404, "Project not found")
 
         # Pre-check uniqueness for specific error messages
-        existing_path = db.query(ProjectRepo).filter_by(project_id=project_id, path=req.path).first()
+        existing_path = db.query(ProjectRepo).filter_by(project_id=project_id, path=resolved_path).first()
         if existing_path:
             raise HTTPException(409, f"Repo already exists for path: {req.path}")
 
@@ -757,7 +773,7 @@ async def add_project_repo(
             id=f"repo-{uuid.uuid4().hex[:12]}",
             project_id=project_id,
             label=label,
-            path=req.path,
+            path=resolved_path,
             is_primary=False,
         )
         db.add(repo)
