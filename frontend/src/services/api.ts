@@ -798,8 +798,13 @@ export const apiService = {
     return data;
   },
 
-  submitAutopilotInput: async (requestId: string, choice: string, message?: string): Promise<void> => {
-    await api.post('/autopilot/input', { request_id: requestId, choice, message });
+  submitAutopilotInput: async (
+    requestId: string,
+    choice: string,
+    message?: string,
+    targetPhase?: string
+  ): Promise<void> => {
+    await api.post('/autopilot/input', { request_id: requestId, choice, message, target_phase: targetPhase });
   },
 
   dismissAutopilotInput: async (requestId: string): Promise<void> => {

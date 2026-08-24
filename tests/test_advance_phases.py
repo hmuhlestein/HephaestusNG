@@ -3870,6 +3870,44 @@ class TestResolveHumanArbitrationChoice:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status != "failed"
 
+    @patch("src.autopilot.orchestrator.engine_client.resume_workflow")
+    @patch("src.autopilot.orchestrator.arbitration._resolve_arbitration_outcome")
+    def test_goto_choice_sends_the_phase_to_the_chosen_target(
+        self, mock_resolve_outcome, mock_resume, db_manager, sample_workflow
+    ):
+        """"g" mirrors the AI arbiter's own "goto" decision -- reuses
+        _resolve_arbitration_outcome directly so a human's choice gets
+        identical phase/task bookkeeping to an AI arbiter's, rather than a
+        second, parallel implementation."""
+        from src.autopilot.orchestrator.arbitration import _resolve_human_arbitration_choice
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.status = "paused"
+            wf.paused_by = "review"
+            wf.paused_at = datetime.utcnow()
+
+        _resolve_human_arbitration_choice(
+            "wf-1", "phase-1", "g", MagicMock(), target_phase="implementation"
+        )
+
+        mock_resume.assert_called_once_with("wf-1", force=True)
+        mock_resolve_outcome.assert_called_once_with(
+            "wf-1", "phase-1", "requirements", "goto", "implementation", ANY, ANY,
+        )
+
+    def test_goto_choice_with_unresolvable_phase_is_a_no_op(self, db_manager, sample_workflow):
+        from src.autopilot.orchestrator.arbitration import _resolve_human_arbitration_choice
+
+        # phase_id "nonexistent" resolves to no Phase row.
+        _resolve_human_arbitration_choice(
+            "wf-1", "nonexistent", "g", MagicMock(), target_phase="implementation"
+        )
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"  # untouched -- nothing to resolve
+
 
 class TestMaybeResolveHumanArbitrationEscalations:
     """Tests for _maybe_resolve_human_arbitration_escalations, the sweep
@@ -4011,6 +4049,48 @@ class TestMaybeResolveHumanArbitrationEscalations:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.status == "completed"
 
+    def test_goto_response_without_target_phase_is_left_for_next_tick(
+        self, db_manager, sample_workflow, tmp_path, monkeypatch
+    ):
+        """A malformed "g" response (no target_phase) must not be silently
+        dropped or misapplied -- leave both files for the next tick rather
+        than guessing."""
+        monkeypatch.setattr("src.core.constants.AUTOPILOT_STATE_DIR", str(tmp_path))
+        from src.autopilot.orchestrator.arbitration import _maybe_resolve_human_arbitration_escalations
+
+        self._paused_workflow(db_manager)
+        self._write_request(tmp_path)
+        self._write_response(tmp_path, "g")  # no target_phase
+
+        _maybe_resolve_human_arbitration_escalations(MagicMock())
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+        assert (tmp_path / "input_request_abc12345.json").exists()
+        assert (tmp_path / "input_response_abc12345.json").exists()
+
+    @patch("src.autopilot.orchestrator.engine_client.resume_workflow")
+    @patch("src.autopilot.orchestrator.arbitration._resolve_arbitration_outcome")
+    def test_goto_response_resolves_with_its_target_phase_and_cleans_up_files(
+        self, mock_resolve_outcome, mock_resume, db_manager, sample_workflow, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("src.core.constants.AUTOPILOT_STATE_DIR", str(tmp_path))
+        from src.autopilot.orchestrator.arbitration import _maybe_resolve_human_arbitration_escalations
+
+        self._paused_workflow(db_manager)
+        self._write_request(tmp_path)
+        payload = {"request_id": "abc12345", "choice": "g", "target_phase": "implementation"}
+        (tmp_path / "input_response_abc12345.json").write_text(json.dumps(payload))
+
+        _maybe_resolve_human_arbitration_escalations(MagicMock())
+
+        mock_resolve_outcome.assert_called_once_with(
+            "wf-1", "phase-1", "requirements", "goto", "implementation", ANY, ANY,
+        )
+        assert not (tmp_path / "input_request_abc12345.json").exists()
+        assert not (tmp_path / "input_response_abc12345.json").exists()
+
     def test_message_only_response_keeps_waiting(self, db_manager, sample_workflow, tmp_path, monkeypatch):
         monkeypatch.setattr("src.core.constants.AUTOPILOT_STATE_DIR", str(tmp_path))
         from src.autopilot.orchestrator.arbitration import _maybe_resolve_human_arbitration_escalations
@@ -4026,6 +4106,106 @@ class TestMaybeResolveHumanArbitrationEscalations:
             assert wf.status == "paused"
         assert (tmp_path / "input_request_abc12345.json").exists()
         assert not (tmp_path / "input_response_abc12345.json").exists()
+
+
+class TestBuildArbitrationDecisionContext:
+    """Unit tests for _build_arbitration_decision_context, which
+    reconstructs an arbitration deadlock's actual disagreement from the
+    phase's own "Arbitrate stuck phase: X" task history -- the data source
+    behind the Decide UI's richer breakdown of what each attempt actually
+    concluded."""
+
+    def _seed_arbitration_task(self, db_manager, completion_notes, created_at, task_id):
+        with db_manager.session_scope() as session:
+            session.add(Task(
+                id=task_id,
+                raw_description="Arbitrate stuck phase: requirements",
+                done_definition="decide",
+                status="done",
+                workflow_id="wf-1",
+                created_by_agent_id="arbitration",
+                completion_notes=completion_notes,
+                created_at=created_at,
+            ))
+
+    def test_parses_decision_target_phase_and_reason(self, db_manager, sample_workflow):
+        from src.autopilot.orchestrator.arbitration import _build_arbitration_decision_context
+
+        self._seed_arbitration_task(
+            db_manager,
+            "Arbitration complete. Decision: goto architecture_design. The same 2 "
+            "BLOCKERs were never fixed in architecture.md.",
+            datetime(2026, 1, 1, 10, 0, 0),
+            "arb-1",
+        )
+        self._seed_arbitration_task(
+            db_manager,
+            "Arbitration complete. Decision: continue. The BLOCKERs are trivial doc bugs.",
+            datetime(2026, 1, 1, 11, 0, 0),
+            "arb-2",
+        )
+
+        with db_manager.session_scope() as session:
+            ctx = _build_arbitration_decision_context(session, "wf-1", "requirements")
+
+        assert ctx["phase_name"] == "requirements"
+        assert len(ctx["attempts"]) == 2
+        assert ctx["attempts"][0]["decision"] == "goto"
+        assert ctx["attempts"][0]["target_phase"] == "architecture_design"
+        assert "BLOCKERs were never fixed" in ctx["attempts"][0]["reason"]
+        assert ctx["attempts"][1]["decision"] == "continue"
+        assert ctx["attempts"][1]["target_phase"] is None
+
+    def test_deduplicates_repeated_identical_decisions(self, db_manager, sample_workflow):
+        """The same "goto architecture_design" decided 3 times in a row
+        must offer ONE button, not three identical ones."""
+        from src.autopilot.orchestrator.arbitration import _build_arbitration_decision_context
+
+        for i, at in enumerate([
+            datetime(2026, 1, 1, 10, 0, 0),
+            datetime(2026, 1, 1, 11, 0, 0),
+            datetime(2026, 1, 1, 12, 0, 0),
+        ]):
+            self._seed_arbitration_task(
+                db_manager,
+                "Arbitration complete. Decision: goto architecture_design. Same blocker again.",
+                at, f"arb-{i}",
+            )
+
+        with db_manager.session_scope() as session:
+            ctx = _build_arbitration_decision_context(session, "wf-1", "requirements")
+
+        assert len(ctx["attempts"]) == 3
+        assert len(ctx["distinct_options"]) == 1
+        assert ctx["distinct_options"][0]["target_phase"] == "architecture_design"
+
+    def test_unparseable_completion_notes_falls_back_to_raw_text(self, db_manager, sample_workflow):
+        """An arbiter that doesn't follow the exact "Decision: X." shape
+        must not crash or silently disappear -- the raw text is still
+        surfaced as this attempt's reason, just without a
+        decision/target_phase (so it's excluded from distinct_options,
+        which requires a parsed decision)."""
+        from src.autopilot.orchestrator.arbitration import _build_arbitration_decision_context
+
+        self._seed_arbitration_task(
+            db_manager, "I looked into it and things seem fine I guess.",
+            datetime(2026, 1, 1, 10, 0, 0), "arb-1",
+        )
+
+        with db_manager.session_scope() as session:
+            ctx = _build_arbitration_decision_context(session, "wf-1", "requirements")
+
+        assert ctx["attempts"][0]["decision"] is None
+        assert ctx["attempts"][0]["reason"] == "I looked into it and things seem fine I guess."
+        assert ctx["distinct_options"] == []
+
+    def test_no_arbitration_tasks_returns_empty_attempts(self, db_manager, sample_workflow):
+        from src.autopilot.orchestrator.arbitration import _build_arbitration_decision_context
+
+        with db_manager.session_scope() as session:
+            ctx = _build_arbitration_decision_context(session, "wf-1", "requirements")
+
+        assert ctx == {"phase_name": "requirements", "attempts": [], "distinct_options": []}
 
 
 class TestReadArbitrationResult:
