@@ -147,7 +147,7 @@ class TestFeatureStatusDerivation:
             session.close()
 
         result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"])
+            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
         )
         feature = next(f for f in result["features"] if f["id"] == feat_id)
         assert feature["status"] == "completed"
@@ -166,7 +166,7 @@ class TestFeatureStatusDerivation:
         finally:
             session.close()
 
-        _run(get_project_design_status(status_env["project_id"], status_env["filename"]))
+        _run(get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test"))
 
         session = manager.get_session()
         try:
@@ -192,7 +192,7 @@ class TestFeatureStatusDerivation:
             session.close()
 
         result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"])
+            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
         )
         feature = next(f for f in result["features"] if f["id"] == feat_id)
         assert feature["status"] == "paused"
@@ -217,7 +217,7 @@ class TestFeatureStatusDerivation:
             session.close()
 
         result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"])
+            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
         )
         feature = next(f for f in result["features"] if f["id"] == feat_id)
         assert feature["status"] == "active"
@@ -247,7 +247,7 @@ class TestDesignOverallStatusDerivation:
             session.close()
 
         result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"])
+            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
         )
         assert result["status"] == "paused"
 
@@ -271,7 +271,7 @@ class TestDesignOverallStatusDerivation:
         from src.mcp.autopilot.design_file_routes import get_project_design_status
 
         result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"])
+            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
         )
         assert result["status"] == "active"
 
@@ -302,7 +302,7 @@ class TestPhase0FeatureArchitectVisibility:
             session.close()
 
         result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"])
+            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
         )
 
         phase0_entries = [f for f in result["features"] if f["name"] == "Feature Architect"]
@@ -336,7 +336,7 @@ class TestPhase0FeatureArchitectVisibility:
             session.close()
 
         result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"])
+            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
         )
 
         assert result["features"][0]["name"] == "Feature Architect"
@@ -359,7 +359,7 @@ class TestPhase0FeatureArchitectVisibility:
             session.close()
 
         result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"])
+            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
         )
 
         phase0_entry = next(f for f in result["features"] if f["name"] == "Feature Architect")
@@ -379,7 +379,7 @@ class TestPhase0FeatureArchitectVisibility:
             session.close()
 
         result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"])
+            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
         )
 
         assert not any(f["name"] == "Feature Architect" for f in result["features"])
@@ -403,7 +403,7 @@ class TestPhase0FeatureArchitectVisibility:
             session.close()
 
         result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"])
+            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
         )
 
         assert not any(f["name"] == "Feature Architect" for f in result["features"])
