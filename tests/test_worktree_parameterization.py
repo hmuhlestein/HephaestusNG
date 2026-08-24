@@ -308,3 +308,119 @@ class TestWorktreeManagerParameterization:
 
         with pytest.raises(ValueError, match="Not a valid git repository"):
             WorktreeManager(db, repo_path=Path("/nonexistent/path"))
+
+    def test_reload_resets_worktree_base_cache(self, temp_repo, monkeypatch):
+        """BLOCKER-1: Verify worktree_base recomputes after reload().
+
+        Without the cache reset, a global worktree_base_path config override
+        would silently redirect worktrees to the wrong project after reload().
+        """
+        import src.core.simple_config
+
+        config = src.core.simple_config.Config()
+        config.git.main_repo_path = Path(temp_repo.working_dir)
+
+        monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
+        monkeypatch.setattr("src.core.worktree_manager.get_config", lambda: config)
+
+        from src.core.database import DatabaseManager
+
+        db = DatabaseManager(":memory:")
+        db.create_tables()
+
+        manager = WorktreeManager(db)
+        # Initially, worktree_base should be under temp_repo
+        initial_base = manager.worktree_base
+        assert str(temp_repo.working_dir) in str(initial_base)
+
+        # Create a second repo
+        new_path = Path(tempfile.mkdtemp())
+        Repo.init(new_path)
+        test_file = new_path / "test.txt"
+        test_file.write_text("test")
+        Repo(new_path).index.add([str(test_file)])
+        Repo(new_path).index.commit("init")
+
+        # Reload to new repo
+        manager.reload(new_path)
+
+        # After reload, worktree_base should be under new_path, NOT temp_repo
+        new_base = manager.worktree_base
+        assert str(new_path) in str(new_base)
+        assert str(temp_repo.working_dir) not in str(new_base)
+
+        shutil.rmtree(new_path, ignore_errors=True)
+
+    def test_reload_with_config_override_resets_correctly(self, temp_repo, monkeypatch):
+        """BLOCKER-1: Verify worktree_base resets even with config override.
+
+        When config.paths.worktree_base_path is set, reload() must still
+        invalidate the cache so the override is re-evaluated.
+        """
+        import src.core.simple_config
+
+        config = src.core.simple_config.Config()
+        config.git.main_repo_path = Path(temp_repo.working_dir)
+        # Set a global override
+        override_path = Path(tempfile.mkdtemp())
+        config.paths.worktree_base_path = override_path
+
+        monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
+        monkeypatch.setattr("src.core.worktree_manager.get_config", lambda: config)
+
+        from src.core.database import DatabaseManager
+
+        db = DatabaseManager(":memory:")
+        db.create_tables()
+
+        manager = WorktreeManager(db)
+        # With override set, worktree_base should use the override
+        assert manager.worktree_base == override_path
+
+        # Create a second repo
+        new_path = Path(tempfile.mkdtemp())
+        Repo.init(new_path)
+        test_file = new_path / "test.txt"
+        test_file.write_text("test")
+        Repo(new_path).index.add([str(test_file)])
+        Repo(new_path).index.commit("init")
+
+        # Reload to new repo — cache should be invalidated
+        manager.reload(new_path)
+        # After reload, worktree_base should still be the override (since config didn't change)
+        # but the cache was reset and recomputed
+        assert manager.worktree_base == override_path
+        # Verify _project_root changed
+        assert manager._project_root == new_path
+
+        shutil.rmtree(new_path, ignore_errors=True)
+        shutil.rmtree(override_path, ignore_errors=True)
+
+    def test_resolve_repo_path_with_project_repo(self, db_session):
+        """WARNING-2: Verify resolve_repo_path uses ProjectRepo table."""
+        from src.core.database import resolve_repo_path
+
+        project = AutopilotProject(
+            id="proj-multi",
+            name="Multi Repo",
+            base_dir="/tmp/base",
+        )
+        db_session.add(project)
+
+        frontend_repo = ProjectRepo(
+            id="repo-frontend",
+            project_id="proj-multi",
+            label="frontend",
+            path="/tmp/frontend",
+            is_primary=False,
+        )
+        db_session.add(frontend_repo)
+        db_session.commit()
+
+        # Should resolve to frontend repo, not base_dir
+        result = resolve_repo_path(db_session, "proj-multi", "repo-frontend")
+        assert result == Path("/tmp/frontend")
+
+        # Should fall back to primary (none set, so any repo)
+        result = resolve_repo_path(db_session, "proj-multi", None)
+        assert result == Path("/tmp/frontend")

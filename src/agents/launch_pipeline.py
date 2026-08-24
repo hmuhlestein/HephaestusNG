@@ -12,6 +12,14 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 import libtmux
 
+from src.agents._create_agent_for_task_steps import (
+    _deliver_initial_prompt_flow,
+    _insert_stub_agent_row,
+    _phase_sibling_guard,
+    _prepare_tmux_and_prompt,
+    _run_launch_preparations,
+    _send_launch_command_and_record_agent,
+)
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME
 from src.core.database import (
     Agent,
@@ -24,14 +32,6 @@ from src.core.database import (
 from src.core.phase_lookup import resolve_task_phase
 from src.core.worktree_manager import WorktreeManager
 from src.interfaces import LaunchResult, get_cli_agent
-from src.agents._create_agent_for_task_steps import (
-    _deliver_initial_prompt_flow,
-    _insert_stub_agent_row,
-    _phase_sibling_guard,
-    _prepare_tmux_and_prompt,
-    _run_launch_preparations,
-    _send_launch_command_and_record_agent,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -199,29 +199,25 @@ class LaunchPipeline:
 
     def _resolve_project_base_dir(self, workflow_id: Optional[str]) -> Optional[Path]:
         """Resolve workflow_id's project base_dir via Workflow.project_id ->
-        AutopilotProject.base_dir. Never raises -- returns None on any
-        lookup failure (no workflow_id, workflow/project row missing, or no
-        project_id) so callers can fall back to today's default-instance
-        behavior instead of erroring.
+        resolve_repo_path(). Falls back to AutopilotProject.base_dir when
+        no ProjectRepo rows exist (single-repo projects).
+
+        Never raises -- returns None on any lookup failure so callers can
+        fall back to today's default-instance behavior.
         """
         if not workflow_id:
             return None
         try:
-            from src.core.database import AutopilotProject, Workflow
+            from src.core.database import Workflow, resolve_repo_path
 
             session = self.db_manager.get_session()
             try:
                 wf = session.query(Workflow).filter_by(id=workflow_id).first()
                 if not wf or not wf.project_id:
                     return None
-                proj = (
-                    session.query(AutopilotProject)
-                    .filter_by(id=wf.project_id)
-                    .first()
-                )
-                if not proj or not proj.base_dir:
-                    return None
-                return Path(proj.base_dir)
+                # WARNING-2: Use resolve_repo_path() which handles ProjectRepo
+                # table and falls back to AutopilotProject.base_dir
+                return resolve_repo_path(session, wf.project_id)
             finally:
                 session.close()
         except Exception as e:
