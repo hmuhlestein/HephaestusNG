@@ -417,6 +417,8 @@ export interface CommitDiff {
   commit_message: string;
   commit_timestamp: string;
   author: string;
+  repo_id?: string;  // REQ-23: which repo this commit belongs to
+  repo_label?: string;  // REQ-23: human-readable repo label
   files: Array<{
     path: string;
     status: 'added' | 'modified' | 'deleted' | 'renamed';
@@ -428,6 +430,15 @@ export interface CommitDiff {
   total_insertions: number;
   total_deletions: number;
   total_files: number;
+}
+
+export interface ProjectRepoItem {
+  id: string;
+  project_id: string;
+  label: string;
+  path: string;
+  is_primary: boolean;
+  created_at: string;
 }
 
 export interface TicketSearchResult {

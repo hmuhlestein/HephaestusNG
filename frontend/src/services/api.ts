@@ -1137,4 +1137,32 @@ export const apiService = {
     const { data } = await api.delete(`/tasks/${taskId}/prompt/overrides`);
     return data;
   },
+
+  // ProjectRepo CRUD (REQ-24)
+  listProjectRepos: async (projectId: string): Promise<import('@/types').ProjectRepoItem[]> => {
+    const { data } = await api.get(`/projects/${projectId}/repos`);
+    return data;
+  },
+
+  createProjectRepo: async (
+    projectId: string,
+    req: { label: string; path: string; is_primary?: boolean }
+  ): Promise<import('@/types').ProjectRepoItem> => {
+    const { data } = await api.post(`/projects/${projectId}/repos`, req);
+    return data;
+  },
+
+  updateProjectRepo: async (
+    projectId: string,
+    repoId: string,
+    req: { label: string; path: string; is_primary?: boolean }
+  ): Promise<import('@/types').ProjectRepoItem> => {
+    const { data } = await api.put(`/projects/${projectId}/repos/${repoId}`, req);
+    return data;
+  },
+
+  deleteProjectRepo: async (projectId: string, repoId: string): Promise<{ deleted: string }> => {
+    const { data } = await api.delete(`/projects/${projectId}/repos/${repoId}`);
+    return data;
+  },
 };
