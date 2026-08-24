@@ -830,6 +830,30 @@ class TestHumanInput:
         assert data["id"] == "abc123"
         assert data["reason"] == "Test impasse"
 
+    def test_read_surfaces_workflow_id_and_decision_context(self, client, autopilot_dirs):
+        """Regression: HumanInputRequest didn't declare workflow_id/phase_id,
+        so BaseModel silently dropped them from the response even though
+        arbitration.py's escalation request file always writes them --
+        the frontend's row-correlation (which design/workflow is this
+        request for?) never received them."""
+        state_dir = autopilot_dirs["state"]
+        (state_dir / "input_request_wf1.json").write_text(
+            json.dumps({
+                "id": "wf1", "reason": "r",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "options": ["c", "s"], "labels": {},
+                "workflow_id": "wf-abc", "phase_id": "phase-xyz",
+                "decision_context": {"phase_name": "design_review", "attempts": [], "distinct_options": []},
+            })
+        )
+
+        resp = client.get("/api/autopilot/input")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["workflow_id"] == "wf-abc"
+        assert data["phase_id"] == "phase-xyz"
+        assert data["decision_context"]["phase_name"] == "design_review"
+
     def test_submit_response(self, client, autopilot_dirs):
         state_dir = autopilot_dirs["state"]
         request_file = state_dir / "input_request_def456.json"
