@@ -46,7 +46,7 @@ async def get_messages(limit: int = Query(50, ge=1, le=500), project_id: Optiona
             type=row.event_type,
             data=row.data or {},
         )
-        for row in reversed(rows)
+        for row in rows
     ]
     return _store(cache_key, result)
 

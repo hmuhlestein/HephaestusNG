@@ -1252,7 +1252,10 @@ class TestMessages:
     def test_messages_with_events(self, client, autopilot_dirs):
         """Events are DB-backed (AutopilotPipelineEvent rows), not an
         events.jsonl file -- message_routes.py's /messages reads them
-        directly, oldest first (matching the old file-tail's order)."""
+        directly, most recent first, so the message list (and the pulsing
+        "Waiting on you" badge for a fresh human_input_required row) shows
+        newest activity at the top without the frontend needing its own
+        sort."""
         from datetime import datetime
 
         from src.core.database import AutopilotPipelineEvent, get_db
@@ -1278,7 +1281,8 @@ class TestMessages:
 
         resp = client.get("/api/autopilot/messages?limit=10")
         assert len(resp.json()) == 2
-        assert resp.json()[0]["type"] == "design_started"
+        assert resp.json()[0]["type"] == "design_completed"
+        assert resp.json()[1]["type"] == "design_started"
 
 
 # ── Logs ─────────────────────────────────────────────────────────
