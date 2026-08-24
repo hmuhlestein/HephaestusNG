@@ -1486,7 +1486,20 @@ class LaunchPipeline:
             await asyncio.sleep(3)  # let the CLI print any rejection message
             try:
                 output = "\n".join(pane.cmd("capture-pane", "-p", "-S", "-50").stdout)
-                output_lower = output.lower()
+                # Scope the check to content AFTER this delivery's own
+                # verification_string (the freshly-echoed "Task ID: ..."
+                # line every prompt starts with) -- not the whole last-50-
+                # line block. A CLI session reused across dispatches (e.g.
+                # qa_validation's persistent session ID) can still have an
+                # OLD, already-resolved rejection banner sitting in
+                # scrollback from a PRIOR task's attempt; checking the
+                # whole block wrongly treats that stale text as evidence
+                # THIS delivery was rejected. Falls back to the whole
+                # block if the marker isn't found (capture raced the
+                # send) rather than silently skipping the check.
+                marker_pos = output.rfind(verification_string)
+                scoped_output = output[marker_pos:] if marker_pos != -1 else output
+                output_lower = scoped_output.lower()
                 # Match Claude session/rate/limit messages — weekly and monthly
                 # spend limits are distinct from "session limit" and must be
                 # caught here too, otherwise the agent starts "successfully"
