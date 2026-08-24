@@ -74,6 +74,7 @@ from src.core.constants import (
 from src.core.database import (
     Agent,
     DatabaseManager,
+    Feature,
     Phase,
     PhaseExecution,
     Task,
@@ -691,6 +692,13 @@ def _retry_exhausted_paused_workflows(logger: "OrchestratorLogger") -> int:
                 wf.status_reason = None
                 wf.paused_at = None
                 wf.paused_retry_count = 0
+                # Sync feature status -- this function bypasses
+                # resume_workflow() (which has its own cascade), so the
+                # feature row stays "paused" in the DB and the UI's
+                # review-mode highlight misses it. Observed live:
+                # worktree-manager-parameterization on proj-540541ed.
+                for feat in db.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
+                    feat.status = "active"
                 logger.warning(
                     f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} was system-exhausted but has "
                     f"{len(stuck_tasks)} stuck task(s) in in_progress phase -- retrying"
@@ -714,6 +722,10 @@ def _retry_exhausted_paused_workflows(logger: "OrchestratorLogger") -> int:
             wf.status_reason = None
             wf.paused_at = None
             wf.paused_retry_count = (wf.paused_retry_count or 0) + 1
+            # Sync feature status -- same reasoning as the system-exhausted
+            # branch above.
+            for feat in db.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
+                feat.status = "active"
             logger.warning(
                 f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} past its exhausted-"
                 f"retry cooldown -- reset retry_count on {len(failed_tasks)} "
@@ -2714,6 +2726,10 @@ def _create_corrective_task_body(
             return None
         if wf.status != "active":
             wf.status = "active"
+            # Sync feature status -- same class of bug as the sweep gaps.
+            from src.core.database import Feature
+            for feat in db.query(Feature).filter_by(workflow_id=wf.id, status="paused").all():
+                feat.status = "active"
 
         execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
         if execution and execution.status != "in_progress":
@@ -2910,6 +2926,13 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: "OrchestratorLogger")
             resume_workflow(workflow_id, force=True, session=db)
         elif wf.status == "failed":
             wf.status = "active"
+            # Sync feature status -- a failed workflow's feature may have
+            # been cascaded to "paused" or left as "failed" by
+            # derive_feature_status; either way, resuming the workflow
+            # should also resume its feature.
+            from src.core.database import Feature
+            for feat in db.query(Feature).filter_by(workflow_id=wf.id).filter(Feature.status != "active").all():
+                feat.status = "active"
 
         candidates = (
             db.query(Task)

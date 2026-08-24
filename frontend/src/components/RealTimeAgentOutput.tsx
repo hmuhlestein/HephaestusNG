@@ -450,6 +450,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   return (
     <AnimatePresence>
       <motion.div
+        key="agent-output-modal"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
