@@ -122,6 +122,12 @@ async def login(
                 user_agent=request.headers.get("user-agent", ""),
             )
     except AuthError as e:
+        # Failure-path log: the LoginAttempt row records this for the audit
+        # DB, but a rejected login (bad password, locked account, inactive
+        # user) previously left nothing in the log stream -- a brute-force
+        # or credential-stuffing attempt was invisible to anyone tailing
+        # logs.
+        logger.warning(f"Login failed for {form_data.username!r} from {client_ip}: {e.detail}")
         raise HTTPException(
             status_code=e.status_code, detail=e.detail, headers=e.headers
         ) from e
@@ -143,6 +149,10 @@ async def refresh_token(request: RefreshTokenRequest):
         with db_manager.session_scope() as db:
             tokens = AuthService.refresh_tokens(db, request.refresh_token)
     except AuthError as e:
+        # Same reasoning as the login path: a rejected refresh (revoked or
+        # expired token) is a possible token-reuse signal and previously
+        # left no log-line trace at all.
+        logger.warning(f"Token refresh rejected: {e.detail}")
         raise HTTPException(
             status_code=e.status_code, detail=e.detail, headers=e.headers
         ) from e
