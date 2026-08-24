@@ -213,7 +213,7 @@ class AgentDispatchService:
                 session.close()
 
     @staticmethod
-    def resolve_task_project_context(task, session=None) -> str:
+    async def resolve_task_project_context(task, session=None) -> str:
         """Resolve project context for a task, including repo awareness.
 
         Consolidates the workflow.project_id + task.repo_id → get_project_context(...)
@@ -230,23 +230,13 @@ class AgentDispatchService:
         repo_id = getattr(task, "repo_id", None)
 
         try:
-            import asyncio
-
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We're in an async context, can't use run_until_complete
-                # Fall back to no-args version
-                return loop.run_until_complete(server_state.agent_manager.get_project_context())
-            else:
-                return loop.run_until_complete(
-                    server_state.agent_manager.get_project_context(
-                        workflow_id=workflow_id,
-                        repo_id=repo_id,
-                    )
-                )
+            return await server_state.agent_manager.get_project_context(
+                workflow_id=workflow_id,
+                repo_id=repo_id,
+            )
         except Exception as e:
-            logger.warning(f"Failed to resolve task project context: {e}")
+            logger.warning(f"Failed to resolve task project context with repo awareness: {e}")
             try:
-                return loop.run_until_complete(server_state.agent_manager.get_project_context())
+                return await server_state.agent_manager.get_project_context()
             except Exception:
                 return "Project context unavailable"
