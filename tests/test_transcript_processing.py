@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 
 
-def _make_agent(tmux_session_name="test_agent", status="working", current_task_id=None):
+def _make_agent(tmux_session_name="test_agent", status="working", current_task_id=None, working_directory=None):
     """Create a mock agent object."""
     agent = MagicMock()
     agent.id = "test-agent-id"
@@ -12,6 +12,7 @@ def _make_agent(tmux_session_name="test_agent", status="working", current_task_i
     agent.status = status
     agent.current_task_id = current_task_id
     agent.cli_type = "pi"
+    agent.working_directory = working_directory
     return agent
 
 
@@ -383,7 +384,7 @@ class TestReadTranscriptLogReal:
         mgr.db_manager.get_session.return_value = session
         mgr._output_capture = AgentOutputCapture(mgr.db_manager, MagicMock())
 
-        agent = _make_agent(current_task_id="t1")
+        agent = _make_agent(current_task_id="t1", working_directory=str(tmp_path))
         return mgr._read_transcript_log(agent, lines)
 
     def test_filters_separator_lines(self, tmp_path):
