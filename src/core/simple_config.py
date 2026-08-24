@@ -504,7 +504,10 @@ class TestingConfig(_ConfigSection):
     Two floors, read from hephaestus_config.yaml's `testing:` section:
 
     - coverage_floor: the minimum overall (existing + new code combined)
-      coverage percentage.  Applied via pytest-cov's --cov-fail-under.
+      coverage percentage.  NOT auto-applied from here -- pytest-cov reads
+      .coveragerc's fail_under directly and builds it before any
+      pytest_configure hook can run, so this value must be kept in sync
+      by hand with .coveragerc's fail_under when raising the floor.
       20 % is a deliberately low starter floor -- the repo has never had
       a coverage gate, so jumping straight to 80 % would fail every CI
       run.  Raise it as coverage improves.

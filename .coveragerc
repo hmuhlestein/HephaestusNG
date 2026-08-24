@@ -11,8 +11,13 @@ omit =
 [report]
 show_missing = true
 precision = 1
-# Default floor -- overridden at runtime by conftest.py's pytest_configure
-# hook which reads testing.coverage_floor from hephaestus_config.yaml.
+# The sole enforcement point -- pytest-cov reads this value directly and
+# builds it before any pytest_configure hook can run (it captures
+# --cov-fail-under during pytest_load_initial_conftests), so nothing in
+# conftest.py can override it at runtime. Keep this in sync by hand with
+# hephaestus_config.yaml's testing.coverage_floor when raising the floor;
+# conftest.py's pytest_configure hook only exposes that YAML value on
+# config for other scripts/plugins to read, it does not enforce it.
 fail_under = 20
 exclude_lines =
     pragma: no cover
