@@ -66,9 +66,11 @@ additional_notes: |
 
   Do NOT edit existing source/production code. If you find bugs in the
   application, file a ticket (STEP 9) — the developer fixes it, not you.
-  You MAY write tests: new test files, smoke tests, or validation for
-  uncovered requirements (STEP 5/STEP 6) — that's expected, not an exception
-  to the rule above.
+  You MAY write AND fix tests: new test files, smoke tests, validation for
+  uncovered requirements (STEP 5/STEP 6), and fixing broken or outdated
+  tests so the suite passes — that's expected, not an exception to the
+  rule above. If a test fails due to a stale assertion, wrong fixture, or
+  outdated mock, fix the test directly rather than filing a ticket.
 
   ## STEP 1: CHECK FOR TESTING.md (PRIMARY INSTRUCTIONS)
   
