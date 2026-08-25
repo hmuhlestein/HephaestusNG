@@ -474,6 +474,92 @@ class TestDeriveWorkflowCost:
         cost = derive_workflow_cost(db_session, sample_workflow.id)
         assert abs(cost - 0.10) < 0.0001
 
+    def test_throttles_the_upward_cascade_on_the_write_back_path(
+        self, db_session, sample_feature, sample_design, sample_project, sample_workflow, sample_task
+    ):
+        """Regression, found live: derive_workflow_cost's cascade to
+        feature/design/project fires on EVERY record_cost() call -- one
+        per LLM call, across every active agent. Each level is its own
+        SUM() query on SQLite's single StaticPool connection; under
+        several concurrent agents this became a per-second cascade
+        hammering that connection badly enough to trip the watchdog's
+        health check. Same-entity cascades within the throttle window
+        must coalesce into one -- not lost, since the next call past the
+        window recomputes the CURRENT total regardless of how many calls
+        happened in between."""
+        import src.core.cost_derivation as cd
+
+        cd._last_cost_cascade_time.clear()
+
+        entry1 = CostEntry(
+            id=f"cost-{uuid.uuid4().hex[:8]}", task_id=sample_task.id,
+            workflow_id=sample_workflow.id, source="pi", cost_usd=0.10,
+        )
+        db_session.add(entry1)
+        db_session.commit()
+        derive_workflow_cost(db_session, sample_workflow.id, write_back=True)
+        db_session.commit()
+        db_session.refresh(sample_feature)
+        assert abs(sample_feature.cost_total_usd - 0.10) < 0.0001
+
+        # A second cost entry lands, and derive_workflow_cost runs again
+        # immediately (as record_cost would trigger) -- within the
+        # throttle window, so the feature/design/project cascade must be
+        # skipped this time, leaving their totals stale at 0.10.
+        entry2 = CostEntry(
+            id=f"cost-{uuid.uuid4().hex[:8]}", task_id=sample_task.id,
+            workflow_id=sample_workflow.id, source="pi", cost_usd=0.20,
+        )
+        db_session.add(entry2)
+        db_session.commit()
+        derive_workflow_cost(db_session, sample_workflow.id, write_back=True)
+        db_session.commit()
+        db_session.refresh(sample_feature)
+        db_session.refresh(sample_design)
+        db_session.refresh(sample_project)
+        assert abs(sample_feature.cost_total_usd - 0.10) < 0.0001, (
+            "cascade should have been throttled, not re-run"
+        )
+
+        # Past the throttle window, the next call catches up to the
+        # CURRENT total (0.30) -- nothing was lost, just coalesced.
+        with patch.object(cd.time, "monotonic", return_value=cd.time.monotonic() + 10):
+            derive_workflow_cost(db_session, sample_workflow.id, write_back=True)
+            db_session.commit()
+        db_session.refresh(sample_feature)
+        db_session.refresh(sample_design)
+        db_session.refresh(sample_project)
+        assert abs(sample_feature.cost_total_usd - 0.30) < 0.0001
+        assert abs(sample_design.cost_total_usd - 0.30) < 0.0001
+        assert abs(sample_project.cost_total_usd - 0.30) < 0.0001
+
+    def test_does_not_throttle_the_on_demand_display_path(
+        self, db_session, sample_feature, sample_workflow, sample_task
+    ):
+        """write_back=False (cost_routes.py's on-demand display reads)
+        must always compute fresh -- throttling that would show a stale
+        number to someone actively asking for a current one."""
+        import src.core.cost_derivation as cd
+
+        cd._last_cost_cascade_time.clear()
+
+        entry1 = CostEntry(
+            id=f"cost-{uuid.uuid4().hex[:8]}", task_id=sample_task.id,
+            workflow_id=sample_workflow.id, source="pi", cost_usd=0.10,
+        )
+        db_session.add(entry1)
+        db_session.commit()
+        derive_workflow_cost(db_session, sample_workflow.id, write_back=False)
+
+        entry2 = CostEntry(
+            id=f"cost-{uuid.uuid4().hex[:8]}", task_id=sample_task.id,
+            workflow_id=sample_workflow.id, source="pi", cost_usd=0.20,
+        )
+        db_session.add(entry2)
+        db_session.commit()
+        cost = derive_feature_cost(db_session, sample_feature.id, write_back=False)
+        assert abs(cost - 0.30) < 0.0001
+
 
 class TestDeriveFeatureCost:
     """Test the derive_feature_cost function."""
