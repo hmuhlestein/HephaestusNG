@@ -66,67 +66,77 @@ class TaskService:
         project_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get all tasks with pagination."""
-        session = self.db_manager.get_session()
-        try:
-            query = session.query(Task)
 
-            if status:
-                query = query.filter(Task.status == status)
-            if workflow_id:
-                query = query.filter(Task.workflow_id == workflow_id)
-            if project_id:
-                # Filter through workflow -> project_id
-                query = query.join(Workflow, Task.workflow_id == Workflow.id).filter(
-                    Workflow.project_id == project_id
+        def _fetch_sync():
+            session = self.db_manager.get_session()
+            try:
+                query = session.query(Task)
+
+                if status:
+                    query = query.filter(Task.status == status)
+                if workflow_id:
+                    query = query.filter(Task.workflow_id == workflow_id)
+                if project_id:
+                    # Filter through workflow -> project_id
+                    query = query.join(
+                        Workflow, Task.workflow_id == Workflow.id
+                    ).filter(Workflow.project_id == project_id)
+
+                tasks = (
+                    query.order_by(desc(Task.created_at))
+                    .offset(skip)
+                    .limit(limit)
+                    .all()
                 )
 
-            tasks = (
-                query.order_by(desc(Task.created_at)).offset(skip).limit(limit).all()
-            )
+                result = []
+                for task in tasks:
+                    task_data = {
+                        "id": task.id,
+                        "description": task.enriched_description or task.raw_description,
+                        "done_definition": task.done_definition,
+                        "status": task.status,
+                        "priority": task.priority,
+                        "assigned_agent_id": task.assigned_agent_id,
+                        "created_by_agent_id": task.created_by_agent_id,
+                        "parent_task_id": task.parent_task_id,
+                        "created_at": task.created_at.isoformat()
+                        + "Z",  # Add UTC timezone indicator
+                        "started_at": task.started_at.isoformat() + "Z"
+                        if task.started_at
+                        else None,
+                        "completed_at": task.completed_at.isoformat() + "Z"
+                        if task.completed_at
+                        else None,
+                        "estimated_complexity": task.estimated_complexity,
+                        "phase_id": task.phase_id,
+                        "workflow_id": task.workflow_id,
+                        "action": task.action or "",
+                        "action_target_phase": task.action_target_phase or None,
+                        "depends_on": task.depends_on,
+                        "parallel_group": task.parallel_group,
+                        "max_concurrent": task.max_concurrent,
+                    }
 
-            result = []
-            for task in tasks:
-                task_data = {
-                    "id": task.id,
-                    "description": task.enriched_description or task.raw_description,
-                    "done_definition": task.done_definition,
-                    "status": task.status,
-                    "priority": task.priority,
-                    "assigned_agent_id": task.assigned_agent_id,
-                    "created_by_agent_id": task.created_by_agent_id,
-                    "parent_task_id": task.parent_task_id,
-                    "created_at": task.created_at.isoformat()
-                    + "Z",  # Add UTC timezone indicator
-                    "started_at": task.started_at.isoformat() + "Z"
-                    if task.started_at
-                    else None,
-                    "completed_at": task.completed_at.isoformat() + "Z"
-                    if task.completed_at
-                    else None,
-                    "estimated_complexity": task.estimated_complexity,
-                    "phase_id": task.phase_id,
-                    "workflow_id": task.workflow_id,
-                    "action": task.action or "",
-                    "action_target_phase": task.action_target_phase or None,
-                    "depends_on": task.depends_on,
-                    "parallel_group": task.parallel_group,
-                    "max_concurrent": task.max_concurrent,
-                }
+                    # Add phase information if available
+                    if task.phase_id:
+                        # Handle numeric phase_id (order) vs UUID phase_id
+                        phase = resolve_task_phase(session, task)
 
-                # Add phase information if available
-                if task.phase_id:
-                    # Handle numeric phase_id (order) vs UUID phase_id
-                    phase = resolve_task_phase(session, task)
+                        if phase:
+                            task_data["phase_name"] = phase.name
+                            task_data["phase_order"] = phase.order
 
-                    if phase:
-                        task_data["phase_name"] = phase.name
-                        task_data["phase_order"] = phase.order
+                    result.append(task_data)
 
-                result.append(task_data)
+                return result
+            finally:
+                session.close()
 
-            return result
-        finally:
-            session.close()
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _fetch_sync)
 
     async def get_task(self, task_id: str) -> Dict[str, Any]:
         """Get a single task by ID with basic information."""

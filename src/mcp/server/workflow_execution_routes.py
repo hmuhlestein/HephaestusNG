@@ -203,8 +203,13 @@ async def register_workflow_definition(request: RegisterWorkflowDefinitionReques
 @router.get("/api/workflow-executions")
 async def list_workflow_executions(status: str = "all"):
     """List all workflow executions."""
+    import asyncio
+
     assert server_state.phase_manager is not None
-    executions = server_state.phase_manager.list_active_executions(status)
+    loop = asyncio.get_event_loop()
+    executions = await loop.run_in_executor(
+        None, server_state.phase_manager.list_active_executions, status
+    )
     return {
         "executions": [
             {
@@ -318,63 +323,74 @@ async def start_workflow_execution(request: StartWorkflowRequest):
 @router.get("/api/workflow-executions/{workflow_id}")
 async def get_workflow_execution(workflow_id: str):
     """Get details of a specific workflow execution."""
+    import asyncio
+
     assert server_state.phase_manager is not None
-    workflow = server_state.phase_manager.get_workflow(workflow_id)
-    if not workflow:
+    phase_manager = server_state.phase_manager
+
+    def _fetch_sync():
+        workflow = phase_manager.get_workflow(workflow_id)
+        if not workflow:
+            return None
+
+        stats = phase_manager.get_execution_stats(workflow_id)
+
+        # Get phases for this workflow execution
+        phases = phase_manager.get_phases_for_workflow(workflow_id)
+
+        # Get phase stats
+        session = phase_manager.db_manager.get_session()
+        try:
+            phases_data = []
+            for phase in phases:
+                # Count tasks in this phase
+                total_tasks = session.query(Task).filter_by(phase_id=phase.id).count()
+                completed_tasks = session.query(Task).filter_by(phase_id=phase.id, status="done").count()
+                active_tasks = session.query(Task).filter_by(phase_id=phase.id, status="in_progress").count()
+                pending_tasks = session.query(Task).filter_by(phase_id=phase.id, status="pending").count()
+
+                # Count active agents working on tasks in this phase
+                active_agents = session.query(Agent).join(Task, Agent.current_task_id == Task.id).filter(Task.phase_id == phase.id, Agent.status == "working").count()
+
+                phases_data.append(
+                    {
+                        "id": phase.id,
+                        "order": phase.order,
+                        "name": phase.name,
+                        "description": phase.description,
+                        "active_agents": active_agents,
+                        "total_tasks": total_tasks,
+                        "completed_tasks": completed_tasks,
+                        "active_tasks": active_tasks,
+                        "pending_tasks": pending_tasks,
+                        "cli_config": {
+                            "cli_tool": phase.cli_tool,
+                            "cli_model": phase.cli_model,
+                            "glm_api_token_env": phase.glm_api_token_env,
+                        },
+                    }
+                )
+        finally:
+            session.close()
+
+        return {
+            "id": workflow.id,
+            "definition_id": workflow.definition_id,
+            "definition_name": workflow.definition.name if workflow.definition else None,
+            "description": workflow.description,
+            "status": workflow.status,
+            "status_reason": workflow.status_reason,
+            "created_at": workflow.created_at.isoformat() if workflow.created_at else None,
+            "working_directory": workflow.working_directory,
+            "stats": stats,
+            "phases": phases_data,
+        }
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _fetch_sync)
+    if result is None:
         raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
-
-    stats = server_state.phase_manager.get_execution_stats(workflow_id)
-
-    # Get phases for this workflow execution
-    phases = server_state.phase_manager.get_phases_for_workflow(workflow_id)
-
-    # Get phase stats
-    session = server_state.phase_manager.db_manager.get_session()
-    try:
-        phases_data = []
-        for phase in phases:
-            # Count tasks in this phase
-            total_tasks = session.query(Task).filter_by(phase_id=phase.id).count()
-            completed_tasks = session.query(Task).filter_by(phase_id=phase.id, status="done").count()
-            active_tasks = session.query(Task).filter_by(phase_id=phase.id, status="in_progress").count()
-            pending_tasks = session.query(Task).filter_by(phase_id=phase.id, status="pending").count()
-
-            # Count active agents working on tasks in this phase
-            active_agents = session.query(Agent).join(Task, Agent.current_task_id == Task.id).filter(Task.phase_id == phase.id, Agent.status == "working").count()
-
-            phases_data.append(
-                {
-                    "id": phase.id,
-                    "order": phase.order,
-                    "name": phase.name,
-                    "description": phase.description,
-                    "active_agents": active_agents,
-                    "total_tasks": total_tasks,
-                    "completed_tasks": completed_tasks,
-                    "active_tasks": active_tasks,
-                    "pending_tasks": pending_tasks,
-                    "cli_config": {
-                        "cli_tool": phase.cli_tool,
-                        "cli_model": phase.cli_model,
-                        "glm_api_token_env": phase.glm_api_token_env,
-                    },
-                }
-            )
-    finally:
-        session.close()
-
-    return {
-        "id": workflow.id,
-        "definition_id": workflow.definition_id,
-        "definition_name": workflow.definition.name if workflow.definition else None,
-        "description": workflow.description,
-        "status": workflow.status,
-        "status_reason": workflow.status_reason,
-        "created_at": workflow.created_at.isoformat() if workflow.created_at else None,
-        "working_directory": workflow.working_directory,
-        "stats": stats,
-        "phases": phases_data,
-    }
+    return result
 
 @router.post("/api/workflow-executions/{workflow_id}/complete")
 async def complete_workflow_execution(workflow_id: str, request: Request):
