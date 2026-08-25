@@ -383,13 +383,7 @@ class RepairService:
             # relying on it pointing at a different project. Only db_manager
             # itself should be the shared instance (see SOLID review 1.12).
             db_manager = get_app_state().db_manager
-            bm = WorktreeManager(db_manager)
-            # Without this, WorktreeManager operates on whatever project happens
-            # to be config.main_repo_path's current global default -- wrong
-            # project entirely once more than one project exists (see the other
-            # WorktreeManager(...).reload(...) call sites in orchestrator.py,
-            # which already do this for the same reason).
-            bm.reload(project)
+            bm = WorktreeManager(db_manager, repo_path=project)
             # Run cleanup in background thread to not block pipeline start
             import threading
 

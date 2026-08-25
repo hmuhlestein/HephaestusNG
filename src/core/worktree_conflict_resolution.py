@@ -36,20 +36,30 @@ class ConflictResolver:
             parent_ts = self._get_file_timestamp(repo, file_path, "HEAD")
             child_ts = self._get_file_timestamp(repo, file_path, "MERGE_HEAD")
 
-            if parent_ts is None:
-                parent_ts = utc_now()
-            if child_ts is None:
-                child_ts = utc_now()
-
-            if child_ts > parent_ts:
-                choice = "child"
-                content = self._get_file_content(repo, file_path, "MERGE_HEAD")
-            elif parent_ts > child_ts:
+            # WARNING-3: When both timestamps are None, log warning and default
+            # to parent (prefer upstream committed code over unverified agent work)
+            if parent_ts is None and child_ts is None:
+                logger.warning(
+                    f"[WORKTREE:{agent_id}] Cannot determine timestamps for "
+                    f"{file_path} — defaulting to parent (upstream)"
+                )
                 choice = "parent"
                 content = self._get_file_content(repo, file_path, "HEAD")
             else:
-                choice = "tie_child"
-                content = self._get_file_content(repo, file_path, "MERGE_HEAD")
+                if parent_ts is None:
+                    parent_ts = utc_now()
+                if child_ts is None:
+                    child_ts = utc_now()
+
+                if child_ts > parent_ts:
+                    choice = "child"
+                    content = self._get_file_content(repo, file_path, "MERGE_HEAD")
+                elif parent_ts > child_ts:
+                    choice = "parent"
+                    content = self._get_file_content(repo, file_path, "HEAD")
+                else:
+                    choice = "tie_child"
+                    content = self._get_file_content(repo, file_path, "MERGE_HEAD")
 
             try:
                 repo.git.rm("--cached", "-f", file_path)

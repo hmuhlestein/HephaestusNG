@@ -610,8 +610,7 @@ async def cleanup_branches(project_path: Optional[str] = None):
         # relying on it pointing at a different project. Only db_manager
         # itself should be the shared instance (see SOLID review 1.12).
         db_manager = get_app_state().db_manager
-        branch_manager = WorktreeManager(db_manager)
-        branch_manager.reload(project_path)
+        branch_manager = WorktreeManager(db_manager, repo_path=project_path)
         # cleanup_all_stale_branches does real git/filesystem work --
         # blocking, same class of issue as the /health endpoint below
         # (its own comment explains the same offload-at-the-caller
