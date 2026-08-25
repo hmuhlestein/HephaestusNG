@@ -1362,7 +1362,15 @@ def _case_start_first_phase(db, workflow_id: str, pending: list, in_progress: li
             # ~15s apart -- only one agent ever got dispatched (a separate,
             # working dedup check in create_agent_for_task_direct caught
             # that), but the extra Task row was pure debris left behind.
-            existing = db.query(Task).filter_by(phase_id=phase_id).count()
+            #
+            # If this re-check finds a task after all, this call is the one
+            # holding the claim (a lost claim already set existing=1 above
+            # and skipped this whole block) -- release it, since
+            # _create_phase_task's own success path (which normally does
+            # so) is never reached below.
+            if db.query(Task).filter_by(phase_id=phase_id).count() > 0:
+                _release_phase_task_creation_claim(db, phase_id)
+                return None
         if existing == 0:
             logger.info(f"[PHASE-ADVANCE] Starting first phase: {first_phase['phase'].name}")
             return _create_phase_task(
@@ -1412,6 +1420,19 @@ def _case_in_progress_no_tasks(db, workflow_id: str, in_progress: list, logger: 
             # actual fix -- it's atomic regardless of how long the other
             # path takes to finish creating its task, unlike a fixed sleep.
             task_count = 1
+        if task_count == 0:
+            # Re-check immediately before creating, on a fresh query --
+            # same TOCTOU gap _case_start_first_phase closed (see its own
+            # comment): the task_count read above happens BEFORE the claim
+            # attempt, so a task committed by another claim-protected path
+            # on a separate DB session in that window would otherwise still
+            # look like zero here.
+            if db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count() > 0:
+                # We won the claim ourselves -- release it, since
+                # _create_phase_task's own success path (which normally
+                # does so) is never reached for this phase.
+                _release_phase_task_creation_claim(db, phase.id)
+                continue
         if task_count == 0:
             logger.info(f"[PHASE-ADVANCE] Phase {phase.name} is in_progress but has no tasks — creating one")
             return _create_phase_task(
@@ -1552,9 +1573,25 @@ def _case_completed_with_successor(db, workflow_id: str, completed: list, pendin
             # completed phase, a pending successor, and zero tasks. The
             # decision to advance to `successor` was already made; call
             # _create_phase_task directly instead of re-deciding it.
-            if existing_tasks == 0 and not _claim_phase_task_creation(db, successor["phase"].id):
-                existing_tasks = 1
+            won_claim = False
+            if existing_tasks == 0:
+                won_claim = _claim_phase_task_creation(db, successor["phase"].id)
+                if not won_claim:
+                    existing_tasks = 1
+            if existing_tasks == 0:
+                # Re-check immediately before creating, on a fresh query --
+                # same TOCTOU gap _case_start_first_phase closed (see its
+                # own comment): the existing_tasks read above happens
+                # BEFORE the claim attempt, so a task committed by another
+                # claim-protected path on a separate DB session in that
+                # window would otherwise still look like zero here.
+                existing_tasks = db.query(Task).filter(Task.phase_id == successor["phase"].id, *cycle_filter).count()
             if existing_tasks > 0:
+                if won_claim:
+                    # We won the claim ourselves -- release it, since
+                    # _create_phase_task's own success path (which
+                    # normally does so) is never reached below.
+                    _release_phase_task_creation_claim(db, successor["phase"].id)
                 return False  # Already fired (or someone else just claimed it)
 
             logger.info(f"[PHASE-ADVANCE] {last_completed['phase'].name} completed, advancing to {successor['phase'].name}")
@@ -1713,6 +1750,18 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             total_cycle_tasks = db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
             if total_cycle_tasks == 0:
                 if not _claim_phase_task_creation(db, phase.id):
+                    continue
+                # Re-check immediately before creating, on a fresh query --
+                # same TOCTOU gap _case_start_first_phase closed (see its
+                # own comment): total_cycle_tasks above was read BEFORE the
+                # claim attempt, so a task committed by another
+                # claim-protected path on a separate DB session in that
+                # window would otherwise still look like zero here.
+                if db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count() > 0:
+                    # We won the claim ourselves -- release it, since
+                    # _create_phase_task (whose own success path would
+                    # normally do so) is never reached on this branch.
+                    _release_phase_task_creation_claim(db, phase.id)
                     continue
                 logger.warning(f"[PHASE-ADVANCE] {phase.name} is in_progress but has no tasks within its own cycle (stale started_at?) — creating a fresh one")
                 return _create_phase_task(workflow_id, phase.id, phase.name, "continue", logger, target_already_claimed=True)
