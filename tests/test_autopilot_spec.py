@@ -531,7 +531,7 @@ class TestValidateGateResultSchema:
     def test_every_gated_phase_has_a_required_keys_mapping(self):
         """Guardrail: every phase in GATED_PHASES should have a schema
         check, or a newly-added gated phase silently skips this floor."""
-        for phase_name in S.GATED_PHASES:
+        for phase_name in S.get_gated_phases():
             assert phase_name in S.GATE_RESULT_REQUIRED_KEYS, phase_name
 
 

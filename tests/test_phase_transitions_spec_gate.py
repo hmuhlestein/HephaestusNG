@@ -96,7 +96,7 @@ class TestFireSpecGateIfReadyGoto:
                     },
                 },
             ), patch(
-                "src.autopilot.spec.GATED_PHASES", ("adversarial_review",)
+                "src.autopilot.orchestrator.phase_transitions.get_gated_phases", lambda: ("adversarial_review",)
             ), patch(
                 "src.autopilot.spec.build_phase_output", return_value={"score": 0.4}
             ), patch(
@@ -150,7 +150,7 @@ class TestFireSpecGateIfReadyGoto:
                     },
                 },
             ), patch(
-                "src.autopilot.spec.GATED_PHASES", ("adversarial_review",)
+                "src.autopilot.orchestrator.phase_transitions.get_gated_phases", lambda: ("adversarial_review",)
             ), patch(
                 "src.autopilot.spec.build_phase_output", return_value={"score": 0.4}
             ), patch(
@@ -179,7 +179,7 @@ class TestFireSpecGateIfReadyGoto:
                 "src.phases.phase_manager.PhaseManager.mark_phase_complete",
                 return_value={"action": "continue"},
             ), patch(
-                "src.autopilot.spec.GATED_PHASES", ("adversarial_review",)
+                "src.autopilot.orchestrator.phase_transitions.get_gated_phases", lambda: ("adversarial_review",)
             ), patch(
                 "src.autopilot.spec.build_phase_output", return_value={"score": 0.9}
             ), patch(
@@ -210,7 +210,7 @@ class TestFireSpecGateIfReadyGoto:
             fake_loop.run_in_executor = AsyncMock(return_value={"action": "continue"})
 
             with patch(
-                "src.autopilot.spec.GATED_PHASES", ("adversarial_review",)
+                "src.autopilot.orchestrator.phase_transitions.get_gated_phases", lambda: ("adversarial_review",)
             ), patch(
                 "src.autopilot.spec.build_phase_output", return_value={"score": 0.9}
             ), patch(
@@ -254,7 +254,7 @@ class TestFireSpecGateIfReadyGoto:
             with patch(
                 "src.phases.phase_manager.PhaseManager.mark_phase_complete"
             ) as mock_mark_complete, patch(
-                "src.autopilot.spec.GATED_PHASES", ("adversarial_review",)
+                "src.autopilot.orchestrator.phase_transitions.get_gated_phases", lambda: ("adversarial_review",)
             ), patch(
                 "src.autopilot.spec.build_phase_output"
             ) as mock_build_output, patch(
@@ -298,7 +298,7 @@ class TestFireSpecGateIfReadyGoto:
                     "reason": "GOTO limit exceeded (4/3), arbitration requested",
                 },
             ), patch(
-                "src.autopilot.spec.GATED_PHASES", ("adversarial_review",)
+                "src.autopilot.orchestrator.phase_transitions.get_gated_phases", lambda: ("adversarial_review",)
             ), patch(
                 "src.autopilot.spec.build_phase_output", return_value={"score": 0.4}
             ), patch(

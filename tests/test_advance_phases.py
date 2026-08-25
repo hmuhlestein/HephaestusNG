@@ -3687,7 +3687,7 @@ class TestTriggerArbitration:
 
         mock_fire_transition.return_value = True
 
-        with patch("src.autopilot.orchestrator.phase_transitions.GATED_PHASES", ("qa_validation",)):
+        with patch("src.autopilot.orchestrator.arbitration.get_gated_phases", lambda: ("qa_validation",)):
             result = _trigger_arbitration(
                 "wf-1", "phase-1", "qa_validation", "still not converging", MagicMock()
             )

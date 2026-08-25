@@ -66,7 +66,7 @@ from src.autopilot.orchestrator.queue import (
 from src.autopilot.orchestrator.worktree_integration import (
     _run_ash_scan,
 )
-from src.autopilot.spec import GATED_PHASES, build_phase_output
+from src.autopilot.spec import build_phase_output, get_gated_phases
 from src.core.constants import (
     CONTEXT_DIR_NAME,
     DIAGNOSTIC_TASK_PREFIX,
@@ -2029,7 +2029,7 @@ def _fire_phase_transition(
         # forced continue, which doesn't read it (_handle_force_continue
         # takes no phase_output) and shouldn't pay for computing it.
         phase_output = {}
-        if not force_continue and phase_name in GATED_PHASES:
+        if not force_continue and phase_name in get_gated_phases():
             with get_db() as db:
                 wf = db.query(Workflow).filter_by(id=workflow_id).first()
                 # Path is already imported at module level -- a redundant
@@ -3051,7 +3051,7 @@ async def fire_spec_gate_if_ready(session, task) -> None:
     from src.core.log_context import set_log_context
 
     phase = session.query(Phase).filter_by(id=task.phase_id).first()
-    if not phase or phase.name not in GATED_PHASES:
+    if not phase or phase.name not in get_gated_phases():
         return
 
     # An arbitration task completing is NOT a normal phase-completion

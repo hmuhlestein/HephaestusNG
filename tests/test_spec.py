@@ -6,13 +6,13 @@ from unittest.mock import MagicMock
 
 from src.autopilot.spec import (
     DEFAULT_SPEC,
-    GATED_PHASES,
     PHASE_OUTPUT_ARTIFACTS,
     _clamp01,
     _pass_with_subjective,
     _select_relevant_test_files,
     build_phase_output,
     gate_finding_count,
+    get_gated_phases,
     load_spec,
     read_okf_report,
     run_independent_test_verification,
@@ -25,6 +25,12 @@ from src.autopilot.spec import (
     score_scope_review,
     score_security_review,
 )
+
+# get_gated_phases() is lru_cache'd and lazily computed (moved off module
+# import, see its own docstring) -- bound once here so every existing
+# `GATED_PHASES` usage below (a bare name, checked with plain `in`/`not in`)
+# keeps working unchanged.
+GATED_PHASES = get_gated_phases()
 
 
 class TestClamp01:
@@ -1297,9 +1303,10 @@ class TestThresholdBandsAreCoherent:
 
 class TestResolveDeclaredOutputSubdirPrefixed:
     """Phase.outputs is snapshotted into the DB when a workflow is created
-    and never re-read from YAML, but GATED_PHASES is read from YAML at
-    import. So the moment security_review became a gated phase, every
-    workflow ALREADY IN FLIGHT kept its old "security_review/security.md"
+    and never re-read from YAML, but get_gated_phases() reads from YAML
+    fresh (lru_cache'd per process). So the moment security_review became
+    a gated phase, every workflow ALREADY IN FLIGHT kept its old
+    "security_review/security.md"
     declaration -- and resolve_declared_output_path's flat-.hephaestus/
     exclusion (which applies to gated phases) rejected it, reporting a
     report sitting in exactly the right place as missing. Correcting the
@@ -1477,8 +1484,6 @@ class TestSecurityReviewGateWiring:
         assert "security.md" in _extract_declared_files(cfg["outputs"])
 
     def test_security_review_is_a_gated_phase(self):
-        from src.autopilot.spec import GATED_PHASES
-
         assert "security_review" in GATED_PHASES
 
     def test_gate_artifact_and_type_are_registered(self):
