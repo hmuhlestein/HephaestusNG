@@ -28,7 +28,10 @@ from src.core.database import (
     get_db,
 )
 from src.mcp.autopilot._shared import _extract_pr_url
-from src.mcp.autopilot.feature_routes import _find_archived_feature_report
+from src.mcp.autopilot.feature_record_routes import (
+    _find_archived_feature_report,
+    _resolve_live_feature_report,
+)
 
 
 def _resolve_latest_agent_per_task(db, task_ids) -> Dict[str, Agent]:
@@ -432,10 +435,7 @@ async def get_design_status(
                     ).first()
                     if doc_review_done:
                         if feat_wf and feat_wf.working_directory:
-                            has_report = (Path(feat_wf.working_directory) / CONTEXT_DIR_NAME / "doc_review" / "feature_report.html").is_file() or \
-                                         (Path(feat_wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html").is_file() or \
-                                         (Path(feat_wf.working_directory) / "docs" / "doc_review" / "feature_report.html").is_file() or \
-                                         (Path(feat_wf.working_directory) / "docs" / "feature_report.html").is_file()
+                            has_report = _resolve_live_feature_report(feat_wf.working_directory) is not None
                         if not has_report:
                             # working_directory is null/gone once the feature's
                             # worktree is cleaned up on full completion (see

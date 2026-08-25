@@ -26,6 +26,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _resolve_live_feature_report(working_directory: str) -> Optional[Path]:
+    """Where doc_review's feature_report.html actually landed in a live
+    worktree, or None.
+
+    Tries every sanctioned/legacy bare-name location first, then falls back
+    to the newest suffixed file in Artifacts Path -- doc_review's dispatched
+    task writes feature_report-<task_id[:8]>.html, not the bare declared
+    name (suffixed_output_name in spec.py; the same newest-match convention
+    read_okf_report/score_* already use for gate scoring), so a bare-name-
+    only check finds nothing for the common case: a report that exists
+    reads as permanently missing. Shared by every live-worktree caller
+    (get_workflow_feature_report, get_feature_record_report,
+    get_project_design_status's has_report flag, _scan_features's
+    has_report flag) so they all agree on the same file.
+    """
+    base = Path(working_directory)
+    for rel in (
+        Path(CONTEXT_DIR_NAME) / "doc_review" / "feature_report.html",
+        Path(CONTEXT_DIR_NAME) / "feature_review" / "feature_report.html",
+        Path(CONTEXT_DIR_NAME) / "feature_report.html",
+        Path("docs") / "doc_review" / "feature_report.html",
+        Path("docs") / "feature_report.html",
+    ):
+        candidate = base / rel
+        if candidate.is_file():
+            return candidate
+    from src.autopilot.spec import _newest_glob_match
+
+    return _newest_glob_match(base / CONTEXT_DIR_NAME, "feature_report.html")
+
+
 def _find_archived_feature_report(project_base: str, workflow_id: str) -> Optional[Path]:
     """Find a workflow's feature_report.html in the archived features
     gallery, once its worktree (and Workflow.working_directory) is gone.
@@ -62,6 +93,17 @@ def _find_archived_feature_report(project_base: str, workflow_id: str) -> Option
         ):
             if candidate.is_file():
                 return candidate
+        # Same suffix fallback as _resolve_live_feature_report -- the
+        # archival sweep can carry a suffixed file (feature_report-
+        # <task_id[:8]>.html) into the gallery folder as-is, not renamed to
+        # the bare name, so a bare-name-only check here misses it too.
+        from src.autopilot.spec import _newest_glob_match
+
+        newest = _newest_glob_match(
+            gallery_dir / "docs", "feature_report.html"
+        ) or _newest_glob_match(gallery_dir, "feature_report.html")
+        if newest:
+            return newest
         # Continue checking other directories with the same workflow_id
         # (e.g. shared-integrations may lack the report while the main
         # feature gallery folder has it).
@@ -108,21 +150,7 @@ async def get_workflow_feature_report(workflow_id: str):
 
     report_path = None
     if working_directory:
-        candidate = Path(working_directory) / CONTEXT_DIR_NAME / "doc_review" / "feature_report.html"
-        if not candidate.is_file():
-            # feature_review's own subdirectory (Phase 0's decomposition
-            # synopsis, not doc_review's) -- checked before the flat
-            # fallback below since it's this phase's one sanctioned
-            # location, same convention every other gated phase uses.
-            candidate = Path(working_directory) / CONTEXT_DIR_NAME / "feature_review" / "feature_report.html"
-        if not candidate.is_file():
-            candidate = Path(working_directory) / CONTEXT_DIR_NAME / "feature_report.html"
-        if not candidate.is_file():
-            candidate = Path(working_directory) / "docs" / "doc_review" / "feature_report.html"
-        if not candidate.is_file():
-            candidate = Path(working_directory) / "docs" / "feature_report.html"
-        if candidate.is_file():
-            report_path = candidate
+        report_path = _resolve_live_feature_report(working_directory)
 
     if report_path is None and phase0_designs_folder:
         candidate = Path(phase0_designs_folder) / "feature_report.html"
@@ -351,26 +379,11 @@ async def get_feature_record_report(feature_id: str):
 
     report_path = None
     if base_dir:
-        # Same candidate order as get_workflow_feature_report -- doc_review
-        # is where the report actually lands (doc_review phase writes it
-        # there), checked before the flatter fallback locations. This
-        # endpoint's own docstring claims it already serves "the same
-        # underlying file" as that one; it didn't -- a real feature's
-        # report 404s here whenever it's still in the live worktree,
-        # even though feature.has_report (design_status_service.py,
-        # which does check doc_review/) correctly reports it exists,
-        # so the review modal's iframe renders blank instead of the report.
-        for rel in (
-            Path(CONTEXT_DIR_NAME) / "doc_review" / "feature_report.html",
-            Path(CONTEXT_DIR_NAME) / "feature_review" / "feature_report.html",
-            Path(CONTEXT_DIR_NAME) / "feature_report.html",
-            Path("docs") / "doc_review" / "feature_report.html",
-            Path("docs") / "feature_report.html",
-        ):
-            candidate = Path(base_dir) / rel
-            if candidate.is_file():
-                report_path = candidate
-                break
+        # Same resolver as get_workflow_feature_report, so both endpoints
+        # agree on which file "the report" is -- see
+        # _resolve_live_feature_report's own docstring for why a bare-name
+        # check alone isn't enough (doc_review writes a suffixed filename).
+        report_path = _resolve_live_feature_report(base_dir)
     if report_path is None:
         # Worktree may have been cleaned up after completion — check the
         # archived features gallery (copied there by PhaseManager before
