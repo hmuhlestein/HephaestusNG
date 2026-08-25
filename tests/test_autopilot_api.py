@@ -60,7 +60,8 @@ def client(autopilot_dirs, tmp_path, monkeypatch):
 
     from src.core.database import DatabaseManager
     from src.mcp.autopilot import _shared as autopilot_api
-    from src.mcp.autopilot import control_routes, router
+    from src.mcp.autopilot import control_routes
+    from src.mcp.autopilot import router
 
     # Route handlers that call DatabaseManager(None) (e.g. list_features'
     # _scan_features) read HEPHAESTUS_TEST_DB fresh on every call -- point
@@ -193,7 +194,9 @@ class TestDesignQueue:
         for name in ["a.md", "b.md", "c.md"]:
             (autopilot_dirs["queue"] / name).write_text(name)
 
-        resp = client.post("/api/autopilot/queue/reorder", json={"filenames": ["c.md", "a.md", "b.md"]})
+        resp = client.post(
+            "/api/autopilot/queue/reorder", json={"filenames": ["c.md", "a.md", "b.md"]}
+        )
         assert resp.status_code == 200
 
         resp = client.get("/api/autopilot/queue")
@@ -203,7 +206,9 @@ class TestDesignQueue:
     def test_reorder_rejects_unknown(self, client, autopilot_dirs):
         (autopilot_dirs["queue"] / "a.md").write_text("a")
 
-        resp = client.post("/api/autopilot/queue/reorder", json={"filenames": ["a.md", "ghost.md"]})
+        resp = client.post(
+            "/api/autopilot/queue/reorder", json={"filenames": ["a.md", "ghost.md"]}
+        )
         assert resp.status_code == 400
 
 
@@ -216,7 +221,9 @@ class TestQueueRerun:
     copied twice.
     """
 
-    def test_rerun_uses_in_process_service_not_subprocess(self, client, autopilot_dirs, monkeypatch, tmp_path):
+    def test_rerun_uses_in_process_service_not_subprocess(
+        self, client, autopilot_dirs, monkeypatch, tmp_path
+    ):
         import subprocess as subprocess_mod
 
         project_dir = tmp_path / "project"
@@ -228,8 +235,12 @@ class TestQueueRerun:
         fake_service.running = False
         fake_service.start = AsyncMock(return_value={"started": True})
         fake_service.stop = AsyncMock(return_value={"stopped": True})
-        monkeypatch.setattr("src.autopilot.service.get_autopilot_service", lambda project_id: fake_service)
-        monkeypatch.setattr("src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: "proj-fixed")
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: "proj-fixed"
+        )
         monkeypatch.setattr(
             "src.autopilot.orchestrator.state._get_or_create_project_id",
             lambda project_path: "proj-fixed",
@@ -250,7 +261,9 @@ class TestQueueRerun:
         assert call_kwargs["project_path"] == str(project_dir)
         assert not (Path(autopilot_dirs["state"]) / "orchestrator.pid").exists()
 
-    def test_rerun_stops_running_service_before_restarting(self, client, autopilot_dirs, monkeypatch, tmp_path):
+    def test_rerun_stops_running_service_before_restarting(
+        self, client, autopilot_dirs, monkeypatch, tmp_path
+    ):
         project_dir = tmp_path / "project"
         (project_dir / ".hephaestus" / "designs").mkdir(parents=True)
         (project_dir / ".hephaestus" / "designs" / "my_design.md").write_text("# Design")
@@ -259,8 +272,12 @@ class TestQueueRerun:
         fake_service.running = True  # already running -- rerun must stop it first
         fake_service.start = AsyncMock(return_value={"started": True})
         fake_service.stop = AsyncMock(return_value={"stopped": True})
-        monkeypatch.setattr("src.autopilot.service.get_autopilot_service", lambda project_id: fake_service)
-        monkeypatch.setattr("src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: "proj-fixed")
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: "proj-fixed"
+        )
         monkeypatch.setattr(
             "src.autopilot.orchestrator.state._get_or_create_project_id",
             lambda project_path: "proj-fixed",
@@ -275,7 +292,9 @@ class TestQueueRerun:
         fake_service.stop.assert_called_once()
         fake_service.start.assert_called_once()
 
-    def test_rerun_maps_runtime_error_to_409_not_400(self, client, autopilot_dirs, monkeypatch, tmp_path):
+    def test_rerun_maps_runtime_error_to_409_not_400(
+        self, client, autopilot_dirs, monkeypatch, tmp_path
+    ):
         """service.start() raising RuntimeError means "already running" (its
         own docstring: "Raises: RuntimeError: If pipeline is already
         running") -- matches /start's own convention of mapping that to 409,
@@ -288,10 +307,16 @@ class TestQueueRerun:
 
         fake_service = Mock()
         fake_service.running = False
-        fake_service.start = AsyncMock(side_effect=RuntimeError("Pipeline is already running"))
+        fake_service.start = AsyncMock(
+            side_effect=RuntimeError("Pipeline is already running")
+        )
         fake_service.stop = AsyncMock(return_value={"stopped": True})
-        monkeypatch.setattr("src.autopilot.service.get_autopilot_service", lambda project_id: fake_service)
-        monkeypatch.setattr("src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: "proj-fixed")
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: "proj-fixed"
+        )
         monkeypatch.setattr(
             "src.autopilot.orchestrator.state._get_or_create_project_id",
             lambda project_path: "proj-fixed",
@@ -304,7 +329,9 @@ class TestQueueRerun:
 
         assert resp.status_code == 409, resp.text
 
-    def test_rerun_maps_value_error_to_400(self, client, autopilot_dirs, monkeypatch, tmp_path):
+    def test_rerun_maps_value_error_to_400(
+        self, client, autopilot_dirs, monkeypatch, tmp_path
+    ):
         """service.start() raising ValueError means bad input (e.g. project
         path isn't a git repo) -- matches /start's own convention of 400."""
         project_dir = tmp_path / "project"
@@ -313,10 +340,16 @@ class TestQueueRerun:
 
         fake_service = Mock()
         fake_service.running = False
-        fake_service.start = AsyncMock(side_effect=ValueError("Project path is not a git repository"))
+        fake_service.start = AsyncMock(
+            side_effect=ValueError("Project path is not a git repository")
+        )
         fake_service.stop = AsyncMock(return_value={"stopped": True})
-        monkeypatch.setattr("src.autopilot.service.get_autopilot_service", lambda project_id: fake_service)
-        monkeypatch.setattr("src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: "proj-fixed")
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: "proj-fixed"
+        )
         monkeypatch.setattr(
             "src.autopilot.orchestrator.state._get_or_create_project_id",
             lambda project_path: "proj-fixed",
@@ -329,7 +362,9 @@ class TestQueueRerun:
 
         assert resp.status_code == 400, resp.text
 
-    def test_rerun_rejects_when_over_concurrency_cap(self, client, autopilot_dirs, monkeypatch, tmp_path):
+    def test_rerun_rejects_when_over_concurrency_cap(
+        self, client, autopilot_dirs, monkeypatch, tmp_path
+    ):
         """Regression: rerun_design used to call service.start() with no
         concurrency-cap check at all, unlike POST /start -- a "rerun" on a
         brand-new, not-yet-running project could silently exceed
@@ -339,7 +374,9 @@ class TestQueueRerun:
         (project_dir / ".hephaestus" / "designs").mkdir(parents=True)
         (project_dir / ".hephaestus" / "designs" / "my_design.md").write_text("# Design")
 
-        monkeypatch.setattr("src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: None)
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: None
+        )
         monkeypatch.setattr(
             "src.autopilot.orchestrator.state._get_or_create_project_id",
             lambda project_path: "proj-over-cap",
@@ -347,9 +384,12 @@ class TestQueueRerun:
         fake_registry = Mock()
         fake_registry.try_reserve.return_value = (
             False,
-            "Max concurrent projects (2) reached: proj-a, proj-b. Stop one before starting another.",
+            "Max concurrent projects (2) reached: proj-a, proj-b. "
+            "Stop one before starting another.",
         )
-        monkeypatch.setattr("src.autopilot.service.get_registry", lambda: fake_registry)
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
 
         resp = client.post(
             "/api/autopilot/queue/rerun",
@@ -359,7 +399,9 @@ class TestQueueRerun:
         assert resp.status_code == 409, resp.text
         assert "proj-a" in resp.text
 
-    def test_rerun_cleans_up_old_worktree_before_returning(self, project_client, monkeypatch, tmp_path):
+    def test_rerun_cleans_up_old_worktree_before_returning(
+        self, project_client, monkeypatch, tmp_path
+    ):
         """Regression: rerun deleted a design's Workflow rows (a "clean
         slate") but never removed the worktree directory on disk.
         _create_integration_worktree's per-design path is deterministic and
@@ -382,11 +424,8 @@ class TestQueueRerun:
         with get_db() as db:
             db.add(
                 Workflow(
-                    id="wf-rerun-1",
-                    name="autopilot",
-                    phases_folder_path="/tmp",
-                    status="failed",
-                    definition_id="autopilot",
+                    id="wf-rerun-1", name="autopilot", phases_folder_path="/tmp",
+                    status="failed", definition_id="autopilot",
                     working_directory=str(worktree),
                     launch_params={
                         "design_document": str(design_file),
@@ -399,8 +438,12 @@ class TestQueueRerun:
         fake_service.running = False
         fake_service.start = AsyncMock(return_value={"started": True})
         fake_service.stop = AsyncMock(return_value={"stopped": True})
-        monkeypatch.setattr("src.autopilot.service.get_autopilot_service", lambda project_id: fake_service)
-        monkeypatch.setattr("src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: "proj-fixed")
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: "proj-fixed"
+        )
         monkeypatch.setattr(
             "src.autopilot.orchestrator.state._get_or_create_project_id",
             lambda project_path: "proj-fixed",
@@ -418,7 +461,9 @@ class TestQueueRerun:
         assert call_args[0] == worktree
         assert str(call_args[2]) == str(project_dir)
 
-    def test_rerun_does_not_touch_an_unrelated_designs_agents(self, project_client, monkeypatch, tmp_path):
+    def test_rerun_does_not_touch_an_unrelated_designs_agents(
+        self, project_client, monkeypatch, tmp_path
+    ):
         """Regression: Step 2 used to query Agent/Workflow with NO scoping
         at all -- db.query(Agent).filter(Agent.status.in_(["working",
         "starting", "idle"])) terminated every active agent and paused
@@ -455,80 +500,50 @@ class TestQueueRerun:
             target_proj = AutopilotProject(id="proj-target", name="target", base_dir=str(project_dir))
             db.add(target_proj)
             target_design = AutopilotDesign(
-                id="des-target",
-                project_id="proj-target",
-                filename="01-auth.md",
-                name="Auth",
-                status="active",
+                id="des-target", project_id="proj-target", filename="01-auth.md", name="Auth", status="active",
             )
             db.add(target_design)
             # A FEATURE workflow spawned from the design being rerun -- not
             # a Phase 0 workflow, so Step 2b's own hard-delete (scoped to
             # DESIGN_WORKFLOW_DEFINITION_IDS) never touches it. Step 2 must
             # stop it directly.
-            db.add(
-                Workflow(
-                    id="wf-target-feature",
-                    name="autopilot",
-                    phases_folder_path="/tmp",
-                    status="active",
-                    definition_id="autopilot",
-                    design_id="des-target",
-                )
-            )
-            db.add(
-                Task(
-                    id="task-target",
-                    workflow_id="wf-target-feature",
-                    phase_id=None,
-                    raw_description="x",
-                    done_definition="x",
-                    status="in_progress",
-                    assigned_agent_id="agent-target",
-                )
-            )
+            db.add(Workflow(
+                id="wf-target-feature", name="autopilot", phases_folder_path="/tmp",
+                status="active", definition_id="autopilot", design_id="des-target",
+            ))
+            db.add(Task(
+                id="task-target", workflow_id="wf-target-feature", phase_id=None,
+                raw_description="x", done_definition="x", status="in_progress", assigned_agent_id="agent-target",
+            ))
             db.add(Agent(id="agent-target", status="working", current_task_id="task-target", cli_type="claude", system_prompt="x"))
 
             # A completely unrelated project/design -- must survive.
             other_proj = AutopilotProject(id="proj-other", name="other", base_dir=str(tmp_path / "otherproject"))
             db.add(other_proj)
             other_design = AutopilotDesign(
-                id="des-other",
-                project_id="proj-other",
-                filename="other.md",
-                name="Other",
-                status="active",
+                id="des-other", project_id="proj-other", filename="other.md", name="Other", status="active",
             )
             db.add(other_design)
-            db.add(
-                Workflow(
-                    id="wf-other-feature",
-                    name="autopilot",
-                    phases_folder_path="/tmp",
-                    status="active",
-                    definition_id="autopilot",
-                    design_id="des-other",
-                )
-            )
-            db.add(
-                Task(
-                    id="task-other",
-                    workflow_id="wf-other-feature",
-                    phase_id=None,
-                    raw_description="x",
-                    done_definition="x",
-                    status="in_progress",
-                    assigned_agent_id="agent-other",
-                )
-            )
+            db.add(Workflow(
+                id="wf-other-feature", name="autopilot", phases_folder_path="/tmp",
+                status="active", definition_id="autopilot", design_id="des-other",
+            ))
+            db.add(Task(
+                id="task-other", workflow_id="wf-other-feature", phase_id=None,
+                raw_description="x", done_definition="x", status="in_progress", assigned_agent_id="agent-other",
+            ))
             db.add(Agent(id="agent-other", status="working", current_task_id="task-other", cli_type="claude", system_prompt="x"))
 
         fake_service = Mock()
         fake_service.running = False
         fake_service.start = AsyncMock(return_value={"started": True})
         fake_service.stop = AsyncMock(return_value={"stopped": True})
-        monkeypatch.setattr("src.autopilot.service.get_autopilot_service", lambda project_id: fake_service)
-        monkeypatch.setattr("src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: "proj-target")
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: "proj-target"
+        )
         monkeypatch.setattr(
             "src.autopilot.orchestrator.state._get_or_create_project_id",
             lambda project_path: "proj-target",
@@ -723,7 +738,9 @@ class TestFeatures:
 
         working_dir = tmp_path / "wf-working-dir"
         (working_dir / CONTEXT_DIR_NAME).mkdir(parents=True)
-        (working_dir / CONTEXT_DIR_NAME / "feature_report.html").write_text("<html>report</html>")
+        (working_dir / CONTEXT_DIR_NAME / "feature_report.html").write_text(
+            "<html>report</html>"
+        )
 
         db = DatabaseManager(None)
         with db.session_scope() as session:
@@ -841,18 +858,13 @@ class TestHumanInput:
         request for?) never received them."""
         state_dir = autopilot_dirs["state"]
         (state_dir / "input_request_wf1.json").write_text(
-            json.dumps(
-                {
-                    "id": "wf1",
-                    "reason": "r",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "options": ["c", "s"],
-                    "labels": {},
-                    "workflow_id": "wf-abc",
-                    "phase_id": "phase-xyz",
-                    "decision_context": {"phase_name": "design_review", "attempts": [], "distinct_options": []},
-                }
-            )
+            json.dumps({
+                "id": "wf1", "reason": "r",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "options": ["c", "s"], "labels": {},
+                "workflow_id": "wf-abc", "phase_id": "phase-xyz",
+                "decision_context": {"phase_name": "design_review", "attempts": [], "distinct_options": []},
+            })
         )
 
         resp = client.get("/api/autopilot/input")
@@ -894,15 +906,11 @@ class TestHumanInput:
     def test_submit_goto_choice_requires_target_phase(self, client, autopilot_dirs):
         state_dir = autopilot_dirs["state"]
         (state_dir / "input_request_g1.json").write_text(
-            json.dumps(
-                {
-                    "id": "g1",
-                    "reason": "r",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "options": ["c", "s"],
-                    "labels": {},
-                }
-            )
+            json.dumps({
+                "id": "g1", "reason": "r",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "options": ["c", "s"], "labels": {},
+            })
         )
 
         resp = client.post(
@@ -914,15 +922,11 @@ class TestHumanInput:
     def test_submit_goto_choice_with_target_phase_persists_it(self, client, autopilot_dirs):
         state_dir = autopilot_dirs["state"]
         (state_dir / "input_request_g2.json").write_text(
-            json.dumps(
-                {
-                    "id": "g2",
-                    "reason": "r",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "options": ["c", "s"],
-                    "labels": {},
-                }
-            )
+            json.dumps({
+                "id": "g2", "reason": "r",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "options": ["c", "s"], "labels": {},
+            })
         )
 
         resp = client.post(
@@ -1025,18 +1029,12 @@ class TestHumanInput:
         old_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
         request_file = state_dir / "input_request_arb1.json"
         request_file.write_text(
-            json.dumps(
-                {
-                    "id": "arb1",
-                    "reason": "design_review deadlocked",
-                    "timestamp": old_ts,
-                    "options": ["c", "s"],
-                    "labels": {},
-                    "kind": "arbitration_escalation",
-                    "workflow_id": "wf-1",
-                    "phase_id": "phase-1",
-                }
-            )
+            json.dumps({
+                "id": "arb1", "reason": "design_review deadlocked",
+                "timestamp": old_ts, "options": ["c", "s"], "labels": {},
+                "kind": "arbitration_escalation",
+                "workflow_id": "wf-1", "phase_id": "phase-1",
+            })
         )
 
         resp = client.get("/api/autopilot/input")
@@ -1109,7 +1107,9 @@ class TestPipelineStatus:
         # registry for whatever's running, not a single global service.
         fake_registry = Mock()
         fake_registry.running.return_value = [FakeService()]
-        monkeypatch.setattr("src.autopilot.service.get_registry", lambda: fake_registry)
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
 
         resp = client.get("/api/autopilot/status")
         assert resp.status_code == 200
@@ -1119,7 +1119,9 @@ class TestPipelineStatus:
         # in this test) -- falls back to the directory basename.
         assert data["running_project_name"] == "some-project"
 
-    def test_status_sums_design_counts_across_concurrently_running_projects(self, client, autopilot_dirs, monkeypatch):
+    def test_status_sums_design_counts_across_concurrently_running_projects(
+        self, client, autopilot_dirs, monkeypatch
+    ):
         """Regression: with no project_id given, the global status endpoint
         used to report running_services[0].status() outright -- whichever
         project happened to be first in registry dict-iteration order.
@@ -1155,7 +1157,9 @@ class TestPipelineStatus:
             FakeService(5, 4, 1),
             FakeService(3, 2, 1),
         ]
-        monkeypatch.setattr("src.autopilot.service.get_registry", lambda: fake_registry)
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
 
         resp = client.get("/api/autopilot/status")
         assert resp.status_code == 200
@@ -1164,7 +1168,9 @@ class TestPipelineStatus:
         assert data["designs_succeeded"] == 6
         assert data["designs_failed"] == 2
 
-    def test_status_reports_every_running_project_not_just_the_first(self, client, autopilot_dirs, monkeypatch):
+    def test_status_reports_every_running_project_not_just_the_first(
+        self, client, autopilot_dirs, monkeypatch
+    ):
         """running_project_path/running_project_name are singular fields
         that can't represent more than one concurrently running project --
         running_projects must list every one of them (id/name/base_dir),
@@ -1198,7 +1204,9 @@ class TestPipelineStatus:
             FakeService("proj-a", "/Users/test/project-a"),
             FakeService("proj-b", "/Users/test/project-b"),
         ]
-        monkeypatch.setattr("src.autopilot.service.get_registry", lambda: fake_registry)
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
 
         resp = client.get("/api/autopilot/status")
         assert resp.status_code == 200
@@ -1210,7 +1218,9 @@ class TestPipelineStatus:
             "/Users/test/project-b",
         }
 
-    def test_status_running_projects_survives_missing_project_id_attr(self, client, autopilot_dirs, monkeypatch):
+    def test_status_running_projects_survives_missing_project_id_attr(
+        self, client, autopilot_dirs, monkeypatch
+    ):
         """Must not crash if a service object doesn't expose project_id
         (defensive -- real AutopilotService always sets it, but this
         endpoint shouldn't 500 on a test double or future refactor that
@@ -1236,13 +1246,17 @@ class TestPipelineStatus:
 
         fake_registry = Mock()
         fake_registry.running.return_value = [FakeService()]
-        monkeypatch.setattr("src.autopilot.service.get_registry", lambda: fake_registry)
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
 
         resp = client.get("/api/autopilot/status")
         assert resp.status_code == 200
         assert resp.json()["running_projects"][0]["id"] is None
 
-    def test_self_conflict_detected_even_when_not_first_in_running_list(self, client, autopilot_dirs, monkeypatch):
+    def test_self_conflict_detected_even_when_not_first_in_running_list(
+        self, client, autopilot_dirs, monkeypatch
+    ):
         """Regression: is_self_conflict only compared project_path against
         running_project_path, which (with no project_id given, exactly how
         the frontend's self-conflict check calls this endpoint) is just
@@ -1277,7 +1291,9 @@ class TestPipelineStatus:
             FakeService("proj-a", "/Users/test/project-a"),
             FakeService("proj-b", "/Users/test/project-b"),
         ]
-        monkeypatch.setattr("src.autopilot.service.get_registry", lambda: fake_registry)
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
 
         resp = client.get(
             "/api/autopilot/status",
@@ -1286,7 +1302,9 @@ class TestPipelineStatus:
         assert resp.status_code == 200
         assert resp.json()["is_self_conflict"] is True
 
-    def test_self_conflict_false_for_a_genuinely_different_project(self, client, autopilot_dirs, monkeypatch):
+    def test_self_conflict_false_for_a_genuinely_different_project(
+        self, client, autopilot_dirs, monkeypatch
+    ):
         """Sanity check the fix isn't overbroad: a project_path that matches
         none of the running projects must still report is_self_conflict=False."""
         from src.mcp.autopilot import _shared as api_mod
@@ -1316,7 +1334,9 @@ class TestPipelineStatus:
             FakeService("proj-a", "/Users/test/project-a"),
             FakeService("proj-b", "/Users/test/project-b"),
         ]
-        monkeypatch.setattr("src.autopilot.service.get_registry", lambda: fake_registry)
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
 
         resp = client.get(
             "/api/autopilot/status",
@@ -1396,7 +1416,9 @@ class TestLogs:
         state_dir = autopilot_dirs["state"]
         run_dir = state_dir / "run-20260101"
         run_dir.mkdir(parents=True)
-        (run_dir / "orchestrator.log").write_text("Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n")
+        (run_dir / "orchestrator.log").write_text(
+            "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n"
+        )
 
         resp = client.get("/api/autopilot/logs?lines=3")
         assert len(resp.json()["lines"]) == 3
@@ -1638,6 +1660,7 @@ class TestProjects:
         resp = client.delete("/api/autopilot/projects/nonexistent")
         assert resp.status_code == 404
 
+
     def test_delete_project_with_repo_scoped_task_does_not_500(self, project_client, tmp_path):
         """BLOCKER regression (adversarial review): a project with a
         non-primary ProjectRepo that has a Task scoped to it (repo_id set)
@@ -1817,6 +1840,64 @@ class TestProjectDesigns:
             json={
                 "name": "Dup Test",
                 "content": "second",
+            },
+        )
+        assert resp.status_code == 409
+
+    def test_add_design_reselecting_the_same_remote_file_returns_it_instead_of_409(
+        self, project_client
+    ):
+        """Regression: LoadDesignModal's "Load from Remote" file picker
+        re-submits the exact file it just read back to its own folder --
+        previously a guaranteed 409 on every such re-submission, since the
+        file (and its design row) already exists. source_remote_path lets
+        the client say "this is still exactly the file I picked, unedited"
+        -- the endpoint recognizes the match and returns the existing
+        design instead of erroring or inserting a duplicate queue entry."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        first = client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={"name": "Reselect Test", "content": "original"},
+        )
+        assert first.status_code == 200
+        first_id = first.json()["id"]
+        first_ordinal = first.json()["ordinal"]
+
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={
+                "name": "Reselect Test",
+                "content": "original",
+                "source_remote_path": "some/folder/Reselect_Test.md",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["id"] == first_id
+        assert resp.json()["ordinal"] == first_ordinal
+
+    def test_add_design_source_remote_path_naming_a_different_file_still_409s(
+        self, project_client
+    ):
+        """source_remote_path must name THIS SAME file -- a stale or
+        mismatched value (e.g. left over from a previous selection) must
+        not accidentally suppress a genuine name collision against an
+        unrelated existing design."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={"name": "Collision Test", "content": "first"},
+        )
+
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={
+                "name": "Collision Test",
+                "content": "second",
+                "source_remote_path": "some/folder/some_other_file.md",
             },
         )
         assert resp.status_code == 409
@@ -2121,7 +2202,9 @@ class TestProjectDesigns:
         pid = self._create_project(client, dirs)
 
         design_dir = dirs["design_dir"]
-        (design_dir / "04-fix-crash.md").write_text("# Fix Crash\nThe app crashes and returns the wrong error on login.")
+        (design_dir / "04-fix-crash.md").write_text(
+            "# Fix Crash\nThe app crashes and returns the wrong error on login."
+        )
 
         resp = client.post(f"/api/autopilot/projects/{pid}/sync")
         assert resp.status_code == 200
@@ -2145,7 +2228,9 @@ class TestProjectDesigns:
         resp = client.get("/api/autopilot/projects/nonexistent/designs")
         assert resp.status_code == 404
 
-    def test_remove_design_cascades_orphaned_workflow_with_no_design_id(self, project_client):
+    def test_remove_design_cascades_orphaned_workflow_with_no_design_id(
+        self, project_client
+    ):
         """Regression test: observed live in production that a completed
         Phase 0 workflow (and its first per-feature workflow) can end up with
         Workflow.design_id left NULL and Feature.workflow_id never linked
@@ -2230,7 +2315,11 @@ class TestProjectDesigns:
         assert resp.status_code == 200, resp.text
 
         with get_db() as db:
-            remaining = db.query(Workflow).filter(Workflow.id.in_(["wf-orphan-phase0", "wf-orphan-feature"])).all()
+            remaining = (
+                db.query(Workflow)
+                .filter(Workflow.id.in_(["wf-orphan-phase0", "wf-orphan-feature"]))
+                .all()
+            )
             assert remaining == []
 
     def test_remove_design_with_cost_history_does_not_500(self, project_client):
@@ -2248,31 +2337,20 @@ class TestProjectDesigns:
             design = db.query(AutopilotDesign).filter_by(project_id=pid, filename="01-auth.md").first()
             db.add(
                 Workflow(
-                    id="wf-cost-1",
-                    name="autopilot",
-                    phases_folder_path="/tmp",
-                    status="failed",
-                    definition_id="autopilot",
-                    design_id=design.id,
+                    id="wf-cost-1", name="autopilot", phases_folder_path="/tmp",
+                    status="failed", definition_id="autopilot", design_id=design.id,
                 )
             )
             db.add(
                 Task(
-                    id="task-cost-1",
-                    workflow_id="wf-cost-1",
-                    phase_id="phase-1",
-                    raw_description="r",
-                    done_definition="d",
-                    status="failed",
+                    id="task-cost-1", workflow_id="wf-cost-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="failed",
                 )
             )
             db.add(
                 CostEntry(
-                    id="cost-1",
-                    task_id="task-cost-1",
-                    workflow_id="wf-cost-1",
-                    source="pi",
-                    cost_usd=0.05,
+                    id="cost-1", task_id="task-cost-1", workflow_id="wf-cost-1",
+                    source="pi", cost_usd=0.05,
                 )
             )
             db.commit()
@@ -2320,7 +2398,9 @@ class TestProjectDesigns:
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["status"] == "failed"
-        assert body["error"] == ("Invalid features.json: features array must have at least 1 entry, got 0")
+        assert body["error"] == (
+            "Invalid features.json: features array must have at least 1 entry, got 0"
+        )
 
     def test_design_status_includes_cost_total(self, project_client):
         """cost_total_usd must be surfaced per-feature and summed at the
@@ -2377,7 +2457,9 @@ class TestProjectDesigns:
         assert body["features"][0]["cost_total_usd"] == 1.5
         assert body["cost_total_usd"] == 1.5
 
-    def test_design_status_task_timestamps_are_utc_marked_and_include_cli_type(self, project_client):
+    def test_design_status_task_timestamps_are_utc_marked_and_include_cli_type(
+        self, project_client
+    ):
         """Regression: task created_at/completed_at were serialized via
         plain datetime.isoformat() -- a naive-but-UTC datetime with no
         timezone marker at all. The frontend's `new Date(iso_string)` then
@@ -2404,51 +2486,26 @@ class TestProjectDesigns:
         (design_dir / "cli-design.md").write_text("# Design")
 
         with get_db() as db:
-            db.add(
-                AutopilotDesign(
-                    id="des-test-cli",
-                    project_id=pid,
-                    filename="cli-design.md",
-                    name="CLI Design",
-                    ordinal=14,
-                    size_bytes=10,
-                    extension=".md",
-                    status="active",
-                )
-            )
+            db.add(AutopilotDesign(
+                id="des-test-cli", project_id=pid, filename="cli-design.md", name="CLI Design",
+                ordinal=14, size_bytes=10, extension=".md", status="active",
+            ))
             db.add(Workflow(id="wf-cli-1", name="autopilot", phases_folder_path="/tmp", status="active"))
             db.add(Agent(id="agent-cli-1", status="working", cli_type="pi", system_prompt="x"))
 
         with get_db() as db:
-            db.add(
-                Feature(
-                    id="feat-cli-1",
-                    design_id="des-test-cli",
-                    feature_key="core",
-                    name="Core",
-                    scope="s",
-                    status="active",
-                    workflow_id="wf-cli-1",
-                )
-            )
-            db.add(
-                Task(
-                    id="task-cli-1",
-                    workflow_id="wf-cli-1",
-                    raw_description="x",
-                    done_definition="x",
-                    status="in_progress",
-                    assigned_agent_id="agent-cli-1",
-                )
-            )
-            db.add(
-                AgentLog(
-                    agent_id="agent-cli-1",
-                    log_type="created",
-                    message="x",
-                    details={"cli_type": "pi", "task_id": "task-cli-1"},
-                )
-            )
+            db.add(Feature(
+                id="feat-cli-1", design_id="des-test-cli", feature_key="core", name="Core",
+                scope="s", status="active", workflow_id="wf-cli-1",
+            ))
+            db.add(Task(
+                id="task-cli-1", workflow_id="wf-cli-1", raw_description="x", done_definition="x",
+                status="in_progress", assigned_agent_id="agent-cli-1",
+            ))
+            db.add(AgentLog(
+                agent_id="agent-cli-1", log_type="created", message="x",
+                details={"cli_type": "pi", "task_id": "task-cli-1"},
+            ))
 
         resp = client.get(f"/api/autopilot/projects/{pid}/designs/cli-design.md/status")
         assert resp.status_code == 200, resp.text
@@ -2456,7 +2513,9 @@ class TestProjectDesigns:
         assert task["created_at"].endswith("Z"), "must carry an explicit UTC marker"
         assert task["cli_type"] == "pi"
 
-    def test_design_status_ignores_stale_active_workflow_whose_feature_is_done(self, project_client):
+    def test_design_status_ignores_stale_active_workflow_whose_feature_is_done(
+        self, project_client
+    ):
         """Regression, observed live on BACKEND_DESIGN.md: matching_workflows
         is deliberately broad (LIKE-matched on the bare design filename), so
         it also catches every OTHER feature's workflow that happened to
@@ -2610,7 +2669,9 @@ class TestProjectDesigns:
         # behind, matched to the workflow via pipeline_metrics.json.
         gallery_dir = dirs["project_dir"] / ".hephaestus" / "features" / "20260101_000000_Report_Design"
         (gallery_dir / "docs").mkdir(parents=True)
-        (gallery_dir / "docs" / "pipeline_metrics.json").write_text(json.dumps({"workflow_id": "wf-report-done"}))
+        (gallery_dir / "docs" / "pipeline_metrics.json").write_text(
+            json.dumps({"workflow_id": "wf-report-done"})
+        )
         (gallery_dir / "docs" / "feature_report.html").write_text("<html>report</html>")
 
         resp = client.get(f"/api/autopilot/projects/{pid}/designs/report-design.md/status")
@@ -2663,7 +2724,9 @@ class TestProjectDesigns:
                 )
             )
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/budget-paused-design.md/status")
+        resp = client.get(
+            f"/api/autopilot/projects/{pid}/designs/budget-paused-design.md/status"
+        )
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["status"] == "paused"
@@ -2811,7 +2874,9 @@ class TestProjectDesigns:
         tasks = resp.json()["features"][0]["tasks"]
         assert len(tasks) == 1
         task = tasks[0]
-        assert task["phase_description"] == ("Implement all components according to the architecture.")
+        assert task["phase_description"] == (
+            "Implement all components according to the architecture."
+        )
         assert task["goto_reason"] == "6 BLOCKER findings in adversarial review"
         assert task["action"] == "goto"
         assert task["action_target_phase"] == "development"
@@ -2880,7 +2945,9 @@ class TestWorkflowFeatureReport:
 
         gallery_dir = dirs["project_dir"] / ".hephaestus" / "features" / "20260101_000000_Some_Design"
         (gallery_dir / "docs").mkdir(parents=True)
-        (gallery_dir / "docs" / "pipeline_metrics.json").write_text(json.dumps({"workflow_id": "wf-archived-report"}))
+        (gallery_dir / "docs" / "pipeline_metrics.json").write_text(
+            json.dumps({"workflow_id": "wf-archived-report"})
+        )
         (gallery_dir / "docs" / "feature_report.html").write_text("<html>archived</html>")
 
         resp = client.get("/api/autopilot/workflows/wf-archived-report/feature_report")
@@ -2984,7 +3051,9 @@ class TestFeatureRecordReport:
 
         worktree_dir = dirs["project_dir"] / "worktree"
         (worktree_dir / ".hephaestus" / "doc_review").mkdir(parents=True)
-        (worktree_dir / ".hephaestus" / "doc_review" / "feature_report.html").write_text("<html>doc_review report</html>")
+        (worktree_dir / ".hephaestus" / "doc_review" / "feature_report.html").write_text(
+            "<html>doc_review report</html>"
+        )
 
         with get_db() as db:
             db.add(
@@ -3075,7 +3144,9 @@ class TestPhase0PseudoFeatureReviewFields:
         )
         return resp.json()["id"]
 
-    def test_paused_for_review_reports_paused_status_and_review_pending(self, project_client):
+    def test_paused_for_review_reports_paused_status_and_review_pending(
+        self, project_client
+    ):
         client, dirs = project_client
         pid = self._create_project(client, dirs)
 
@@ -3466,7 +3537,9 @@ class TestProjectPathTraversal:
         )
         pid = resp.json()["id"]
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/../../etc/passwd/content")
+        resp = client.get(
+            f"/api/autopilot/projects/{pid}/designs/../../etc/passwd/content"
+        )
         assert resp.status_code in (400, 404)
 
     def test_design_remove_rejects_traversal(self, project_client):
@@ -3523,7 +3596,9 @@ class TestCleanupBranchesProjectScoping:
         from src.core.database import AutopilotProject, get_db
 
         with get_db() as db:
-            proj = AutopilotProject(id="proj-active-1", name="Active", base_dir=target, is_active=True)
+            proj = AutopilotProject(
+                id="proj-active-1", name="Active", base_dir=target, is_active=True
+            )
             db.add(proj)
 
         with patch("src.core.worktree_manager.WorktreeManager") as MockWtMgr:
@@ -3585,7 +3660,9 @@ class TestCostEntryAgentBinding:
     def test_real_agent_cannot_claim_a_different_agent_id(self, client, monkeypatch):
         from src.mcp.autopilot import cost_routes as api_mod
 
-        monkeypatch.setattr(api_mod, "verify_agent_authentication", AsyncMock(return_value=True))
+        monkeypatch.setattr(
+            api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
+        )
         self._mock_cost_stack(monkeypatch)
 
         resp = client.post(
@@ -3603,7 +3680,9 @@ class TestCostEntryAgentBinding:
     def test_real_agent_id_matching_header_is_allowed(self, client, monkeypatch):
         from src.mcp.autopilot import cost_routes as api_mod
 
-        monkeypatch.setattr(api_mod, "verify_agent_authentication", AsyncMock(return_value=True))
+        monkeypatch.setattr(
+            api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
+        )
         recorded = self._mock_cost_stack(monkeypatch)
 
         own_id = "11111111-1111-1111-1111-111111111111"
@@ -3623,7 +3702,9 @@ class TestCostEntryAgentBinding:
     def test_system_identity_may_post_on_behalf_of_any_agent(self, client, monkeypatch):
         from src.mcp.autopilot import cost_routes as api_mod
 
-        monkeypatch.setattr(api_mod, "verify_agent_authentication", AsyncMock(return_value=True))
+        monkeypatch.setattr(
+            api_mod, "verify_agent_authentication", AsyncMock(return_value=True)
+        )
         recorded = self._mock_cost_stack(monkeypatch)
 
         resp = client.post(
@@ -3654,12 +3735,8 @@ class TestDeleteFeature:
         with get_db() as db:
             db.add(
                 Feature(
-                    id="feat-1",
-                    design_id="does-not-matter",
-                    feature_key="x",
-                    name="X",
-                    scope="s",
-                    status="pending",
+                    id="feat-1", design_id="does-not-matter", feature_key="x",
+                    name="X", scope="s", status="pending",
                 )
             )
 
@@ -3677,32 +3754,20 @@ class TestDeleteFeature:
         with get_db() as db:
             db.add(
                 Workflow(
-                    id="wf-del-1",
-                    name="t",
-                    phases_folder_path="/tmp",
-                    status="active",
-                    definition_id="autopilot",
+                    id="wf-del-1", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
                 )
             )
             db.add(
                 Feature(
-                    id="feat-2",
-                    design_id="does-not-matter",
-                    feature_key="y",
-                    name="Y",
-                    scope="s",
-                    status="active",
-                    workflow_id="wf-del-1",
+                    id="feat-2", design_id="does-not-matter", feature_key="y",
+                    name="Y", scope="s", status="active", workflow_id="wf-del-1",
                 )
             )
             db.add(
                 Task(
-                    id="task-del-1",
-                    workflow_id="wf-del-1",
-                    phase_id="phase-1",
-                    raw_description="r",
-                    done_definition="d",
-                    status="pending",
+                    id="task-del-1", workflow_id="wf-del-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="pending",
                 )
             )
 
@@ -3725,41 +3790,26 @@ class TestDeleteFeature:
         with get_db() as db:
             db.add(
                 Workflow(
-                    id="wf-del-cost",
-                    name="t",
-                    phases_folder_path="/tmp",
-                    status="active",
-                    definition_id="autopilot",
+                    id="wf-del-cost", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
                 )
             )
             db.add(
                 Feature(
-                    id="feat-cost",
-                    design_id="does-not-matter",
-                    feature_key="c",
-                    name="C",
-                    scope="s",
-                    status="active",
-                    workflow_id="wf-del-cost",
+                    id="feat-cost", design_id="does-not-matter", feature_key="c",
+                    name="C", scope="s", status="active", workflow_id="wf-del-cost",
                 )
             )
             db.add(
                 Task(
-                    id="task-del-cost",
-                    workflow_id="wf-del-cost",
-                    phase_id="phase-1",
-                    raw_description="r",
-                    done_definition="d",
-                    status="done",
+                    id="task-del-cost", workflow_id="wf-del-cost", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="done",
                 )
             )
             db.add(
                 CostEntry(
-                    id="cost-del-1",
-                    task_id="task-del-cost",
-                    workflow_id="wf-del-cost",
-                    source="pi",
-                    cost_usd=0.05,
+                    id="cost-del-1", task_id="task-del-cost", workflow_id="wf-del-cost",
+                    source="pi", cost_usd=0.05,
                 )
             )
 
@@ -3777,40 +3827,32 @@ class TestDeleteFeature:
         with get_db() as db:
             db.add(
                 Workflow(
-                    id="wf-del-2",
-                    name="t",
-                    phases_folder_path="/tmp",
-                    status="active",
-                    definition_id="autopilot",
+                    id="wf-del-2", name="t", phases_folder_path="/tmp",
+                    status="active", definition_id="autopilot",
                 )
             )
             db.add(
                 Feature(
-                    id="feat-3",
-                    design_id="does-not-matter",
-                    feature_key="z",
-                    name="Z",
-                    scope="s",
-                    status="active",
-                    workflow_id="wf-del-2",
+                    id="feat-3", design_id="does-not-matter", feature_key="z",
+                    name="Z", scope="s", status="active", workflow_id="wf-del-2",
                 )
             )
-            db.add(Agent(id="agent-del-1", system_prompt="p", status="working", cli_type="claude"))
+            db.add(
+                Agent(id="agent-del-1", system_prompt="p", status="working", cli_type="claude")
+            )
             db.add(
                 Task(
-                    id="task-del-2",
-                    workflow_id="wf-del-2",
-                    phase_id="phase-1",
-                    raw_description="r",
-                    done_definition="d",
-                    status="in_progress",
-                    assigned_agent_id="agent-del-1",
+                    id="task-del-2", workflow_id="wf-del-2", phase_id="phase-1",
+                    raw_description="r", done_definition="d",
+                    status="in_progress", assigned_agent_id="agent-del-1",
                 )
             )
 
         mock_state = Mock()
         mock_state.agent_manager.terminate_agent = AsyncMock()
-        monkeypatch.setattr("src.core.app_context.get_app_state", lambda: mock_state)
+        monkeypatch.setattr(
+            "src.core.app_context.get_app_state", lambda: mock_state
+        )
 
         resp = client.delete("/api/autopilot/features/feat-3")
         assert resp.status_code == 200
@@ -3841,11 +3883,15 @@ def stop_pipeline_client(tmp_path, monkeypatch):
     db_manager.create_tables()
 
     with db_manager.session_scope() as session:
-        session.add(AutopilotProject(id="proj-stop", name="proj-stop", base_dir=str(tmp_path), is_active=True))
+        session.add(
+            AutopilotProject(id="proj-stop", name="proj-stop", base_dir=str(tmp_path), is_active=True)
+        )
 
     fake_service = Mock()
     fake_service.stop = AsyncMock(return_value={"stopped": True})
-    monkeypatch.setattr("src.autopilot.service.get_autopilot_service", lambda project_id: fake_service)
+    monkeypatch.setattr(
+        "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+    )
 
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -3875,7 +3921,9 @@ class TestStopPipelineDeactivatesProject:
     def test_deactivates_the_stopped_project(self, stop_pipeline_client):
         from src.core.database import AutopilotProject, get_db
 
-        resp = stop_pipeline_client.post("/api/autopilot/stop", params={"project_id": "proj-stop"})
+        resp = stop_pipeline_client.post(
+            "/api/autopilot/stop", params={"project_id": "proj-stop"}
+        )
         assert resp.status_code == 200, resp.text
 
         with get_db() as db:
@@ -3895,73 +3943,71 @@ class TestRouterAggregation:
     # guarding anything. A subset check keeps catching the failure mode
     # this actually exists for -- include_router() wiring silently
     # dropping a route -- while staying green as the surface grows.
-    PRE_SPLIT_ROUTES = frozenset(
-        {
-            ("POST", "/api/autopilot/cleanup-branches"),
-            ("POST", "/api/autopilot/cost-entries"),
-            ("POST", "/api/autopilot/designs/add"),
-            ("GET", "/api/autopilot/designs/{design_id}/costs"),
-            ("GET", "/api/autopilot/feature-records/{feature_id}/docs"),
-            ("GET", "/api/autopilot/feature-records/{feature_id}/docs/{doc_name}"),
-            ("GET", "/api/autopilot/feature-records/{feature_id}/report"),
-            ("GET", "/api/autopilot/features"),
-            ("DELETE", "/api/autopilot/features/{feature_id}"),
-            ("GET", "/api/autopilot/features/{feature_id}"),
-            ("GET", "/api/autopilot/features/{feature_id}/costs"),
-            ("GET", "/api/autopilot/features/{feature_id}/docs/{doc_name}"),
-            ("GET", "/api/autopilot/features/{feature_id}/download"),
-            ("GET", "/api/autopilot/features/{feature_id}/logs"),
-            ("GET", "/api/autopilot/features/{feature_id}/logs/{log_name}"),
-            ("POST", "/api/autopilot/features/{feature_id}/pause"),
-            ("GET", "/api/autopilot/features/{feature_id}/report"),
-            ("POST", "/api/autopilot/features/{feature_id}/resume"),
-            ("POST", "/api/autopilot/features/{feature_id}/review"),
-            ("GET", "/api/autopilot/health"),
-            ("GET", "/api/autopilot/input"),
-            ("POST", "/api/autopilot/input"),
-            ("DELETE", "/api/autopilot/input/{request_id}"),
-            ("GET", "/api/autopilot/logs"),
-            ("GET", "/api/autopilot/messages"),
-            ("POST", "/api/autopilot/messages/archive"),
-            ("GET", "/api/autopilot/messages/archived"),
-            ("POST", "/api/autopilot/messages/cleanup-archives"),
-            ("POST", "/api/autopilot/messages/unarchive"),
-            ("POST", "/api/autopilot/messages/unarchive-all"),
-            ("GET", "/api/autopilot/projects"),
-            ("POST", "/api/autopilot/projects"),
-            ("DELETE", "/api/autopilot/projects/{project_id}"),
-            ("GET", "/api/autopilot/projects/{project_id}"),
-            ("PUT", "/api/autopilot/projects/{project_id}"),
-            ("GET", "/api/autopilot/projects/{project_id}/browse"),
-            ("GET", "/api/autopilot/projects/{project_id}/browse/content"),
-            ("GET", "/api/autopilot/projects/{project_id}/costs"),
-            ("GET", "/api/autopilot/projects/{project_id}/designs"),
-            ("POST", "/api/autopilot/projects/{project_id}/designs"),
-            ("POST", "/api/autopilot/projects/{project_id}/designs/reload"),
-            ("PUT", "/api/autopilot/projects/{project_id}/designs/reorder"),
-            ("DELETE", "/api/autopilot/projects/{project_id}/designs/{filename}"),
-            ("GET", "/api/autopilot/projects/{project_id}/designs/{filename}/content"),
-            ("GET", "/api/autopilot/projects/{project_id}/designs/{filename}/status"),
-            ("PATCH", "/api/autopilot/projects/{project_id}/review-mode"),
-            ("POST", "/api/autopilot/projects/{project_id}/sync"),
-            ("GET", "/api/autopilot/queue"),
-            ("POST", "/api/autopilot/queue"),
-            ("POST", "/api/autopilot/queue/reorder"),
-            ("POST", "/api/autopilot/queue/repair"),
-            ("GET", "/api/autopilot/queue/repair/{repair_id}"),
-            ("POST", "/api/autopilot/queue/requeue"),
-            ("POST", "/api/autopilot/queue/rerun"),
-            ("DELETE", "/api/autopilot/queue/{filename}"),
-            ("GET", "/api/autopilot/queue/{filename}/content"),
-            ("POST", "/api/autopilot/start"),
-            ("GET", "/api/autopilot/status"),
-            ("POST", "/api/autopilot/stop"),
-            ("GET", "/api/autopilot/tasks/{task_id}/costs"),
-            ("GET", "/api/autopilot/workflows/{workflow_id}/costs"),
-            ("GET", "/api/autopilot/workflows/{workflow_id}/decomposition_review"),
-            ("GET", "/api/autopilot/workflows/{workflow_id}/feature_report"),
-        }
-    )
+    PRE_SPLIT_ROUTES = frozenset({
+        ("POST", "/api/autopilot/cleanup-branches"),
+        ("POST", "/api/autopilot/cost-entries"),
+        ("POST", "/api/autopilot/designs/add"),
+        ("GET", "/api/autopilot/designs/{design_id}/costs"),
+        ("GET", "/api/autopilot/feature-records/{feature_id}/docs"),
+        ("GET", "/api/autopilot/feature-records/{feature_id}/docs/{doc_name}"),
+        ("GET", "/api/autopilot/feature-records/{feature_id}/report"),
+        ("GET", "/api/autopilot/features"),
+        ("DELETE", "/api/autopilot/features/{feature_id}"),
+        ("GET", "/api/autopilot/features/{feature_id}"),
+        ("GET", "/api/autopilot/features/{feature_id}/costs"),
+        ("GET", "/api/autopilot/features/{feature_id}/docs/{doc_name}"),
+        ("GET", "/api/autopilot/features/{feature_id}/download"),
+        ("GET", "/api/autopilot/features/{feature_id}/logs"),
+        ("GET", "/api/autopilot/features/{feature_id}/logs/{log_name}"),
+        ("POST", "/api/autopilot/features/{feature_id}/pause"),
+        ("GET", "/api/autopilot/features/{feature_id}/report"),
+        ("POST", "/api/autopilot/features/{feature_id}/resume"),
+        ("POST", "/api/autopilot/features/{feature_id}/review"),
+        ("GET", "/api/autopilot/health"),
+        ("GET", "/api/autopilot/input"),
+        ("POST", "/api/autopilot/input"),
+        ("DELETE", "/api/autopilot/input/{request_id}"),
+        ("GET", "/api/autopilot/logs"),
+        ("GET", "/api/autopilot/messages"),
+        ("POST", "/api/autopilot/messages/archive"),
+        ("GET", "/api/autopilot/messages/archived"),
+        ("POST", "/api/autopilot/messages/cleanup-archives"),
+        ("POST", "/api/autopilot/messages/unarchive"),
+        ("POST", "/api/autopilot/messages/unarchive-all"),
+        ("GET", "/api/autopilot/projects"),
+        ("POST", "/api/autopilot/projects"),
+        ("DELETE", "/api/autopilot/projects/{project_id}"),
+        ("GET", "/api/autopilot/projects/{project_id}"),
+        ("PUT", "/api/autopilot/projects/{project_id}"),
+        ("GET", "/api/autopilot/projects/{project_id}/browse"),
+        ("GET", "/api/autopilot/projects/{project_id}/browse/content"),
+        ("GET", "/api/autopilot/projects/{project_id}/costs"),
+        ("GET", "/api/autopilot/projects/{project_id}/designs"),
+        ("POST", "/api/autopilot/projects/{project_id}/designs"),
+        ("POST", "/api/autopilot/projects/{project_id}/designs/reload"),
+        ("PUT", "/api/autopilot/projects/{project_id}/designs/reorder"),
+        ("DELETE", "/api/autopilot/projects/{project_id}/designs/{filename}"),
+        ("GET", "/api/autopilot/projects/{project_id}/designs/{filename}/content"),
+        ("GET", "/api/autopilot/projects/{project_id}/designs/{filename}/status"),
+        ("PATCH", "/api/autopilot/projects/{project_id}/review-mode"),
+        ("POST", "/api/autopilot/projects/{project_id}/sync"),
+        ("GET", "/api/autopilot/queue"),
+        ("POST", "/api/autopilot/queue"),
+        ("POST", "/api/autopilot/queue/reorder"),
+        ("POST", "/api/autopilot/queue/repair"),
+        ("GET", "/api/autopilot/queue/repair/{repair_id}"),
+        ("POST", "/api/autopilot/queue/requeue"),
+        ("POST", "/api/autopilot/queue/rerun"),
+        ("DELETE", "/api/autopilot/queue/{filename}"),
+        ("GET", "/api/autopilot/queue/{filename}/content"),
+        ("POST", "/api/autopilot/start"),
+        ("GET", "/api/autopilot/status"),
+        ("POST", "/api/autopilot/stop"),
+        ("GET", "/api/autopilot/tasks/{task_id}/costs"),
+        ("GET", "/api/autopilot/workflows/{workflow_id}/costs"),
+        ("GET", "/api/autopilot/workflows/{workflow_id}/decomposition_review"),
+        ("GET", "/api/autopilot/workflows/{workflow_id}/feature_report"),
+    })
 
     def test_no_pre_split_route_was_dropped(self):
         from src.mcp.autopilot import router
@@ -3978,7 +4024,11 @@ class TestRouterAggregation:
             return out
 
         flat = _flatten(router.routes)
-        current = {(method, r.path) for r in flat for method in (getattr(r, "methods", None) or set())}
+        current = {
+            (method, r.path)
+            for r in flat
+            for method in (getattr(r, "methods", None) or set())
+        }
         missing = self.PRE_SPLIT_ROUTES - current
         assert not missing, f"routes lost since the split: {sorted(missing)}"
 
