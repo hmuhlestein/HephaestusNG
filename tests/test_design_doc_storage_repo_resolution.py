@@ -182,6 +182,39 @@ class TestSyncProjectDesigns:
         result = await sync_project_designs("proj-sync", agent_id="test-agent")
         assert isinstance(result, list)
 
+    @pytest.mark.asyncio
+    async def test_non_queue_design_survives_a_sync(self, db_manager, tmp_path):
+        """Regression: sync's filesystem scan only ever looks at
+        DESIGN_CONTEXT_SUBDIR (.hephaestus/designs/), but add_project_design
+        writes a "docs"/"docs/bugfix"/custom-destination design somewhere
+        else entirely and marks it with file_path. Before this fix, sync's
+        deletion sweep compared ALL of a project's design rows against that
+        one directory's listing -- so a design added via the New
+        Feature/Report Bug flow looked "deleted" on literally the first
+        sync (this endpoint, or DesignQueuePanel's own 30s auto-reload
+        timer) and was silently dropped from the DB, even though its file
+        was sitting untouched on disk the whole time."""
+        from src.mcp.autopilot.design_file_routes import add_project_design, sync_project_designs
+
+        project_dir = tmp_path / "proj-sync-nonqueue"
+        project_dir.mkdir()
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-sync-nonqueue", name="p", base_dir=str(project_dir)))
+
+        await add_project_design(
+            "proj-sync-nonqueue",
+            _make_request(destination="docs/bugfix", name="My Bug"),
+            agent_id="test-agent",
+        )
+        assert (project_dir / "docs" / "bugfix" / "My_Bug.md").exists()
+
+        result = await sync_project_designs("proj-sync-nonqueue", agent_id="test-agent")
+
+        names = [d.name for d in result]
+        assert "My Bug" in names
+        assert (project_dir / "docs" / "bugfix" / "My_Bug.md").exists()
+
 
 class TestReloadProjectDesigns:
     @pytest.mark.asyncio

@@ -148,11 +148,21 @@ def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[s
     existing = {d.filename: d for d in db.query(AutopilotDesign).filter_by(project_id=project_id).all()}
 
     fs_filenames = set(fs_files.keys())
-    db_filenames = set(existing.keys())
+    # Only rows with no file_path live in design_dir -- add_project_design
+    # sets file_path for every OTHER destination (docs/spec, docs/bugfix,
+    # or an arbitrary browsed folder; see its own comment), so a design
+    # added there is invisible to the glob above by construction. Scoping
+    # the deletion sweep to file_path-less rows only is what makes this
+    # sync a no-op for those -- unscoped, every one of them looked
+    # "deleted" on every sync (this endpoint, and DesignQueuePanel's own
+    # 30s auto-reload timer), and got dropped from the DB despite the file
+    # still sitting on disk right where it was added.
+    queue_scoped = {fname: d for fname, d in existing.items() if not d.file_path}
+    db_filenames = set(queue_scoped.keys())
 
     # Remove DB records for deleted files
     for fname in db_filenames - fs_filenames:
-        db.delete(existing[fname])
+        db.delete(queue_scoped[fname])
 
     # Add or update DB records — two passes: prefixed first, then unprefixed
     prefixed = []
