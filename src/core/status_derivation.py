@@ -169,9 +169,24 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
 
     if task_statuses == {TaskStatus.DONE} and workflow_blocks_completion:
         # If workflow is failed, the feature should be failed too
-        # If workflow is paused, keep active so retry/resume logic can pick it back up
+        # If workflow is paused mid-pipeline (real work still to resume),
+        # keep active so retry/resume logic can pick it back up. But
+        # paused_by="review" is a different shape of "paused" entirely --
+        # it's only ever set once EVERY phase has already reached
+        # "completed" (_pause_feature_for_review), so there is no
+        # "remaining work" for retry/resume logic to pick up; deriving
+        # ACTIVE here is what a human review is waiting on, not what's
+        # actually true. The frontend's Review button gates on
+        # feature.status in {"completed", "paused"} (DesignQueuePanel.tsx),
+        # so deriving ACTIVE instead of PAUSED silently hid the button even
+        # though review_pending (read straight from workflow.paused_by)
+        # correctly reported the review as pending. Observed live: feature
+        # feat-e1d649cf's Review button never appeared despite the
+        # workflow sitting paused_by="review" for hours.
         if wf and wf.status == "failed":
             derived = FeatureStatus.FAILED
+        elif wf and wf.paused_by == "review":
+            derived = FeatureStatus.PAUSED
         else:
             derived = FeatureStatus.ACTIVE
     elif task_statuses == {TaskStatus.DONE}:
