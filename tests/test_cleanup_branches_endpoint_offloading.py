@@ -32,7 +32,14 @@ async def test_cleanup_is_offloaded_to_executor():
     ):
         result = await cleanup_branches(project_path="/tmp/some-project")
 
-    assert result == {"cleaned": 2}
+    assert result == {
+        "cleaned": 2,
+        "merged": 0,
+        "failed": 0,
+        "worktrees_cleaned": 0,
+        "branches": [],
+        "repos_swept": [{"path": "/tmp/some-project", "cleaned": 2}],
+    }
     fake_loop.run_in_executor.assert_called_once_with(
         None, fake_branch_manager.cleanup_all_stale_branches
     )
