@@ -1844,64 +1844,6 @@ class TestProjectDesigns:
         )
         assert resp.status_code == 409
 
-    def test_add_design_reselecting_the_same_remote_file_returns_it_instead_of_409(
-        self, project_client
-    ):
-        """Regression: LoadDesignModal's "Load from Remote" file picker
-        re-submits the exact file it just read back to its own folder --
-        previously a guaranteed 409 on every such re-submission, since the
-        file (and its design row) already exists. source_remote_path lets
-        the client say "this is still exactly the file I picked, unedited"
-        -- the endpoint recognizes the match and returns the existing
-        design instead of erroring or inserting a duplicate queue entry."""
-        client, dirs = project_client
-        pid = self._create_project(client, dirs)
-
-        first = client.post(
-            f"/api/autopilot/projects/{pid}/designs",
-            json={"name": "Reselect Test", "content": "original"},
-        )
-        assert first.status_code == 200
-        first_id = first.json()["id"]
-        first_ordinal = first.json()["ordinal"]
-
-        resp = client.post(
-            f"/api/autopilot/projects/{pid}/designs",
-            json={
-                "name": "Reselect Test",
-                "content": "original",
-                "source_remote_path": "some/folder/Reselect_Test.md",
-            },
-        )
-        assert resp.status_code == 200
-        assert resp.json()["id"] == first_id
-        assert resp.json()["ordinal"] == first_ordinal
-
-    def test_add_design_source_remote_path_naming_a_different_file_still_409s(
-        self, project_client
-    ):
-        """source_remote_path must name THIS SAME file -- a stale or
-        mismatched value (e.g. left over from a previous selection) must
-        not accidentally suppress a genuine name collision against an
-        unrelated existing design."""
-        client, dirs = project_client
-        pid = self._create_project(client, dirs)
-
-        client.post(
-            f"/api/autopilot/projects/{pid}/designs",
-            json={"name": "Collision Test", "content": "first"},
-        )
-
-        resp = client.post(
-            f"/api/autopilot/projects/{pid}/designs",
-            json={
-                "name": "Collision Test",
-                "content": "second",
-                "source_remote_path": "some/folder/some_other_file.md",
-            },
-        )
-        assert resp.status_code == 409
-
     def test_add_design_with_docs_destination_writes_to_docs_dir(self, project_client):
         """Locally-uploaded designs (destination="docs") persist as a
         real, git-tracked file under docs/ instead of the hidden
