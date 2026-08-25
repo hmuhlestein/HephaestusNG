@@ -1369,7 +1369,25 @@ def _case_in_progress_no_tasks(db, workflow_id: str, in_progress: list, logger: 
     """
     for ps in in_progress:
         phase = ps["phase"]
-        task_count = db.query(Task).filter_by(phase_id=phase.id).count()
+        # Scoped to this phase's CURRENT cycle (Task.created_at >=
+        # execution.started_at), matching _case_completed_with_successor's
+        # own cycle_filter -- an unscoped count sees a stale, terminal task
+        # from a PRIOR cycle (e.g. "duplicated", left behind when a ticket-
+        # blocked git_expert/doc_review task got routed to development,
+        # see _retry_failed_tasks/_maybe_retry_failed_tasks) and treats the
+        # phase as "already has a task," permanently blocking a fresh
+        # dispatch even though this cycle's own task count is genuinely
+        # zero. Observed live: workflow b7bd02cc's git_expert phase sat
+        # in_progress for hours with only a "duplicated" task from a
+        # resolved ticket, deploy never budging, because this exact count
+        # never dropped to zero.
+        execution = ps.get("execution")
+        cycle_filter = (
+            (Task.created_at >= execution.started_at,)
+            if execution and execution.started_at
+            else ()
+        )
+        task_count = db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
         if task_count == 0 and not _claim_phase_task_creation(db, phase.id):
             # Same race as _case_start_first_phase: other paths (e.g. the
             # spec-gate immediate-fire path in task_completion_service.py,

@@ -575,6 +575,46 @@ class TestCaseInProgressNoTasks:
                 assert result is True
                 mock_create.assert_called_once()
 
+    def test_creates_task_when_only_a_stale_terminal_task_predates_this_cycle(
+        self, db_manager, sample_workflow
+    ):
+        """Regression, observed live: workflow b7bd02cc's git_expert phase
+        sat "in_progress" for hours with deploy never budging, because its
+        only task was "duplicated" -- left behind when a ticket-blocked
+        git_expert task got routed to development to fix the ticket (see
+        _retry_failed_tasks/_maybe_retry_failed_tasks's routing branch).
+        The old unscoped `Task.filter_by(phase_id=...).count()` counted
+        that stale, terminal task forever, so this case never saw
+        task_count == 0 and never dispatched a fresh one -- exactly the
+        "stale count blocks fresh dispatch forever" class
+        _case_completed_with_successor's own cycle_filter already guards
+        against (see its "product_validation stalled 2+ days" note); this
+        case had no equivalent."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_no_tasks
+
+        cycle_start = datetime.utcnow()
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.started_at = cycle_start
+            session.add(Task(
+                id="task-stale-duplicated",
+                workflow_id="wf-1",
+                phase_id="phase-1",
+                raw_description="r",
+                done_definition="d",
+                status="duplicated",
+                created_at=cycle_start - timedelta(minutes=10),
+            ))
+            in_progress = [{"phase": phase, "execution": execution, "status": "in_progress"}]
+
+        logger = MagicMock()
+        with patch("src.autopilot.orchestrator.phase_transitions._create_phase_task", return_value=True) as mock_create:
+            with db_manager.session_scope() as session:
+                result = _case_in_progress_no_tasks(session, "wf-1", in_progress, logger)
+                assert result is True
+                mock_create.assert_called_once()
+
 
 class TestMaybeRetryFailedTasks:
     """Tests for _maybe_retry_failed_tasks function."""
