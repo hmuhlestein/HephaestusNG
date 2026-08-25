@@ -15,6 +15,7 @@ Score bands map onto the autopilot evaluation_points thresholds:
     score >= 0.7 -> continue           (passes the gate)
 """
 
+import functools
 import json
 import logging
 import re
@@ -43,7 +44,8 @@ DEFAULT_SPEC: Dict[str, Any] = {
 _WORKFLOWS_DIR = Path(__file__).parent.parent.parent / "config" / "workflows"
 
 
-def _load_gated_phases() -> Tuple[str, ...]:
+@functools.lru_cache(maxsize=1)
+def get_gated_phases() -> Tuple[str, ...]:
     """Phases gated by the hybrid spec (engine evaluation point keys).
 
     Read from each phase's own YAML file (`spec_gate: true`) instead of a
@@ -62,6 +64,17 @@ def _load_gated_phases() -> Tuple[str, ...]:
     `outputs:`/`required_output:` declarations, the same place a phase
     author already looks) removes the second place that has to be kept in
     sync by hand.
+
+    lru_cache'd and called lazily (not computed eagerly at module import,
+    which this used to do via a bare `GATED_PHASES = _load_gated_phases()`
+    module-level statement) -- this scans and yaml.safe_loads every phase
+    file across every workflow definition (20+ files), which sat directly
+    in `import src.mcp.server:app`'s dependency chain, adding several
+    real seconds to EVERY server startup before uvicorn could even bind
+    the port. Every caller now goes through this function instead of a
+    module-level constant, so the cost lands on first real use (a phase
+    transition being evaluated, already off the startup path) instead of
+    unconditionally on every process start.
     """
     gated = []
     try:
@@ -90,8 +103,6 @@ def _load_gated_phases() -> Tuple[str, ...]:
                 gated.append(phase_cfg["name"])
     return tuple(gated)
 
-
-GATED_PHASES = _load_gated_phases()
 
 # Single-file overrides per phase, keyed by phase name — used when a phase's
 # real output lives somewhere its own declared `outputs:` list doesn't
@@ -290,7 +301,7 @@ def resolve_declared_output_path(
     # phase whose GATE_RESULT_SUBDIR override IS that flat location (none
     # currently -- kept for a future phase that might genuinely need it).
     gate_excludes_flat = (
-        phase_name in GATED_PHASES
+        phase_name in get_gated_phases()
         and GATE_RESULT_SUBDIR.get(phase_name) != CONTEXT_DIR_NAME
     )
     for name in names_to_check:
@@ -309,7 +320,8 @@ def resolve_declared_output_path(
         #
         # This is not hypothetical. Phase.outputs is snapshotted into the DB
         # when a workflow is created and never re-read from YAML, while
-        # GATED_PHASES is read from YAML at import -- so the moment
+        # get_gated_phases() reads from YAML fresh (lru_cache'd per
+        # process, not per workflow) -- so the moment
         # security_review became a gated phase, every workflow already
         # in flight kept its old "security_review/security.md" declaration
         # and could no longer complete the phase at all. Correcting the YAML
@@ -2278,7 +2290,7 @@ def build_phase_output(
     heuristic evaluator honours an explicit `score`, so this drives goto/retry/
     continue against the configured thresholds.
     """
-    if phase_name not in GATED_PHASES:
+    if phase_name not in get_gated_phases():
         return {}
 
     spec = spec if spec is not None else load_spec()

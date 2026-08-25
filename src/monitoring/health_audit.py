@@ -165,11 +165,11 @@ class SystemHealthAuditor:
                 # before promoting to done, otherwise invalid results bypass
                 # the gate validation.
                 if task.completion_notes:
-                    from src.autopilot.spec import GATED_PHASES
+                    from src.autopilot.spec import get_gated_phases
                     from src.core.database import Phase as _Phase
-                    
+
                     phase = session.query(_Phase).filter_by(id=task.phase_id).first() if task.phase_id else None
-                    is_gated = phase and phase.name in GATED_PHASES
+                    is_gated = phase and phase.name in get_gated_phases()
                     
                     if is_gated:
                         # For gated phases, don't promote to done without gate validation

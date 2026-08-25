@@ -308,8 +308,8 @@ def verify_gate_result_schema(session, task, phase=None) -> Optional[Dict[str, A
     from src.autopilot.spec import (
         GATE_RESULT_ARTIFACTS,
         GATE_RESULT_SUBDIR,
-        GATED_PHASES,
         _feature_review_legacy_report,
+        get_gated_phases,
         read_okf_report,
         validate_gate_result_schema,
     )
@@ -317,7 +317,7 @@ def verify_gate_result_schema(session, task, phase=None) -> Optional[Dict[str, A
 
     if phase is None:
         phase = session.query(Phase).filter_by(id=task.phase_id).first()
-    if not phase or phase.name not in GATED_PHASES:
+    if not phase or phase.name not in get_gated_phases():
         return None
 
     # Same exemption as verify_output_artifact's -- an arbitration task's

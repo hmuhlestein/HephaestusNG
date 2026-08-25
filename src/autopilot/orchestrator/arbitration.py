@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from src.autopilot.orchestrator.engine_client import create_agent_for_task_direct
-from src.autopilot.spec import GATED_PHASES, build_phase_output
+from src.autopilot.spec import build_phase_output, get_gated_phases
 from src.core.constants import CONTEXT_DIR_NAME
 from src.core.database import (
     Agent,
@@ -173,7 +173,7 @@ def _phase_currently_passes(
     max_review_runs bug (cb60308) did -- it only ever advances on a
     genuine fresh passing score.
     """
-    if phase_name not in GATED_PHASES:
+    if phase_name not in get_gated_phases():
         return False, "not a gated phase"
     if not working_directory or not Path(working_directory).exists():
         return False, "no working directory"
