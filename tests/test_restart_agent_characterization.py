@@ -292,6 +292,7 @@ class TestRestartSessionId:
                 "  cli_type VARCHAR,"
                 "  tmux_session_name VARCHAR,"
                 "  current_task_id VARCHAR,"
+                "  working_directory VARCHAR,"
                 "  last_activity DATETIME,"
                 "  launched_at DATETIME,"
                 "  health_check_failures INTEGER DEFAULT 0,"

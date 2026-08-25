@@ -31,7 +31,7 @@ async def _run_delete(test_db, task_id, agent_manager=None):
             terminate_agent=AsyncMock()
         )
         mock_state.broadcast_update = AsyncMock()
-        return await server_module.delete_task_endpoint(task_id)
+        return await server_module.delete_task_endpoint(task_id, x_agent_id="system")
 
 
 class TestDeleteTaskEndpoint:

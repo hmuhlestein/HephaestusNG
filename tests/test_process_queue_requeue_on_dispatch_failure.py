@@ -251,7 +251,7 @@ class TestBumpEndpointRequeueOnDispatchFailure:
         )
 
         with pytest.raises(HTTPException):
-            await task_admin_routes.bump_task_priority_endpoint(task_id=queued_task_id)
+            await task_admin_routes.bump_task_priority_endpoint(task_id=queued_task_id, x_agent_id="system")
 
         status, agent_id = _fetch(db_manager, queued_task_id)
         assert status == "queued", (
