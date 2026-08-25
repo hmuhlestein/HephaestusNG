@@ -82,6 +82,11 @@ def client(autopilot_dirs, tmp_path, monkeypatch):
     monkeypatch.setattr(autopilot_api, "_get_active_project_id", lambda: None)
     monkeypatch.setattr(control_routes, "_get_active_project_id", lambda: None)
 
+    # _cache is a module-level dict shared by every test that imports this
+    # module -- an earlier test's cached "features"/etc. entry (still within
+    # its TTL) would otherwise leak into this test's response.
+    autopilot_api._cache.clear()
+
     return TestClient(app)
 
 
@@ -724,6 +729,10 @@ class TestFeatures:
         the old test's "validated", which the Feature.status CHECK
         constraint doesn't even permit) is what the current status model
         actually produces."""
+        from types import SimpleNamespace
+
+        import src.core.app_context as app_context
+        from src.core.app_context import set_app_state
         from src.core.constants import CONTEXT_DIR_NAME
         from src.core.database import DatabaseManager, Feature, Workflow
 
@@ -756,7 +765,18 @@ class TestFeatures:
                 )
             )
 
-        resp = client.get("/api/autopilot/features")
+        # _scan_features reads get_app_state().db_manager, not a fresh
+        # DatabaseManager(None) -- register a fake state pointing at this
+        # test's own db, restoring whatever was there before so this
+        # doesn't leak into later tests in the session (see
+        # test_broadcast_scoping_round2.py's fake_state fixture for the
+        # same leak this mirrors).
+        previous_state = app_context._app_state
+        set_app_state(SimpleNamespace(db_manager=db))
+        try:
+            resp = client.get("/api/autopilot/features")
+        finally:
+            app_context._app_state = previous_state
         assert len(resp.json()) == 1
         assert resp.json()[0]["status"] == "completed"
         assert resp.json()[0]["has_report"] is True

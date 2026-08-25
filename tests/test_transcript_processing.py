@@ -12,6 +12,11 @@ def _make_agent(tmux_session_name="test_agent", status="working", current_task_i
     agent.status = status
     agent.current_task_id = current_task_id
     agent.cli_type = "pi"
+    # _resolve_tmux_transcript_dir checks agent.working_directory before
+    # falling back to task.workflow.working_directory (see its own
+    # docstring) -- unset, a bare MagicMock() is truthy, so it wins over
+    # this mock's real task/workflow chain and resolves to a bogus path.
+    agent.working_directory = None
     return agent
 
 

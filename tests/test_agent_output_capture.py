@@ -60,6 +60,10 @@ class TestAgentOutputCapture:
         mock_agent.tmux_session_name = session_name
         mock_agent.status = "working"
         mock_agent.current_task_id = None
+        # Unset on a Mock(spec=Agent) defaults to a truthy Mock, and
+        # terminate_agent subtracts it from a real datetime for the
+        # message-delivery grace-period check -- TypeError.
+        mock_agent.pending_message_sent_at = None
 
         # Create mock tmux session
         mock_tmux_session = Mock()
@@ -129,6 +133,10 @@ class TestAgentOutputCapture:
         mock_agent.tmux_session_name = session_name
         mock_agent.status = "working"
         mock_agent.current_task_id = None
+        # Unset on a Mock(spec=Agent) defaults to a truthy Mock, and
+        # terminate_agent subtracts it from a real datetime for the
+        # message-delivery grace-period check -- TypeError.
+        mock_agent.pending_message_sent_at = None
 
         # Setup database session mock
         mock_db_session = Mock()
@@ -359,6 +367,10 @@ class TestAgentOutputCapture:
         mock_agent.tmux_session_name = session_name
         mock_agent.status = "working"
         mock_agent.current_task_id = None
+        # Unset on a Mock(spec=Agent) defaults to a truthy Mock, and
+        # terminate_agent subtracts it from a real datetime for the
+        # message-delivery grace-period check -- TypeError.
+        mock_agent.pending_message_sent_at = None
 
         # Create mock tmux session that fails to capture
         mock_tmux_session = Mock()

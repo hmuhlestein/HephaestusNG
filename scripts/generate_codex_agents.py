@@ -55,6 +55,14 @@ def main():
     phases.sort(key=lambda phase: phase["id"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Remove existing generated agents first -- otherwise a phase that gets
+    # renamed or merged into another (e.g. git_commit_push folded into
+    # git_expert) leaves its old .toml behind forever instead of being
+    # regenerated away, since this loop only ever writes/overwrites the
+    # CURRENT phase set's filenames.
+    for stale in output_dir.glob("hephaestus-*.toml"):
+        stale.unlink()
+
     print(f"Found {len(phases)} phases in YAML")
     for phase in phases:
         filename = f"hephaestus-{phase['name'].replace('_', '-')}.toml"

@@ -131,7 +131,7 @@ class TestRestartTaskEndpointCliModelConcurrency:
                  new=AsyncMock(return_value=dispatched_agent),
              ) as mock_dispatch, \
              patch("src.services.agent_dispatch_service.AgentDispatchService.mark_assigned"):
-            result = await restart_task_endpoint(task_id="task-1")
+            result = await restart_task_endpoint(task_id="task-1", x_agent_id="system")
 
         assert result["status"] == "assigned"
         _, kwargs = mock_dispatch.call_args
@@ -163,7 +163,7 @@ class TestRestartTaskEndpointCliModelConcurrency:
                  "src.services.agent_dispatch_service.AgentDispatchService.dispatch",
                  new=AsyncMock(),
              ) as mock_dispatch:
-            result = await restart_task_endpoint(task_id="task-1")
+            result = await restart_task_endpoint(task_id="task-1", x_agent_id="system")
 
         assert result["status"] == "queued"
         mock_dispatch.assert_not_called()
@@ -196,7 +196,7 @@ class TestRestartTaskEndpointCliModelConcurrency:
                  new=AsyncMock(return_value=dispatched_agent),
              ) as mock_dispatch, \
              patch("src.services.agent_dispatch_service.AgentDispatchService.mark_assigned"):
-            result = await restart_task_endpoint(task_id="task-1")
+            result = await restart_task_endpoint(task_id="task-1", x_agent_id="system")
 
         assert result["status"] == "assigned"
         mock_dispatch.assert_called_once()
@@ -252,7 +252,7 @@ class TestRestartTaskEndpointCliModelConcurrency:
                  new=AsyncMock(return_value=dispatched_agent),
              ), \
              patch("src.services.agent_dispatch_service.AgentDispatchService.mark_assigned"):
-            await restart_task_endpoint(task_id="task-blocked")
+            await restart_task_endpoint(task_id="task-blocked", x_agent_id="system")
 
         session = db_manager.get_session()
         try:
@@ -316,7 +316,7 @@ class TestRestartTaskEndpointCliModelConcurrency:
                  new=AsyncMock(return_value=dispatched_agent),
              ), \
              patch("src.services.agent_dispatch_service.AgentDispatchService.mark_assigned"):
-            await restart_task_endpoint(task_id="task-review")
+            await restart_task_endpoint(task_id="task-review", x_agent_id="system")
 
         session = db_manager.get_session()
         try:
@@ -355,7 +355,7 @@ class TestBumpTaskPriorityEndpointCliModelConcurrency:
                  new=AsyncMock(return_value=dispatched_agent),
              ) as mock_dispatch, \
              patch("src.services.agent_dispatch_service.AgentDispatchService.mark_assigned"):
-            result = await bump_task_priority_endpoint(task_id="task-1")
+            result = await bump_task_priority_endpoint(task_id="task-1", x_agent_id="system")
 
         assert result["success"] is True
         _, kwargs = mock_dispatch.call_args
@@ -391,7 +391,7 @@ class TestBumpTaskPriorityEndpointCliModelConcurrency:
                  new=AsyncMock(return_value=dispatched_agent),
              ) as mock_dispatch, \
              patch("src.services.agent_dispatch_service.AgentDispatchService.mark_assigned"):
-            result = await bump_task_priority_endpoint(task_id="task-1")
+            result = await bump_task_priority_endpoint(task_id="task-1", x_agent_id="system")
 
         assert result["success"] is True
         mock_dispatch.assert_called_once()
