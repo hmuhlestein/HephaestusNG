@@ -247,3 +247,85 @@ class TestCheckBackendHealth:
         ), patch("httpx.get", return_value=mock_resp):
             watchdog.check_backend_health(8300)
         assert watchdog._backend_health_failures == 1
+
+
+class TestBackendRestartGraceSeeding:
+    """Regression: every ProcessWatchdog is a freshly constructed instance
+    (run_watchdog.py is its own subprocess, spawned by `heph start`/`heph
+    restart` AFTER the backend already exists), so _backend_last_restart
+    defaulting to 0.0 made the post-restart grace period inert for the
+    backend instance a fresh watchdog was actually handed -- it only ever
+    applied to a restart the watchdog later triggered itself. In practice
+    this meant every `heph restart` produced a watchdog that started
+    counting /health failures against the brand-new, still-warming-up
+    backend immediately, killing it ~90-135s in and repeating the cycle on
+    every subsequent restart. initial_backend_start_time closes that gap by
+    letting the caller (run_watchdog.py, via --backend-started-at) seed the
+    real start time."""
+
+    def test_recent_start_time_skips_health_check_during_grace_period(self):
+        import time
+
+        watchdog = ProcessWatchdog(initial_backend_start_time=time.time())
+        with patch("src.cli.commands.start.read_pid", return_value=111), patch(
+            "src.cli.commands.start.is_process_running", return_value=True
+        ), patch("httpx.get", side_effect=TimeoutError("no response")) as mock_get:
+            watchdog.check_backend_health(8300)
+        mock_get.assert_not_called()
+        assert watchdog._backend_health_failures == 0
+
+    def test_old_start_time_does_not_skip_health_check(self):
+        import time
+
+        watchdog = ProcessWatchdog(initial_backend_start_time=time.time() - 300)
+        with patch("src.cli.commands.start.read_pid", return_value=111), patch(
+            "src.cli.commands.start.is_process_running", return_value=True
+        ), patch("httpx.get", side_effect=TimeoutError("no response")) as mock_get:
+            watchdog.check_backend_health(8300)
+        mock_get.assert_called_once()
+        assert watchdog._backend_health_failures == 1
+
+    def test_default_construction_does_not_skip_health_check(self):
+        """No timestamp given (e.g. backend was already running, so
+        _start_watchdog passes none) -- must behave exactly like before
+        this fix: no grace period, checks run immediately."""
+        watchdog = ProcessWatchdog()
+        with patch("src.cli.commands.start.read_pid", return_value=111), patch(
+            "src.cli.commands.start.is_process_running", return_value=True
+        ), patch("httpx.get", side_effect=TimeoutError("no response")) as mock_get:
+            watchdog.check_backend_health(8300)
+        mock_get.assert_called_once()
+        assert watchdog._backend_health_failures == 1
+
+
+class TestStartWatchdogPassesBackendStartTime:
+    """_start_watchdog is the CLI-side half of the same fix -- it must
+    actually forward the timestamp _start_backend recorded into the
+    subprocess command line, or run_watchdog.py's --backend-started-at
+    default of 0.0 makes the grace-period seed above a no-op in practice."""
+
+    def test_includes_backend_started_at_when_given(self):
+        from src.cli.commands.start import _start_watchdog
+
+        with patch("src.cli.commands.start._find_python", return_value="python3"), patch(
+            "subprocess.Popen"
+        ) as mock_popen, patch("src.cli.commands.start.save_pid"):
+            mock_popen.return_value = MagicMock(pid=222)
+            _start_watchdog(8300, MagicMock(backend_only=False, no_monitor=False, reload=False), 1234.5)
+
+        cmd = mock_popen.call_args[0][0]
+        assert "--backend-started-at" in cmd
+        assert cmd[cmd.index("--backend-started-at") + 1] == "1234.5"
+
+    def test_omits_backend_started_at_when_none(self):
+        """Backend was "already running" -- run() passes None, nothing to seed."""
+        from src.cli.commands.start import _start_watchdog
+
+        with patch("src.cli.commands.start._find_python", return_value="python3"), patch(
+            "subprocess.Popen"
+        ) as mock_popen, patch("src.cli.commands.start.save_pid"):
+            mock_popen.return_value = MagicMock(pid=222)
+            _start_watchdog(8300, MagicMock(backend_only=False, no_monitor=False, reload=False), None)
+
+        cmd = mock_popen.call_args[0][0]
+        assert "--backend-started-at" not in cmd

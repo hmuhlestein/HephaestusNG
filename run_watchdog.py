@@ -49,11 +49,23 @@ def main():
     parser.add_argument("--no-frontend", action="store_true")
     parser.add_argument("--reload", action="store_true")
     parser.add_argument("--check-interval", type=int, default=30)
+    parser.add_argument(
+        "--backend-started-at",
+        type=float,
+        default=0.0,
+        help="Unix timestamp of when the backend this watchdog supervises was "
+        "started -- seeds the post-restart grace period so it actually covers "
+        "that backend instance instead of defaulting to 0.0 (see ProcessWatchdog).",
+    )
     args = parser.parse_args()
 
     python = _find_python(HEPHAESTUS_DIR)
 
-    watchdog = ProcessWatchdog(check_interval=args.check_interval, backend_port=args.port)
+    watchdog = ProcessWatchdog(
+        check_interval=args.check_interval,
+        backend_port=args.port,
+        initial_backend_start_time=args.backend_started_at,
+    )
     watchdog.register_service(
         "backend", lambda: _start_backend(python, args.port, args.reload)
     )
