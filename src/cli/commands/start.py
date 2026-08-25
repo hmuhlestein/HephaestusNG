@@ -33,6 +33,7 @@ class ProcessWatchdog:
         restart_window: int = 300,
         unresponsive_threshold: int = 3,
         backend_port: Optional[int] = None,
+        initial_backend_start_time: float = 0.0,
     ):
         self.check_interval = check_interval
         self.max_restarts = max_restarts
@@ -47,13 +48,29 @@ class ProcessWatchdog:
         self.last_restarts: dict[str, float] = {}
         self._restart_callbacks: dict[str, callable] = {}
         self._backend_health_failures = 0
-        # Grace period (seconds) after a watchdog-initiated restart before
-        # health checks resume -- the backend takes 60-70s to fully
-        # initialize (LLM models, embeddings, autopilot resume). Without
-        # this, the watchdog kills the backend right before it becomes
-        # healthy, creating an infinite restart loop.
+        # Grace period (seconds) after a restart before health checks
+        # resume -- the backend takes 60-70s to fully initialize (LLM
+        # models, embeddings, autopilot resume). Without this, the
+        # watchdog kills the backend right before it becomes healthy,
+        # creating an infinite restart loop.
         self._backend_restart_grace = 120
-        self._backend_last_restart = 0.0
+        # initial_backend_start_time: when the backend that THIS watchdog
+        # is about to supervise was actually started -- passed in by
+        # run_watchdog.py, which gets it from `heph start`/`heph restart`'s
+        # own _start_backend() call. Every watchdog instance is freshly
+        # constructed (run_watchdog.py is its own subprocess, spawned
+        # after the backend already exists), so leaving this at the old
+        # default of 0.0 made `elapsed_since_restart` a multi-decade
+        # value -- the grace period above only ever applied to a restart
+        # the watchdog later triggered itself (_maybe_restart sets this
+        # correctly), NEVER to the backend instance a fresh watchdog was
+        # handed at startup. Observed live: every `heph restart` produced
+        # a watchdog that started counting /health failures against the
+        # brand-new, still-warming-up backend immediately, killing it
+        # ~90-135s in -- well within the time multi-provider LLM init plus
+        # autopilot resume can legitimately take -- and repeating on every
+        # subsequent restart for the same reason.
+        self._backend_last_restart = initial_backend_start_time
         # Port the backend listens on -- passed by the caller (run_watchdog.py)
         # so _check_services can reconcile the PID file against port
         # listeners before restarting.
@@ -374,6 +391,7 @@ def run(args):
         results["qdrant"] = "skipped (turbovec)"
 
     # Backend
+    backend_start_time = None
     if backend_running:
         results["backend"] = "already running"
     else:
@@ -384,6 +402,7 @@ def run(args):
             )
             return 1
 
+        backend_start_time = time.time()
         backend_proc = _start_backend(python, port, args.reload)
         if not backend_proc:
             results["backend"] = "failed"
@@ -420,7 +439,7 @@ def run(args):
         if watchdog_pid and is_process_running(watchdog_pid):
             results["watchdog"] = "already running"
         else:
-            watchdog_proc = _start_watchdog(port, args)
+            watchdog_proc = _start_watchdog(port, args, backend_start_time)
             results["watchdog"] = "started" if watchdog_proc else "failed"
 
     _print_results(results, port)
@@ -580,7 +599,7 @@ def _start_monitor(python: str) -> bool:
         return False
 
 
-def _start_watchdog(port: int, args) -> bool:
+def _start_watchdog(port: int, args, backend_start_time: Optional[float] = None) -> bool:
     python = _find_python(HEPHAESTUS_DIR)
     cmd = [python, str(HEPHAESTUS_DIR / "run_watchdog.py"), "--port", str(port)]
     if getattr(args, "backend_only", False):
@@ -589,6 +608,12 @@ def _start_watchdog(port: int, args) -> bool:
         cmd.append("--no-monitor")
     if getattr(args, "reload", False):
         cmd.append("--reload")
+    # Lets the freshly-spawned watchdog's grace period actually cover the
+    # backend instance it's about to supervise -- see ProcessWatchdog's
+    # initial_backend_start_time docstring for why this was missing.
+    # Omitted when the backend was already running (nothing to seed).
+    if backend_start_time is not None:
+        cmd.extend(["--backend-started-at", str(backend_start_time)])
 
     log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
