@@ -676,6 +676,49 @@ class TestCaseInProgressNoTasks:
                 assert result is True
                 mock_create.assert_called_once()
 
+    def test_does_not_duplicate_a_real_task_that_predates_cycle_start_by_a_few_ms(
+        self, db_manager, sample_workflow
+    ):
+        """Regression, observed live: workflow 2ee7f496's product_requirements
+        phase had a genuine, real task (created via the UI-launched
+        synchronous /start_workflow_execution step) sitting "pending" only
+        ~12ms before execution.started_at was stamped (an independent
+        utc_now() call a moment later -- see _correct_skewed_cycle_start's
+        own docstring) -- the strict `Task.created_at >= execution.
+        started_at` cycle_filter excluded it, this case saw task_count == 0,
+        and created a SECOND task 15s later. Unlike the stale-duplicated-
+        task case above, this task is genuinely live (status="pending", no
+        terminal status to exclude) -- only the clock-skew correction
+        closes this, not the "duplicated" exclusion."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_no_tasks, _get_phase_statuses
+
+        real_task_created_at = datetime.utcnow()
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.started_at = real_task_created_at + timedelta(milliseconds=12)
+            session.add(Task(
+                id="task-real-just-created",
+                workflow_id="wf-1",
+                phase_id="phase-1",
+                raw_description="r",
+                done_definition="d",
+                status="pending",
+                created_at=real_task_created_at,
+            ))
+
+        logger = MagicMock()
+        with patch("src.autopilot.orchestrator.phase_transitions._create_phase_task", return_value=True) as mock_create:
+            with db_manager.session_scope() as session:
+                phase_statuses = _get_phase_statuses(session, "wf-1")
+                in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+                result = _case_in_progress_no_tasks(session, "wf-1", in_progress, logger)
+                assert result is None
+                mock_create.assert_not_called()
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.started_at <= real_task_created_at
+
     def test_creates_task_when_the_only_task_is_duplicated_even_within_the_cycle(
         self, db_manager, sample_workflow
     ):
