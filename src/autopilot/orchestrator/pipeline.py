@@ -306,30 +306,68 @@ def _merge_design_branch_into_main(
             repo_path=Path(project_path),
         )
 
-        # Ensure main is clean
-        wt_mgr.main_repo.heads[wt_mgr.config.git.base_branch].checkout()
+        # Same file lock (<repo>/.git/.hephaestus_merge_lock) WorktreeManager.
+        # merge_to_main serializes agent-branch merges with -- this final
+        # design-branch merge touches the exact same main_repo and previously
+        # held no lock at all, so it could interleave with a concurrent
+        # agent merge's own stash/reset/clean/merge sequence against the
+        # same working tree.
+        lock_file = wt_mgr._merge_lock.acquire(f"design-merge:{design_branch}")
         try:
-            wt_mgr.main_repo.git.merge("--abort")
-        except Exception:
-            pass
-        wt_mgr.main_repo.git.reset("--hard", "HEAD")
-        wt_mgr.main_repo.git.clean("-fd")
+            # Stash anything genuinely dirty/untracked in main BEFORE the
+            # forced-clean below -- reset --hard/clean -fd can't tell
+            # "leftover conflict debris from an old failed merge" apart from
+            # "someone's real uncommitted work sitting here" (a design spec
+            # added via the dashboard's New Feature/Report Bug flow, which
+            # writes into the primary checkout outside any worktree; another
+            # agent's in-progress edit). Same fix, same reasoning, as
+            # WorktreeManager.merge_to_main's identical pre-merge sequence.
+            stashed = False
+            if wt_mgr.main_repo.is_dirty() or wt_mgr.main_repo.untracked_files:
+                try:
+                    wt_mgr.main_repo.git.stash(
+                        "push", "-u", "-m", f"Auto-stash before final merge of {design_branch}"
+                    )
+                    stashed = True
+                except Exception:
+                    pass
 
-        try:
-            wt_mgr.main_repo.git.merge(
-                design_branch,
-                no_ff=True,
-                m=f"Merge design branch {design_branch} into main",
-            )
-            merge_sha = wt_mgr.main_repo.head.commit.hexsha
-            logger.info(f"Final merge complete: {design_branch} -> main ({merge_sha[:8]})")
-        except _git.exc.GitCommandError as e:
-            if "CONFLICT" in str(e):
-                logger.warning(f"Merge conflict on {design_branch} -> main, aborting")
+            # Ensure main is clean
+            wt_mgr.main_repo.heads[wt_mgr.config.git.base_branch].checkout()
+            try:
                 wt_mgr.main_repo.git.merge("--abort")
-                logger.info(f"Conflict detected — branch {design_branch} preserved for manual merge/PR")
-            else:
-                raise
+            except Exception:
+                pass
+            wt_mgr.main_repo.git.reset("--hard", "HEAD")
+            wt_mgr.main_repo.git.clean("-fd")
+
+            try:
+                wt_mgr.main_repo.git.merge(
+                    design_branch,
+                    no_ff=True,
+                    m=f"Merge design branch {design_branch} into main",
+                )
+                merge_sha = wt_mgr.main_repo.head.commit.hexsha
+                logger.info(f"Final merge complete: {design_branch} -> main ({merge_sha[:8]})")
+            except _git.exc.GitCommandError as e:
+                if "CONFLICT" in str(e):
+                    logger.warning(f"Merge conflict on {design_branch} -> main, aborting")
+                    wt_mgr.main_repo.git.merge("--abort")
+                    logger.info(f"Conflict detected — branch {design_branch} preserved for manual merge/PR")
+                else:
+                    raise
+            finally:
+                if stashed:
+                    try:
+                        wt_mgr.main_repo.git.stash("pop")
+                    except _git.exc.GitCommandError as stash_err:
+                        logger.warning(
+                            f"Failed to restore stashed main-repo changes after final "
+                            f"merge of {design_branch} -- they remain in the stash "
+                            f"list, not the working tree: {stash_err}"
+                        )
+        finally:
+            wt_mgr._merge_lock.release(lock_file, f"design-merge:{design_branch}")
 
         # Worktree is intentionally kept — UI references artifacts there
     except Exception as e:
