@@ -98,12 +98,22 @@ class WorktreeManager:
 
     Each agent gets its own worktree + branch; the main repo stays on the base
     branch. Merge-on-success, discard-on-failure.
+
+    Args:
+        db_manager: Database manager instance.
+        repo_path: Optional path to the git repository. If provided, skips
+            reading from config. Used for multi-repo projects where each
+            task targets a specific repo.
     """
 
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager, repo_path: Optional[Path] = None):
         self.db_manager = db_manager
         self.config = get_config()
-        self._project_root = Path(self.config.git.main_repo_path)
+
+        if repo_path is not None:
+            self._project_root = Path(repo_path) if not isinstance(repo_path, Path) else repo_path
+        else:
+            self._project_root = Path(self.config.git.main_repo_path)
 
         try:
             self.main_repo = Repo(self._project_root)
@@ -121,6 +131,8 @@ class WorktreeManager:
         self._merge_lock = MergeLockManager(self.merge_lock_path)
         self._conflict_resolver = ConflictResolver()
         self._worktree_remover = WorktreeRemover()
+        self._worktree_base_cache: Optional[Path] = None  # BLOCKER-1: reset in reload()
+        self._explicit_repo_path = (repo_path is not None)  # BLOCKER-1: track if repo_path was explicit
         self._ensure_excludes()
         logger.info(f"WorktreeManager initialized for repo: {self._project_root}")
 
@@ -143,6 +155,7 @@ class WorktreeManager:
         self._project_root = new_path
         self.merge_lock_path = Path(new_path) / ".git" / ".hephaestus_merge_lock"
         self._merge_lock = MergeLockManager(self.merge_lock_path)
+        self._worktree_base_cache = None  # BLOCKER-1: force recompute from new _project_root
         self._ensure_excludes()
         logger.info(f"WorktreeManager reloaded with repo: {new_path}")
 
@@ -150,11 +163,24 @@ class WorktreeManager:
 
     @property
     def worktree_base(self) -> Path:
-        """Base directory for agent worktrees (``<repo>/.worktrees``)."""
-        override = getattr(self.config.paths, "worktree_base_path", None)
-        if override:
-            return Path(override)
-        return self._project_root / WORKTREES_SUBDIR
+        """Base directory for agent worktrees (``<repo>/.worktrees``).
+
+        BLOCKER-1 fix: cache the result so reload() can invalidate it.
+        When repo_path was explicitly provided, ignore the global config
+        override to prevent redirecting worktrees to the wrong project.
+        """
+        if self._worktree_base_cache is not None:
+            return self._worktree_base_cache
+        # Only use config override when no explicit repo_path was given
+        if not self._explicit_repo_path:
+            override = getattr(self.config.paths, "worktree_base_path", None)
+            if override:
+                result = Path(override)
+                self._worktree_base_cache = result
+                return result
+        result = self._project_root / WORKTREES_SUBDIR
+        self._worktree_base_cache = result
+        return result
 
     def _worktree_path_for(self, agent_id: str) -> Path:
         return self.worktree_base / f"wt_{agent_id}"
@@ -423,29 +449,27 @@ class WorktreeManager:
             )
 
             # Commit any uncommitted work in the agent's worktree first
-            try:
-                wt_repo = Repo(record.worktree_path)
-                wt_repo.git.add("-A")
-                if wt_repo.is_dirty() or wt_repo.untracked_files:
-                    wt_repo.git.commit(
-                        "-m",
-                        f"[Agent {agent_id}] Final - Task completed",
-                        "--no-verify",
+            # BLOCKER-2: Do NOT wrap in try/except — let GitCommandError propagate
+            # to the outer except so merge_status stays "active" and the worktree
+            # is preserved. Swallowing this silently merges partial/broken code.
+            wt_repo = Repo(record.worktree_path)
+            wt_repo.git.add("-A")
+            if wt_repo.is_dirty() or wt_repo.untracked_files:
+                wt_repo.git.commit(
+                    "-m",
+                    f"[Agent {agent_id}] Final - Task completed",
+                    "--no-verify",
+                )
+                final = wt_repo.head.commit
+                session.add(
+                    WorktreeCommit(
+                        id=str(uuid.uuid4()),
+                        agent_id=agent_id,
+                        commit_sha=final.hexsha,
+                        commit_type="final",
+                        commit_message=f"[Agent {agent_id}] Final - Task completed",
+                        files_changed=final.stats.total.get("files", 0),
                     )
-                    final = wt_repo.head.commit
-                    session.add(
-                        WorktreeCommit(
-                            id=str(uuid.uuid4()),
-                            agent_id=agent_id,
-                            commit_sha=final.hexsha,
-                            commit_type="final",
-                            commit_message=f"[Agent {agent_id}] Final - Task completed",
-                            files_changed=final.stats.total.get("files", 0),
-                        )
-                    )
-            except Exception as e:
-                logger.warning(
-                    f"[WORKTREE:{agent_id}] Could not finalize worktree commit: {e}"
                 )
 
             # Ensure main repo is on the base branch and clean
@@ -768,6 +792,22 @@ class WorktreeManager:
         2. Merge active branches into main (newest-file-wins on conflict).
         3. Delete branches (force-delete unmergeable ones).
         """
+        # WARNING-1: Acquire merge lock to prevent racing with merge_to_main
+        lock_file = None
+        try:
+            lock_file = self._merge_lock.acquire("cleanup-sweep", timeout=30)
+        except Exception as e:
+            logger.warning(f"[WORKTREE] Could not acquire merge lock for cleanup sweep: {e}")
+            return {"cleaned": 0, "merged": 0, "failed": 0, "worktrees_cleaned": 0, "branches": [], "error": "lock_timeout"}
+
+        try:
+            return self._cleanup_all_stale_branches_inner()
+        finally:
+            if lock_file:
+                self._merge_lock.release(lock_file, "cleanup-sweep")
+
+    def _cleanup_all_stale_branches_inner(self) -> Dict[str, Any]:
+        """Inner implementation of cleanup_all_stale_branches (lock already acquired)."""
         with self.db_manager.session_scope() as session:
             cleaned: List[str] = []
             merged: List[str] = []

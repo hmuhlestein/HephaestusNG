@@ -28,6 +28,7 @@ from src.core.simple_config import get_config
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
+    from src.core.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ def _create_integration_worktree(
     design_id: str,
     branch: str,
     logger: "OrchestratorLogger",
+    db_manager: Optional["DatabaseManager"] = None,
 ) -> Optional[Path]:
     """Create an integration worktree for a feature pipeline.
 
@@ -69,6 +71,8 @@ def _create_integration_worktree(
         design_id: Design ID for branch naming
         branch: Branch name to create
         logger: Orchestrator logger
+        db_manager: Optional shared DatabaseManager to avoid leaking connections.
+            If None, creates a new one and ensures cleanup.
 
     Returns:
         Path to the worktree, or None on failure
@@ -88,10 +92,9 @@ def _create_integration_worktree(
             return Path(project_path)
 
         cfg = get_config()
-        db = DbManager(str(cfg.paths.database_path))
+        db = db_manager or DbManager(str(cfg.paths.database_path))
         try:
-            wt_mgr = WorktreeManager(db_manager=db)
-            wt_mgr.reload(project_path)
+            wt_mgr = WorktreeManager(db_manager=db, repo_path=project_path)
 
             # Create branch from main if it doesn't exist
             try:
@@ -122,10 +125,13 @@ def _create_integration_worktree(
             logger.info(f"Created integration worktree: {wt_path} (branch: {branch})")
             return wt_path
         finally:
-            try:
-                db.close()
-            except Exception:
-                pass
+            # BLOCKER-3: Only dispose if we created a new DatabaseManager
+            # (caller passed db_manager means caller owns the lifecycle)
+            if db_manager is None and db is not None:
+                try:
+                    db.dispose()
+                except Exception:
+                    pass
     except Exception as e:
         logger.error(f"[WORKTREE] Failed to create integration worktree for {project_path} (branch: {branch}): {e}", exc_info=True)
         return None
@@ -136,6 +142,7 @@ def _cleanup_worktree(
     branch: str,
     project_path: Path,
     logger: "OrchestratorLogger",
+    db_manager: Optional["DatabaseManager"] = None,
 ) -> None:
     """Clean up a worktree after feature pipeline completes.
 
@@ -144,6 +151,7 @@ def _cleanup_worktree(
         branch: Branch name
         project_path: Path to the project root
         logger: Orchestrator logger
+        db_manager: Optional shared DatabaseManager to avoid leaking connections.
     """
     try:
         from src.core.database import DatabaseManager as DbManager
@@ -151,10 +159,9 @@ def _cleanup_worktree(
         from src.core.worktree_manager import WorktreeManager
 
         cfg = get_config()
-        db = DbManager(str(cfg.paths.database_path))
+        db = db_manager or DbManager(str(cfg.paths.database_path))
         try:
-            wt_mgr = WorktreeManager(db_manager=db)
-            wt_mgr.reload(project_path)
+            wt_mgr = WorktreeManager(db_manager=db, repo_path=project_path)
 
             # Archive tmux transcripts before the worktree (and everything in
             # it) is deleted -- .hephaestus/ is git-excluded, so it doesn't
@@ -227,10 +234,12 @@ def _cleanup_worktree(
                 except Exception as e:
                     logger.warning(f"Failed to clear workflow working_directory: {e}")
         finally:
-            try:
-                db.close()
-            except Exception:
-                pass
+            # BLOCKER-3: Only dispose if we created a new DatabaseManager
+            if db_manager is None:
+                try:
+                    db.dispose()
+                except Exception:
+                    pass
     except Exception as e:
         logger.warning(f"Failed to cleanup worktree: {e}")
 
@@ -316,14 +325,18 @@ def sweep_completed_workflow_worktrees(logger: "OrchestratorLogger") -> int:
             except Exception:
                 branch = ""
 
-            logger.info(f"[SWEEP] Cleaning up orphaned worktree for completed workflow {wf_id[:8]}: {worktree}")
-            _cleanup_worktree(worktree, branch, Path(project_path_str), logger)
+            logger.info(
+                f"[SWEEP] Cleaning up orphaned worktree for completed "
+                f"workflow {wf_id[:8]}: {worktree}"
+            )
+            _cleanup_worktree(worktree, branch, Path(project_path_str), logger, db_manager=db)
             removed += 1
     except Exception as e:
         logger.warning(f"[SWEEP] Failed to sweep completed-workflow worktrees: {e}")
     finally:
+        # BLOCKER-3: Properly dispose of the DatabaseManager
         try:
-            db.close()
+            db.dispose()
         except Exception:
             pass
     return removed
@@ -622,7 +635,7 @@ def _recover_abandoned_workflows_missing_worktree(logger: "OrchestratorLogger") 
                 continue
 
             branch = f"feature/{feature.design_id[:8]}/{feature.feature_key}"
-            wt_path = _create_integration_worktree(repo_path, feature.design_id, branch, logger)
+            wt_path = _create_integration_worktree(repo_path, feature.design_id, branch, logger, db_manager=db)
             if not wt_path:
                 logger.warning(f"[WORKFLOW-RECOVERY] Could not rebuild worktree for workflow {wf.id[:8]} (branch {branch}) -- leaving failed")
                 continue

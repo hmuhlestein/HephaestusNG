@@ -5,6 +5,7 @@ import os
 import threading
 from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from sqlalchemy import (
@@ -1677,6 +1678,17 @@ class DatabaseManager:
     def drop_tables(self):
         """Drop all database tables (for testing)."""
         Base.metadata.drop_all(bind=self.engine)
+
+    def dispose(self) -> None:
+        """Dispose of the engine's connection pool.
+
+        Call this when done with a short-lived DatabaseManager to release
+        connections back to the pool. Safe to call multiple times.
+        """
+        try:
+            self.engine.dispose()
+        except Exception as e:
+            logger.warning(f"Error disposing engine: {e}")
 
 
 @contextmanager

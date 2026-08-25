@@ -266,9 +266,9 @@ class LaunchPipeline:
             # the dispatch cannot proceed safely.
             raise
         if base_dir is None:
-            return self.branch_manager
-        wt_mgr = WorktreeManager(db_manager=self.db_manager)
-        wt_mgr.reload(base_dir)
+            # WARNING-1: Create fresh instance instead of returning shared singleton
+            base_dir = Path(self.config.git.main_repo_path)
+        wt_mgr = WorktreeManager(db_manager=self.db_manager, repo_path=base_dir)
         return wt_mgr
 
     @staticmethod

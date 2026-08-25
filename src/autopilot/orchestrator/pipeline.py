@@ -248,7 +248,10 @@ def _has_unfinished_phases(exec_id: str, done_count: int, logger: OrchestratorLo
         return False
 
 
-def _merge_design_branch_into_main(design_branch: Optional[str], project_path: str, logger: OrchestratorLogger) -> None:
+def _merge_design_branch_into_main(
+    design_branch: Optional[str], project_path: str, logger: OrchestratorLogger,
+    db_manager: Optional["DatabaseManager"] = None,
+) -> None:
     """Merge the shared design branch into main once the workflow completes.
 
     A merge conflict aborts and preserves the branch for a manual merge/PR
@@ -266,8 +269,11 @@ def _merge_design_branch_into_main(design_branch: Optional[str], project_path: s
         from src.core.worktree_manager import WorktreeManager
 
         cfg = get_config()
-        wt_mgr = WorktreeManager(db_manager=DbManager(str(cfg.paths.database_path)))
-        wt_mgr.reload(Path(project_path))
+        db = db_manager or DbManager(str(cfg.paths.database_path))
+        wt_mgr = WorktreeManager(
+            db_manager=db,
+            repo_path=Path(project_path),
+        )
 
         # Ensure main is clean
         wt_mgr.main_repo.heads[wt_mgr.config.git.base_branch].checkout()
@@ -440,7 +446,7 @@ def run_single_workflow(
 
         cfg = get_config()
         db = DbManager(str(cfg.paths.database_path))
-        wt_mgr = WorktreeManager(db_manager=db)
+        wt_mgr = WorktreeManager(db_manager=db, repo_path=Path(project_path))
 
         # FIX: If project_path is already a worktree (contains .worktrees/),
         # use it directly as the design worktree. Don't create a nested
@@ -450,8 +456,6 @@ def run_single_workflow(
             design_worktree_path = str(project_path)
             logger.info(f"Using existing worktree directly: {design_worktree_path}")
         else:
-            # Reload to point at the actual project repo (not config.main_repo_path)
-            wt_mgr.reload(Path(project_path))
 
             # Create feature branch from main
             import git as _git
@@ -688,7 +692,10 @@ def run_single_workflow(
 
                     logger.info(f"Workflow complete: {len(activity.done)} tasks done, no agents active, all phases done")
 
-                    _merge_design_branch_into_main(getattr(state, "_design_branch", None), project_path, logger)
+                    _merge_design_branch_into_main(
+                        getattr(state, "_design_branch", None), project_path, logger,
+                        db_manager=db,
+                    )
 
                     if state:
                         state.current_workflow_id = None
