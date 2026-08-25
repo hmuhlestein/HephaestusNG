@@ -183,6 +183,32 @@ class TestResolveRecoveryProjectPath:
 
         assert result is None
 
+    def test_dangling_project_id_degrades_to_no_op_not_project_path_env(self, test_db, monkeypatch):
+        """Workflow.project_id doesn't resolve to any AutopilotProject row
+        (deleted project, orphaned FK) -- resolve_repo_path raises ValueError.
+        Must degrade to a genuine no-op (None), per NFR-03, rather than
+        silently substituting $PROJECT_PATH (a possibly-wrong repo)."""
+        from src.autopilot.orchestrator.policy import _resolve_recovery_project_path
+
+        session = test_db.get_session()
+        session.add(
+            Workflow(
+                id="wf-6",
+                name="wf",
+                phases_folder_path="/tmp",
+                working_directory=None,
+                project_id="proj-does-not-exist",
+            )
+        )
+        session.commit()
+        session.close()
+
+        monkeypatch.setenv("PROJECT_PATH", "/env/fallback")
+
+        result = _resolve_recovery_project_path("wf-6")
+
+        assert result is None
+
     def test_db_failure_falls_back_to_env(self, test_db, monkeypatch):
         """get_db() itself raising (e.g. DB unreachable) must not propagate --
         recovery falls back to $PROJECT_PATH rather than crashing the sweep."""
