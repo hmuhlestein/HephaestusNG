@@ -5,6 +5,7 @@ and that create_task properly validates ticket_id when tracking is enabled.
 """
 
 import os
+import subprocess
 import sys
 from datetime import datetime
 
@@ -12,6 +13,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+
+def _real_head_sha() -> str:
+    """A commit SHA that actually exists in this repo -- _link_commit_impl
+    now verifies existence via `git cat-file -e` and rejects fake SHAs like
+    the old hardcoded 'abc123def456' (adversarial-review fix, REQ-10)."""
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), capture_output=True, text=True, check=True
+    ).stdout.strip()
 
 
 @pytest.fixture(scope="module")
@@ -279,12 +289,13 @@ class TestMCPTicketEndpoints:
         if test_state['ticket_id_1'] is None:
             pytest.skip("Requires ticket from test_01")
 
+        commit_sha = _real_head_sha()
         response = client.post(
             "/api/tickets/link-commit",
             headers=headers,
             json={
                 "ticket_id": test_state['ticket_id_1'],
-                "commit_sha": "abc123def456",
+                "commit_sha": commit_sha,
                 "commit_message": "feat: Add MCP test feature",
                 "link_method": "manual",
             },
@@ -293,7 +304,7 @@ class TestMCPTicketEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert data["commit_sha"] == "abc123def456"
+        assert data["commit_sha"] == commit_sha
         print(f"✅ Linked commit: {data['commit_sha']}")
 
     def test_09_get_ticket_stats(self, client, headers):
@@ -341,7 +352,7 @@ class TestMCPTicketEndpoints:
             json={
                 "ticket_id": test_state['ticket_id_1'],
                 "resolution_comment": "Resolved via MCP endpoint test",
-                "commit_sha": "abc123def456",
+                "commit_sha": _real_head_sha(),
             },
         )
 

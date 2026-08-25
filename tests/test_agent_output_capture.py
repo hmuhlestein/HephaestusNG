@@ -56,6 +56,7 @@ class TestAgentOutputCapture:
 
         # Create mock agent
         mock_agent = Mock(spec=Agent)
+        mock_agent.pending_message_sent_at = None
         mock_agent.id = agent_id
         mock_agent.tmux_session_name = session_name
         mock_agent.status = "working"
@@ -125,6 +126,7 @@ class TestAgentOutputCapture:
 
         # Create mock agent
         mock_agent = Mock(spec=Agent)
+        mock_agent.pending_message_sent_at = None
         mock_agent.id = agent_id
         mock_agent.tmux_session_name = session_name
         mock_agent.status = "working"
@@ -177,6 +179,7 @@ class TestAgentOutputCapture:
 
         # Create mock agent
         mock_agent = Mock(spec=Agent)
+        mock_agent.pending_message_sent_at = None
         mock_agent.id = agent_id
         mock_agent.status = "terminated"
         mock_agent.current_task_id = None  # No current task
@@ -223,6 +226,7 @@ class TestAgentOutputCapture:
 
         # Create mock agent
         mock_agent = Mock(spec=Agent)
+        mock_agent.pending_message_sent_at = None
         mock_agent.id = agent_id
         mock_agent.status = "terminated"
         mock_agent.current_task_id = None  # No current task
@@ -271,6 +275,7 @@ class TestAgentOutputCapture:
 
         # Create mock agent (not terminated)
         mock_agent = Mock(spec=Agent)
+        mock_agent.pending_message_sent_at = None
         mock_agent.id = agent_id
         mock_agent.status = "working"
         mock_agent.tmux_session_name = session_name
@@ -324,6 +329,7 @@ class TestAgentOutputCapture:
 
         # Create mock agent
         mock_agent = Mock(spec=Agent)
+        mock_agent.pending_message_sent_at = None
         mock_agent.id = agent_id
         mock_agent.status = "terminated"
         mock_agent.current_task_id = None
@@ -355,6 +361,7 @@ class TestAgentOutputCapture:
 
         # Create mock agent
         mock_agent = Mock(spec=Agent)
+        mock_agent.pending_message_sent_at = None
         mock_agent.id = agent_id
         mock_agent.tmux_session_name = session_name
         mock_agent.status = "working"

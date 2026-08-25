@@ -1,9 +1,19 @@
 """Comprehensive tests for the Ticket Tracking System (Wave 1)."""
 
 import os
+import subprocess
 import sys
 
 import pytest
+
+
+def _real_head_sha() -> str:
+    """A commit SHA that actually exists in this repo -- _link_commit_impl
+    now verifies existence via `git cat-file -e` and rejects fake SHAs like
+    the old hardcoded 'abc123def456' (adversarial-review fix, REQ-10)."""
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), capture_output=True, text=True, check=True
+    ).stdout.strip()
 
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -601,24 +611,26 @@ async def test_link_commit_to_ticket(
         priority="medium",
     )
 
+    commit_sha = _real_head_sha()
+
     # Link a commit
     result = await TicketService.link_commit(
         ticket_id=ticket["ticket_id"],
         agent_id=test_agent,
-        commit_sha="abc123def456",
+        commit_sha=commit_sha,
         commit_message="Fix issue related to ticket",
         link_method="manual",
     )
 
     assert result["success"] is True
-    assert result["commit_sha"] == "abc123def456"
+    assert result["commit_sha"] == commit_sha
 
     # Verify commit link in database
     session = db_manager.get_session()
     try:
         commit = (
             session.query(TicketCommit)
-            .filter_by(ticket_id=ticket["ticket_id"], commit_sha="abc123def456")
+            .filter_by(ticket_id=ticket["ticket_id"], commit_sha=commit_sha)
             .first()
         )
         assert commit is not None
@@ -646,23 +658,29 @@ async def test_link_commit_offloads_get_commit_stats(
         priority="medium",
     )
 
+    # First run_in_executor call is the cat-file existence check (REQ-10),
+    # second is the offloaded _get_commit_stats -- fake both in order.
+    fake_cat_file_result = MagicMock(returncode=0)
     fake_loop = MagicMock()
     fake_loop.run_in_executor = AsyncMock(
-        return_value={"files_changed": 0, "insertions": 0, "deletions": 0, "files_list": []}
+        side_effect=[
+            fake_cat_file_result,
+            {"files_changed": 0, "insertions": 0, "deletions": 0, "files_list": []},
+        ]
     )
 
     with patch("asyncio.get_event_loop", return_value=fake_loop):
         result = await TicketService.link_commit(
             ticket_id=ticket["ticket_id"],
             agent_id=test_agent,
-            commit_sha="abc123def456",
+            commit_sha=_real_head_sha(),
             commit_message="Fix issue related to ticket",
             link_method="manual",
         )
 
     assert result["success"] is True
-    fake_loop.run_in_executor.assert_called_once()
-    executor_arg, func_arg = fake_loop.run_in_executor.call_args.args[:2]
+    assert fake_loop.run_in_executor.call_count == 2
+    executor_arg, func_arg = fake_loop.run_in_executor.call_args_list[1].args[:2]
     assert executor_arg is None
     assert func_arg == TicketService._get_commit_stats
 
@@ -689,9 +707,15 @@ async def test_change_status_with_commit_sha_shares_one_db_session(
         priority="medium",
     )
 
+    # First run_in_executor call is the cat-file existence check (REQ-10),
+    # second is the offloaded _get_commit_stats -- fake both in order.
+    fake_cat_file_result = MagicMock(returncode=0)
     fake_loop = MagicMock()
     fake_loop.run_in_executor = AsyncMock(
-        return_value={"files_changed": 0, "insertions": 0, "deletions": 0, "files_list": []}
+        side_effect=[
+            fake_cat_file_result,
+            {"files_changed": 0, "insertions": 0, "deletions": 0, "files_list": []},
+        ]
     )
 
     call_count = 0
@@ -701,6 +725,8 @@ async def test_change_status_with_commit_sha_shares_one_db_session(
         call_count += 1
         return real_get_db(*args, **kwargs)
 
+    commit_sha = _real_head_sha()
+
     with patch(
         "src.services.ticket_service.get_db", side_effect=counting_get_db
     ), patch("asyncio.get_event_loop", return_value=fake_loop):
@@ -709,7 +735,7 @@ async def test_change_status_with_commit_sha_shares_one_db_session(
             agent_id=test_agent,
             new_status="in_progress",
             comment="Starting work on this ticket",
-            commit_sha="abc123def456",
+            commit_sha=commit_sha,
         )
 
     assert result["success"] is True
@@ -719,7 +745,7 @@ async def test_change_status_with_commit_sha_shares_one_db_session(
     try:
         commit = (
             session.query(TicketCommit)
-            .filter_by(ticket_id=ticket["ticket_id"], commit_sha="abc123def456")
+            .filter_by(ticket_id=ticket["ticket_id"], commit_sha=commit_sha)
             .first()
         )
         assert commit is not None

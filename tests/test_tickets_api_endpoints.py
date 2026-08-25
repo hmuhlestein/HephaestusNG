@@ -39,8 +39,15 @@ def db_manager(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def client(db_manager):
+def client(db_manager, monkeypatch):
+    from src.mcp.server._shared import server_state
     from src.mcp.tickets_api import router
+
+    # verify_agent_authentication looks up Agent rows via
+    # server_state.db_manager -- unset (None) by default in this bare
+    # router-only app, which crashes the lookup and rejects every agent
+    # as unauthenticated regardless of whether it's actually seeded.
+    monkeypatch.setattr(server_state, "db_manager", db_manager)
 
     app = FastAPI()
     app.include_router(router)

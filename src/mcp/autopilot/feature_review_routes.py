@@ -346,6 +346,19 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
                     project_id, _ = resolve_project_for_workflow(wf.id)
                     project = db.query(AutopilotProject).get(project_id) if project_id else None
                     if project and project.base_dir:
+                        # The merge below runs with cwd=project.base_dir, not
+                        # wf.working_directory -- the safe git wrapper only
+                        # walks UP from the command's cwd looking for
+                        # .hephaestus/review_approved, so the marker written
+                        # above (under working_directory) is invisible to it
+                        # unless base_dir happens to be an ancestor. Write it
+                        # here too so the merge itself isn't blocked.
+                        base_marker_dir = Path(project.base_dir) / ".hephaestus"
+                        base_marker_dir.mkdir(parents=True, exist_ok=True)
+                        (base_marker_dir / "review_approved").write_text(
+                            f"Approved at {datetime.utcnow().isoformat()}\n"
+                        )
+
                         wt_repo = Repo(wf.working_directory)
                         branch_name = wt_repo.active_branch.name
                         merge_message = f"Merge {branch_name} into main after human review approval"

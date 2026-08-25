@@ -72,7 +72,15 @@ def client(autopilot_dirs, tmp_path, monkeypatch):
     # so two separate ":memory:" instances never share rows.
     db_path = tmp_path / "test.db"
     monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
-    DatabaseManager(str(db_path)).create_tables()
+    test_db_manager = DatabaseManager(str(db_path))
+    test_db_manager.create_tables()
+
+    # _scan_features (feature_routes.py) reads get_app_state().db_manager,
+    # not HEPHAESTUS_TEST_DB directly -- unwired it's None, which crashes
+    # the DB query and silently degrades to an empty feature list.
+    from src.core.app_context import get_app_state
+
+    monkeypatch.setattr(get_app_state(), "db_manager", test_db_manager)
 
     app = FastAPI()
     app.include_router(router)

@@ -70,7 +70,7 @@ async def test_requeue_does_not_pause_another_projects_same_named_design(
     _make_workflow(queue_db, "wf-mine", "proj-a", "/repos/a/designs/design.md")
     _make_workflow(queue_db, "wf-theirs", "proj-b", "/repos/b/designs/design.md")
 
-    result = await requeue_design({"filename": "design.md", "project_id": "proj-a"})
+    result = await requeue_design({"filename": "design.md", "project_id": "proj-a"}, agent_id="ui-user")
 
     assert result["paused_workflows"] == 1
     with queue_db.session_scope() as session:
@@ -89,7 +89,7 @@ async def test_requeue_does_not_match_a_design_merely_containing_the_name(
     _make_workflow(queue_db, "wf-exact", "proj-a", "/repos/a/designs/api.md")
     _make_workflow(queue_db, "wf-superset", "proj-a", "/repos/a/designs/legacy-api.md")
 
-    result = await requeue_design({"filename": "api.md", "project_id": "proj-a"})
+    result = await requeue_design({"filename": "api.md", "project_id": "proj-a"}, agent_id="ui-user")
 
     assert result["paused_workflows"] == 1
     with queue_db.session_scope() as session:
@@ -132,7 +132,7 @@ async def test_requeue_resets_a_queued_task_through_the_locked_path(
         lambda: _FakeServerState(queue_db),
     )
 
-    result = await requeue_design({"filename": "design.md", "project_id": "proj-a"})
+    result = await requeue_design({"filename": "design.md", "project_id": "proj-a"}, agent_id="ui-user")
 
     assert result["paused_workflows"] == 1
     with queue_db.session_scope() as session:

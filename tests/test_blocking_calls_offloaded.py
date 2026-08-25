@@ -171,7 +171,7 @@ async def test_remove_project_design_offloads_tmux_kill(db, tmp_path):
         ),
         patch.object(design_file_routes, "_invalidate", return_value=None),
     ):
-        result = await design_file_routes.remove_project_design("proj-1", "des.md")
+        result = await design_file_routes.remove_project_design("proj-1", "des.md", agent_id="ui-user")
 
     assert result == {"removed": "des.md"}
     fake_loop.run_in_executor.assert_called_once()
@@ -244,7 +244,7 @@ async def test_review_feature_offloads_gh_pr_merge(db):
         from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest
 
         await feature_review_routes.review_feature(
-            "feat-1", FeatureReviewRequest(action="approve")
+            "feat-1", FeatureReviewRequest(action="approve"), agent_id="ui-user"
         )
 
     fake_loop.run_in_executor.assert_called_once()

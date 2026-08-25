@@ -731,7 +731,7 @@ class TestHistoricalPauseSiteConsistency:
 
         from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
 
-        result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
+        result = await review_feature("feat-1", FeatureReviewRequest(action="approve"), agent_id="ui-user")
 
         assert result["success"] is True
         with orch_db_env.session_scope() as session:
@@ -884,6 +884,7 @@ class TestReviewFeatureReopensCompletedDevelopmentPhase:
             from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
             result = await review_feature(
                 "feat-1", FeatureReviewRequest(action="request_changes", feedback="do another lint check"),
+                agent_id="ui-user",
             )
         assert result["success"] is True
 
@@ -959,6 +960,7 @@ class TestReviewAndResumeReuseOldPendingTasks:
         from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
         result = await review_feature(
             "feat-1", FeatureReviewRequest(action="request_changes", feedback="do another lint check"),
+            agent_id="ui-user",
         )
         assert result["success"] is True
 
@@ -985,7 +987,7 @@ class TestReviewAndResumeReuseOldPendingTasks:
         monkeypatch.setattr(feature_routes, "_spawn_agent_for_task", spawn_mock)
 
         from src.mcp.autopilot.feature_routes import resume_feature
-        result = await resume_feature("feat-1")
+        result = await resume_feature("feat-1", agent_id="ui-user")
         assert result["success"] is True
 
         spawn_mock.assert_called_once_with("task-old-pending", "wf-1-dev")
@@ -1018,7 +1020,7 @@ class TestReviewAndResumeReuseOldPendingTasks:
         monkeypatch.setattr(feature_routes, "_spawn_agent_for_task", spawn_mock)
 
         from src.mcp.autopilot.feature_routes import resume_feature
-        result = await resume_feature("feat-1")
+        result = await resume_feature("feat-1", agent_id="ui-user")
         assert result["success"] is True
 
         spawn_mock.assert_called_once_with("task-needs-work", "wf-1-dev")
@@ -1082,7 +1084,7 @@ class TestReviewFeatureApproveLocalMergeFallback:
             ))
 
         from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
-        result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
+        result = await review_feature("feat-1", FeatureReviewRequest(action="approve"), agent_id="ui-user")
         assert result["success"] is True
 
         assert (project_dir / "new_file.txt").exists(), (
@@ -1120,7 +1122,7 @@ class TestReviewFeatureApproveLocalMergeFallback:
             return_value=MagicMock(returncode=0, stdout="", stderr=""),
         ) as mock_run:
             from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
-            result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
+            result = await review_feature("feat-1", FeatureReviewRequest(action="approve"), agent_id="ui-user")
         assert result["success"] is True
         mock_run.assert_called_once()
         assert mock_run.call_args.args[0][:3] == ["gh", "pr", "merge"]
