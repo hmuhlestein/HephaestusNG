@@ -4773,6 +4773,160 @@ class TestSyncStaleFeatureStatuses:
             assert feat.completed_at is not None
 
 
+class TestPauseStaleCompletedWorkflowsForReview:
+    """_pause_stale_completed_workflows_for_review: self-heal for a
+    workflow whose phases all finished but whose own _run_one_feature
+    call never reached its "pause for review" check (e.g. a backend
+    restart landed right after the last phase completed). Without this,
+    such a feature sits Workflow.status="active" forever, with a PR up
+    and no review_pending flag, invisible to the UI's Review button.
+    Observed live: feat-775d44f6 (commit-resolution) -- git_expert's own
+    completion notes said it pushed a PR and deferred the merge pending
+    review approval, but the workflow was never marked paused_by="review"."""
+
+    def _seed(
+        self, orch_db_env, *, review_mode=True, review_status=None,
+        workflow_status="active", paused_by=None, phase_status="completed",
+    ):
+        from src.core.database import (
+            AutopilotDesign,
+            AutopilotProject,
+            Feature,
+            Phase,
+            PhaseExecution,
+            Workflow,
+        )
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(
+                id="proj-1", name="p", base_dir="/tmp/proj-1", review_mode=review_mode,
+            ))
+            session.add(AutopilotDesign(
+                id="design-1", project_id="proj-1", filename="d.md", name="D",
+            ))
+            session.add(Workflow(
+                id="wf-1", name="feature pipeline", phases_folder_path="/tmp",
+                status=workflow_status, paused_by=paused_by, project_id="proj-1",
+                definition_id="feature_pipeline",
+            ))
+            session.add(Feature(
+                id="feature-row-1", design_id="design-1", feature_key="feat-a",
+                name="Feature A", scope="s", status=workflow_status,
+                workflow_id="wf-1", review_status=review_status,
+            ))
+            session.add(Phase(
+                id="phase-1", workflow_id="wf-1", name="deploy", order=1,
+                description="d", done_definitions=["x"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-1", phase_id="phase-1", status=phase_status,
+                started_at=datetime.utcnow(),
+            ))
+
+    def test_pauses_workflow_when_all_phases_completed_and_review_mode_on(
+        self, orch_db_env
+    ):
+        from src.autopilot.orchestrator.features import (
+            _pause_stale_completed_workflows_for_review,
+        )
+        from src.core.database import Feature, Workflow
+
+        self._seed(orch_db_env)
+
+        paused = _pause_stale_completed_workflows_for_review(MagicMock())
+
+        assert paused == 1
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            feat = session.query(Feature).filter_by(id="feature-row-1").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "review"
+            assert feat.status == "paused"
+
+    def test_leaves_workflow_alone_when_a_phase_is_incomplete(self, orch_db_env):
+        from src.autopilot.orchestrator.features import (
+            _pause_stale_completed_workflows_for_review,
+        )
+        from src.core.database import Workflow
+
+        self._seed(orch_db_env, phase_status="in_progress")
+
+        paused = _pause_stale_completed_workflows_for_review(MagicMock())
+
+        assert paused == 0
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"
+            assert wf.paused_by is None
+
+    def test_leaves_workflow_alone_when_review_mode_off(self, orch_db_env):
+        from src.autopilot.orchestrator.features import (
+            _pause_stale_completed_workflows_for_review,
+        )
+        from src.core.database import Workflow
+
+        self._seed(orch_db_env, review_mode=False)
+
+        paused = _pause_stale_completed_workflows_for_review(MagicMock())
+
+        assert paused == 0
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"
+
+    def test_leaves_workflow_alone_when_already_paused_for_review(self, orch_db_env):
+        from src.autopilot.orchestrator.features import (
+            _pause_stale_completed_workflows_for_review,
+        )
+
+        self._seed(orch_db_env, workflow_status="paused", paused_by="review")
+
+        paused = _pause_stale_completed_workflows_for_review(MagicMock())
+
+        assert paused == 0
+
+    def test_leaves_workflow_alone_when_review_already_approved(self, orch_db_env):
+        from src.autopilot.orchestrator.features import (
+            _pause_stale_completed_workflows_for_review,
+        )
+        from src.core.database import Workflow
+
+        self._seed(orch_db_env, review_status="approved")
+
+        paused = _pause_stale_completed_workflows_for_review(MagicMock())
+
+        assert paused == 0
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"
+
+    def test_leaves_workflow_alone_when_no_phases_tracked(self, orch_db_env):
+        """Not a phase-tracked workflow at all -- not this function's case."""
+        from src.autopilot.orchestrator.features import (
+            _pause_stale_completed_workflows_for_review,
+        )
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1", review_mode=True))
+            session.add(AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D"))
+            session.add(Workflow(
+                id="wf-1", name="feature pipeline", phases_folder_path="/tmp",
+                status="active", project_id="proj-1", definition_id="feature_pipeline",
+            ))
+            session.add(Feature(
+                id="feature-row-1", design_id="design-1", feature_key="feat-a",
+                name="Feature A", scope="s", status="active", workflow_id="wf-1",
+            ))
+
+        paused = _pause_stale_completed_workflows_for_review(MagicMock())
+
+        assert paused == 0
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"
+
+
 class TestSyncStaleDesignStatuses:
     """_sync_stale_design_statuses: the Design-table-wide self-heal for the
     same class of bug TestSyncStaleFeatureStatuses covers one level up --
