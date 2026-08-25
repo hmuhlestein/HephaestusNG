@@ -3872,14 +3872,10 @@ class TestCleanupStaleWorktrees:
         calls = []
 
         def _make_instance(*a, **kw):
+            calls.append(kw.get("repo_path"))
+            if kw.get("repo_path") == "/path/fails":
+                raise ValueError("not a git repository")
             inst = MagicMock()
-
-            def _reload(base_dir):
-                calls.append(base_dir)
-                if base_dir == "/path/fails":
-                    raise ValueError("not a git repository")
-
-            inst.reload.side_effect = _reload
             inst.cleanup_all_stale_branches.return_value = {"worktrees_cleaned": 0}
             return inst
 
