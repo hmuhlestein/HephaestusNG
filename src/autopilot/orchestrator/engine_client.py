@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import logging
 import os
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
@@ -19,6 +18,7 @@ from src.core.database import (
     Task,
     Workflow,
     get_db,
+    utc_now,
 )
 
 if TYPE_CHECKING:
@@ -156,7 +156,7 @@ def terminate_agent(
         # 2. Set the three-field invariant.
         agent.status = "terminated"
         agent.current_task_id = None
-        agent.terminated_at = datetime.utcnow()
+        agent.terminated_at = utc_now()
         return True
 
     # A caller-supplied session means the caller owns the transaction, so
@@ -251,7 +251,7 @@ def pause_workflow(
             return False
         wf.status = "paused"
         wf.paused_by = reason
-        wf.paused_at = datetime.utcnow()
+        wf.paused_at = utc_now()
         if status_reason is not None:
             wf.status_reason = status_reason
         if cascade_to_feature:
@@ -839,7 +839,7 @@ def _update_orchestrator_status(status: str, project_id: Optional[str] = None) -
             agent = session.query(Agent).filter_by(id=orchestrator_agent_id).first()
             if agent:
                 agent.status = status
-                agent.last_activity = datetime.utcnow()
+                agent.last_activity = utc_now()
     except Exception as e:
         # Non-critical — don't break the pipeline if status update fails
         logger.debug(f"[orchestrator] Failed to update status to {status}: {e}")

@@ -7,14 +7,13 @@ domain's share of that split.
 """
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import desc
 
 from src.agents.manager import AgentManager
-from src.core.database import Agent, AgentLog, CostEntry, DatabaseManager, Task, Workflow
+from src.core.database import Agent, AgentLog, CostEntry, DatabaseManager, Task, Workflow, utc_now
 from src.core.phase_lookup import resolve_task_phase
 from src.phases import PhaseManager
 
@@ -477,7 +476,7 @@ class TaskService:
             # Calculate runtime
             runtime_seconds = 0
             if task.started_at:
-                end_time = task.completed_at or datetime.utcnow()
+                end_time = task.completed_at or utc_now()
                 runtime_seconds = int((end_time - task.started_at).total_seconds())
 
             result = {

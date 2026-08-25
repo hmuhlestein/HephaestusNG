@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 from git import GitCommandError, Repo
 from sqlalchemy.orm import Session
 
-from src.core.database import MergeConflictResolution
+from src.core.database import MergeConflictResolution, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,9 @@ class ConflictResolver:
             child_ts = self._get_file_timestamp(repo, file_path, "MERGE_HEAD")
 
             if parent_ts is None:
-                parent_ts = datetime.utcnow()
+                parent_ts = utc_now()
             if child_ts is None:
-                child_ts = datetime.utcnow()
+                child_ts = utc_now()
 
             if child_ts > parent_ts:
                 choice = "child"

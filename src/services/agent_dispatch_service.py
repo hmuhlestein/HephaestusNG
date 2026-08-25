@@ -14,8 +14,9 @@ import asyncio
 import functools
 import logging
 import os
-from datetime import datetime
 from typing import Any, Dict, Optional
+
+from src.core.database import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +226,7 @@ class AgentDispatchService:
             if task:
                 task.assigned_agent_id = agent_id
                 task.status = status
-                task.started_at = datetime.utcnow()
+                task.started_at = utc_now()
                 session.commit()
         except Exception:
             session.rollback()

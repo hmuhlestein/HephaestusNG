@@ -4,7 +4,6 @@ Extracted from src/mcp/server.py (design_docs/phase_1c_server_decomposition.md).
 """
 
 import logging
-from datetime import datetime
 from typing import Optional
 
 from fastapi import (
@@ -16,6 +15,7 @@ from fastapi import (
 from src.core.database import (
     Agent,
     Task,
+    utc_now,
 )
 from src.mcp.server._shared import CreateTaskRequest, RegisterWorkflowDefinitionRequest, StartWorkflowRequest, server_state
 from src.mcp.server.agent_task_routes import create_task
@@ -100,7 +100,7 @@ async def _terminate_workflow_agents(session, workflow_id: str):
             # before Stop is rare enough not to warrant the added
             # complexity of a fan-out wait here.
             if agent.pending_message_sent_at:
-                elapsed = (datetime.utcnow() - agent.pending_message_sent_at).total_seconds()
+                elapsed = (utc_now() - agent.pending_message_sent_at).total_seconds()
                 remaining = PENDING_MESSAGE_GRACE_SECONDS - elapsed
                 agent.pending_message_sent_at = None
                 if remaining > 0:
@@ -559,7 +559,7 @@ async def cancel_workflow(workflow_id: str, request: Request):
             if task.status in non_terminal_not_queued:
                 task.status = "failed"
                 task.failure_reason = "Workflow cancelled by user"
-                task.completed_at = datetime.utcnow()
+                task.completed_at = utc_now()
 
         # Mark as failed (can't delete due to FK constraints, using failed to indicate user cancellation)
         workflow.status = "failed"

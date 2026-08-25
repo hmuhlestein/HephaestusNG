@@ -5,13 +5,12 @@ docs/SOLID_OO_REVIEW_UPDATE_2026-08-21.md §1)."""
 
 import asyncio
 import logging
-from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from src.core.database import utc_now
 from src.mcp.autopilot._shared import _extract_pr_url, _invalidate
 from src.mcp.autopilot.feature_routes import _spawn_agent_for_task
 
@@ -260,7 +259,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             return {"success": True, "message": "Feature was not awaiting review"}
 
         feature.review_status = "approved" if req.action == "approve" else "changes_requested"
-        feature.reviewed_at = datetime.utcnow()
+        feature.reviewed_at = utc_now()
         feature.reviewed_by = "ui-user"
 
         if req.action == "approve":
@@ -289,7 +288,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 marker_dir = Path(wf.working_directory) / ".hephaestus"
                 marker_dir.mkdir(parents=True, exist_ok=True)
                 marker = marker_dir / "review_approved"
-                marker.write_text(f"Approved at {datetime.utcnow().isoformat()}\n")
+                marker.write_text(f"Approved at {utc_now().isoformat()}\n")
                 logger.info(f"[REVIEW] Created review_approved marker at {marker}")
 
             # In review mode, git_expert created a PR but didn't merge.

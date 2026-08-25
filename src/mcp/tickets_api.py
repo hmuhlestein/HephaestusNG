@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Union
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from src.core.database import get_db
+from src.core.database import get_db, utc_now
 from src.services.ticket_search_service import TicketSearchService
 from src.services.ticket_service import TicketService
 
@@ -1280,7 +1280,7 @@ async def get_commit_diff_endpoint(
         timestamp_unix = int(parts[2]) if len(parts) > 2 else 0
         message = parts[3] if len(parts) > 3 else "No message"
 
-        timestamp = datetime.utcfromtimestamp(timestamp_unix).isoformat() + "Z" if timestamp_unix > 0 else datetime.utcnow().isoformat() + "Z"
+        timestamp = datetime.utcfromtimestamp(timestamp_unix).isoformat() + "Z" if timestamp_unix > 0 else utc_now().isoformat() + "Z"
 
         # Get file stats from the correct repository
         cmd = ["git", "diff", "--numstat", f"{commit_sha}^", commit_sha]

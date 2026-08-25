@@ -2,7 +2,6 @@
 
 import logging
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -11,6 +10,7 @@ from src.core.database import (
     Agent,
     AgentLog,
     Task,
+    utc_now,
 )
 
 logger = logging.getLogger(__name__)
@@ -190,7 +190,7 @@ class Terminator:
             # before the wait so a crash/restart mid-sleep, or a second
             # concurrent termination attempt, doesn't re-trigger it.
             if agent.pending_message_sent_at:
-                elapsed = (datetime.utcnow() - agent.pending_message_sent_at).total_seconds()
+                elapsed = (utc_now() - agent.pending_message_sent_at).total_seconds()
                 remaining = PENDING_MESSAGE_GRACE_SECONDS - elapsed
                 agent.pending_message_sent_at = None
                 session.commit()
@@ -466,7 +466,7 @@ class Terminator:
                 log_type="terminated",
                 message="Agent terminated",
                 details={
-                    "terminated_at": datetime.utcnow().isoformat(),
+                    "terminated_at": utc_now().isoformat(),
                     "final_output": final_output,
                 },
             )

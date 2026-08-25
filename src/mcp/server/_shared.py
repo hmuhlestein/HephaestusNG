@@ -22,6 +22,7 @@ from src.core.database import (
     DatabaseManager,
     Phase,
     Workflow,
+    utc_now,
 )
 from src.core.simple_config import get_config
 from src.core.worktree_manager import WorktreeManager
@@ -631,9 +632,8 @@ def _touch_agent_activity(agent_id: str) -> None:
 
             agent = session.query(Agent).filter_by(id=agent_id).first()
             if agent:
-                from datetime import datetime
 
-                agent.last_activity = datetime.utcnow()
+                agent.last_activity = utc_now()
                 session.commit()
         finally:
             session.close()

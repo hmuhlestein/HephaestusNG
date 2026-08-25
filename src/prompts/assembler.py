@@ -474,10 +474,10 @@ def assemble_phase_prompt(
 
     This is the primary entry point for the preview endpoint.
     """
-    from src.core.database import DatabaseManager, Phase
+    from src.core.database import Phase, get_default_db_manager
 
     if db_manager is None:
-        db_manager = DatabaseManager(None)
+        db_manager = get_default_db_manager()
     with db_manager.get_session() as session:
         phase = session.query(Phase).filter_by(id=phase_id).first()
         if not phase:
@@ -531,10 +531,10 @@ def assemble_task_prompt(
 
     This is used at agent creation time.
     """
-    from src.core.database import DatabaseManager, Phase, Task, TaskPromptOverride
+    from src.core.database import Phase, Task, TaskPromptOverride, get_default_db_manager
 
     if db_manager is None:
-        db_manager = DatabaseManager(None)
+        db_manager = get_default_db_manager()
     with db_manager.get_session() as session:
         task = session.query(Task).filter_by(id=task_id).first()
         if not task:

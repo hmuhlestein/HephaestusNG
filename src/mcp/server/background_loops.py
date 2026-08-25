@@ -11,6 +11,7 @@ from typing import List, Optional
 from src.core.database import (
     Task,
     Workflow,
+    utc_now,
 )
 from src.mcp.server._shared import server_state
 
@@ -515,7 +516,7 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     # typically already "completed" by the time this matters). Throttled
     # since it shells out to git per project every time it runs.
     global _LAST_BRANCH_HEAL_TIME
-    now = datetime.utcnow()
+    now = utc_now()
     if _LAST_BRANCH_HEAL_TIME is None or (now - _LAST_BRANCH_HEAL_TIME).total_seconds() >= _BRANCH_HEAL_INTERVAL_SECONDS:
         _LAST_BRANCH_HEAL_TIME = now
         try:

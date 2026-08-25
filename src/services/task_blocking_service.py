@@ -1,10 +1,9 @@
 """Service for managing task blocking based on ticket blocking."""
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from src.core.database import Task, Ticket, Workflow, get_db
+from src.core.database import Task, Ticket, Workflow, get_db, get_default_db_manager, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +161,7 @@ class TaskBlockingService:
             # BUG FIX: Set to 'queued' instead of 'pending' so process_queue() will pick it up
             # Tasks in 'pending' status never get started automatically
             task.status = "queued"
-            task.queued_at = datetime.utcnow()
+            task.queued_at = utc_now()
 
             # Clear blocking reason
             if task.completion_notes and task.completion_notes.startswith("Blocked:"):
@@ -177,11 +176,10 @@ class TaskBlockingService:
         # Recalculate queue positions for all queued tasks
         # Import here to avoid circular dependencies
         try:
-            from src.core.database import DatabaseManager
             from src.core.simple_config import get_config
             from src.services.queue_service import QueueService
 
-            db_manager = DatabaseManager(None)
+            db_manager = get_default_db_manager()
             # max_concurrent_agents is required and was missing, so this
             # raised TypeError and the except below swallowed it as a
             # warning -- queue positions have never actually been

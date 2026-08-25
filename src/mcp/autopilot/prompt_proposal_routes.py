@@ -10,14 +10,13 @@ see that module's SAFETY MODEL. These routes are a thin transport over it.
 
 import asyncio
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from src.core.database import PromptProposal, get_db
+from src.core.database import PromptProposal, get_db, utc_now
 from src.services.prompt_proposal_service import (
     EDITABLE_FIELDS,
     apply_proposal,
@@ -182,15 +181,15 @@ async def approve_prompt_proposal(proposal_id: str, req: ProposalReview):
                 # needs to see, not an error that vanishes with the response.
                 row.status = "failed"
                 row.review_note = f"apply failed: {e}"
-                row.reviewed_at = datetime.utcnow()
+                row.reviewed_at = utc_now()
                 db.commit()
                 return ("failed", str(e))
             row.status = "applied"
             row.previous_value = result["previous_value"]
             row.applied_commit_sha = result["commit_sha"]
             row.review_note = req.note
-            row.reviewed_at = datetime.utcnow()
-            row.applied_at = datetime.utcnow()
+            row.reviewed_at = utc_now()
+            row.applied_at = utc_now()
             db.commit()
             return ("ok", _serialize(row))
 
@@ -217,7 +216,7 @@ async def reject_prompt_proposal(proposal_id: str, req: ProposalReview):
                 return ("not_pending", row.status)
             row.status = "rejected"
             row.review_note = req.note
-            row.reviewed_at = datetime.utcnow()
+            row.reviewed_at = utc_now()
             db.commit()
             return ("ok", _serialize(row))
 
@@ -255,7 +254,7 @@ async def revert_prompt_proposal(proposal_id: str):
                 return ("failed", str(e))
             row.status = "reverted"
             row.reverted_commit_sha = result["commit_sha"]
-            row.reverted_at = datetime.utcnow()
+            row.reverted_at = utc_now()
             db.commit()
             return ("ok", _serialize(row))
 

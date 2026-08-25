@@ -1,7 +1,7 @@
 """Feature-Model DB record bookkeeping."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional
 
@@ -11,6 +11,7 @@ from src.core.database import (
     Task,
     Workflow,
     get_db,
+    utc_now,
 )
 from src.core.simple_config import get_config
 from src.core.status_derivation import derive_feature_status
@@ -199,7 +200,6 @@ def _update_feature_status(
         error: Error message if status is failed
         logger: Optional logger
     """
-    from datetime import datetime
 
     from src.core.database import Feature
 
@@ -208,9 +208,9 @@ def _update_feature_status(
         if feature:
             feature.status = status
             if status == "active":
-                feature.started_at = datetime.utcnow()
+                feature.started_at = utc_now()
             elif status in ("completed", "failed", "skipped"):
-                feature.completed_at = datetime.utcnow()
+                feature.completed_at = utc_now()
             if error:
                 feature.error = error
             db.commit()
@@ -304,7 +304,7 @@ def _sync_stale_feature_statuses(logger: "OrchestratorLogger") -> int:
             if derived != old_status:
                 logger.info(f"[FEATURE-SYNC] {feature.feature_key}: workflow already completed, Feature.status was {old_status!r} -- derived {derived!r}")
                 if derived in ("completed", "failed", "skipped"):
-                    feature.completed_at = feature.completed_at or datetime.utcnow()
+                    feature.completed_at = feature.completed_at or utc_now()
                 repaired += 1
 
         if repaired:
@@ -497,7 +497,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
         # refreshed by enqueue_task immediately before every dequeue, so it
         # measures time since this dispatch attempt began, not task age.
         grace_seconds = get_config().monitoring.stranded_task_grace_seconds
-        cutoff = datetime.utcnow() - timedelta(seconds=grace_seconds)
+        cutoff = utc_now() - timedelta(seconds=grace_seconds)
         stranded = (
             db.query(Task)
             .filter(
@@ -544,7 +544,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
         # Observed live: task 36a04e0e (product_requirements) sat pending
         # for 10+ hours after its sibling task completed the phase, hiding
         # the Review button on a feature otherwise ready for merge.
-        stale_cutoff = datetime.utcnow() - timedelta(minutes=5)
+        stale_cutoff = utc_now() - timedelta(minutes=5)
         stale_in_completed_phase = (
             db.query(Task)
             .join(PhaseExecution, PhaseExecution.phase_id == Task.phase_id)

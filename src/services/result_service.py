@@ -2,10 +2,9 @@
 
 import os
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from src.core.database import AgentResult, Task, get_db
+from src.core.database import AgentResult, Task, get_db, utc_now
 from src.services.validation_helpers import (
     validate_file_path,
     validate_file_size,
@@ -74,7 +73,7 @@ class ResultService:
                 result_type=result_type,
                 summary=summary,
                 verification_status="unverified",
-                created_at=datetime.utcnow(),
+                created_at=utc_now(),
             )
 
             db.add(result)
@@ -209,7 +208,7 @@ class ResultService:
             raise ValueError(f"Result not found: {result_id}")
 
         result.verification_status = "verified" if verified else "disputed"
-        result.verified_at = datetime.utcnow()
+        result.verified_at = utc_now()
         result.verified_by_validation_id = validation_review_id
 
         return {

@@ -2,12 +2,11 @@
 
 import json
 import logging
-from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List
 
 from src.agents.manager import AgentManager
-from src.core.database import Agent, AgentLog, DatabaseManager, Task
+from src.core.database import Agent, AgentLog, DatabaseManager, Task, utc_now
 from src.interfaces import LLMProviderInterface
 from src.prompts.loader import get_prompt
 
@@ -191,7 +190,7 @@ class Conductor:
 
             # Build final result
             result = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": utc_now().isoformat(),
                 "num_agents": len(guardian_summaries),
                 "duplicates": duplicates,
                 "coherence": {
@@ -206,7 +205,7 @@ class Conductor:
             # Update system state
             self.system_state.update(
                 {
-                    "last_analysis": datetime.utcnow(),
+                    "last_analysis": utc_now(),
                     "duplicate_pairs": duplicates,
                     "coherence_score": coherence_score,
                 }
@@ -322,7 +321,7 @@ class Conductor:
         if not self.system_state["last_analysis"]:
             return "System not yet analyzed"
 
-        age = datetime.utcnow() - self.system_state["last_analysis"]
+        age = utc_now() - self.system_state["last_analysis"]
         summary = f"Last analysis: {age.total_seconds():.0f}s ago"
 
         if self.system_state["duplicate_pairs"]:
@@ -335,7 +334,7 @@ class Conductor:
     def _get_empty_analysis(self) -> Dict[str, Any]:
         """Get empty analysis structure when no agents active."""
         return {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utc_now().isoformat(),
             "num_agents": 0,
             "duplicates": [],
             "coherence": {"score": 1.0, "issues": []},

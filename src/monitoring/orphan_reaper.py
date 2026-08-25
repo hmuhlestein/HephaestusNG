@@ -15,6 +15,8 @@ import logging
 from datetime import datetime
 from typing import Dict, Optional
 
+from src.core.database import utc_now
+
 logger = logging.getLogger(__name__)
 
 
@@ -189,7 +191,7 @@ class OrphanSessionReaper:
                             # status="terminated" without ever setting
                             # terminated_at.
                             # utcnow, not now: last_activity is stamped with
-                            # datetime.utcnow() at every write site, so a
+                            # utc_now() at every write site, so a
                             # datetime.now() cutoff compares a local-time
                             # value against a UTC one. West of UTC that
                             # difference is negative, so this guard matched
@@ -197,7 +199,7 @@ class OrphanSessionReaper:
                             # here. See CLAUDE.md's utc-only invariant.
                             if (
                                 agent.last_activity
-                                and (datetime.utcnow() - agent.last_activity).total_seconds()
+                                and (utc_now() - agent.last_activity).total_seconds()
                                 < 30
                             ):
                                 logger.debug(
@@ -246,7 +248,7 @@ class OrphanSessionReaper:
             # here would still disagree with the utcnow() comparison already
             # used for last_activity earlier in this method. See CLAUDE.md's
             # utc-only invariant.
-            current_time = datetime.utcnow()
+            current_time = utc_now()
 
             # First-ever call: nothing has been tracked as a candidate yet,
             # so every apparent orphan right now is one this reaper simply

@@ -25,6 +25,8 @@ import logging
 from sqlalchemy import exc as sqlalchemy_exc
 from sqlalchemy import text
 
+from src.core.database import utc_now
+
 logger = logging.getLogger(__name__)
 
 
@@ -769,7 +771,6 @@ def migrate_project_repos_table(engine):
     project's primary repo" everywhere.
     """
     import uuid
-    from datetime import datetime
 
     from src.core.database import Base, ProjectRepo
 
@@ -834,7 +835,7 @@ def migrate_project_repos_table(engine):
     try:
         with engine.connect() as conn:
             rows = conn.execute(text("SELECT id, base_dir FROM autopilot_projects")).fetchall()
-            now = datetime.utcnow().isoformat()
+            now = utc_now().isoformat()
             created = 0
             for project_id, base_dir in rows:
                 has_primary = conn.execute(

@@ -25,6 +25,7 @@ import yaml
 
 from src.autopilot.okf_markdown import read_okf
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME
+from src.core.database import get_default_db_manager, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -393,9 +394,9 @@ def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:
     try:
         definition_id = _WORKFLOW_DEFINITION_ID_CACHE.get(workflow_id)
         if definition_id is None:
-            from src.core.database import DatabaseManager, Workflow
+            from src.core.database import Workflow
 
-            db = DatabaseManager(None)
+            db = get_default_db_manager()
             session = db.get_session()
             try:
                 wf = session.query(Workflow).filter_by(id=workflow_id).first()
@@ -444,9 +445,9 @@ def load_optional_phases(workflow_id: Optional[str] = None) -> set:
         return OPTIONAL_PHASES
 
     try:
-        from src.core.database import DatabaseManager, Workflow
+        from src.core.database import Workflow
 
-        db = DatabaseManager(None)
+        db = get_default_db_manager()
         session = db.get_session()
         try:
             wf = session.query(Workflow).filter_by(id=workflow_id).first()
@@ -618,9 +619,9 @@ def load_phase_inputs(workflow_id: Optional[str] = None) -> dict:
     if workflow_id is None:
         return {}
     try:
-        from src.core.database import DatabaseManager, Workflow
+        from src.core.database import Workflow
 
-        session = DatabaseManager(None).get_session()
+        session = get_default_db_manager().get_session()
         try:
             wf = session.query(Workflow).filter_by(id=workflow_id).first()
             if not wf or not wf.definition_id:
@@ -665,9 +666,9 @@ def input_producer_phases(workflow_id: Optional[str], filename: str) -> list:
     if workflow_id is None:
         return []
     try:
-        from src.core.database import DatabaseManager, Workflow
+        from src.core.database import Workflow
 
-        session = DatabaseManager(None).get_session()
+        session = get_default_db_manager().get_session()
         try:
             wf = session.query(Workflow).filter_by(id=workflow_id).first()
             if not wf or not wf.definition_id:
@@ -875,7 +876,6 @@ def record_review_finding(
     into max_review_runs; callers should check get_max_review_runs first
     to avoid writing history nothing ever reads.
     """
-    from datetime import datetime
 
     from src.core.database import ProjectContext, get_db
 
@@ -890,7 +890,7 @@ def record_review_finding(
                 # Bounded -- this gets echoed into a task description, not
                 # stored for its own sake.
                 "summary": (summary or "")[:500],
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": utc_now().isoformat(),
             }
         )
         if row:

@@ -87,7 +87,7 @@ from src.autopilot.orchestrator.state import (
 )
 from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree, _create_designs_folder, _create_integration_worktree
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, HEPHAESTUS_INSTALL_DIR, PHASE0_DEFINITION_IDS
-from src.core.database import DatabaseManager, Workflow, get_db
+from src.core.database import DatabaseManager, Workflow, get_db, get_default_db_manager, utc_now
 from src.core.simple_config import get_config
 
 # Module-level logger for persistent state operations
@@ -225,9 +225,9 @@ def _has_unfinished_phases(exec_id: str, done_count: int, logger: OrchestratorLo
     completion handling, matching the original inline behavior.
     """
     try:
-        from src.core.database import DatabaseManager, PhaseExecution
+        from src.core.database import PhaseExecution
 
-        _session = DatabaseManager(None).get_session()
+        _session = get_default_db_manager().get_session()
         try:
             unfinished = (
                 _session.query(PhaseExecution)
@@ -1850,7 +1850,7 @@ def _run_one_feature(
                     # legitimate "the feature is done" exit path.
                     if feat_record.status != "completed":
                         feat_record.status = "completed"
-                        feat_record.completed_at = feat_record.completed_at or datetime.utcnow()
+                        feat_record.completed_at = feat_record.completed_at or utc_now()
                         db.commit()
                     # Clean up worktree — branch and path are deterministic
                     # from design_id + feature_key, same as _run_one_feature's
@@ -1876,7 +1876,7 @@ def _run_one_feature(
 
             # Update status to active
             feat_record.status = "active"
-            feat_record.started_at = feat_record.started_at or datetime.utcnow()
+            feat_record.started_at = feat_record.started_at or utc_now()
             db.commit()
 
     if not feature_id:
@@ -2342,7 +2342,7 @@ def run_design_aggregate(
         "status": status.value,
         # FeatureRunStatus is a plain Enum, not json-serializable as-is.
         "features": {k: v.value for k, v in feature_results.items()},
-        "completed_at": datetime.utcnow().isoformat(),
+        "completed_at": utc_now().isoformat(),
     }
     metrics_path = designs_folder / "design_metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2))
@@ -2358,7 +2358,7 @@ def run_design_aggregate(
     _update_design_status(
         design_entry.db_id,
         status.value,
-        completed_at=datetime.utcnow(),
+        completed_at=utc_now(),
         logger=logger,
     )
 
@@ -2381,7 +2381,7 @@ def run_single_design(
     # Both use the same clock so the subtraction is self-consistent, but
     # local time jumps an hour at a DST boundary and a design run can span
     # one -- which would silently add or remove 3600s from total_time.
-    design_entry.started_at = datetime.utcnow().isoformat()
+    design_entry.started_at = utc_now().isoformat()
 
     logger.info("=" * 70)
     logger.info(f"PROCESSING DESIGN: {design_entry.name}")
@@ -2427,7 +2427,7 @@ def run_single_design(
     # ── Stage 3: Design aggregate ──
     status, report = run_design_aggregate(design_entry, feature_results, designs_folder, logger)
 
-    design_entry.completed_at = datetime.utcnow().isoformat()
+    design_entry.completed_at = utc_now().isoformat()
 
     # Note: Phase 0 and feature worktrees are cleaned up by their own finally blocks
     # inside run_phase0() and _run_one_feature(). No additional cleanup needed here.
@@ -2540,7 +2540,7 @@ def _persist_design_outcome(design, status, current_project_id: Optional[str], l
             _des.status = status.value if hasattr(status, "value") else str(status)
             _des.feature_folder = str(design.feature_folder) if design.feature_folder else None
             if status == DesignStatus.COMPLETED:
-                _des.completed_at = datetime.utcnow()
+                _des.completed_at = utc_now()
                 # Clear retry counter on success
                 _delete_project_context(_db, f"autopilot_retry_{_des.id}")
             _db.commit()

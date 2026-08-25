@@ -158,12 +158,10 @@ class TestOrphanSessionReaper:
 
         clock = {"now": datetime(2026, 1, 1, 12, 0, 0)}
 
-        class _FakeDatetime:
-            @staticmethod
-            def utcnow():
-                return clock["now"]
+        def fake_utc_now():
+            return clock["now"]
 
-        monkeypatch.setattr(orphan_reaper_module, "datetime", _FakeDatetime)
+        monkeypatch.setattr(orphan_reaper_module, "utc_now", fake_utc_now)
 
         # First call establishes the baseline (no candidates tracked yet).
         reaper.last_check_time = clock["now"]
@@ -334,20 +332,10 @@ class TestOrphanSessionReaper:
 
         fixed_utc_now = datetime(2026, 1, 1, 12, 0, 10)
 
-        class _FakeDatetime:
-            @staticmethod
-            def utcnow():
-                return fixed_utc_now
+        def fake_utc_now():
+            return fixed_utc_now
 
-            @staticmethod
-            def now():
-                # A "local" clock wildly different from UTC. If the source
-                # used this instead of utcnow(), the elapsed-orphaned
-                # duration would be computed against the wrong epoch
-                # entirely (deeply negative, never past the grace period).
-                return datetime(2000, 1, 1, 0, 0, 0)
-
-        monkeypatch.setattr(orphan_reaper_module, "datetime", _FakeDatetime)
+        monkeypatch.setattr(orphan_reaper_module, "utc_now", fake_utc_now)
 
         # Past the "very first call ever" short-circuit.
         reaper.last_check_time = fixed_utc_now - timedelta(seconds=10)
@@ -670,8 +658,8 @@ class TestReviewPausedWorkflowIsNotOrphaned:
 
     @pytest.mark.asyncio
     async def test_does_not_kill_agent_in_a_review_paused_workflow(self, real_db):
-        from src.monitoring.orphan_reaper import OrphanSessionReaper
         from src.core.database import Agent
+        from src.monitoring.orphan_reaper import OrphanSessionReaper
 
         self._seed(real_db, workflow_status="paused", paused_by="review")
 
@@ -696,8 +684,8 @@ class TestReviewPausedWorkflowIsNotOrphaned:
     async def test_still_kills_agent_in_a_user_paused_workflow(self, real_db):
         """Other pause reasons (user, budget, system) are genuine full
         stops -- must still be reaped, same as before this fix."""
-        from src.monitoring.orphan_reaper import OrphanSessionReaper
         from src.core.database import Agent
+        from src.monitoring.orphan_reaper import OrphanSessionReaper
 
         self._seed(real_db, workflow_status="paused", paused_by="user")
 

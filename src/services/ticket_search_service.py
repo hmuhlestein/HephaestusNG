@@ -4,12 +4,11 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.sql import text
 
-from src.core.database import Ticket, TicketComment, get_db
+from src.core.database import Ticket, TicketComment, get_db, utc_now
 from src.memory.embedding_factory import create_embedding_provider
 from src.memory.store_factory import create_vector_store
 
@@ -617,7 +616,7 @@ class TicketSearchService:
                 ticket = db.query(Ticket).filter_by(id=ticket_id).first()
                 ticket.embedding = embedding
                 ticket.embedding_id = ticket_id
-                ticket.updated_at = datetime.utcnow()
+                ticket.updated_at = utc_now()
                 db.commit()
 
             logger.info(f"Reindexed ticket {ticket_id} in {TICKET_COLLECTION}")

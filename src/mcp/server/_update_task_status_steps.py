@@ -11,13 +11,12 @@ these in sequence.
 import asyncio
 import functools
 import logging
-from datetime import datetime
 from typing import Optional
 
 from fastapi import HTTPException
 from git import Repo
 
-from src.core.database import Agent, AgentLog, Phase, Task
+from src.core.database import Agent, AgentLog, Phase, Task, utc_now
 from src.mcp.server._create_task_steps import _dispatch_ready_dependents
 from src.mcp.server._shared import (
     SELF_REVIEW_CHECKLIST_PROMPT,
@@ -122,7 +121,7 @@ async def _maybe_fire_self_review_gate(
     # message is delivered, the worst case is a skipped prompt, not an
     # infinite re-trigger of this branch on retry.
     task.self_review_done = True
-    task.self_review_started_at = datetime.utcnow()
+    task.self_review_started_at = utc_now()
     # _resolve_worktree_head_sha does real GitPython I/O (Repo().head) --
     # blocking, same class of issue as commit_and_link_ticket/
     # collect_cost_on_completion below, fixed here too since this path
@@ -163,7 +162,7 @@ async def _log_self_review_telemetry(session, task: Task) -> None:
     if not (task.self_review_started_at is not None):
         return
 
-    elapsed = (datetime.utcnow() - task.self_review_started_at).total_seconds()
+    elapsed = (utc_now() - task.self_review_started_at).total_seconds()
     diff_stat = None
     if task.self_review_started_commit:
         worktree_path = _resolve_worktree_path(session, task)
@@ -284,7 +283,7 @@ async def _complete_task_normally(
     from src.services.task_completion_service import TaskCompletionService
 
     task.status = request.status
-    task.completed_at = datetime.utcnow()
+    task.completed_at = utc_now()
     task.completion_notes = request.summary
 
     if request.status == "failed":

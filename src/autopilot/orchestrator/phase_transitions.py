@@ -73,13 +73,14 @@ from src.core.constants import (
 )
 from src.core.database import (
     Agent,
-    DatabaseManager,
     Feature,
     Phase,
     PhaseExecution,
     Task,
     Workflow,
     get_db,
+    get_default_db_manager,
+    utc_now,
 )
 from src.core.simple_config import get_config
 from src.phases import PhaseManager
@@ -108,7 +109,7 @@ def _clear_stale_task_creation_claim(db, phase_id: str, *, repair_status: bool =
 
     Returns True if a stale claim was found and cleared, False otherwise.
     """
-    stale_cutoff = datetime.utcnow() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
+    stale_cutoff = utc_now() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
     cleared = (
         db.query(PhaseExecution)
         .filter(
@@ -246,7 +247,7 @@ def reopen_phase_execution(
     if started_at == "clear":
         execution.started_at = None
     elif started_at == "now":
-        execution.started_at = datetime.utcnow()
+        execution.started_at = utc_now()
     # "leave": no-op, by design -- not every reopen should touch it.
 
 
@@ -556,7 +557,7 @@ def _retry_failed_tasks(workflow_id: str, logger: "OrchestratorLogger") -> List[
                     if _t2:
                         _t2.assigned_agent_id = agent_id
                         _t2.status = "in_progress"
-                        _t2.started_at = datetime.utcnow()
+                        _t2.started_at = utc_now()
                         _db4.commit()
             except Exception as e3:
                 logger.error(f"  Agent {agent_id[:8]} created for task {task_id[:8]} but failed to link it to the task row: {e3}")
@@ -638,7 +639,7 @@ def _retry_exhausted_paused_workflows(logger: "OrchestratorLogger") -> int:
     from src.autopilot.orchestrator import _get_paused_workflow_max_retry_cycles, _get_paused_workflow_retry_cooldown_seconds
 
     max_cycles = _get_paused_workflow_max_retry_cycles()
-    cutoff = datetime.utcnow() - timedelta(seconds=_get_paused_workflow_retry_cooldown_seconds())
+    cutoff = utc_now() - timedelta(seconds=_get_paused_workflow_retry_cooldown_seconds())
     recovered = 0
     with get_db() as db:
         # Also pick up system-exhausted workflows that may have been manually
@@ -980,7 +981,7 @@ def _release_stale_task_creation_claims(db, workflow_id: str, logger: "Orchestra
     pending/completed to in_progress and clear the claim. If no Task
     exists at all, just clear the claim so Case 0/0b can create one fresh.
 
-    Uses datetime.utcnow(), matching _claim_phase_task_creation's writer and
+    Uses utc_now(), matching _claim_phase_task_creation's writer and
     every other timestamp in this codebase -- datetime.now() (ambient local
     time) here previously meant a claim's staleness depended on whatever
     TZ the process happened to be running under at the moment it compared,
@@ -990,7 +991,7 @@ def _release_stale_task_creation_claims(db, workflow_id: str, logger: "Orchestra
     compare against -- the workflow stayed silently stuck indefinitely,
     invisible to this self-heal despite being its exact intended case.
     """
-    stale_cutoff = datetime.utcnow() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
+    stale_cutoff = utc_now() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
     stale_executions = (
         db.query(PhaseExecution)
         .join(Phase, PhaseExecution.phase_id == Phase.id)
@@ -1195,7 +1196,7 @@ def _claim_phase_task_creation(db, phase_id: str) -> bool:
     claim (go ahead and create the task), False if someone else already
     holds it (skip -- a task is already being created for this phase).
     """
-    claimed_at = datetime.utcnow()
+    claimed_at = utc_now()
     result = (
         db.query(PhaseExecution)
         .filter(
@@ -1240,7 +1241,7 @@ def _release_phase_task_creation_claim(db, phase_id: str) -> None:
     test_maybe_retry_failed_tasks_is_claim_protected.
 
     started_at is anchored to the guarded task's own created_at, NOT
-    datetime.utcnow() -- this function always runs strictly after that
+    utc_now() -- this function always runs strictly after that
     task was already committed by the caller (server.py's create_task,
     which can spend real seconds on enrichment/embedding/dedup/capacity-
     queue checks before returning), so "now" is always later than the
@@ -1265,7 +1266,7 @@ def _release_phase_task_creation_claim(db, phase_id: str) -> None:
             .order_by(Task.created_at.asc())
             .first()
         )
-        execution.started_at = earliest_task.created_at if earliest_task else datetime.utcnow()
+        execution.started_at = earliest_task.created_at if earliest_task else utc_now()
     execution.task_creation_claimed_at = None
     db.commit()
 
@@ -1980,7 +1981,7 @@ def _maybe_retry_failed_tasks(db, phase, logger: "OrchestratorLogger", cycle_sta
                     continue
                 retry_task.assigned_agent_id = agent_data.get("agent_id", "unknown")
                 retry_task.status = "in_progress"
-                retry_task.started_at = datetime.utcnow()
+                retry_task.started_at = utc_now()
                 retry_db.commit()
         return True
     return None
@@ -2048,9 +2049,8 @@ def _fire_phase_transition(
                     )
 
         # Mark phase complete and get engine decision
-        from src.core.database import DatabaseManager
 
-        pm = PhaseManager(DatabaseManager(None), workflow_id=workflow_id)
+        pm = PhaseManager(get_default_db_manager(), workflow_id=workflow_id)
         result = (
             pm.mark_phase_complete(phase_id, completion_summary, force_action="continue")
             if force_continue
@@ -2294,9 +2294,8 @@ def _get_phase_max_retries(workflow_id: str, phase_name: str) -> Optional[int]:
     falls back to a sane default in that case, same role the hardcoded
     constant used to play.
     """
-    from src.core.database import DatabaseManager
 
-    pm = PhaseManager(DatabaseManager(None))
+    pm = PhaseManager(get_default_db_manager())
     with get_db() as db:
         try:
             orchestrator = pm._get_orchestrator(db, workflow_id)
@@ -2460,7 +2459,7 @@ def _create_phase_task(
                 # claimed_at claim only serializes who gets to create a
                 # task; it does nothing to stop this check from
                 # misjudging one that already exists.
-                orphan_cutoff = datetime.utcnow() - timedelta(minutes=1)
+                orphan_cutoff = utc_now() - timedelta(minutes=1)
                 # A "pending" task can also be orphaned the OTHER way: it WAS
                 # dispatched (assigned_agent_id set), but that agent later
                 # died/got terminated (killed mid-launch by a backend
@@ -2620,7 +2619,7 @@ def _create_phase_task(
             if task:
                 task.assigned_agent_id = agent_id
                 task.status = "in_progress"
-                task.started_at = datetime.utcnow()
+                task.started_at = utc_now()
                 db.commit()
 
         logger.info(f"[PHASE-TASK] Created task {task_id[:8]} and agent {agent_id[:8]} for {phase_name}")
@@ -2796,7 +2795,7 @@ def _create_corrective_task_body(
             if t:
                 t.assigned_agent_id = agent_id
                 t.status = "in_progress"
-                t.started_at = datetime.utcnow()
+                t.started_at = utc_now()
                 db.commit()
     except Exception as e:
         logger.error(f"[CORRECTIVE-TASK] Agent {agent_id[:8]} created for task {task_id[:8]} but failed to link it to the task row: {e}")
@@ -2963,7 +2962,7 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: "OrchestratorLogger")
                     agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
                     if not agent or agent.status == "terminated":
                         restartable.append(t)
-                elif t.created_at and (datetime.utcnow() - t.created_at) > timedelta(minutes=pending_stuck_minutes):
+                elif t.created_at and (utc_now() - t.created_at) > timedelta(minutes=pending_stuck_minutes):
                     restartable.append(t)
             elif t.assigned_agent_id:
                 agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
@@ -3011,7 +3010,7 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: "OrchestratorLogger")
                     if task:
                         task.assigned_agent_id = agent_id
                         task.status = "in_progress"
-                        task.started_at = datetime.utcnow()
+                        task.started_at = utc_now()
                         db.commit()
             except Exception as e:
                 logger.error(f"[RESUME] Agent {agent_id[:8]} created for task {task_id[:8]} but failed to link it to the task row: {e}")
@@ -3131,7 +3130,7 @@ async def fire_spec_gate_if_ready(session, task) -> None:
             functools.partial(build_phase_output, phase.name, Path(wf.working_directory)),
         )
         logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
-        pm = PhaseManager(DatabaseManager(None), workflow_id=task.workflow_id)
+        pm = PhaseManager(get_default_db_manager(), workflow_id=task.workflow_id)
         # mark_phase_complete can itself run an LLM evaluate() call and,
         # on completing the whole workflow, cascade into
         # _populate_feature_folder's recursive filesystem copies of the

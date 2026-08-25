@@ -402,7 +402,7 @@ class TestEscalationReasonIsCarriedThrough:
         with (
             patch.object(pt, "_trigger_arbitration", side_effect=fake_trigger),
             patch.object(pt, "PhaseManager", return_value=pm),
-            patch.object(pt, "DatabaseManager", MagicMock()),
+            patch.object(pt, "get_default_db_manager", MagicMock()),
         ):
             pt._fire_phase_transition("wf-1", "phase-1", "development", MagicMock())
 
@@ -431,7 +431,7 @@ class TestEscalationReasonIsCarriedThrough:
         with (
             patch.object(pt, "_trigger_arbitration", side_effect=fake_trigger),
             patch.object(pt, "PhaseManager", return_value=pm),
-            patch.object(pt, "DatabaseManager", MagicMock()),
+            patch.object(pt, "get_default_db_manager", MagicMock()),
         ):
             pt._fire_phase_transition("wf-1", "phase-1", "development", MagicMock())
 

@@ -6,7 +6,6 @@ Extracted from src/mcp/server.py (design_docs/phase_1c_server_decomposition.md).
 import logging
 import time
 from collections import defaultdict
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import (
@@ -65,6 +64,8 @@ async def openid_config():
 import base64
 import hashlib
 import threading
+
+from src.core.database import utc_now
 
 _auth_codes: Dict[str, Dict] = {}  # code -> {client_id, redirect_uri, scope, code_challenge, code_challenge_method, expires_at, used}
 
@@ -156,7 +157,7 @@ async def register_client(request: Dict[str, Any]):
             "response_types": request.get("response_types", ["code"]),
             "scope": request.get("scope", "openid profile email"),
             "token_endpoint_auth_method": request.get("token_endpoint_auth_method", "none"),
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": utc_now().isoformat(),
         }
 
     logger.info(f"Registered new OAuth client: {client_id}")
@@ -165,7 +166,7 @@ async def register_client(request: Dict[str, Any]):
     return {
         "client_id": client_id,
         "client_secret": client_secret,
-        "client_id_issued_at": int(datetime.utcnow().timestamp()),
+        "client_id_issued_at": int(utc_now().timestamp()),
         "client_secret_expires_at": 0,  # Never expires
         "redirect_uris": redirect_uris,
         "grant_types": registered_clients[client_id]["grant_types"],

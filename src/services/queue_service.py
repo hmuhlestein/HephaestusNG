@@ -2,12 +2,11 @@
 
 import logging
 import threading
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import and_, case
 
-from src.core.database import Agent, DatabaseManager, Phase, Task, Workflow
+from src.core.database import Agent, DatabaseManager, Phase, Task, Workflow, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -363,7 +362,7 @@ class QueueService:
 
             # Task is not blocked - proceed with normal queueing
             task.status = "queued"
-            task.queued_at = datetime.utcnow()
+            task.queued_at = utc_now()
 
             session.commit()
 
@@ -778,7 +777,7 @@ class QueueService:
                 workflow_id = task.workflow_id
                 task.status = "failed"
                 task.failure_reason = reason
-                task.completed_at = datetime.utcnow()
+                task.completed_at = utc_now()
                 # Explicit commit before _recalculate_queue_positions, which
                 # opens its own session against this same shared connection.
                 session.commit()

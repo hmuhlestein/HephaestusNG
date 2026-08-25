@@ -3,10 +3,9 @@
 import logging
 import os
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from src.core.database import Agent, Workflow, WorkflowResult, get_db
+from src.core.database import Agent, Workflow, WorkflowResult, get_db, utc_now
 from src.services.validation_helpers import (
     validate_file_path,
     validate_file_size,
@@ -127,7 +126,7 @@ class WorkflowResultService:
                 result_content=markdown_content,
                 extra_files=validated_extra_files,  # Store list of validated extra file paths
                 status="pending_validation",
-                created_at=datetime.utcnow(),
+                created_at=utc_now(),
             )
 
             db.add(result)
@@ -231,7 +230,7 @@ class WorkflowResultService:
         result.status = status
         result.validation_feedback = feedback
         result.validation_evidence = evidence
-        result.validated_at = datetime.utcnow()
+        result.validated_at = utc_now()
         if validator_agent_id:
             result.validated_by_agent_id = validator_agent_id
 

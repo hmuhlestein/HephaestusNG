@@ -27,6 +27,7 @@ from src.core.database import (
     Task,
     Workflow,
     WorkflowResult,
+    utc_now,
 )
 from src.core.phase_lookup import resolve_task_phase
 from src.phases import PhaseManager
@@ -218,7 +219,7 @@ class DashboardService:
                 session.query(func.count(Task.id))
                 .filter(
                     Task.status == "failed",
-                    Task.completed_at >= datetime.utcnow() - timedelta(days=1),
+                    Task.completed_at >= utc_now() - timedelta(days=1),
                 )
                 .scalar()
             )
@@ -231,7 +232,7 @@ class DashboardService:
                 "recent_activity": recent_activity,
                 "stuck_agents": stuck_agents,
                 "failed_tasks_today": failed_tasks_today,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": utc_now().isoformat() + "Z",
             }
         finally:
             session.close()
@@ -490,7 +491,7 @@ class DashboardService:
                 "nodes": nodes,
                 "edges": edges,
                 "phases": phase_info,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": utc_now().isoformat() + "Z",
             }
         finally:
             session.close()
@@ -795,7 +796,7 @@ class DashboardService:
 
     async def get_system_overview(self, workflow_id: Optional[str] = None) -> Dict[str, Any]:
         """Get comprehensive system overview data."""
-        from datetime import datetime, timedelta
+        from datetime import timedelta
 
         from src.core.database import ConductorAnalysis, GuardianAnalysis
 
@@ -862,7 +863,7 @@ class DashboardService:
             conductor_analyses = (
                 session.query(ConductorAnalysis)
                 .filter(
-                    ConductorAnalysis.timestamp > datetime.utcnow() - timedelta(hours=6)
+                    ConductorAnalysis.timestamp > utc_now() - timedelta(hours=6)
                 )
                 .order_by(ConductorAnalysis.timestamp)
                 .all()
@@ -916,7 +917,7 @@ class DashboardService:
                 "recent_steering_events": recent_steerings,
                 "agent_alignments": agent_alignments,
                 "metrics_history": metrics_history,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": utc_now().isoformat() + "Z",
             }
         finally:
             session.close()

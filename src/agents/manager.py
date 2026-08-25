@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
@@ -13,6 +12,7 @@ from src.core.database import (
     AgentLog,
     DatabaseManager,
     Task,
+    utc_now,
 )
 from src.core.simple_config import get_config
 from src.core.worktree_manager import WorktreeManager
@@ -667,7 +667,7 @@ class AgentManager:
                             "recipient_id": agent.id,
                             "message_type": "broadcast",
                             "message_content": message[:200],  # Truncate for storage
-                            "timestamp": datetime.utcnow().isoformat(),
+                            "timestamp": utc_now().isoformat(),
                         },
                     )
                     session.add(log_entry)
@@ -738,7 +738,7 @@ class AgentManager:
                     "recipient_id": recipient_agent_id,
                     "message_type": "direct",
                     "message_content": message[:200],  # Truncate for storage
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": utc_now().isoformat(),
                 },
             )
             session.add(log_entry)

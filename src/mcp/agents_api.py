@@ -5,14 +5,13 @@ Extracted from server.py for better modularity.
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 
 from src.core.agent_identity import is_root_agent
 from src.core.app_context import get_app_state
-from src.core.database import Agent, Task
+from src.core.database import Agent, Task, utc_now
 from src.core.phase_lookup import resolve_task_phase
 
 logger = logging.getLogger(__name__)
@@ -60,7 +59,7 @@ def _serialize_agent(session, a) -> dict:
                 "started_at": task.started_at.isoformat() + "Z" if task.started_at else None,
                 "completed_at": task.completed_at.isoformat() + "Z" if task.completed_at else None,
                 "runtime_seconds": int(
-                    (datetime.utcnow() - task.started_at).total_seconds()
+                    (utc_now() - task.started_at).total_seconds()
                 )
                 if task.started_at
                 else 0,
@@ -616,7 +615,7 @@ async def terminate_agent_endpoint(
             if task:
                 task.status = "failed"
                 task.failure_reason = f"Manually terminated: {reason}"
-                task.completed_at = datetime.utcnow()
+                task.completed_at = utc_now()
                 session.commit()
 
             task_workflow_id = task.workflow_id if task else None
@@ -755,7 +754,6 @@ async def get_task_progress(
                     phase_name = None
                     phase_order = None
                     if t.phase_id:
-                        from src.core.database import Phase
                         phase = resolve_task_phase(session, t)
                         if phase:
                             phase_name = phase.name

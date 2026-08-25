@@ -6,7 +6,6 @@ import logging
 import shlex
 import time
 import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
@@ -28,6 +27,7 @@ from src.core.database import (
     Task,
     TaskStatus,
     get_db,
+    utc_now,
 )
 from src.core.phase_lookup import resolve_task_phase
 from src.core.worktree_manager import WorktreeManager
@@ -839,7 +839,7 @@ class LaunchPipeline:
             logger.info(f"Exporting {len(env_vars)} environment variables for {label}: {', '.join(env_vars.keys())}")
             await self._export_env_vars_and_verify(tmux_session, pane, env_vars, label=label)
 
-        cli_launch_started_at = datetime.utcnow().timestamp()
+        cli_launch_started_at = utc_now().timestamp()
         return launch_result, pane, cli_launch_started_at
 
     async def _deliver_initial_prompt(
@@ -1813,7 +1813,7 @@ class LaunchPipeline:
                     if task_record:
                         task_record.status = "failed"
                         task_record.failure_reason = f"Agent creation failed: {str(e)}"
-                        task_record.completed_at = datetime.utcnow()
+                        task_record.completed_at = utc_now()
                         logger.info(f"Marked task {task.id} as failed")
                         if "CLI session limit detected" in str(e) and task_record.workflow_id:
                             from src.core.database import Workflow as _Workflow
@@ -2057,8 +2057,8 @@ class LaunchPipeline:
             agent.tmux_session_name = new_session_name
             agent.status = "working"
             agent.health_check_failures = 0
-            agent.last_activity = datetime.utcnow()
-            agent.launched_at = datetime.utcnow()
+            agent.last_activity = utc_now()
+            agent.launched_at = utc_now()
 
             log_entry = AgentLog(
                 agent_id=agent_id,

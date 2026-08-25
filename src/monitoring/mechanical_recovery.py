@@ -13,10 +13,9 @@ import asyncio
 import logging
 import re
 import time
-from datetime import datetime
 from typing import Any, Dict
 
-from src.core.database import Agent, AgentLog, Task, TaskStatus, Workflow
+from src.core.database import Agent, AgentLog, Task, TaskStatus, Workflow, utc_now
 from src.core.simple_config import get_config
 from src.interfaces import get_cli_agent
 from src.monitoring.patterns import (
@@ -433,7 +432,7 @@ class MechanicalRecoveryDetector:
                         _session.query(_Agent).filter_by(id=agent.id).first()
                     )
                     if _db_agent:
-                        _db_agent.last_activity = datetime.utcnow()
+                        _db_agent.last_activity = utc_now()
             except Exception:
                 pass  # best-effort; the mechanical-recovery check itself must not fail
             return None
@@ -1289,7 +1288,7 @@ class MechanicalRecoveryDetector:
         if not started_at:
             return False
         return (
-            datetime.utcnow() - started_at
+            utc_now() - started_at
         ).total_seconds() < self.RESUME_REPLAY_GRACE_SECONDS
 
     async def detect_unconfirmed_task_completion(self, agent) -> bool:
@@ -2024,7 +2023,7 @@ class MechanicalRecoveryDetector:
             # seconds of launched_at, nothing has happened since launch.
             if (agent.last_activity - agent.launched_at).total_seconds() > 5:
                 return False
-            elapsed = (datetime.utcnow() - agent.last_activity).total_seconds()
+            elapsed = (utc_now() - agent.last_activity).total_seconds()
             if elapsed < self.NEVER_STARTED_GRACE_SECONDS:
                 return False
 

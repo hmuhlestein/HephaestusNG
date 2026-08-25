@@ -6,7 +6,6 @@ Extracted from src/mcp/server.py (design_docs/phase_1c_server_decomposition.md).
 import asyncio
 import logging
 import os
-from datetime import datetime
 from typing import Optional
 
 from src.auth.auth_api import router as auth_router
@@ -14,6 +13,7 @@ from src.core.database import (
     Agent,
     Task,
     Workflow,
+    utc_now,
 )
 from src.mcp.frontend import create_frontend_routes
 from src.mcp.server._shared import _build_phase_dict, _git_expert_already_landed, _tmux_session_alive, app, config, server_state, spawn_background_task
@@ -117,7 +117,7 @@ async def _resume_interrupted_workflows(
                     # stop counting historical (pre-retry) arbitration
                     # attempts against this fresh run.
                     wf.total_gotos = 0
-                    wf.gotos_reset_at = datetime.utcnow()
+                    wf.gotos_reset_at = utc_now()
                     # Also update the associated feature status
                     feature = session.query(Feature).filter_by(workflow_id=wf.id).first()
                     if feature and feature.status in ("paused", "failed"):
@@ -218,7 +218,7 @@ async def _resume_interrupted_workflows(
                 if landed:
                     logger.info(f"[RESUME] Workflow {wf.id[:8]}: orphaned agent {agent.id[:8]}'s git_expert work already landed on {config.base_branch} -- marking done instead of redispatching")
                     task.status = "done"
-                    task.completed_at = datetime.utcnow()
+                    task.completed_at = utc_now()
                     task.failure_reason = None
                     task.completion_notes = ((task.completion_notes or "") + "\n[auto-recovered: git work had already landed before the agent's completion call was lost]").strip()
                     from src.autopilot.orchestrator.engine_client import terminate_agent
