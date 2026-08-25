@@ -212,6 +212,50 @@ def reset_stale_executions_on_goto(
     return len(stale)
 
 
+def mark_skipped_over_phases(db, workflow_id: str, from_order: int, to_order: int, logger: "OrchestratorLogger") -> None:
+    """Downgrade "pending" PhaseExecutions strictly between from_order and
+    to_order to "skipped" when a jump (goto/retry action_target_phase, or a
+    successor pick that lands past intervening phases) advances the
+    pipeline past them.
+
+    Extracted from _start_next_phase (phase_manager.py), which had this
+    logic for its OWN jump but _case_completed_with_successor's identical
+    jump (below) had no equivalent -- leaving any phase it jumped over
+    stuck "pending" forever, since nothing else ever downgrades it and
+    derive_workflow_status's completeness check treats "pending" as real
+    work remaining. Observed live: workflow c1f0839c's design_review
+    (order 4) sat "pending" from 2026-08-23 after a goto jumped
+    architecture_design (order 3) straight to development (order 5) via
+    this function, silently blocking the workflow from ever completing or
+    pausing for review even after every phase that actually needed to run
+    (through deploy, order 14) had finished.
+
+    Only downgrades "pending" -- a genuinely "completed" phase (from an
+    earlier pass this jump doesn't need to redo) must not get overwritten.
+    """
+    skipped_phases = (
+        db.query(Phase)
+        .filter(
+            Phase.workflow_id == workflow_id,
+            Phase.order > from_order,
+            Phase.order < to_order,
+        )
+        .all()
+    )
+    for sp in skipped_phases:
+        sp_execution = db.query(PhaseExecution).filter_by(phase_id=sp.id).first()
+        if sp_execution and sp_execution.status == "pending":
+            logger.info(
+                f"[PHASE] {sp.name} skipped over by a jump from order "
+                f"{from_order} to order {to_order} -- marking its "
+                "PhaseExecution 'skipped' instead of leaving it 'pending' forever"
+            )
+            sp_execution.status = "skipped"
+            sp_execution.completed_at = utc_now()
+    if skipped_phases:
+        db.commit()
+
+
 def reopen_phase_execution(
     execution: PhaseExecution,
     *,
@@ -1426,6 +1470,20 @@ def _case_completed_with_successor(db, workflow_id: str, completed: list, pendin
                 (p for p in pending if p["phase"].order > last_completed["phase"].order),
                 key=lambda p: p["phase"].order,
                 default=None,
+            )
+        if successor and successor["phase"].order > last_completed["phase"].order + 1:
+            # Same jump-over-intermediate-phases case _start_next_phase's
+            # own action_target_phase handling covers -- an explicit goto
+            # target (above) or a by-order pick that lands past a phase
+            # still sitting "pending" leaves it there forever otherwise.
+            # See mark_skipped_over_phases for the full rationale. Observed
+            # live: workflow c1f0839c's design_review (order 4) sat
+            # "pending" from 2026-08-23 after this exact path jumped
+            # architecture_design (order 3) straight to development
+            # (order 5), permanently blocking derive_workflow_status's
+            # completeness check even after deploy (order 14) finished.
+            mark_skipped_over_phases(
+                db, workflow_id, last_completed["phase"].order, successor["phase"].order, logger
             )
         if successor:
             # Check if successor already has tasks from the CURRENT cycle
