@@ -1568,6 +1568,21 @@ class PhaseManager:
             )
             return None
 
+        # An explicitly paused workflow (user/budget/review) must not advance,
+        # even though "paused" is otherwise in the allowed-status set above.
+        # Missed live: a deploy-phase goto back to qa_validation kept firing
+        # on workflow e6437c3f every ~6 minutes for hours after it was
+        # review-paused with every phase already "completed" — nothing here
+        # checked paused_by, so the goto walked the whole downstream chain
+        # (qa_validation -> ... -> deploy) again each cycle while a human
+        # review was still pending, burning real agent/LLM cost the entire
+        # time paused_by stayed set.
+        if workflow.paused_by is not None:
+            logger.debug(
+                f"[PHASE] _start_next_phase skipped — workflow paused_by={workflow.paused_by}"
+            )
+            return None
+
         # Don't start a new phase if another phase is already in_progress.
         # This prevents out-of-order execution when a long-running phase
         # (e.g. scope_review) completes after a later phase (e.g. development)
