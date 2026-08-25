@@ -3285,53 +3285,64 @@ class TestOrchestratorLogger:
 
 
 class TestCheckApiCredits:
+    """Regression: get_agents()/get_tasks() have never returned "error" or
+    "output_log" keys -- the checks below used to read exactly those, so
+    every comparison silently ran against "" and this function could never
+    return True in production. An agent's real output text only exists via
+    peek_agent_output (tmux); a task's real failure text is failure_reason.
+    These tests mock the ACTUAL data sources, not the fictitious keys the
+    old implementation (and old tests) assumed existed."""
+
+    @patch("src.autopilot.orchestrator.policy.peek_agent_output")
     @patch("src.autopilot.orchestrator.policy.get_tasks")
     @patch("src.autopilot.orchestrator.policy.get_agents")
-    def test_no_credits_issue(self, mock_agents, mock_tasks):
+    def test_no_credits_issue(self, mock_agents, mock_tasks, mock_peek):
         from src.autopilot.orchestrator.policy import check_api_credits
 
-        mock_agents.return_value = [{"status": "working", "error": ""}]
+        mock_agents.return_value = [{"id": "a1", "status": "working"}]
         mock_tasks.return_value = []
+        mock_peek.return_value = "still working normally"
         found, msg = check_api_credits()
         assert found is False
 
+    @patch("src.autopilot.orchestrator.policy.peek_agent_output")
     @patch("src.autopilot.orchestrator.policy.get_tasks")
     @patch("src.autopilot.orchestrator.policy.get_agents")
-    def test_agent_credit_error(self, mock_agents, mock_tasks):
+    def test_agent_credit_error(self, mock_agents, mock_tasks, mock_peek):
         from src.autopilot.orchestrator.policy import check_api_credits
 
-        mock_agents.return_value = [
-            {"id": "a1", "status": "error", "error": "insufficient credits"}
-        ]
+        mock_agents.return_value = [{"id": "a1", "status": "error"}]
         mock_tasks.return_value = []
+        mock_peek.return_value = "Error: insufficient credits"
         found, msg = check_api_credits()
         assert found is True
         assert "credit" in msg.lower()
 
+    @patch("src.autopilot.orchestrator.policy.peek_agent_output")
     @patch("src.autopilot.orchestrator.policy.get_tasks")
     @patch("src.autopilot.orchestrator.policy.get_agents")
-    def test_task_credit_error(self, mock_agents, mock_tasks):
+    def test_task_credit_error(self, mock_agents, mock_tasks, mock_peek):
         from src.autopilot.orchestrator.policy import check_api_credits
 
         mock_agents.return_value = []
-        mock_tasks.return_value = [{"id": "t1", "error": "rate limit exceeded"}]
+        mock_tasks.return_value = [{"id": "t1", "failure_reason": "rate limit exceeded"}]
+        mock_peek.return_value = ""
         found, msg = check_api_credits()
         assert found is True
 
+    @patch("src.autopilot.orchestrator.policy.peek_agent_output")
     @patch("src.autopilot.orchestrator.policy.get_tasks")
     @patch("src.autopilot.orchestrator.policy.get_agents")
-    def test_agent_output_log_credit(self, mock_agents, mock_tasks):
+    def test_agent_output_log_credit(self, mock_agents, mock_tasks, mock_peek):
+        """Even an agent NOT (yet) marked status="error" is checked -- the
+        output-phrase scan runs unconditionally, so a credit message that
+        shows up before the agent is formally marked errored is still
+        caught."""
         from src.autopilot.orchestrator.policy import check_api_credits
 
-        mock_agents.return_value = [
-            {
-                "id": "a1",
-                "status": "working",
-                "error": "",
-                "output_log": "quota exceeded",
-            }
-        ]
+        mock_agents.return_value = [{"id": "a1", "status": "working"}]
         mock_tasks.return_value = []
+        mock_peek.return_value = "quota exceeded"
         found, msg = check_api_credits()
         assert found is True
 
