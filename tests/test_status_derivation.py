@@ -495,6 +495,47 @@ class TestDeriveFeatureStatus:
             result = derive_feature_status(session, "feat-1")
         assert result == "completed"
 
+    def test_returns_paused_not_active_when_paused_for_review(self, db_manager):
+        """Regression, observed live: feature feat-e1d649cf's Review button
+        never appeared in the UI even though its workflow correctly sat
+        paused_by="review" for hours. A workflow paused mid-pipeline
+        (paused_by=None/"user"/"budget", real work still to resume) should
+        derive ACTIVE so retry/resume logic picks it back up -- but
+        paused_by="review" is only ever set once EVERY phase already
+        reached "completed" (_pause_feature_for_review), so there is no
+        remaining work to resume. The frontend's Review button
+        (DesignQueuePanel.tsx) gates on feature.status in {"completed",
+        "paused"}; deriving ACTIVE here silently hid the button despite
+        review_pending (read from workflow.paused_by) correctly reporting
+        the review as pending."""
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(
+                id="wf-1", name="Test", status="paused", paused_by="review",
+                phases_folder_path="/tmp/phases",
+            )
+            session.add(wf)
+
+            feature = Feature(
+                id="feat-1",
+                design_id="design-1",
+                feature_key="test-feature",
+                name="Test Feature",
+                scope="Test scope",
+                workflow_id="wf-1",
+                status="active",
+            )
+            session.add(feature)
+
+            session.add(Task(
+                id="task-1", workflow_id="wf-1", raw_description="r",
+                done_definition="d", status="done",
+            ))
+
+        with db_manager.session_scope() as session:
+            result = derive_feature_status(session, "feat-1")
+        assert result == "paused"
+
 
 class TestDeriveWorkflowStatus:
     """Tests for derive_workflow_status function."""
