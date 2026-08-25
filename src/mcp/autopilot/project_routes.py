@@ -616,7 +616,18 @@ async def delete_project(
             detail="Agent not authenticated. Provide valid X-Agent-ID header.",
         )
 
-    from src.core.database import AutopilotProject, get_db
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.database import (
+        AgentWorktree,
+        AutopilotProject,
+        Feature,
+        ProjectRepo,
+        Task,
+        Ticket,
+        TicketCommit,
+        get_db,
+    )
 
     replacement_base_dir = None
 
@@ -626,8 +637,29 @@ async def delete_project(
             raise HTTPException(404, "Project not found")
 
         was_active = getattr(proj, "is_active", False)
-        db.delete(proj)
-        db.flush()
+
+        # BLOCKER fix (adversarial review): repo_id FKs on these five tables
+        # have no ondelete clause, so SQLite's FK enforcement rejects the
+        # cascade delete of ProjectRepo rows (AutopilotProject.repos,
+        # cascade="all, delete-orphan") if any row still references one.
+        # Null the FK first, in the same transaction, so the cascade delete
+        # below always succeeds — matches repo_id=None's existing meaning
+        # ("use the primary repo").
+        repo_ids = [r.id for r in db.query(ProjectRepo.id).filter_by(project_id=project_id).all()]
+        if repo_ids:
+            for model in (Task, Ticket, TicketCommit, AgentWorktree, Feature):
+                db.query(model).filter(model.repo_id.in_(repo_ids)).update({"repo_id": None}, synchronize_session=False)
+
+        try:
+            db.delete(proj)
+            db.flush()
+        except IntegrityError as e:
+            db.rollback()
+            logger.error(f"Failed to delete project {project_id}: {e}")
+            raise HTTPException(
+                status_code=409,
+                detail="Project cannot be deleted: it still has references that block deletion.",
+            ) from e
 
         if was_active:
             next_proj = db.query(AutopilotProject).order_by(AutopilotProject.name).first()
