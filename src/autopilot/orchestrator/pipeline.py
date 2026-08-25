@@ -1835,6 +1835,32 @@ def _run_one_feature(
             feature_id = feat_record.id
             feature_repo_id = feat_record.repo_id
 
+            # Multi-repo: a Feature bound to a specific repo (REQ-19/REQ-20) runs
+            # its pipeline against THAT repo's path, not the project's primary --
+            # repo_id is None for single-repo projects (or a feature whose repo
+            # inference was inconclusive), in which case resolve_repo_path falls
+            # back to the project's primary repo, i.e. today's project_path.
+            # Resolved here (before the "already completed" cleanup branch
+            # below) rather than after this whole block, so that branch's own
+            # _create_integration_worktree/_cleanup_worktree calls target the
+            # feature's real repo too -- moved up after a bug found where the
+            # cleanup path used the project's primary path even for a feature
+            # bound to a different repo, silently missing its actual worktree.
+            if project_id:
+                from src.core.repo_resolution import RepoNotFoundError, resolve_repo_path
+
+                try:
+                    project_path = resolve_repo_path(db, project_id, feature_repo_id)
+                except (RepoNotFoundError, ValueError) as e:
+                    if feature_repo_id:
+                        # Feature bound to a specific repo but resolution failed --
+                        # fail the feature instead of silently running against wrong repo
+                        logger.error(f"[REPO-SCOPE] Feature {feature_key} bound to repo {feature_repo_id} but resolution failed: {e} -- failing feature")
+                        _update_feature_status(feature_id, design_entry.db_id, "failed", f"Repo resolution failed: {e}", logger)
+                        return FeatureRunStatus.FAILED
+                    else:
+                        logger.warning(f"[REPO-SCOPE] Could not resolve repo path for feature {feature_key}: {e} -- using default")
+
             # Resume support: a design that was Phase-0'd, then had this
             # feature's pipeline stopped mid-flight (service stop/pause),
             # lands back here on a later "play" with feat_record.status
@@ -1889,27 +1915,6 @@ def _run_one_feature(
     if not feature_id:
         logger.error(f"Feature record not found for {feature_key}")
         return FeatureRunStatus.FAILED
-
-    # Multi-repo: a Feature bound to a specific repo (REQ-19/REQ-20) runs
-    # its pipeline against THAT repo's path, not the project's primary --
-    # repo_id is None for single-repo projects (or a feature whose repo
-    # inference was inconclusive), in which case resolve_repo_path falls
-    # back to the project's primary repo, i.e. today's project_path.
-    if project_id:
-        from src.core.repo_resolution import RepoNotFoundError, resolve_repo_path
-
-        with get_db() as db:
-            try:
-                project_path = resolve_repo_path(db, project_id, feature_repo_id)
-            except (RepoNotFoundError, ValueError) as e:
-                if feature_repo_id:
-                    # Feature bound to a specific repo but resolution failed --
-                    # fail the feature instead of silently running against wrong repo
-                    logger.error(f"[REPO-SCOPE] Feature {feature_key} bound to repo {feature_repo_id} but resolution failed: {e} -- failing feature")
-                    _update_feature_status(feature_id, design_entry.db_id, "failed", f"Repo resolution failed: {e}", logger)
-                    return FeatureRunStatus.FAILED
-                else:
-                    logger.warning(f"[REPO-SCOPE] Could not resolve repo path for feature {feature_key}: {e} -- using default")
 
     # Create feature record folder
     feature_record_path = designs_folder / "features" / feature_key

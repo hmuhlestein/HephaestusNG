@@ -577,18 +577,27 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
 async def cleanup_branches(project_path: Optional[str] = None):
     """Clean up all stale agent branches.
 
-    project_path: which project's repo to sweep. Defaults to the active
-    project -- WorktreeManager otherwise operates on whatever project
-    happens to be config.main_repo_path's current global default, which is
-    wrong as soon as more than one project exists (same bug already fixed
-    for the other WorktreeManager(...) call sites -- see orchestrator.py).
+    project_path: an explicit single repo path to sweep, taken as-is. Omit
+    it to sweep every repo of the active project -- WorktreeManager
+    otherwise operates on whatever project happens to be
+    config.main_repo_path's current global default, which is wrong as soon
+    as more than one project exists (same bug already fixed for the other
+    WorktreeManager(...) call sites -- see orchestrator.py), and a single
+    base_dir path misses a multi-repo project's non-primary repos entirely
+    (REQ-19/REQ-20 -- see resolve_repo_path's own "single choke point"
+    docstring; sweeping is a some-repos-not-others gap, not a wrong-repo
+    one, since each repo's stale branches just sit unswept rather than
+    being swept in the wrong place).
     """
     from src.core.app_context import get_app_state
     from src.core.database import AutopilotProject, get_db
+    from src.core.repo_resolution import get_project_repos
     from src.core.worktree_manager import WorktreeManager
 
     try:
-        if not project_path:
+        if project_path:
+            repo_paths = [project_path]
+        else:
             with get_db() as db:
                 active_id = _get_active_project_id()
                 proj = (
@@ -601,7 +610,9 @@ async def cleanup_branches(project_path: Optional[str] = None):
                         400,
                         "project_path is required (no active project to default to)",
                     )
-                project_path = proj.base_dir
+                repos = get_project_repos(db, proj.id)
+                repo_paths = [repo.path for repo in repos] if repos else [proj.base_dir]
+                repo_paths = [p for p in repo_paths if p]
 
         # A fresh WorktreeManager instance is deliberate here (not the
         # shared server_state.branch_manager) -- .reload(project_path) below
@@ -610,7 +621,6 @@ async def cleanup_branches(project_path: Optional[str] = None):
         # relying on it pointing at a different project. Only db_manager
         # itself should be the shared instance (see SOLID review 1.12).
         db_manager = get_app_state().db_manager
-        branch_manager = WorktreeManager(db_manager, repo_path=project_path)
         # cleanup_all_stale_branches does real git/filesystem work --
         # blocking, same class of issue as the /health endpoint below
         # (its own comment explains the same offload-at-the-caller
@@ -621,8 +631,17 @@ async def cleanup_branches(project_path: Optional[str] = None):
         import asyncio
 
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, branch_manager.cleanup_all_stale_branches)
-        return result
+        totals = {"cleaned": 0, "merged": 0, "failed": 0, "worktrees_cleaned": 0, "branches": [], "repos_swept": []}
+        for repo_path in repo_paths:
+            branch_manager = WorktreeManager(db_manager, repo_path=repo_path)
+            result = await loop.run_in_executor(None, branch_manager.cleanup_all_stale_branches)
+            totals["cleaned"] += result.get("cleaned", 0)
+            totals["merged"] += result.get("merged", 0)
+            totals["failed"] += result.get("failed", 0)
+            totals["worktrees_cleaned"] += result.get("worktrees_cleaned", 0)
+            totals["branches"].extend(result.get("branches", []))
+            totals["repos_swept"].append({"path": repo_path, **result})
+        return totals
     except HTTPException:
         raise
     except Exception as e:

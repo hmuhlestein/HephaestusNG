@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import pytest
 
@@ -3301,7 +3301,10 @@ class TestCleanupBranchesProjectScoping:
     config.main_repo_path's current global default -- wrong project as
     soon as more than one exists. Live impact: a real cleanup run swept
     zero of ~25 stale worktrees sitting in a different project's repo,
-    with no error surfaced anywhere."""
+    with no error surfaced anywhere. Fixed by passing repo_path directly
+    to the constructor (WorktreeManager.__init__ opens the repo from it
+    inline -- functionally identical to reload(), just not a separate
+    call), so these check the constructor's repo_path kwarg, not .reload()."""
 
     def test_explicit_project_path_is_used(self, project_client, monkeypatch):
         client, dirs = project_client
@@ -3322,7 +3325,7 @@ class TestCleanupBranchesProjectScoping:
             )
 
         assert resp.status_code == 200
-        mock_instance.reload.assert_called_once_with(target)
+        MockWtMgr.assert_called_once_with(ANY, repo_path=target)
 
     def test_falls_back_to_active_project_when_omitted(self, project_client):
         client, dirs = project_client
@@ -3348,7 +3351,7 @@ class TestCleanupBranchesProjectScoping:
             resp = client.post("/api/autopilot/cleanup-branches")
 
         assert resp.status_code == 200
-        mock_instance.reload.assert_called_once_with(target)
+        MockWtMgr.assert_called_once_with(ANY, repo_path=target)
 
     def test_no_project_path_and_no_active_project_is_rejected(self, project_client):
         client, dirs = project_client
