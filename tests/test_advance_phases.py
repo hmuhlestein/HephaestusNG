@@ -676,6 +676,54 @@ class TestCaseInProgressNoTasks:
                 assert result is True
                 mock_create.assert_called_once()
 
+    def test_creates_task_when_the_only_task_is_duplicated_even_within_the_cycle(
+        self, db_manager, sample_workflow
+    ):
+        """Regression, observed live: workflow 81b399c7's git_expert phase
+        stuck "in_progress" with only a "duplicated" task (from the same
+        ticket-blocked routing as the stale-terminal-task case above), but
+        this time execution.started_at was NEVER refreshed past the
+        duplicated task's own created_at -- something set status=
+        "in_progress" directly without going through reopen_phase_
+        execution/_create_phase_task's own reopening logic (which always
+        stamps started_at="now"), so the cycle_filter's `>=` boundary
+        stayed stale and the duplicated task still satisfied it. Excluding
+        status="duplicated" from the count directly closes this regardless
+        of why started_at didn't advance.
+
+        Exercises BOTH count sites in this function, not just the first:
+        with the claim mocked to succeed (matching the real live case),
+        this reaches the TOCTOU re-check a few lines below the initial
+        count too -- that second query had its own, separate copy of the
+        same unfiltered `Task.filter_by(phase_id=...)` count, missed on
+        the first pass at this fix, which wrongly treated the duplicated
+        task as "a real task raced in" and released the claim without
+        creating anything. This test fails if either site regresses."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_no_tasks
+
+        cycle_start = datetime.utcnow()
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.started_at = cycle_start
+            session.add(Task(
+                id="task-duplicated-in-cycle",
+                workflow_id="wf-1",
+                phase_id="phase-1",
+                raw_description="r",
+                done_definition="d",
+                status="duplicated",
+                created_at=cycle_start,
+            ))
+            in_progress = [{"phase": phase, "execution": execution, "status": "in_progress"}]
+
+        logger = MagicMock()
+        with patch("src.autopilot.orchestrator.phase_transitions._create_phase_task", return_value=True) as mock_create:
+            with db_manager.session_scope() as session:
+                result = _case_in_progress_no_tasks(session, "wf-1", in_progress, logger)
+                assert result is True
+                mock_create.assert_called_once()
+
     def test_releases_its_own_claim_when_a_task_raced_in(self, db_manager, sample_workflow):
         """Same TOCTOU gap as _case_start_first_phase's own regression
         (see test_reverifies_existing_right_before_creating): a task
@@ -1651,6 +1699,58 @@ class TestCaseInProgressComplete:
             fresh = [t for t in tasks if t.id != "task-old-done"][0]
             assert fresh.status == "in_progress"
 
+    def test_creates_fresh_task_when_only_task_in_cycle_is_duplicated(
+        self, db_manager, sample_workflow
+    ):
+        """Regression, same class as the stale-started_at case above but a
+        different cause: a "duplicated" task left behind by a ticket-
+        blocked git_expert/doc_review routing to development (see
+        _maybe_retry_failed_tasks) still satisfies the cycle_filter (it's
+        genuinely within the current cycle), so total_cycle_tasks alone
+        would read as "phase already has a task" and this branch would
+        never fire -- exactly the bug observed live on workflow 81b399c7's
+        git_expert phase. "duplicated" must be excluded here the same way
+        it already is in _case_in_progress_no_tasks."""
+        from src.core.database import Agent, PhaseExecution
+        from src.autopilot.orchestrator.phase_transitions import (
+            _case_in_progress_complete,
+            _get_phase_statuses,
+        )
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(id="new-agent-2", system_prompt="p", status="working", cli_type="pi")
+            )
+            session.add(
+                Task(
+                    id="task-duplicated-in-cycle",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="duplicated",
+                )
+            )
+            session.flush()
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.started_at = datetime.utcnow() - timedelta(minutes=1)
+
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct",
+            side_effect=_agent_row_side_effect("new-agent-2"),
+        ):
+            with db_manager.session_scope() as session:
+                phase_statuses = _get_phase_statuses(session, "wf-1")
+                in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+                result = _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            tasks = session.query(Task).filter_by(phase_id="phase-1").all()
+            assert len(tasks) == 2, "a fresh task must be created, not silently skipped"
+            fresh = [t for t in tasks if t.id != "task-duplicated-in-cycle"][0]
+            assert fresh.status == "in_progress"
+
     def test_maybe_retry_failed_tasks_is_claim_protected(self, db_manager, sample_workflow):
         """Regression: _maybe_retry_failed_tasks used to run with zero
         claim protection, unlike the sibling _fire_phase_transition path a
@@ -2559,6 +2659,46 @@ class TestCaseCompletedWithSuccessor:
 
         assert result is False
         mock_create.assert_not_called()
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    def test_creates_task_when_successors_only_task_is_duplicated(
+        self, mock_create, db_manager, sample_workflow
+    ):
+        """Regression: a "duplicated" task left behind on the successor
+        phase (e.g. a ticket-blocked git_expert/doc_review task routed to
+        development, which names THIS phase as its own action_target_phase
+        -- see _maybe_retry_failed_tasks's routing branch) must not read as
+        "successor already has a task" -- same class of bug fixed in
+        _case_in_progress_no_tasks, same "duplicated means doesn't count"
+        convention this codebase already uses elsewhere. Observed live:
+        workflow 81b399c7's git_expert phase was left exactly this way."""
+        from src.autopilot.orchestrator.phase_transitions import _case_completed_with_successor, _get_phase_statuses
+
+        self._seed_completed_with_pending_successor(db_manager)
+        mock_create.return_value = True
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-duplicated",
+                    workflow_id="wf-1",
+                    phase_id="phase-2",
+                    raw_description="r",
+                    done_definition="d",
+                    status="duplicated",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            completed = [p for p in phase_statuses if p["status"] == "completed"]
+            pending = [p for p in phase_statuses if p["status"] == "pending"]
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_completed_with_successor(
+                session, "wf-1", completed, pending, in_progress, MagicMock()
+            )
+
+        assert result is True
+        mock_create.assert_called_once()
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
     def test_skips_when_claim_already_held(self, mock_create, db_manager, sample_workflow):
