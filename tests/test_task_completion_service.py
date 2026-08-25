@@ -842,6 +842,31 @@ class TestVerifyOutputSurvivedCommit:
         assert task.status == "failed"
         assert task.failure_reason == result["message"]
 
+    def test_missing_message_names_the_expected_suffixed_filename(self, tmp_path):
+        """Same clarity fix as verify_output_artifact's own equivalent test
+        -- this function has its own, separately-maintained copy of the
+        same "missing" message construction (the module's own docstring
+        flags this duplication as deliberate), so it needed the identical
+        fix independently."""
+        phase = Mock(name="qa_validation", id="phase-1")
+        phase.name = "qa_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="614b42ba-0d27-4238-bf7e-ba1eabc1ec8e", status="done")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))  # empty -- no report at all
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files", return_value=["qa.md"]
+        ):
+            result = TaskCompletionService.verify_output_survived_commit(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is not None
+        assert "qa-614b42ba.md" in result["message"]
+
     def test_rejects_when_the_correctly_named_file_got_replaced_by_a_bare_one(self, tmp_path):
         """Defense-in-depth mirror of verify_output_artifact's own naming
         floor: normally redundant (a wrongly-named file is rejected before
