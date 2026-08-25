@@ -62,7 +62,7 @@ async def test_has_session_is_offloaded_to_executor(dispatcher):
     with patch("asyncio.get_event_loop", return_value=fake_loop):
         await dispatcher.guardian_analysis_for_agent(agent)
 
-    fake_loop.run_in_executor.assert_called_once_with(
+    fake_loop.run_in_executor.assert_any_call(
         None, dispatcher.agent_manager.tmux_server.has_session, "agent-tmux-1"
     )
     dispatcher.handle_missing_tmux_session.assert_called_once_with(agent)
@@ -95,13 +95,14 @@ async def test_dead_pane_triggers_restart_even_though_session_exists(dispatcher)
     dispatcher.agent_manager.is_pane_dead = MagicMock(return_value=True)
 
     fake_loop = MagicMock()
-    # has_session() -> True (session exists), then is_pane_dead() -> True
-    fake_loop.run_in_executor = AsyncMock(side_effect=[True, True])
+    # has_session() -> True (session exists), is_pane_dead() -> True, then
+    # the "is this task already done?" query -> mock_task (in_progress)
+    fake_loop.run_in_executor = AsyncMock(side_effect=[True, True, mock_task])
 
     with patch("asyncio.get_event_loop", return_value=fake_loop):
         await dispatcher.guardian_analysis_for_agent(agent)
 
-    assert fake_loop.run_in_executor.call_count == 2
+    assert fake_loop.run_in_executor.call_count == 3
     fake_loop.run_in_executor.assert_any_call(
         None, dispatcher.agent_manager.is_pane_dead, "agent-tmux-1"
     )

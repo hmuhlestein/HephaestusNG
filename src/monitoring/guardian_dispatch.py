@@ -12,6 +12,7 @@ AutoRestart collaborator owns that logic.
 See docs/SOLID_OO_REVIEW.md and design_docs/phase_1b_decomposition.md §4.3.
 """
 
+import functools
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -59,9 +60,12 @@ class GuardianDispatcher:
         Returns:
             Guardian analysis result or None if failed
         """
+        import asyncio
+
         from src.core.log_context import set_log_context
         set_log_context(agent=agent.id, task=agent.current_task_id or "")
         session = self.db_manager.get_session()
+        loop = asyncio.get_event_loop()
         try:
             # Skip agents that are too young (grace period for spin-up)
             agent_age_seconds = (utc_now() - agent.created_at).total_seconds()
@@ -89,9 +93,6 @@ class GuardianDispatcher:
             # one at a time.
             has_missing_session = False
             if agent.tmux_session_name:
-                import asyncio
-
-                loop = asyncio.get_event_loop()
                 has_missing_session = not await loop.run_in_executor(
                     None, self.agent_manager.tmux_server.has_session, agent.tmux_session_name
                 )
@@ -110,7 +111,9 @@ class GuardianDispatcher:
                     )
             if has_missing_session:
                 # Check if task is already done before restarting
-                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                task = await loop.run_in_executor(
+                    None, lambda: session.query(Task).filter_by(id=agent.current_task_id).first()
+                )
                 if task and task.status == "done":
                     logger.info(
                         f"Agent {agent.id} has missing tmux session but task {task.id[:8]} is done — not restarting"
@@ -138,24 +141,30 @@ class GuardianDispatcher:
                 try:
                     from src.core.database import Phase as _Phase
 
-                    _task = (
-                        session.query(Task).filter_by(id=agent.current_task_id).first()
-                    )
-                    if _task and _task.phase_id:
-                        _phase = (
-                            session.query(_Phase).filter_by(id=_task.phase_id).first()
+                    def _fetch_task_and_phase_name_sync():
+                        _task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                        if not (_task and _task.phase_id):
+                            return None
+                        _phase = session.query(_Phase).filter_by(id=_task.phase_id).first()
+                        return _phase.name if _phase else None
+
+                    phase_name = await loop.run_in_executor(None, _fetch_task_and_phase_name_sync)
+                    if phase_name:
+                        # write_agent_tmux_log does its own DB query plus
+                        # filesystem I/O -- offloaded, same reasoning as
+                        # everything else in this function.
+                        await loop.run_in_executor(
+                            None, functools.partial(self.write_agent_tmux_log, agent.id, phase_name, tmux_output)
                         )
-                        if _phase:
-                            self.write_agent_tmux_log(
-                                agent.id, _phase.name, tmux_output
-                            )
                 except Exception:
                     pass  # non-fatal; don't interrupt the monitoring cycle
 
             # DETECT: Agent exited to command line (shows $, %, >>>, bquote>)
             if self.guardian.detect_agent_exited(tmux_output):
                 # Check if task is already done before restarting
-                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                task = await loop.run_in_executor(
+                    None, lambda: session.query(Task).filter_by(id=agent.current_task_id).first()
+                )
                 if task and task.status == "done":
                     logger.info(
                         f"Agent {agent.id[:8]} exited but task {task.id[:8]} is done — not restarting"
@@ -183,7 +192,9 @@ class GuardianDispatcher:
             if self.guardian.detect_garbled_output(
                 tmux_output, tui_patterns=tui_patterns
             ):
-                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                task = await loop.run_in_executor(
+                    None, lambda: session.query(Task).filter_by(id=agent.current_task_id).first()
+                )
                 if task and task.status == "done":
                     logger.info(
                         f"Agent {agent.id[:8]} garbled but task done — not restarting"
@@ -195,8 +206,10 @@ class GuardianDispatcher:
                 await self.handle_missing_tmux_session(agent)
                 return None
 
-            # Get past summaries for this agent
-            past_summaries = self.get_past_summaries_for_agent(agent.id)
+            # Get past summaries for this agent -- get_past_summaries_for_agent
+            # does real synchronous SQLAlchemy work, so offloaded like every
+            # other DB access in this function.
+            past_summaries = await loop.run_in_executor(None, self.get_past_summaries_for_agent, agent.id)
 
             # Perform Guardian analysis with trajectory thinking
             analysis = await self.guardian.analyze_agent_with_trajectory(
@@ -218,7 +231,7 @@ class GuardianDispatcher:
                 # check further down (previously computed after the signal
                 # was emitted, so the signal's metadata always saw a
                 # not-yet-assigned value and silently reported 0).
-                past = self.get_past_summaries_for_agent(agent.id, limit=5)
+                past = await loop.run_in_executor(None, functools.partial(self.get_past_summaries_for_agent, agent.id, limit=5))
                 consecutive_stuck = sum(
                     1
                     for s in past
@@ -387,6 +400,11 @@ class GuardianDispatcher:
         health_check_failures is incremented when trajectory is off-track,
         so the Guardian can decide whether to intervene.
         """
+        import asyncio
+
+        await asyncio.get_event_loop().run_in_executor(None, functools.partial(self._update_agent_health_from_trajectory_sync, agent, analysis))
+
+    def _update_agent_health_from_trajectory_sync(self, agent: Agent, analysis: Dict[str, Any]) -> None:
         with self.db_manager.session_scope() as session:
             db_agent = session.query(Agent).filter_by(id=agent.id).first()
             if not db_agent:

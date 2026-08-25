@@ -788,14 +788,22 @@ class MonitoringLoop:
         from src.core.repo_resolution import get_project_repos
         from src.core.worktree_manager import WorktreeManager
 
-        with self.db_manager.session_scope() as session:
-            active_repo_dirs = []
-            for p in session.query(AutopilotProject).filter_by(is_active=True).all():
-                repos = get_project_repos(session, p.id)
-                paths = [repo.path for repo in repos] if repos else [p.base_dir]
-                active_repo_dirs.extend((p.id, path) for path in paths if path)
+        # Plain synchronous SQLAlchemy run directly on the event loop stalls
+        # it for this call's whole duration -- same class of bug fixed in
+        # src/mcp/server/lifecycle.py's _resume_interrupted_workflows (see
+        # its docstring). This process's own loop also has to run every
+        # other monitoring-cycle task, so offloaded the same way.
+        def _fetch_active_repo_dirs_sync():
+            with self.db_manager.session_scope() as session:
+                dirs = []
+                for p in session.query(AutopilotProject).filter_by(is_active=True).all():
+                    repos = get_project_repos(session, p.id)
+                    paths = [repo.path for repo in repos] if repos else [p.base_dir]
+                    dirs.extend((p.id, path) for path in paths if path)
+                return dirs
 
         loop = asyncio.get_event_loop()
+        active_repo_dirs = await loop.run_in_executor(None, _fetch_active_repo_dirs_sync)
         for project_id, base_dir in active_repo_dirs:
             try:
                 bm = WorktreeManager(self.db_manager)
