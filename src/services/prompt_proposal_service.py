@@ -126,6 +126,30 @@ def phase_yaml_path(workflow_definition: str, phase_name: str) -> Optional[Path]
     return None
 
 
+def _coerce_done_definitions(value: Any) -> Any:
+    """Accept done_definitions as a real list OR a YAML-block/JSON-array
+    string and normalize to a list.
+
+    The MCP tool schema leaves proposed_value/current_value untyped so one
+    schema can serve every editable field; an agent submitting the one
+    list-typed field (done_definitions) has no schema hint that an array is
+    expected and reliably sends it JSON- or YAML-encoded as a string
+    instead (ticket-cdb9fa63). yaml.safe_load parses both encodings (JSON is
+    a YAML subset), so it is the single parse path for either. Anything
+    that isn't a list of strings after parsing is returned unchanged so
+    validate_proposal's own check still produces the real error message.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        parsed = yaml.safe_load(value)
+    except yaml.YAMLError:
+        return value
+    if isinstance(parsed, list) and all(isinstance(v, str) for v in parsed):
+        return parsed
+    return value
+
+
 def validate_proposal(
     workflow_definition: str,
     phase_name: str,
@@ -491,6 +515,10 @@ def create_proposal(
     from datetime import datetime as _dt
 
     from src.core.database import PromptProposal, get_db
+
+    if field == "done_definitions":
+        proposed_value = _coerce_done_definitions(proposed_value)
+        quoted_current_value = _coerce_done_definitions(quoted_current_value)
 
     problem = validate_proposal(
         workflow_definition, phase_name, field, proposed_value, proposing_phase
