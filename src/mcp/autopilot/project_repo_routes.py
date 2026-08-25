@@ -128,6 +128,14 @@ async def add_project_repo(
                         409,
                         "This project already has a primary repo (lost a concurrent race to add the first repo) -- retry the request",
                     )
+                # SQLite's IntegrityError message for a __table_args__
+                # UniqueConstraint names the *columns*, not the constraint
+                # name (unlike the named partial index handled above) --
+                # e.g. "UNIQUE constraint failed: project_repos.project_id, project_repos.path"
+                if "project_repos.project_id, project_repos.path" in str(e):
+                    raise HTTPException(409, f"A repo with path {resolved_path!r} already exists on this project")
+                if "project_repos.project_id, project_repos.label" in str(e):
+                    raise HTTPException(409, f"A repo with label {req.label!r} already exists on this project")
                 raise HTTPException(409, f"A repo with label {req.label!r} or path {resolved_path!r} already exists on this project")
 
             return ProjectRepoItem(

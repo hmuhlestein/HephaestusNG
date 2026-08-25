@@ -135,6 +135,49 @@ class TestAddProjectRepo:
         assert exc_info.value.status_code == 409
 
     @pytest.mark.asyncio
+    async def test_duplicate_path_message_names_path_not_label(self, db_manager, tmp_path):
+        """WARNING fix (adversarial review): a path-only collision (distinct
+        label, same path) must name the path as the culprit, not a generic
+        'label or path' message that could send the user chasing the wrong
+        field."""
+        from src.mcp.autopilot.project_repo_routes import ProjectRepoCreate, add_project_repo
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+        backend = tmp_path / "backend"
+        backend.mkdir()
+        (backend / ".git").mkdir()
+
+        await add_project_repo("proj-1", ProjectRepoCreate(label="backend", path=str(backend)))
+        with pytest.raises(HTTPException) as exc_info:
+            await add_project_repo("proj-1", ProjectRepoCreate(label="backend-dup", path=str(backend)))
+        assert exc_info.value.status_code == 409
+        assert "path" in exc_info.value.detail
+        assert str(backend) in exc_info.value.detail
+        assert "backend-dup" not in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_duplicate_label_message_names_label_not_path(self, db_manager, tmp_path):
+        """WARNING fix (adversarial review): a label-only collision (same
+        label, distinct path) must name the label as the culprit."""
+        from src.mcp.autopilot.project_repo_routes import ProjectRepoCreate, add_project_repo
+
+        with db_manager.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+        backend = tmp_path / "backend"
+        backend2 = tmp_path / "backend2"
+        for d in (backend, backend2):
+            d.mkdir()
+            (d / ".git").mkdir()
+
+        await add_project_repo("proj-1", ProjectRepoCreate(label="backend", path=str(backend)))
+        with pytest.raises(HTTPException) as exc_info:
+            await add_project_repo("proj-1", ProjectRepoCreate(label="backend", path=str(backend2)))
+        assert exc_info.value.status_code == 409
+        assert "label" in exc_info.value.detail
+        assert str(backend2) not in exc_info.value.detail
+
+    @pytest.mark.asyncio
     async def test_unauthenticated_request_401s(self, db_manager, tmp_path, monkeypatch):
         from src.mcp.autopilot import project_repo_routes as routes
 
