@@ -55,24 +55,44 @@ async def _resume_interrupted_workflows(
 
     session = server_state.db_manager.get_session()
     result = {"resumed": 0, "workflows": []}
+    loop = asyncio.get_event_loop()
     try:
         if not getattr(server_state, "agent_manager", None):
             logger.warning("[RESUME] agent_manager not ready — skipping resume scan")
             return result
 
-        statuses = ["active", "paused"] + (["failed"] if reactivate else [])
-        q = session.query(Workflow).filter(Workflow.status.in_(statuses))
-        if workflow_id:
-            q = q.filter(Workflow.id == workflow_id)
-        elif project_id:
-            q = q.filter(Workflow.project_id == project_id)
-        active = q.all()
+        # Plain synchronous SQLAlchemy (DatabaseManager uses a sync
+        # create_engine) run directly on the event loop stalls it for
+        # this call's whole duration -- every other HTTP request,
+        # WebSocket push, and SSE stream this process is serving,
+        # including /health -- the same class of bug already fixed for
+        # process_queue and the phase-advancement sweep (see their own
+        # docstrings). This function runs on every server startup via
+        # _run_startup_recovery; under a large DB, staying un-offloaded
+        # left startup itself unresponsive to /health long enough to trip
+        # the watchdog's unresponsive-restart threshold, which restarted
+        # the (still-starting) backend before this call ever finished --
+        # a self-inflicted crash loop, confirmed live via a stuck-startup
+        # py-spy dump landing in this exact query. Each synchronous DB
+        # segment below is offloaded via run_in_executor; the genuinely
+        # async calls (tmux/git checks already were, restart_agent,
+        # AgentDispatchService.dispatch) stay as direct awaits.
+        def _fetch_active_workflows_sync():
+            statuses = ["active", "paused"] + (["failed"] if reactivate else [])
+            q = session.query(Workflow).filter(Workflow.status.in_(statuses))
+            if workflow_id:
+                q = q.filter(Workflow.id == workflow_id)
+            elif project_id:
+                q = q.filter(Workflow.project_id == project_id)
+            return q.all()
+
+        active = await loop.run_in_executor(None, _fetch_active_workflows_sync)
         if not active:
             return result
 
         # On-demand retry can flip a paused/failed workflow back to active so the
         # monitor re-drives it (and the scan below restarts any orphaned agents).
-        if reactivate:
+        def _reactivate_sync():
             for wf in active:
                 if wf.status == "paused" and wf.paused_by == "review":
                     # A "review" pause means a human decision (approve/
@@ -124,6 +144,9 @@ async def _resume_interrupted_workflows(
                         feature.status = "active"
             session.commit()
 
+        if reactivate:
+            await loop.run_in_executor(None, _reactivate_sync)
+
         resumed = 0
         for wf in active:
             # On-demand retry only (never the passive startup-wide scan, which
@@ -139,19 +162,24 @@ async def _resume_interrupted_workflows(
             # click, since a lone "blocked" task is invisible to both this
             # reset and the orphaned-agent scan below).
             if reactivate:
-                stuck_tasks = session.query(Task).filter(Task.workflow_id == wf.id, Task.status.in_(["failed", "blocked"])).all()
-                for t in stuck_tasks:
-                    t.status = "pending"
-                    t.failure_reason = None
-                    t.assigned_agent_id = None
-                    # This row is reused for the retry -- clear any stale
-                    # goto/retry tag from a previous life (see the matching
-                    # fix in restart_task_endpoint / orchestrator.py's
-                    # per-phase failed-task retry).
-                    t.action = ""
-                    t.action_target_phase = None
+                def _reset_stuck_tasks_sync(wf_id=wf.id):
+                    stuck = session.query(Task).filter(Task.workflow_id == wf_id, Task.status.in_(["failed", "blocked"])).all()
+                    for t in stuck:
+                        t.status = "pending"
+                        t.failure_reason = None
+                        t.assigned_agent_id = None
+                        # This row is reused for the retry -- clear any stale
+                        # goto/retry tag from a previous life (see the matching
+                        # fix in restart_task_endpoint / orchestrator.py's
+                        # per-phase failed-task retry).
+                        t.action = ""
+                        t.action_target_phase = None
+                    if stuck:
+                        session.commit()
+                    return stuck
+
+                stuck_tasks = await loop.run_in_executor(None, _reset_stuck_tasks_sync)
                 if stuck_tasks:
-                    session.commit()
                     logger.info(f"[RESUME] Workflow {wf.id[:8]}: resetting {len(stuck_tasks)} failed/blocked task(s) for on-demand retry")
                 for t in stuck_tasks:
                     try:
@@ -180,26 +208,32 @@ async def _resume_interrupted_workflows(
 
             # Only tasks that still need work — a 'done' task advances via the
             # monitor's phase-completion check, not by restarting its old agent.
-            task_ids = [
-                t.id
-                for t in session.query(Task)
-                .filter(
-                    Task.workflow_id == wf.id,
-                    Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+            def _fetch_task_ids_and_orphans_sync(wf_id=wf.id):
+                ids = [
+                    t.id
+                    for t in session.query(Task)
+                    .filter(
+                        Task.workflow_id == wf_id,
+                        Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+                    )
+                    .all()
+                ]
+                if not ids:
+                    return ids, []
+                orphaned = (
+                    session.query(Agent)
+                    .filter(
+                        Agent.current_task_id.in_(ids),
+                        Agent.agent_type == "phase",
+                        Agent.status.in_(["working", "idle", "starting"]),
+                    )
+                    .all()
                 )
-                .all()
-            ]
+                return ids, orphaned
+
+            task_ids, orphans = await loop.run_in_executor(None, _fetch_task_ids_and_orphans_sync)
             if not task_ids:
                 continue
-            orphans = (
-                session.query(Agent)
-                .filter(
-                    Agent.current_task_id.in_(task_ids),
-                    Agent.agent_type == "phase",
-                    Agent.status.in_(["working", "idle", "starting"]),
-                )
-                .all()
-            )
             # Both _tmux_session_alive and _git_expert_already_landed run
             # real subprocess/git work (up to ~23s combined per orphan,
             # between tmux's 3s and git's two 10s timeouts) -- blocking,
@@ -207,7 +241,6 @@ async def _resume_interrupted_workflows(
             # startup (blocking every request until it finishes) and on
             # every on-demand Retry click, over however many agents were
             # orphaned by the last restart, so offloaded per-orphan here.
-            loop = asyncio.get_event_loop()
             for agent in orphans:
                 still_alive = await loop.run_in_executor(None, _tmux_session_alive, agent.tmux_session_name)
                 if still_alive:
