@@ -1894,6 +1894,29 @@ def _run_one_feature(
                     if _wt:
                         _cleanup_worktree(_wt, _branch, project_path, logger)
                     return FeatureRunStatus.COMPLETED
+                if wf and wf.paused_by == "review":
+                    # A review pause is set only after every phase already
+                    # reached "completed" (see the FeatureRunStatus.COMPLETED
+                    # branch below), so wf.status stays "paused", never
+                    # "completed" -- the check above alone can't catch this
+                    # case. _wait_for_review_clearance normally blocks right
+                    # there waiting for the human's approve/reject, but that
+                    # wait dies with the process on a backend restart; without
+                    # this check, re-entering this function for the SAME
+                    # already-fully-completed feature (e.g. every subsequent
+                    # restart while a real PR review is still pending) fell
+                    # through to existing_workflow_id and re-ran
+                    # run_single_workflow from scratch on a workflow with
+                    # nothing left to do -- burning a full doc_review ->
+                    # forensics_analysis -> git_expert -> deploy re-run, for
+                    # real cost, on every restart. Confirmed live: feature
+                    # feat-e1d649cf re-ran this way 4-7 times across a single
+                    # debugging session's worth of restarts, still sitting
+                    # unreviewed the whole time. No worktree cleanup here --
+                    # the branch/PR must survive until the human actually
+                    # merges it.
+                    logger.info(f"Feature {feature_key} awaiting human review (workflow {wf.id[:8]}) -- skipping re-run")
+                    return FeatureRunStatus.PAUSED
                 if wf:
                     existing_workflow_id = wf.id
 
