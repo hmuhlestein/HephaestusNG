@@ -1342,17 +1342,32 @@ def _case_start_first_phase(db, workflow_id: str, pending: list, in_progress: li
     """
     if not in_progress and not completed and pending:
         first_phase = min(pending, key=lambda p: p["phase"].order)
+        phase_id = first_phase["phase"].id
         # Check if it already has tasks
-        existing = db.query(Task).filter_by(phase_id=first_phase["phase"].id).count()
-        if existing == 0 and not _claim_phase_task_creation(db, first_phase["phase"].id):
+        existing = db.query(Task).filter_by(phase_id=phase_id).count()
+        if existing == 0 and not _claim_phase_task_creation(db, phase_id):
             # Someone else (or a previous iteration of this same loop) is
             # already creating this phase's first task -- don't duplicate it.
             existing = 1
         if existing == 0:
+            # Re-check immediately before creating, on a fresh query --
+            # closes the TOCTOU gap between the count() above and winning
+            # the claim. workflow_execution_routes.py's own initial-task
+            # flow is independently claim-protected on the SAME phase, but
+            # runs on a separate DB connection/session; a task it creates
+            # can commit in the window between this function's initial
+            # existing==0 read and its own claim succeeding, and the stale
+            # snapshot would otherwise still look empty. Observed live: two
+            # Task rows (ed82ce49, 83e86c54) for the same brand-new phase 1,
+            # ~15s apart -- only one agent ever got dispatched (a separate,
+            # working dedup check in create_agent_for_task_direct caught
+            # that), but the extra Task row was pure debris left behind.
+            existing = db.query(Task).filter_by(phase_id=phase_id).count()
+        if existing == 0:
             logger.info(f"[PHASE-ADVANCE] Starting first phase: {first_phase['phase'].name}")
             return _create_phase_task(
                 workflow_id,
-                first_phase["phase"].id,
+                phase_id,
                 first_phase["phase"].name,
                 "continue",
                 logger,
