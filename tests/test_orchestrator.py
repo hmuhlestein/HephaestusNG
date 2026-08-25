@@ -298,14 +298,26 @@ class TestAttemptRecovery:
     def test_merges_branches(
         self, mock_subprocess, mock_wf_status, mock_agents, mock_tasks
     ):
-        """Recovery should merge unmerged agent branches."""
+        """Recovery should clean a dirty repo state (_clean_stale_repo_state).
+
+        This function's own docstring is explicit that it does NOT merge
+        branches ("WorktreeManager handles merges in update_task_status") --
+        the "merge" mock steps below only exercise _clean_stale_repo_state's
+        "abort a stuck merge" cleanup step, not a branch-merge feature.
+        _resolve_recovery_project_path falls back to $PROJECT_PATH here
+        (the workflow-lookup mock below patches the wrong get_db for the
+        current code and is a no-op) -- and _clean_stale_repo_state now
+        refuses to run against anything that isn't an isolated .worktrees/
+        checkout, so PROJECT_PATH must point at one for this recovery
+        action to fire at all.
+        """
         mock_wf_status.return_value = {"status": "active"}
         mock_tasks.side_effect = lambda status=None, workflow_id=None: []
         mock_agents.return_value = []
 
         # Mock the workflow query to return a workflow with working_directory
         mock_workflow = MagicMock()
-        mock_workflow.working_directory = "/tmp/test-project"
+        mock_workflow.working_directory = "/tmp/test-project/.worktrees/wt_agent-feature-1"
         with patch("src.autopilot.orchestrator.pipeline.get_db") as mock_get_db:
             mock_db = MagicMock()
             mock_db.__enter__ = MagicMock(return_value=mock_db)
@@ -313,22 +325,19 @@ class TestAttemptRecovery:
             mock_db.query.return_value.filter_by.return_value.first.return_value = mock_workflow
             mock_get_db.return_value = mock_db
 
-            # First call: git branch --list agent-* returns branches
-            # Second call: git status (clean)
-            # Third call: git branch --list (for merge check)
+            # First call: git status --porcelain (dirty)
+            # Remaining calls: merge --abort / checkout main / clean -fd / reset --hard
             mock_subprocess.side_effect = [
-                MagicMock(returncode=0, stdout="  agent-feature-1\n"),  # branch list
-                MagicMock(returncode=0, stdout=""),  # status (clean)
-                MagicMock(returncode=0, stdout="  agent-feature-1\n"),  # branch list for merge
-                MagicMock(returncode=0, stdout=""),  # checkout branch
+                MagicMock(returncode=0, stdout="  agent-feature-1\n"),  # status --porcelain (dirty)
+                MagicMock(returncode=0, stdout=""),  # merge --abort
                 MagicMock(returncode=0, stdout=""),  # checkout main
-                MagicMock(returncode=0, stdout="Merge made"),  # merge
-                MagicMock(returncode=0, stdout=""),  # delete branch
+                MagicMock(returncode=0, stdout=""),  # clean -fd
+                MagicMock(returncode=0, stdout=""),  # reset --hard HEAD
             ]
 
-            os.environ["PROJECT_PATH"] = "/tmp/test-project"
+            os.environ["PROJECT_PATH"] = "/tmp/test-project/.worktrees/wt_agent-feature-1"
         success, msg = attempt_recovery("wf-123", MockLogger())
-        assert "merge" in msg.lower() or success
+        assert "cleaned repo state" in msg.lower() or success
 
     @patch("src.autopilot.orchestrator.policy.get_tasks")
     @patch("src.autopilot.orchestrator.policy.get_agents")
