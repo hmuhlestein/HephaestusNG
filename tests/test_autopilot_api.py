@@ -1661,6 +1661,84 @@ class TestProjects:
         assert resp.status_code == 404
 
 
+    def test_delete_project_with_repo_scoped_task_does_not_500(self, project_client, tmp_path):
+        """BLOCKER regression (adversarial review): a project with a
+        non-primary ProjectRepo that has a Task scoped to it (repo_id set)
+        must still be deletable -- previously this raised an uncaught
+        sqlite3 FOREIGN KEY constraint failure (Task.repo_id has no
+        ondelete clause) that left the project permanently stuck."""
+        client, dirs = project_client
+        create = client.post(
+            "/api/autopilot/projects",
+            json={"name": "Multi-repo project", "base_dir": str(dirs["project_dir"])},
+        )
+        project_id = create.json()["id"]
+
+        second_repo_dir = tmp_path / "second-repo"
+        second_repo_dir.mkdir()
+        (second_repo_dir / ".git").mkdir()
+        add_repo = client.post(
+            f"/api/autopilot/projects/{project_id}/repos",
+            json={"label": "frontend", "path": str(second_repo_dir)},
+        )
+        assert add_repo.status_code == 200
+        repo_id = add_repo.json()["id"]
+
+        import os
+
+        from src.core.database import DatabaseManager, Task
+
+        db_manager = DatabaseManager(os.environ["HEPHAESTUS_TEST_DB"])
+        session = db_manager.get_session()
+        try:
+            task = Task(
+                id="task-repo-scoped",
+                raw_description="scoped to non-primary repo",
+                done_definition="n/a",
+                status="pending",
+                repo_id=repo_id,
+            )
+            session.add(task)
+            session.commit()
+        finally:
+            session.close()
+
+        resp = client.delete(f"/api/autopilot/projects/{project_id}")
+        assert resp.status_code == 200
+
+        session = db_manager.get_session()
+        try:
+            reloaded = session.query(Task).filter_by(id="task-repo-scoped").first()
+            assert reloaded is not None
+            assert reloaded.repo_id is None
+        finally:
+            session.close()
+
+    def test_delete_project_surfaces_integrity_error_as_409_not_500(self, project_client, monkeypatch):
+        """BLOCKER fix, defense-in-depth: delete_project's try/except around
+        db.flush() must turn ANY IntegrityError into a clean 409, not an
+        unhandled 500 -- not just the repo_id case the pre-emptive null-out
+        above already prevents from ever reaching this handler."""
+        client, dirs = project_client
+        create = client.post(
+            "/api/autopilot/projects",
+            json={"name": "To Delete", "base_dir": str(dirs["project_dir"])},
+        )
+        project_id = create.json()["id"]
+
+        import sqlalchemy.orm
+        from sqlalchemy.exc import IntegrityError
+
+        def _raise_integrity_error(self, *args, **kwargs):
+            raise IntegrityError("DELETE ...", {}, Exception("FOREIGN KEY constraint failed"))
+
+        monkeypatch.setattr(sqlalchemy.orm.Session, "flush", _raise_integrity_error)
+
+        resp = client.delete(f"/api/autopilot/projects/{project_id}")
+        assert resp.status_code == 409
+        assert "cannot be deleted" in resp.json()["detail"].lower()
+
+
 class TestProjectDesigns:
     def _create_project(self, client, dirs):
         resp = client.post(
