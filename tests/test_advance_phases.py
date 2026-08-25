@@ -2601,6 +2601,68 @@ class TestCaseCompletedWithSuccessor:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.paused_by == "review"
 
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    def test_marks_a_jumped_over_intermediate_phase_skipped(
+        self, mock_create, db_manager, sample_workflow
+    ):
+        """Regression, observed live: workflow c1f0839c's design_review
+        (order 4) sat PhaseExecution.status="pending" from 2026-08-23,
+        after a goto jumped architecture_design (order 3) straight to
+        development (order 5) via this exact case (a goto's
+        action_target_phase, or a by-order successor pick, landing past an
+        intervening phase). _start_next_phase (phase_manager.py) already
+        downgrades a jumped-over "pending" phase to "skipped" for its OWN
+        equivalent jump, but this case had no matching logic -- leaving
+        design_review "pending" forever, which permanently blocked
+        derive_workflow_status's completeness check even after every phase
+        through deploy (order 14) had finished, so the workflow could
+        never complete or pause for review."""
+        from src.autopilot.orchestrator.phase_transitions import _case_completed_with_successor, _get_phase_statuses
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.status = "completed"
+            session.add(
+                Phase(
+                    id="phase-3", workflow_id="wf-1", name="deploy", order=3,
+                    description="Deploy", done_definitions=["deployed"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-2", phase_id="phase-2", workflow_execution_id="wf-1", status="pending",
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-3", phase_id="phase-3", workflow_execution_id="wf-1", status="pending",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-goto", workflow_id="wf-1", phase_id="phase-1",
+                    raw_description="r", done_definition="d", status="done",
+                    action="goto", action_target_phase="deploy",
+                )
+            )
+        mock_create.return_value = True
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            completed = [p for p in phase_statuses if p["status"] == "completed"]
+            pending = [p for p in phase_statuses if p["status"] == "pending"]
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_completed_with_successor(
+                session, "wf-1", completed, pending, in_progress, MagicMock()
+            )
+
+        assert result is True
+        assert mock_create.call_args[0][:4] == ("wf-1", "phase-3", "deploy", "goto")
+
+        with db_manager.session_scope() as session:
+            exec2 = session.query(PhaseExecution).filter_by(phase_id="phase-2").first()
+            assert exec2.status == "skipped"
+
 
 class TestGetPhaseStatuses:
     """Tests for _get_phase_statuses helper."""

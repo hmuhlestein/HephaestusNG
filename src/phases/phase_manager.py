@@ -51,6 +51,12 @@ def _reopen_phase_execution(*args, **kwargs):
     return reopen_phase_execution(*args, **kwargs)
 
 
+def _mark_skipped_over_phases(*args, **kwargs):
+    """Lazy-import wrapper to avoid circular import."""
+    from src.autopilot.orchestrator.phase_transitions import mark_skipped_over_phases
+    return mark_skipped_over_phases(*args, **kwargs)
+
+
 def substitute_params(text: str, params: Dict[str, Any]) -> str:
     """Replace {param_name} placeholders with actual values.
 
@@ -1695,41 +1701,15 @@ class PhaseManager:
             # and once development's fix lands, resuming at product_validation
             # correctly skips re-running architectural_review through
             # qa_validation rather than walking the whole review chain again.
-            # But nothing marked those skipped phases' PhaseExecution rows
-            # as such -- they're left at whatever stale status an earlier
-            # goto's reset left them in (typically "pending"), forever
-            # indistinguishable from genuinely unstarted work. Every
-            # consumer of PhaseExecution.status that treats "pending" as
-            # "real work remains" (derive_workflow_status's completeness
-            # check chief among them) then sees this workflow as
-            # permanently incomplete, even after every phase that actually
-            # needed to run has finished and the whole feature has shipped.
-            # Only downgrade "pending" -- a genuinely "completed" phase
-            # (from an earlier pass that this jump doesn't need to redo)
-            # must not get overwritten to "skipped".
-            skipped_phases = (
-                session.query(Phase)
-                .filter(
-                    Phase.workflow_id == current_phase.workflow_id,
-                    Phase.order > current_phase.order,
-                    Phase.order < next_phase.order,
-                )
-                .all()
+            # Without marking those skipped phases' PhaseExecution rows,
+            # they're left at whatever stale status an earlier goto's reset
+            # left them in (typically "pending"), forever indistinguishable
+            # from genuinely unstarted work -- see mark_skipped_over_phases
+            # for the full rationale (shared with _case_completed_with_
+            # successor's identical jump in phase_transitions.py).
+            _mark_skipped_over_phases(
+                session, current_phase.workflow_id, current_phase.order, next_phase.order, logger
             )
-            for sp in skipped_phases:
-                sp_execution = (
-                    session.query(PhaseExecution).filter_by(phase_id=sp.id).first()
-                )
-                if sp_execution and sp_execution.status == "pending":
-                    logger.info(
-                        f"[PHASE] {sp.name} skipped over by the jump from "
-                        f"{current_phase.name} to {next_phase.name} -- marking "
-                        "its PhaseExecution 'skipped' instead of leaving it "
-                        "'pending' forever"
-                    )
-                    sp_execution.status = "skipped"
-                    sp_execution.completed_at = utc_now()
-            session.commit()
 
         if next_phase:
             # Update execution status for pending or completed phases
