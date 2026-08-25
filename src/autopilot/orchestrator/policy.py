@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from src.autopilot.orchestrator.engine_client import (
     get_agents,
     get_tasks,
+    peek_agent_output,
     terminate_agent_direct,
 )
 from src.autopilot.orchestrator.phase_transitions import (
@@ -448,33 +449,39 @@ def check_api_credits() -> Tuple[bool, str]:
         "payment",
     ]
 
+    # Neither get_agents() nor get_tasks() has ever returned "error" or
+    # "output_log" keys -- both checks below read those anyway, so every
+    # comparison silently ran against "" and this function could never
+    # return True in production, no matter how real the credit exhaustion
+    # was (the exact scenario _retry_exhausted_paused_workflows's own
+    # docstring names as its motivating example). The only place an
+    # agent's actual output text lives is peek_agent_output (tmux), and a
+    # task's real failure text is failure_reason, not "error".
     agents = get_agents()
     for agent in agents:
-        # Check agent status error field (more reliable than raw output)
-        agent_error = (agent.get("error", "") or "").lower()
         agent_status = (agent.get("status", "") or "").lower()
+        output = (peek_agent_output(agent.get("id", "")) or "").lower()
 
         # Check for explicit error status with credit keywords
         if agent_status == "error":
             for keyword in credit_keywords_in_error:
-                if keyword in agent_error:
+                if keyword in output:
                     return (
                         True,
                         f"API credit issue in agent {agent.get('id', '')[:8]}: {keyword}",
                     )
 
         # Check output log for specific phrases (not broad keywords)
-        output = (agent.get("output_log", "") or "").lower()
         for phrase in credit_phrases:
             if phrase in output:
-                return True, f"API credit issue: {phrase}"
+                return True, f"API credit issue in agent {agent.get('id', '')[:8]}: {phrase}"
 
     failed_tasks = get_tasks(status="failed")
     for task in failed_tasks:
-        error = (task.get("error", "") or "").lower()
+        error = (task.get("failure_reason", "") or "").lower()
         for phrase in credit_phrases:
             if phrase in error:
-                return True, f"API credit issue in task: {phrase}"
+                return True, f"API credit issue in task {task.get('id', '')[:8]}: {phrase}"
 
     return False, ""
 
