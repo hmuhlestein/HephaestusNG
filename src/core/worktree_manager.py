@@ -13,6 +13,7 @@ Agents never read out-of-tree paths. Curated inbound context (design doc, qa_spe
 task framing) is copied into a git-excluded ``<worktree>/.hephaestus/`` directory.
 """
 
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -1026,11 +1027,43 @@ class WorktreeManager:
                 and b not in tracked_branches
             ]
 
+            # untracked_branches has no AgentBranch row to stamp "cleaned"
+            # on (the records loop below does, via record.merge_status --
+            # that alone keeps a tracked branch from ever being retried
+            # automatically once attempted). Without an equivalent memory
+            # for untracked branches, one that conflicts (e.g. a real
+            # file-deletion conflict against main that nothing will ever
+            # resolve except a human) gets re-merged, re-conflicts, and
+            # re-`git merge --abort`s on every single sweep tick forever --
+            # `merge --abort` performs its own internal reset-to-HEAD, so
+            # this repeatedly rewrites every tracked file's mtime in
+            # self.main_repo, which for THIS project's own periodic sweep
+            # (monitor.py's _cleanup_stale_worktrees, run every
+            # monitoring_interval_seconds) IS the live checkout the dev
+            # server serves from -- observed live: several long-dead agent
+            # branches and already-superseded feature branches, all
+            # conflicting on the same deleted-in-main file, being
+            # re-attempted and re-aborted every ~60s indefinitely, forcing
+            # Vite full-page-reloads and occasionally catching a file
+            # mid-rewrite as a syntax error. Persisted next to the merge
+            # lock, keyed by branch name -> the main_repo HEAD sha it last
+            # conflicted against: skip a retry only when HEAD hasn't moved
+            # since (an unchanged conflict is guaranteed to reproduce
+            # identically), so a real change to main that might resolve it
+            # still gets tried again on the next sweep.
+            stale_attempts_path = Path(self.main_repo.working_dir) / ".git" / ".hephaestus_stale_branch_attempts.json"
+            try:
+                stale_attempts = json.loads(stale_attempts_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                stale_attempts = {}
+            head_sha = self.main_repo.head.commit.hexsha
+
             def _merge_and_delete(branch_name: str, agent_id: Optional[str]) -> None:
                 result = self.merge_shared_branch(branch_name)
                 action = result["action"]
                 if action == "merged":
                     merged.append(branch_name)
+                    stale_attempts.pop(branch_name, None)
                     # Delete the branch after successful merge.
                     try:
                         self.main_repo.git.branch("-D", branch_name)
@@ -1041,15 +1074,24 @@ class WorktreeManager:
                     # Conflict — branch preserved for manual resolution.
                     # Do NOT delete it.
                     failed.append(branch_name)
+                    stale_attempts[branch_name] = head_sha
                 else:
                     # Branch doesn't exist.
                     cleaned.append(branch_name)
+                    stale_attempts.pop(branch_name, None)
 
             for record in records:
                 _merge_and_delete(record.branch_name, record.agent_id)
                 record.merge_status = "cleaned"
             for branch_name in untracked_branches:
+                if stale_attempts.get(branch_name) == head_sha:
+                    continue  # already known to conflict against this exact HEAD
                 _merge_and_delete(branch_name, None)
+
+            try:
+                stale_attempts_path.write_text(json.dumps(stale_attempts))
+            except OSError:
+                pass
 
             # Step 4: reconcile disk against the database, both directions.
             #

@@ -483,3 +483,88 @@ class TestMergeSharedBranch:
 
         assert result["action"] == "skipped"
         assert result["branch"] == "nonexistent-branch"
+
+
+class TestCleanupAllStaleBranchesSkipsRepeatedConflicts:
+    """A conflicting branch is preserved (see
+    TestMergeSharedBranch.test_preserves_branch_on_conflict), not deleted --
+    but with no AgentBranch row (an orphaned agent, or a leftover feature
+    branch), nothing stopped cleanup_all_stale_branches from re-merging,
+    re-conflicting, and re-`git merge --abort`ing it on every single sweep
+    call, forever. `merge --abort` performs its own internal reset-to-HEAD,
+    which rewrites every tracked file's mtime -- observed live running
+    every ~60s indefinitely against HephaestusNG's own primary checkout
+    (monitor.py's periodic _cleanup_stale_worktrees sweep, for a
+    self-hosted project with no separate isolated copy to target instead),
+    forcing the live dev server's Vite process to full-page-reload
+    repeatedly and occasionally catching a file mid-rewrite as a syntax
+    error."""
+
+    def _make_conflicting_branch(self, temp_repo, branch_name: str) -> None:
+        shared = Path(temp_repo.working_dir) / "shared.txt"
+        shared.write_text("original")
+        temp_repo.git.add("shared.txt")
+        temp_repo.git.commit("-m", "Add shared.txt")
+
+        temp_repo.git.checkout("-b", branch_name)
+        shared.write_text("branch version")
+        temp_repo.git.add("shared.txt")
+        temp_repo.git.commit("-m", "Modify shared.txt on branch")
+
+        temp_repo.git.checkout("main")
+        shared.write_text("main version")
+        temp_repo.git.add("shared.txt")
+        temp_repo.git.commit("-m", "Modify shared.txt on main")
+
+    def test_conflicting_untracked_branch_is_not_reattempted_against_same_head(
+        self, test_db, temp_repo, worktree_manager
+    ):
+        self._make_conflicting_branch(temp_repo, "agent-conflict")
+
+        attempts = []
+        original = worktree_manager.merge_shared_branch
+
+        def spy(branch_name, **kwargs):
+            attempts.append(branch_name)
+            return original(branch_name, **kwargs)
+
+        worktree_manager.merge_shared_branch = spy
+
+        worktree_manager.cleanup_all_stale_branches()
+        worktree_manager.cleanup_all_stale_branches()
+
+        assert attempts.count("agent-conflict") == 1, (
+            "a conflict against an unchanged HEAD must not be retried"
+        )
+        branch_names = [b.name for b in temp_repo.branches]
+        assert "agent-conflict" in branch_names, "still preserved, not force-deleted"
+
+    def test_conflicting_branch_is_retried_once_main_moves(
+        self, test_db, temp_repo, worktree_manager
+    ):
+        """The skip is keyed to the HEAD it conflicted against, not a
+        permanent block -- once main genuinely changes, the branch (which
+        might now merge cleanly, or at least deserves a fresh look) is
+        attempted again."""
+        self._make_conflicting_branch(temp_repo, "agent-conflict")
+
+        attempts = []
+        original = worktree_manager.merge_shared_branch
+
+        def spy(branch_name, **kwargs):
+            attempts.append(branch_name)
+            return original(branch_name, **kwargs)
+
+        worktree_manager.merge_shared_branch = spy
+
+        worktree_manager.cleanup_all_stale_branches()
+
+        # main moves -- the first sweep's recorded HEAD is now stale.
+        unrelated = Path(temp_repo.working_dir) / "unrelated.txt"
+        unrelated.write_text("new commit")
+        temp_repo.git.add("unrelated.txt")
+        temp_repo.git.commit("-m", "Unrelated commit on main")
+
+        worktree_manager.cleanup_all_stale_branches()
+
+        assert attempts.count("agent-conflict") == 2
