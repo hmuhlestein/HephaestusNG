@@ -492,6 +492,44 @@ class TestVerifyOutputArtifact:
             )
             assert result is None
 
+    def test_missing_message_names_the_expected_suffixed_filename(self, tmp_path):
+        """Regression: a "missing" rejection used to name only the bare
+        declared output (e.g. "qa.md"), identical whether the agent wrote
+        nothing at all or wrote a real report under the WRONG task id (a
+        stale id carried over from a dropped/retried complete_my_task
+        call, observed live) -- neither the agent nor a human debugging it
+        could tell which happened, or what filename THIS task actually
+        needed. The message must name the task-id-suffixed filename
+        (suffixed_output_name) this specific task was expected to
+        produce."""
+        phase = Mock(name="qa_validation", id="phase-1")
+        phase.name = "qa_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="614b42ba-0d27-4238-bf7e-ba1eabc1ec8e")
+
+        # A report exists, but under a DIFFERENT task's id -- must not
+        # satisfy this task's own check (that's the whole point of the
+        # suffix scheme), and the rejection message must make the actual
+        # mismatch legible instead of a generic "missing: qa.md".
+        sub = tmp_path / ".hephaestus" / "qa_validation"
+        sub.mkdir(parents=True)
+        (sub / "qa-452971ea.md").write_text("---\ntype: qa_validation_result\n---\n\n# QA Report")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path), project_id=None)
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files", return_value=["qa.md"]
+        ), patch("src.autopilot.spec.load_optional_phases", return_value=[]):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "qa-614b42ba.md" in result["message"]
+
     def test_skips_verification_for_optional_phases(self):
         phase = Mock(name="optional_analysis", id="phase-1")
         phase.name = "optional_analysis"
