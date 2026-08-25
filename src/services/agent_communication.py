@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from src.core.database import Agent, DatabaseManager, Task
+from src.core.database import Agent, DatabaseManager, Task, utc_now
 from src.prompts.loader import get_prompt
 
 logger = logging.getLogger(__name__)
@@ -191,7 +191,7 @@ class AgentCommunicationService:
             "children": children,
         }
 
-        now = datetime.utcnow()
+        now = utc_now()
         for child in children:
             status = child.get("status", "unknown")
             if status == "working":
@@ -243,7 +243,7 @@ class AgentCommunicationService:
             try:
                 last_dt = datetime.fromisoformat(last_activity.replace("Z", "+00:00"))
                 elapsed = (
-                    datetime.utcnow() - last_dt.replace(tzinfo=None)
+                    utc_now() - last_dt.replace(tzinfo=None)
                 ).total_seconds()
 
                 if elapsed > stuck_threshold_seconds:

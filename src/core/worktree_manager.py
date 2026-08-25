@@ -16,7 +16,6 @@ task framing) is copied into a git-excluded ``<worktree>/.hephaestus/`` director
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -32,6 +31,7 @@ from src.core.database import (
     DatabaseManager,
     Workflow,
     WorktreeCommit,
+    utc_now,
 )
 from src.core.simple_config import get_config
 from src.core.worktree_conflict_resolution import ConflictResolver
@@ -405,7 +405,7 @@ class WorktreeManager:
         with newest-file-wins.
         """
         logger.info(f"[WORKTREE:{agent_id}] ========== MERGE TO MAIN START ==========")
-        start_time = datetime.utcnow()
+        start_time = utc_now()
         lock_file = None
         stashed = False
 
@@ -505,7 +505,7 @@ class WorktreeManager:
                     raise
 
             record.merge_status = "merged"
-            record.merged_at = datetime.utcnow()
+            record.merged_at = utc_now()
             record.merge_commit_sha = merge_commit_sha
             session.commit()
 
@@ -515,7 +515,7 @@ class WorktreeManager:
                 except GitCommandError as e:
                     logger.warning(f"[WORKTREE:{agent_id}] Stash pop conflict: {e}")
 
-            elapsed_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            elapsed_ms = int((utc_now() - start_time).total_seconds() * 1000)
             logger.info(
                 f"[WORKTREE:{agent_id}] ========== MERGE COMPLETE ({elapsed_ms}ms) =========="
             )

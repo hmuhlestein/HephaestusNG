@@ -18,13 +18,14 @@ import re
 import subprocess
 import uuid
 from abc import ABC, abstractmethod
-from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+
+from src.core.database import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +194,7 @@ class PiJsonlCollector(CostCollector):
                             "cache_write_tokens": cache_write,
                             "reasoning_tokens": reasoning,
                             "cost_usd": cost_usd,
-                            "recorded_at": datetime.utcnow(),
+                            "recorded_at": utc_now(),
                             "raw_usage": usage,
                         }
                     )
@@ -440,7 +441,7 @@ class ClaudeCodeCollector(CostCollector):
                             "cache_write_tokens": cache_1h + cache_5m,
                             "reasoning_tokens": 0,
                             "cost_usd": cost_usd,
-                            "recorded_at": datetime.utcnow(),
+                            "recorded_at": utc_now(),
                             "raw_usage": usage,
                         }
                     )
@@ -505,7 +506,7 @@ class OpenCodeCollector(CostCollector):
                     "cache_write_tokens": tokens.get("cache", {}).get("write", 0),
                     "reasoning_tokens": tokens.get("reasoning", 0),
                     "cost_usd": cost_usd,
-                    "recorded_at": datetime.utcnow(),
+                    "recorded_at": utc_now(),
                     "raw_usage": data,
                 }
             )
@@ -605,7 +606,7 @@ class CodexUsageCollector(CostCollector):
                             "cache_write_tokens": 0,
                             "reasoning_tokens": deltas["reasoning_output_tokens"],
                             "cost_usd": cost_usd,
-                            "recorded_at": datetime.utcnow(),
+                            "recorded_at": utc_now(),
                             "raw_usage": {
                                 "token_usage": info,
                                 "cost_status": cost_status,
@@ -962,12 +963,12 @@ def collect_task_cost(task_id: str) -> None:
         # confirmed recorded (this call or an earlier retry of it).
         if checkpoint_row:
             checkpoint_row.lines_processed = new_checkpoint
-            checkpoint_row.updated_at = datetime.utcnow()
+            checkpoint_row.updated_at = utc_now()
         else:
             checkpoint_row = SessionCostCheckpoint(
                 session_id=session_id,
                 lines_processed=new_checkpoint,
-                updated_at=datetime.utcnow(),
+                updated_at=utc_now(),
             )
             db.add(checkpoint_row)
 

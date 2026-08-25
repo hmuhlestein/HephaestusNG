@@ -1,11 +1,10 @@
 """Workflow termination handler for stopping all agents when result is validated."""
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List
 
 from src.agents.manager import AgentManager
-from src.core.database import Agent, DatabaseManager, Task, Workflow
+from src.core.database import Agent, DatabaseManager, Task, Workflow, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +58,7 @@ class WorkflowTerminationHandler:
             "cancelled_tasks": [],
             "cleanup_actions": [],
             "errors": [],
-            "terminated_at": datetime.utcnow().isoformat(),
+            "terminated_at": utc_now().isoformat(),
         }
 
         try:
@@ -224,7 +223,7 @@ class WorkflowTerminationHandler:
                     original_status = task.status
                     task.status = "failed"
                     task.failure_reason = "Workflow terminated due to validated result"
-                    task.completed_at = datetime.utcnow()
+                    task.completed_at = utc_now()
                     tasks_cancelled += 1
 
                     results["cancelled_tasks"].append(
@@ -361,7 +360,7 @@ class WorkflowTerminationHandler:
                         execution.completion_summary = "Failed due to workflow termination (never started)"
                     # Already completed executions stay completed
                     
-                    execution.completed_at = datetime.utcnow()
+                    execution.completed_at = utc_now()
                     cleanup_actions.append(
                         {
                             "action": "complete_phase_execution",

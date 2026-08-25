@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,6 +19,7 @@ from src.core.database import (
     TicketHistory,
     Workflow,
     get_db,
+    utc_now,
 )
 from src.services.ticket_history_service import TicketHistoryService
 from src.services.ticket_search_service import TicketSearchService
@@ -372,7 +372,7 @@ class TicketService:
             ticket = db.query(Ticket).filter_by(id=ticket_id).first()
             if ticket:
                 ticket.approval_status = "approved"
-                ticket.approval_decided_at = datetime.utcnow()
+                ticket.approval_decided_at = utc_now()
                 db.commit()
                 logger.info(f"[TICKET_SERVICE] Ticket {ticket_id} approval status updated to 'approved'")
 
@@ -415,8 +415,8 @@ class TicketService:
                 priority=priority,
                 status=status,
                 tags=tags,
-                created_at=datetime.utcnow().isoformat() + "Z",
-                updated_at=datetime.utcnow().isoformat() + "Z",
+                created_at=utc_now().isoformat() + "Z",
+                updated_at=utc_now().isoformat() + "Z",
                 created_by_agent_id=agent_id,
                 assigned_agent_id=assigned_agent_id,
                 is_blocked=len(blocked_by_ticket_ids) > 0,
@@ -513,7 +513,7 @@ class TicketService:
             # Determine initial approval_status
             if human_review_enabled:
                 approval_status = "pending_review"
-                approval_requested_at = datetime.utcnow()
+                approval_requested_at = utc_now()
                 logger.info(f"[TICKET_SERVICE] Ticket will require human approval (timeout: {approval_timeout}s)")
             else:
                 approval_status = "auto_approved"
@@ -543,8 +543,8 @@ class TicketService:
                 embedding=None,  # Will be added in Wave 2
                 embedding_id=None,
                 is_resolved=False,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=utc_now(),
+                updated_at=utc_now(),
                 # Human approval fields
                 approval_status=approval_status,
                 approval_requested_at=approval_requested_at,
@@ -685,7 +685,7 @@ class TicketService:
                 )
 
             # Update timestamp
-            ticket.updated_at = datetime.utcnow()
+            ticket.updated_at = utc_now()
 
             # If update_comment provided, create comment
             if update_comment:
@@ -696,7 +696,7 @@ class TicketService:
                     agent_id=agent_id,
                     comment_text=update_comment,
                     comment_type="general",
-                    created_at=datetime.utcnow(),
+                    created_at=utc_now(),
                 )
                 db.add(comment)
 
@@ -796,7 +796,7 @@ class TicketService:
 
             # Update ticket status
             ticket.status = new_status
-            ticket.updated_at = datetime.utcnow()
+            ticket.updated_at = utc_now()
 
             # Update timing fields based on status
             # This is configurable - here we use simple rules
@@ -806,15 +806,15 @@ class TicketService:
                 ticket.completed_at = None
             elif ticket.started_at is None and new_status != board_config.initial_status:
                 # Mark as started if moving from initial status
-                ticket.started_at = datetime.utcnow()
+                ticket.started_at = utc_now()
 
             # Check if this is a completion status (last column)
             columns = board_config.columns
             last_column_id = columns[-1]["id"] if isinstance(columns[-1], dict) else columns[-1]
             if new_status == last_column_id:
-                ticket.completed_at = datetime.utcnow()
+                ticket.completed_at = utc_now()
                 ticket.is_resolved = True
-                ticket.resolved_at = datetime.utcnow()
+                ticket.resolved_at = utc_now()
             elif ticket.is_resolved and new_status != last_column_id:
                 # Reopening a resolved ticket — clear resolution
                 ticket.is_resolved = False
@@ -828,7 +828,7 @@ class TicketService:
                 agent_id=agent_id,
                 comment_text=comment,
                 comment_type="status_change",
-                created_at=datetime.utcnow(),
+                created_at=utc_now(),
             )
             db.add(status_comment)
 
@@ -914,7 +914,7 @@ class TicketService:
                 comment_type=comment_type,
                 mentions=mentions,
                 attachments=attachments,
-                created_at=datetime.utcnow(),
+                created_at=utc_now(),
             )
 
             db.add(comment)
@@ -935,7 +935,7 @@ class TicketService:
             )
 
             # Update ticket timestamp
-            ticket.updated_at = datetime.utcnow()
+            ticket.updated_at = utc_now()
 
             # Check comment count - every 5 comments, reindex ticket
             comment_count = db.query(TicketComment).filter_by(ticket_id=ticket_id).count()
@@ -1199,7 +1199,7 @@ class TicketService:
 
             old_agent_id = ticket.assigned_agent_id
             ticket.assigned_agent_id = agent_id
-            ticket.updated_at = datetime.utcnow()
+            ticket.updated_at = utc_now()
 
             # Record in history
             await TicketHistoryService.record_change(
@@ -1390,7 +1390,7 @@ class TicketService:
             repo_id=commit_repo_id,
             commit_sha=commit_sha,
             commit_message=commit_message,
-            commit_timestamp=datetime.utcnow(),
+            commit_timestamp=utc_now(),
             link_method=link_method,
             files_changed=commit_stats["files_changed"],
             insertions=commit_stats["insertions"],
@@ -1446,8 +1446,8 @@ class TicketService:
 
             # Set is_resolved = True and resolved_at = now()
             ticket.is_resolved = True
-            ticket.resolved_at = datetime.utcnow()
-            ticket.updated_at = datetime.utcnow()
+            ticket.resolved_at = utc_now()
+            ticket.updated_at = utc_now()
 
             # Add resolution comment
             comment_id = f"comment-{uuid.uuid4()}"
@@ -1457,7 +1457,7 @@ class TicketService:
                 agent_id=agent_id,
                 comment_text=resolution_comment,
                 comment_type="resolution",
-                created_at=datetime.utcnow(),
+                created_at=utc_now(),
             )
             db.add(comment)
 
@@ -1484,7 +1484,7 @@ class TicketService:
                     # Need to create a new list to trigger SQLAlchemy's change tracking
                     new_blocked_list = [tid for tid in dependent_ticket.blocked_by_ticket_ids if tid != ticket_id]
                     dependent_ticket.blocked_by_ticket_ids = new_blocked_list
-                    dependent_ticket.updated_at = datetime.utcnow()
+                    dependent_ticket.updated_at = utc_now()
 
                     # Add comment to each unblocked ticket
                     unblock_comment_id = f"comment-{uuid.uuid4()}"
@@ -1494,7 +1494,7 @@ class TicketService:
                         agent_id=agent_id,
                         comment_text=f"Unblocked - {ticket_id} was resolved",
                         comment_type="blocker",
-                        created_at=datetime.utcnow(),
+                        created_at=utc_now(),
                     )
                     db.add(unblock_comment)
 

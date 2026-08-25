@@ -15,12 +15,12 @@ tests/test_advance_phases.py, tests/test_phase_manager.py.
 import functools
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from src.autopilot.orchestrator.engine_client import create_agent_for_task_direct
 from src.autopilot.spec import get_max_task_retries
 from src.core.constants import DIAGNOSTIC_TASK_PREFIX, GOTO_REASON_PREFIX
-from src.core.database import Agent, Phase, Task, Workflow
+from src.core.database import Agent, Phase, Task, Workflow, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ def _mark_orphaned_and_stale_pending_tasks_failed(db, phase, logger, cycle_filte
     dead-agent pending tasks (>1 min), pending tasks whose agent terminated
     (any age), and pending tasks past the retry cap. The why-comments live
     at the call site in phase_transitions.py."""
-    orphan_cutoff = datetime.utcnow() - timedelta(minutes=1)
+    orphan_cutoff = utc_now() - timedelta(minutes=1)
     stale_pending_candidates = (
         db.query(Task)
         .filter(
@@ -175,7 +175,7 @@ def _retry_failed_tasks_with_done(db, phase, workflow_id, execution, logger,
                 if agent_data:
                     task.assigned_agent_id = agent_data.get("agent_id")
                     task.status = "in_progress"
-                    task.started_at = datetime.utcnow()
+                    task.started_at = utc_now()
             except Exception as e:
                 logger.error(f"[PHASE-ADVANCE] Failed to dispatch retry agent for task {task.id[:8]}: {e}")
         db.commit()
@@ -200,7 +200,7 @@ def _retry_failed_tasks_with_done(db, phase, workflow_id, execution, logger,
         logger.warning(f"[PHASE-ADVANCE] {phase.name} has {failed_count} failed tasks all past retry cap — marking phase and workflow as failed")
         if execution:
             execution.status = "failed"
-            execution.completed_at = datetime.utcnow()
+            execution.completed_at = utc_now()
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
         if wf and wf.status != "failed":
             wf.status = "failed"
@@ -238,6 +238,7 @@ def _review_run_cap_and_findings(db, workflow_id, phase, phase_id, logger):
     # Lazy: _cap_out_review_phase lives in phase_transitions.py, which
     # imports this module -- a top-level import here would be circular.
     from src.autopilot.orchestrator.phase_transitions import _cap_out_review_phase
+
     # Review-run cap + prior-findings injection -- opt-in per phase
     # via workflow.yaml's max_review_runs (None for every phase
     # that doesn't set it, i.e. today's uncapped behavior). Counts

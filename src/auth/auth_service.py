@@ -8,11 +8,12 @@ exceptions itself.
 
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
+from src.core.database import utc_now
 from src.core.user_models import AuditLog, AuthToken, LoginAttempt, User, UserSession
 
 from . import (
@@ -158,7 +159,7 @@ class AuthService:
         no (or only expired) grants gets [] -- the previous behavior, now
         derived from the database instead of assumed.
         """
-        now = datetime.utcnow()
+        now = utc_now()
         return [
             grant.role.name
             for grant in user.roles
@@ -176,7 +177,7 @@ class AuthService:
         if not config.max_login_attempts:
             return True
 
-        cutoff_time = datetime.utcnow() - timedelta(minutes=config.lockout_duration_minutes)
+        cutoff_time = utc_now() - timedelta(minutes=config.lockout_duration_minutes)
         recent_attempts = (
             db.query(LoginAttempt)
             .filter(
@@ -318,7 +319,7 @@ class AuthService:
             success=True,
         )
 
-        user.last_login_at = datetime.utcnow()
+        user.last_login_at = utc_now()
         db.commit()
 
         tokens = create_token_pair(
@@ -332,7 +333,7 @@ class AuthService:
             user_id=user.id,
             token_hash=hash_token(tokens["refresh_token"]),
             token_type="refresh",
-            expires_at=datetime.utcnow() + timedelta(days=config.refresh_token_expire_days),
+            expires_at=utc_now() + timedelta(days=config.refresh_token_expire_days),
         )
         db.add(refresh_token_record)
 
@@ -342,7 +343,7 @@ class AuthService:
             session_token_hash=generate_secure_token(),
             ip_address=ip_address,
             user_agent=user_agent,
-            expires_at=datetime.utcnow() + timedelta(minutes=config.session_timeout_minutes),
+            expires_at=utc_now() + timedelta(minutes=config.session_timeout_minutes),
         )
         db.add(session)
 
@@ -398,14 +399,14 @@ class AuthService:
         if stored_token.revoked_at:
             raise InvalidRefreshTokenError("Refresh token has been revoked")
 
-        if stored_token.expires_at and stored_token.expires_at < datetime.utcnow():
+        if stored_token.expires_at and stored_token.expires_at < utc_now():
             raise InvalidRefreshTokenError("Refresh token has expired")
 
         user = db.query(User).filter(User.id == payload["sub"]).first()
         if not user or user.status != "active":
             raise InactiveUserError()
 
-        stored_token.last_used_at = datetime.utcnow()
+        stored_token.last_used_at = utc_now()
 
         tokens = create_token_pair(
             user_id=user.id,
@@ -415,14 +416,14 @@ class AuthService:
 
         # Optionally revoke old refresh token and store new one
         if not config.allow_multiple_sessions:
-            stored_token.revoked_at = datetime.utcnow()
+            stored_token.revoked_at = utc_now()
 
         new_refresh_token = AuthToken(
             id=str(uuid.uuid4()),
             user_id=user.id,
             token_hash=hash_token(tokens["refresh_token"]),
             token_type="refresh",
-            expires_at=datetime.utcnow() + timedelta(days=config.refresh_token_expire_days),
+            expires_at=utc_now() + timedelta(days=config.refresh_token_expire_days),
         )
         db.add(new_refresh_token)
 

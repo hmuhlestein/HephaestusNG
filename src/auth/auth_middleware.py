@@ -1,12 +1,12 @@
 """Authentication middleware and dependencies for protected routes."""
 
 import logging
-from datetime import datetime
 from typing import List, Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
+from src.core.database import utc_now
 from src.core.user_models import Permission, Role, RolePermission, User, UserRole
 
 from . import verify_access_token
@@ -106,7 +106,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
 
         for user_role in user_roles:
             # Skip expired roles
-            if user_role.expires_at and user_role.expires_at < datetime.utcnow():
+            if user_role.expires_at and user_role.expires_at < utc_now():
                 continue
 
             role = db.query(Role).filter(Role.id == user_role.role_id).first()

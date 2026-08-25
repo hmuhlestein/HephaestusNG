@@ -6,7 +6,6 @@ Extracted from src/mcp/server.py (design_docs/phase_1c_server_decomposition.md).
 import asyncio
 import functools
 import logging
-from datetime import datetime
 
 from fastapi import (
     APIRouter,
@@ -21,6 +20,7 @@ from src.core.database import (
     Phase,
     Task,
     Workflow,
+    utc_now,
 )
 from src.mcp.server._shared import server_state, spawn_background_task, verify_agent_authentication
 
@@ -345,7 +345,7 @@ async def cancel_task_endpoint(task_id: str, x_agent_id: str = Header(..., alias
                 if task and task.status == "pending":
                     task.status = "failed"
                     task.failure_reason = "Cancelled by user"
-                    task.completed_at = datetime.utcnow()
+                    task.completed_at = utc_now()
                     cancelled_task_id = task.id
                     cancelled_task_workflow_id = task.workflow_id
                     session.commit()
@@ -513,7 +513,7 @@ async def complete_task_as_user(
                 raise HTTPException(status_code=400, detail=rejection["message"])
 
         task.status = "done"
-        task.completed_at = datetime.utcnow()
+        task.completed_at = utc_now()
         task.completion_notes = summary.strip()
         task.failure_reason = None
         workflow_id = task.workflow_id
@@ -943,7 +943,7 @@ async def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": utc_now().isoformat(),
         "version": "1.0.0",
     }
 

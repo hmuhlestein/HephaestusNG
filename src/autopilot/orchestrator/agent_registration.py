@@ -4,11 +4,11 @@ registration helper into the actual pipeline-execution flow -- see
 docs/SOLID_OO_REVIEW_UPDATE_2026-08-19.md).
 """
 
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from src.autopilot.orchestrator.engine_client import terminate_agent
+from src.core.database import get_default_db_manager, utc_now
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -28,16 +28,16 @@ def _register_orchestrator_agent(
     try:
         import uuid
 
-        from src.core.database import Agent, DatabaseManager
+        from src.core.database import Agent
 
-        db_manager = DatabaseManager(None)
+        db_manager = get_default_db_manager()
         session = db_manager.get_session()
         try:
             new_agent_id = f"orchestrator-{uuid.uuid4().hex[:8]}"
             orchestrator_agent = session.query(Agent).filter_by(id=new_agent_id).first()
             if orchestrator_agent:
                 orchestrator_agent.status = "working"
-                orchestrator_agent.last_activity = datetime.utcnow()
+                orchestrator_agent.last_activity = utc_now()
             else:
                 # Check if tmux_session_name is already taken
                 existing = session.query(Agent).filter_by(tmux_session_name="orchestrator").first()

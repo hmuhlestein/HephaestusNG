@@ -17,7 +17,8 @@ instead, silently bypassing that mock.
 
 import logging
 import re
-from datetime import datetime
+
+from src.core.database import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,7 @@ class AgentMessenger:
             # check reads this so a task completing (and terminating this
             # agent) right after a message was sent doesn't kill it before
             # it ever had a chance to notice.
-            now = datetime.utcnow()
+            now = utc_now()
             agent.last_activity = now
             agent.pending_message_sent_at = now
             if owns_session:

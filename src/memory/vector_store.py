@@ -1,7 +1,6 @@
 """Vector store management for RAG system using Qdrant."""
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from qdrant_client import QdrantClient
@@ -13,6 +12,8 @@ from qdrant_client.models import (
     PointStruct,
     VectorParams,
 )
+
+from src.core.database import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,7 @@ class VectorStoreManager:
             payload={
                 "content": content,
                 "memory_id": memory_id,  # Store the original ID in payload
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": utc_now().isoformat(),
                 **metadata,
             },
         )

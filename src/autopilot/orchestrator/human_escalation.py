@@ -9,11 +9,11 @@ docs/SOLID_OO_REVIEW_UPDATE_2026-08-19.md).
 import json
 import os
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.core.constants import AUTOPILOT_STATE_DIR
+from src.core.database import utc_now
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -46,7 +46,7 @@ def prompt_human(reason: str, logger: "OrchestratorLogger", timeout: int = 600, 
             # request looks hours older than it is and is deleted as stale
             # (threshold 1h) before the human ever sees the prompt; east of
             # UTC the age goes negative and it is never cleaned up.
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utc_now().isoformat(),
             "options": ["c", "s", "q"],
             "labels": {"c": "Continue", "s": "Skip design", "q": "Quit pipeline"},
             "timeout_seconds": timeout,

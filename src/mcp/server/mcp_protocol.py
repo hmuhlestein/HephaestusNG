@@ -6,7 +6,6 @@ Extracted from src/mcp/server.py (design_docs/phase_1c_server_decomposition.md).
 import asyncio
 import json
 import logging
-from datetime import datetime
 from typing import Any, Dict
 
 from fastapi import (
@@ -15,7 +14,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 
-from src.core.database import Task
+from src.core.database import Task, utc_now
 from src.mcp.server._mcp_tool_registry import (
     _MCP_TOOLS,
     MCP_TOOL_NAMES,  # noqa: F401 -- re-exported, see tests/test_mcp_tool_registry.py
@@ -399,7 +398,7 @@ async def sse_endpoint():
     async def event_generator():
         """Generate SSE events."""
         # Send initial connection event
-        yield f"data: {json.dumps({'type': 'connected', 'message': 'Connected to Hephaestus MCP Server', 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+        yield f"data: {json.dumps({'type': 'connected', 'message': 'Connected to Hephaestus MCP Server', 'timestamp': utc_now().isoformat()})}\n\n"
 
         # Create a queue for this SSE connection
         event_queue = asyncio.Queue(maxsize=100)
@@ -414,7 +413,7 @@ async def sse_endpoint():
                     yield f"data: {json.dumps(event)}\n\n"
                 except asyncio.TimeoutError:
                     # Send keepalive event every 30 seconds
-                    yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+                    yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': utc_now().isoformat()})}\n\n"
         except asyncio.CancelledError:
             # Clean up when connection is closed
             if event_queue in server_state.sse_queues:

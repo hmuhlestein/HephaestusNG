@@ -4,13 +4,12 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import joinedload
 
 from src.core.constants import CONTEXT_DIR_NAME, PHASE0_DEFINITION_IDS, WORKTREES_SUBDIR
-from src.core.database import DatabaseManager, Phase, PhaseExecution, Task, Workflow
+from src.core.database import DatabaseManager, Phase, PhaseExecution, Task, Workflow, utc_now
 from src.core.database import WorkflowDefinition as DBWorkflowDefinition
 from src.core.simple_config import get_config
 from src.phases.models import PhaseContext, PhasesConfig
@@ -724,7 +723,7 @@ class PhaseManager:
         review 2.12 — this exact block was duplicated 3+ times).
         """
         execution.status = status
-        execution.completed_at = datetime.utcnow()
+        execution.completed_at = utc_now()
         if summary is not None:
             execution.completion_summary = summary
         session.commit()
@@ -1531,7 +1530,7 @@ class PhaseManager:
 
         if execution and execution.status == "pending":
             execution.status = "in_progress"
-            execution.started_at = datetime.utcnow()
+            execution.started_at = utc_now()
             session.commit()
             logger.info(f"Started phase {phase_id}")
 
@@ -1714,7 +1713,7 @@ class PhaseManager:
                         "'pending' forever"
                     )
                     sp_execution.status = "skipped"
-                    sp_execution.completed_at = datetime.utcnow()
+                    sp_execution.completed_at = utc_now()
             session.commit()
 
         if next_phase:

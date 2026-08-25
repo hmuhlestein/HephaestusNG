@@ -8,7 +8,6 @@ domain's share of that split.
 """
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
@@ -23,6 +22,7 @@ from src.core.database import (
     PhasePromptVersion,
     Task,
     TaskPromptOverride,
+    utc_now,
 )
 from src.core.phase_lookup import resolve_task_phase
 from src.phases import PhaseManager
@@ -232,7 +232,7 @@ class PhaseService:
             for task in tasks:
                 task.status = "failed"
                 task.failure_reason = f"Phase reset to {target_status}"
-                task.completed_at = datetime.utcnow()
+                task.completed_at = utc_now()
 
             # Update phase execution status
             from src.core.database import PhaseExecution
@@ -246,7 +246,7 @@ class PhaseService:
             if pe:
                 pe.status = target_status
                 if target_status in ("completed", "failed"):
-                    pe.completed_at = datetime.utcnow()
+                    pe.completed_at = utc_now()
 
             session.commit()
             return {

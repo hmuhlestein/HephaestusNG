@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any, Dict, List, NotRequired, Optional, TypedDict
 
 from src.agents.manager import AgentManager
-from src.core.database import Agent, AgentLog, DatabaseManager, Task
+from src.core.database import Agent, AgentLog, DatabaseManager, Task, utc_now
 from src.interfaces import LLMProviderInterface
 from src.prompts.loader import get_prompt
 
@@ -351,7 +351,7 @@ class Guardian:
             self.trajectory_cache[agent.id] = {
                 "analysis": result,
                 "accumulated_context": accumulated_context,
-                "timestamp": datetime.utcnow(),
+                "timestamp": utc_now(),
             }
 
             # Log the GPT-5 analysis
@@ -409,7 +409,7 @@ class Guardian:
             task = session.query(Task).filter_by(id=agent.current_task_id).first()
 
             # Build accumulated context
-            session_start = logs[0].created_at if logs else datetime.utcnow()
+            session_start = logs[0].created_at if logs else utc_now()
             context = {
                 "overall_goal": task.enriched_description if task else "Unknown",
                 "done_definition": task.done_definition if task else "Unknown",
@@ -422,7 +422,7 @@ class Guardian:
                 # SOLID review 3.7: this was never set, so the prompt always
                 # showed the LLM "Session Duration: Unknown" -- session_start
                 # was already computed and unused for this.
-                "session_duration": str(datetime.utcnow() - session_start).split(".")[0],
+                "session_duration": str(utc_now() - session_start).split(".")[0],
                 # SOLID review 3.7: current_focus is carried forward from the
                 # most recent prior cycle's own analysis below, same as
                 # overall_goal's evolved_goal update -- defaults to "Unknown"
@@ -554,7 +554,7 @@ class Guardian:
                 details={
                     "type": steering_type,
                     "message": message,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": utc_now().isoformat(),
                     "model": "parent_child_last_resort",
                 },
             )
@@ -587,7 +587,7 @@ class Guardian:
         # Check consecutive-flag confirmation gate
         if steering_type in needs_confirmation:
             flag_state = self._consecutive_flags.get(agent_id)
-            now = datetime.utcnow()
+            now = utc_now()
             stale = (
                 flag_state is None
                 or flag_state["type"] != steering_type
@@ -613,7 +613,7 @@ class Guardian:
         if agent_id in self.steering_history:
             recent_steerings = [
                 s for s in self.steering_history[agent_id]
-                if datetime.fromisoformat(s["timestamp"]) > datetime.utcnow() - timedelta(minutes=10)
+                if datetime.fromisoformat(s["timestamp"]) > utc_now() - timedelta(minutes=10)
             ]
             if recent_steerings:
                 return False, "cooldown active (10 minutes)"
@@ -692,7 +692,7 @@ class Guardian:
             {
                 "type": steering_type,
                 "message": message,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": utc_now().isoformat(),
             }
         )
 

@@ -13,7 +13,6 @@ See docs/SOLID_OO_REVIEW.md and design_docs/phase_1b_decomposition.md §4.3.
 """
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.core.constants import CONTEXT_DIR_NAME, WORKTREES_SUBDIR
@@ -65,7 +64,7 @@ class GuardianDispatcher:
         session = self.db_manager.get_session()
         try:
             # Skip agents that are too young (grace period for spin-up)
-            agent_age_seconds = (datetime.utcnow() - agent.created_at).total_seconds()
+            agent_age_seconds = (utc_now() - agent.created_at).total_seconds()
             if agent_age_seconds < self.config.monitoring.guardian_min_agent_age_seconds:
                 logger.debug(
                     f"Skipping Guardian analysis for agent {agent.id} "
@@ -209,7 +208,7 @@ class GuardianDispatcher:
             # Cache the summary
             self.guardian_summaries_cache[agent.id] = {
                 "summary": analysis,
-                "timestamp": datetime.utcnow(),
+                "timestamp": utc_now(),
             }
 
             # Execute steering if needed
@@ -276,7 +275,7 @@ class GuardianDispatcher:
                     # Check if agent has recent activity before restarting
                     if agent.last_activity:
                         idle_seconds = (
-                            datetime.utcnow() - agent.last_activity
+                            utc_now() - agent.last_activity
                         ).total_seconds()
                         if idle_seconds < 300:
                             logger.info(

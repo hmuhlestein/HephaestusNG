@@ -1697,6 +1697,28 @@ def get_db(database_path: Optional[str] = None):
         db.close()
 
 
+def utc_now() -> datetime:
+    """Return the current UTC time as a naive datetime.
+
+    Replaces all datetime.utcnow() calls (deprecated in Python 3.12).
+    Uses datetime.now(timezone.utc) and strips tzinfo so the rest of the
+    codebase continues to work with naive datetimes — every stored/
+    compared timestamp uses UTC, and mixing aware/naive in the same
+    comparison raises TypeError.
+    """
+    from datetime import timezone
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def get_default_db_manager() -> DatabaseManager:
+    """Return a DatabaseManager using the default database path.
+
+    Consolidates the repeated DatabaseManager(None) pattern — callers
+    that need a specific path should construct DatabaseManager directly.
+    """
+    return DatabaseManager(None)
+
+
 def get_project_info_for_workflow(session, workflow_id: Optional[str]):
     """Resolve a workflow's (project_id, project_name), or (None, None) if
     workflow_id is missing, the workflow has no project_id, or nothing

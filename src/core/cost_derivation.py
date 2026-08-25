@@ -16,7 +16,6 @@ Usage:
 
 import logging
 import uuid
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import func
@@ -29,6 +28,7 @@ from src.core.database import (
     Feature,
     Task,
     Workflow,
+    utc_now,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,7 +108,7 @@ def record_cost(
         cache_write_tokens=cache_write_tokens,
         reasoning_tokens=reasoning_tokens,
         cost_usd=cost_usd,
-        recorded_at=datetime.utcnow(),
+        recorded_at=utc_now(),
         raw_usage=raw_usage,
     )
 

@@ -29,12 +29,13 @@ from src.autopilot.spec import GATED_PHASES, build_phase_output
 from src.core.constants import CONTEXT_DIR_NAME
 from src.core.database import (
     Agent,
-    DatabaseManager,
     Phase,
     PhaseExecution,
     Task,
     Workflow,
     get_db,
+    get_default_db_manager,
+    utc_now,
 )
 from src.phases import PhaseManager
 
@@ -182,7 +183,7 @@ def _phase_currently_passes(
             phase_name, Path(working_directory), skip_independent_verification=True
         )
 
-        pm = PhaseManager(DatabaseManager(None))
+        pm = PhaseManager(get_default_db_manager())
         session = pm.db_manager.get_session()
         try:
             orchestrator = pm._get_orchestrator(session, workflow_id)
@@ -495,7 +496,7 @@ def _trigger_arbitration(
                 task.status = "failed"
                 task.failure_reason = "Failed to dispatch arbitration agent"
 
-        pm = PhaseManager(DatabaseManager(None), workflow_id=workflow_id)
+        pm = PhaseManager(get_default_db_manager(), workflow_id=workflow_id)
         pm.mark_phase_complete(
             phase_id,
             "Arbitration dispatch failed",
@@ -602,7 +603,6 @@ def _escalate_arbitration_deadlock_to_human(
     point of review mode.
     """
     import os
-    from datetime import datetime
 
     from src.autopilot.orchestrator.engine_client import pause_workflow
     from src.core.constants import AUTOPILOT_STATE_DIR
@@ -632,7 +632,7 @@ def _escalate_arbitration_deadlock_to_human(
                 "(Continue = force this phase through as-is and move on. "
                 "Skip or Stop = give up and mark this workflow failed.)"
             ),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utc_now().isoformat(),
             # MessageCenter's response UI is generic across every
             # human_input_required message -- it always renders all three
             # buttons (Continue/Skip/Stop) and doesn't read options/labels
@@ -976,7 +976,7 @@ def _resolve_arbitration_outcome(
 
     logger.warning(f"[ARBITRATE] {phase_name}: decision={decision} -- {reason}")
 
-    pm = PhaseManager(DatabaseManager(None), workflow_id=workflow_id)
+    pm = PhaseManager(get_default_db_manager(), workflow_id=workflow_id)
     result: Dict[str, Any] = {}
     try:
         if decision == "continue":

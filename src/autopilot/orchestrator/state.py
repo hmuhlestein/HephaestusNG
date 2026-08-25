@@ -3,20 +3,16 @@
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 from src.core.database import (
     ProjectContext,
     Workflow,
     get_db,
+    utc_now,
 )
-
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     pass
@@ -224,7 +220,7 @@ def _set_project_context(db, key: str, value) -> None:
     """
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-    now = datetime.utcnow()
+    now = utc_now()
     stmt = sqlite_insert(ProjectContext).values(key=key, value=value, updated_at=now)
     stmt = stmt.on_conflict_do_update(
         index_elements=[ProjectContext.key],
@@ -276,11 +272,11 @@ def _get_or_create_project_id(project_path: str) -> str:
     cap check, AutopilotServiceRegistry.get_or_create) don't need a second,
     divergent copy of the same insert-if-missing/activate logic.
     """
-    from src.autopilot.orchestrator.worktree_integration import _ensure_git_excluded
     import uuid as _uuid
 
     from sqlalchemy.exc import IntegrityError
 
+    from src.autopilot.orchestrator.worktree_integration import _ensure_git_excluded
     from src.core.database import AutopilotProject
 
     project = Path(project_path).resolve()
@@ -503,7 +499,7 @@ class PersistentPipelineState:
         set on every mid-run checkpoint.
         """
         state_data = state.to_dict()
-        state_data["saved_at"] = datetime.utcnow().isoformat()
+        state_data["saved_at"] = utc_now().isoformat()
         try:
             with get_db() as db:
                 _set_project_context(db, self.STATE_KEY, state_data)

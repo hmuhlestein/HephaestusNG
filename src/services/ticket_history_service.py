@@ -1,11 +1,10 @@
 """Service layer for managing ticket history and audit trail."""
 
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from src.core.database import Ticket, TicketHistory, get_db
+from src.core.database import Ticket, TicketHistory, get_db, utc_now
 
 
 class TicketHistoryService:
@@ -69,7 +68,7 @@ class TicketHistoryService:
                 new_value=new_value,
                 change_description=change_description,
                 change_metadata=metadata,
-                changed_at=datetime.utcnow(),
+                changed_at=utc_now(),
             )
 
             db.add(history_entry)

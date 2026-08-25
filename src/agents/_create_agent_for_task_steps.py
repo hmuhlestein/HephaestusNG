@@ -24,12 +24,11 @@ import asyncio
 import functools
 import logging
 import shlex
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from src.core.constants import CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR
-from src.core.database import Agent, AgentLog, Task
+from src.core.database import Agent, AgentLog, Task, utc_now
 from src.interfaces import LaunchResult
 
 logger = logging.getLogger("src.agents._create_agent_for_task_steps")
@@ -107,7 +106,7 @@ def _insert_stub_agent_row(
             cli_type=cli_type,
             agent_type=agent_type,
             current_task_id=task.id,
-            last_activity=datetime.utcnow(),
+            last_activity=utc_now(),
             health_check_failures=0,
         )
         session.add(agent)
@@ -116,7 +115,7 @@ def _insert_stub_agent_row(
             if claimed_task:
                 claimed_task.assigned_agent_id = agent_id
                 claimed_task.status = "in_progress"
-                claimed_task.started_at = datetime.utcnow()
+                claimed_task.started_at = utc_now()
         session.commit()
     except Exception:
         session.rollback()
@@ -393,14 +392,14 @@ async def _send_launch_command_and_record_agent(
             tmux_session_name=prep.session_name,
             working_directory=prep.branch_path,
             current_task_id=task.id,
-            last_activity=datetime.utcnow(),
-            launched_at=datetime.utcnow(),
+            last_activity=utc_now(),
+            launched_at=utc_now(),
             health_check_failures=0,
             agent_type=prep.agent_type,
         ))
         task.assigned_agent_id = agent_id
         task.status = "in_progress"
-        task.started_at = datetime.utcnow()
+        task.started_at = utc_now()
         log_entry = AgentLog(
             agent_id=agent_id, log_type="created",
             # enriched_description is nullable (e.g. a task created

@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from src.core.database import utc_now
 from src.interfaces import LLMProviderInterface
 from src.memory.vector_store import VectorStoreManager
 
@@ -244,7 +245,7 @@ class RAGSystem:
 
         try:
             memory_time = datetime.fromisoformat(timestamp)
-            age = datetime.utcnow() - memory_time
+            age = utc_now() - memory_time
 
             # Score based on age (newer is better)
             if age < timedelta(hours=1):

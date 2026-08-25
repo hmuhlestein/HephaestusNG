@@ -8,11 +8,10 @@ See docs/SOLID_OO_REVIEW.md and design_docs/phase_1b_decomposition.md §4.3.
 """
 
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from src.core.database import Task
+from src.core.database import Task, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +133,7 @@ class WorkflowStuckDiagnostics:
 
             if recent_phase_completion:
                 time_since_completion = (
-                    datetime.utcnow() - recent_phase_completion.completed_at
+                    utc_now() - recent_phase_completion.completed_at
                 ).total_seconds()
                 phase_cooldown = 120  # 2 minutes after phase completion
                 if time_since_completion < phase_cooldown:
@@ -208,7 +207,7 @@ class WorkflowStuckDiagnostics:
 
             if last_diagnostic:
                 time_since_last = (
-                    datetime.utcnow() - last_diagnostic.triggered_at
+                    utc_now() - last_diagnostic.triggered_at
                 ).total_seconds()
                 if time_since_last < self.config.diagnostic_agent.diagnostic_cooldown_seconds:
                     logger.info(
@@ -243,7 +242,7 @@ class WorkflowStuckDiagnostics:
 
             stuck_time = 0
             if latest_task_time:
-                stuck_time = (datetime.utcnow() - latest_task_time).total_seconds()
+                stuck_time = (utc_now() - latest_task_time).total_seconds()
                 if stuck_time < self.config.diagnostic_agent.diagnostic_min_stuck_time_seconds:
                     logger.info(
                         f"[DIAGNOSTIC MONITOR] ❌ Not stuck long enough: {stuck_time:.0f}s / {self.config.diagnostic_agent.diagnostic_min_stuck_time_seconds}s required"

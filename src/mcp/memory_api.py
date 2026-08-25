@@ -7,7 +7,6 @@ import asyncio
 import functools
 import logging
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Header, HTTPException
@@ -22,6 +21,7 @@ from src.core.database import (
     ValidationReview,
     Workflow,
     WorkflowResult,
+    utc_now,
 )
 
 logger = logging.getLogger(__name__)
@@ -514,7 +514,7 @@ async def give_validation_review(
             task.status = "done"
             task.failure_reason = None
             task.review_done = True
-            task.completed_at = datetime.utcnow()
+            task.completed_at = utc_now()
 
             # Update verification status of results if they exist
             if task.has_results:
@@ -749,7 +749,7 @@ async def submit_result(
                     markdown_file_path=request.markdown_file_path,
                     result_type="implementation",
                     summary=request.explanation or "Workflow result submitted",
-                    created_at=datetime.utcnow(),
+                    created_at=utc_now(),
                 )
                 session.add(agent_result)
                 session.commit()

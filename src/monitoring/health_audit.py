@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple
 
+from src.core.database import utc_now
 from src.prompts.loader import get_monitor_nudge
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ class SystemHealthAuditor:
             from src.core.database import Agent, Task
 
             idle_minutes = timedelta(minutes=self.config.monitoring.stuck_detection_minutes)
-            idle_cutoff = datetime.utcnow() - idle_minutes
+            idle_cutoff = utc_now() - idle_minutes
             candidate_tasks = (
                 session.query(Task)
                 .filter(
@@ -120,7 +121,7 @@ class SystemHealthAuditor:
                         # marked stuck below.
                         continue
 
-                    if nudged_at is not None and datetime.utcnow() - nudged_at < idle_minutes:
+                    if nudged_at is not None and utc_now() - nudged_at < idle_minutes:
                         continue  # still within the post-nudge grace period
 
                     try:
@@ -141,7 +142,7 @@ class SystemHealthAuditor:
                                 agent.id,
                                 get_monitor_nudge("stuck_task_no_activity", task_id=task.id),
                             )
-                            self._stuck_task_nudges[task.id] = (nudge_count + 1, datetime.utcnow())
+                            self._stuck_task_nudges[task.id] = (nudge_count + 1, utc_now())
                             logger.info(
                                 f"[HEALTH] Nudged idle agent {agent.id[:8]} for task "
                                 f"{task.id[:8]} (no activity since {last_seen}, "
@@ -189,7 +190,7 @@ class SystemHealthAuditor:
                         )
                         task.status = "done"
                         task.failure_reason = None
-                        task.completed_at = datetime.utcnow()
+                        task.completed_at = utc_now()
                         # No spec-gate firing here, deliberately: this branch
                         # is only reachable when `is_gated` (computed above)
                         # is already False, so a gated phase's stuck task
