@@ -1049,11 +1049,20 @@ class TestDetectAgentNeverStarted:
     Agent.launched_at/last_activity instead, so it doesn't depend on
     in-memory state surviving a restart."""
 
-    def _session_with(self, task):
+    def _session_with(self, task, grace_until=None):
         from contextlib import contextmanager
 
         session = Mock()
         session.query.return_value.filter_by.return_value.filter.return_value.first.return_value = task
+        # _detect_agent_never_started's own dispatch_grace_until lookup
+        # (query(Task.dispatch_grace_until).filter_by(id=...).scalar())
+        # shares the same session.query.return_value root as the
+        # stuck_task lookup above -- without this, an unconfigured Mock
+        # child (truthy, not comparable to a datetime) stands in for
+        # "no grace period set" instead of None, and utc_now() < grace_until
+        # raises TypeError. None (the default) matches every one of this
+        # class's other tests: none of them set a grace period.
+        session.query.return_value.filter_by.return_value.scalar.return_value = grace_until
 
         @contextmanager
         def mock_session_scope():
@@ -1174,6 +1183,55 @@ class TestDetectAgentNeverStarted:
         await make_monitoring_loop._detect_agent_never_started(agent)
         await make_monitoring_loop._detect_agent_never_started(agent)
 
+        mock_agent_manager.terminate_agent.assert_called_once_with("a1")
+
+    @pytest.mark.asyncio
+    async def test_within_dispatch_grace_period_not_flagged_even_past_never_started_grace(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: a phase with a registered pre-dispatch blocking step
+        (PRE_DISPATCH_BLOCKING_STEPS in worktree_integration.py, e.g.
+        security_review's mandatory ash scan) can legitimately produce zero
+        agent output for longer than NEVER_STARTED_GRACE_SECONDS (240s) --
+        the scan itself can take up to ~300s. Task.dispatch_grace_until,
+        stamped when that step starts, must suppress this check the same
+        way it would otherwise correctly fire at 240s+ of silence."""
+        launch = datetime.utcnow() - timedelta(seconds=300)
+        agent = Agent(
+            id="a1", cli_type="pi", status="working", current_task_id="t1",
+            created_at=launch, launched_at=launch, last_activity=launch,
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        task = Mock(id="t1", status="in_progress", assigned_agent_id="a1", failure_reason=None)
+        grace_until = datetime.utcnow() + timedelta(seconds=60)
+        mock_db.session_scope = self._session_with(task, grace_until=grace_until)
+
+        result = await make_monitoring_loop._detect_agent_never_started(agent)
+
+        assert result is False
+        mock_agent_manager.terminate_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_expired_dispatch_grace_period_no_longer_suppresses(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """A dispatch_grace_until in the past (the blocking step's own
+        grace window already elapsed) must not suppress this check forever
+        -- a genuinely stuck agent past both the blocking step's own grace
+        AND NEVER_STARTED_GRACE_SECONDS must still be caught."""
+        launch = datetime.utcnow() - timedelta(seconds=300)
+        agent = Agent(
+            id="a1", cli_type="pi", status="working", current_task_id="t1",
+            created_at=launch, launched_at=launch, last_activity=launch,
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        task = Mock(id="t1", status="in_progress", assigned_agent_id="a1", failure_reason=None)
+        grace_until = datetime.utcnow() - timedelta(seconds=1)
+        mock_db.session_scope = self._session_with(task, grace_until=grace_until)
+
+        result = await make_monitoring_loop._detect_agent_never_started(agent)
+
+        assert result is True
         mock_agent_manager.terminate_agent.assert_called_once_with("a1")
 
 

@@ -23,6 +23,7 @@ from src.core.database import (
     Phase,
     Task,
     Workflow,
+    utc_now,
 )
 from src.interfaces.cli_interface import CodexAgent, LaunchResult
 
@@ -77,6 +78,45 @@ def sample_task(db_manager):
             raw_description="Implement feature X",
             enriched_description="Implement feature X with tests",
             done_definition="Feature works and tests pass",
+            status="pending",
+        )
+        session.add(task)
+
+        return task
+
+
+@pytest.fixture
+def security_review_task(db_manager):
+    """Same shape as sample_task, but on a phase named "security_review"
+    -- the one phase PRE_DISPATCH_BLOCKING_STEPS (worktree_integration.py)
+    currently registers a pre-dispatch blocking step for."""
+    with db_manager.session_scope() as session:
+        wf = Workflow(
+            id="wf-sec",
+            name="Test Workflow",
+            status="active",
+            working_directory="/tmp/test-project",
+            phases_folder_path="/tmp",
+        )
+        session.add(wf)
+
+        phase = Phase(
+            id="phase-sec",
+            workflow_id="wf-sec",
+            name="security_review",
+            order=8,
+            description="Security review",
+            done_definitions=["security.md created"],
+        )
+        session.add(phase)
+
+        task = Task(
+            id="task-sec",
+            workflow_id="wf-sec",
+            phase_id="phase-sec",
+            raw_description="Review for security issues",
+            enriched_description="Review for security issues",
+            done_definition="security.md written",
             status="pending",
         )
         session.add(task)
@@ -321,6 +361,140 @@ class TestCreateAgentForTask:
             assert saved_agent.status == "working"
             assert saved_agent.current_task_id == "task-1"
             assert saved_agent.working_directory == "/tmp/test-project-agent"
+
+    @pytest.mark.asyncio
+    async def test_security_review_runs_its_registered_blocking_step_and_stamps_grace(
+        self, mock_agent_manager, security_review_task, db_manager
+    ):
+        """security_review's mandatory ash scan used to run before any
+        Task/Agent row existed at all (inside _create_phase_task) -- moved
+        to here (create_agent_for_task, via PRE_DISPATCH_BLOCKING_STEPS)
+        so the Task/Agent/tmux session already exist and show real
+        activity while the scan runs. Confirms: the registered callable
+        actually runs, with the worktree path and a logger; it runs AFTER
+        the Agent row is recorded (real activity visible first); and
+        Task.dispatch_grace_until gets stamped so stuck/orphan/idle
+        detectors know not to flag this task/agent during the scan."""
+        mock_agent_manager._launch._scoped_worktree_manager = (
+            lambda workflow_id: mock_agent_manager.branch_manager
+        )
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-agent",
+                "branch_name": "agent-test-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-sec"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        scan_saw_agent_already_recorded = []
+
+        def _fake_scan(worktree, logger):
+            assert str(worktree) == "/tmp/test-project-agent"
+            # Real, visible activity (the Agent row, status="working") must
+            # already exist by the time this runs -- that's the whole point
+            # of moving the scan here instead of running it before any
+            # Task/Agent row existed at all.
+            with db_manager.session_scope() as scan_check_session:
+                agents = scan_check_session.query(Agent).filter_by(current_task_id="task-sec").all()
+                scan_saw_agent_already_recorded.append(
+                    len(agents) == 1 and agents[0].status == "working"
+                )
+
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock), \
+             patch.dict(
+                 "src.autopilot.orchestrator.worktree_integration.PRE_DISPATCH_BLOCKING_STEPS",
+                 {"security_review": (_fake_scan, 360)},
+             ):
+            mock_cli = MagicMock()
+            mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
+            mock_cli.default_model = "sonnet"
+            mock_get_cli.return_value = mock_cli
+
+            before = utc_now()
+            agent = await mock_agent_manager.create_agent_for_task(
+                task=security_review_task,
+                enriched_data={},
+                memories=[],
+                project_context="Test project context",
+                cli_type="pi",
+                working_directory="/tmp/test-project",
+            )
+
+        assert scan_saw_agent_already_recorded == [True], (
+            "the Agent row must already be recorded (real, visible "
+            "activity) before the blocking step runs"
+        )
+
+        with db_manager.session_scope() as session:
+            saved_agent = session.query(Agent).filter_by(id=agent.id).first()
+            assert saved_agent is not None
+            assert saved_agent.status == "working"
+
+            saved_task = session.query(Task).filter_by(id="task-sec").first()
+            assert saved_task.dispatch_grace_until is not None
+            assert saved_task.dispatch_grace_until > before
+
+    @pytest.mark.asyncio
+    async def test_non_registered_phase_runs_no_blocking_step_and_no_grace(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """sample_task's phase ("implementation") has no entry in
+        PRE_DISPATCH_BLOCKING_STEPS -- dispatch must proceed exactly as
+        before, with no blocking step called and dispatch_grace_until left
+        unset."""
+        mock_agent_manager._launch._scoped_worktree_manager = (
+            lambda workflow_id: mock_agent_manager.branch_manager
+        )
+        mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-agent",
+                "branch_name": "agent-test-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-1"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        mock_scan = MagicMock()
+        with patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock), \
+             patch.dict(
+                 "src.autopilot.orchestrator.worktree_integration.PRE_DISPATCH_BLOCKING_STEPS",
+                 {"security_review": (mock_scan, 360)},
+             ):
+            mock_cli = MagicMock()
+            mock_cli.get_launch_command.return_value = LaunchResult("pi --task test", LaunchResult.FLAG)
+            mock_cli.default_model = "sonnet"
+            mock_get_cli.return_value = mock_cli
+
+            await mock_agent_manager.create_agent_for_task(
+                task=sample_task,
+                enriched_data={},
+                memories=[],
+                project_context="Test project context",
+                cli_type="pi",
+                working_directory="/tmp/test-project",
+            )
+
+        mock_scan.assert_not_called()
+        with db_manager.session_scope() as session:
+            saved_task = session.query(Task).filter_by(id="task-1").first()
+            assert saved_task.dispatch_grace_until is None
 
     @pytest.mark.asyncio
     async def test_assign_to_task_persists_claim_before_slow_setup(

@@ -488,6 +488,23 @@ def migrate_task_action_target_phase_column(engine):
         logger.warning(f"tasks.action_target_phase migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_task_dispatch_grace_until_column(engine):
+    """Add tasks.dispatch_grace_until for existing databases.
+
+    Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN dispatch_grace_until DATETIME"))
+            except Exception:
+                pass  # Column already exists
+            conn.commit()
+            logger.info("Migrated tasks.dispatch_grace_until column")
+    except Exception as e:
+        logger.warning(f"tasks.dispatch_grace_until migration failed (not just 'already exists' -- check this): {e}")
+
+
 def migrate_cost_tracking_columns(engine):
     """Add cost tracking columns and tables for existing databases.
 
@@ -879,6 +896,7 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_workflow_paused_at_column", migrate_workflow_paused_at_column),
     ("_migrate_workflow_paused_retry_count_column", migrate_workflow_paused_retry_count_column),
     ("_migrate_task_action_target_phase_column", migrate_task_action_target_phase_column),
+    ("_migrate_task_dispatch_grace_until_column", migrate_task_dispatch_grace_until_column),
     ("_migrate_cost_tracking_columns", migrate_cost_tracking_columns),
     ("_migrate_phase_fallback_columns", migrate_phase_fallback_columns),
     ("_migrate_review_mode_columns", migrate_review_mode_columns),

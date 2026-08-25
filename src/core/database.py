@@ -307,6 +307,23 @@ class Task(Base):
     # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
     cost_total_usd = Column(Float, default=0.0, nullable=False)
 
+    # Set only for a phase with a registered pre-dispatch blocking step
+    # (PRE_DISPATCH_BLOCKING_STEPS in launch_pipeline.py, e.g.
+    # security_review's mandatory ash scan) -- the agent/tmux session and
+    # this Task row already exist and are genuinely alive at this point,
+    # but the agent's first real prompt is deliberately held back until
+    # that blocking step finishes. Every stuck/orphan/idle detector that
+    # judges elapsed time since Task.created_at or Agent.launched_at (see
+    # _create_phase_task's own orphan check,
+    # _mark_orphaned_and_stale_pending_tasks_failed,
+    # _resume_stuck_workflow_tasks, and mechanical_recovery.py's
+    # detect_agent_never_started) must treat "now < dispatch_grace_until"
+    # as "not stuck yet, this delay is expected" instead of judging
+    # elapsed time against their own, shorter defaults -- without this,
+    # a legitimately slow blocking step reads identically to genuine
+    # staleness and gets the agent killed / task marked orphaned mid-step.
+    dispatch_grace_until = Column(DateTime, nullable=True)
+
     # Relationships
     assigned_agent = relationship("Agent", foreign_keys=[assigned_agent_id])
     duplicate_of = relationship("Task", remote_side=[id], foreign_keys=[duplicate_of_task_id], post_update=True)

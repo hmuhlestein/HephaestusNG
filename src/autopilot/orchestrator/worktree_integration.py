@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple
 
 import git as _git
 
@@ -895,3 +895,23 @@ def _run_ash_scan(worktree: Path, logger: "OrchestratorLogger") -> None:
             shutil.rmtree(worktree / ".ash", ignore_errors=True)
         except Exception:
             pass
+
+
+# Registry of per-phase "real work that must finish before the agent gets
+# its first prompt" steps -- keyed by phase name, mapping to (callable,
+# grace_seconds). Consulted by launch_pipeline.py's create_agent_for_task:
+# once the Agent/tmux session and Task row already exist (so the phase
+# shows real, live activity instead of nothing), it runs the registered
+# callable -- same (worktree: Path, logger) signature as _run_ash_scan --
+# BEFORE sending the actual initial prompt, and stamps
+# Task.dispatch_grace_until = now + grace_seconds so every stuck/orphan/
+# idle detector keyed off Task.created_at or Agent.launched_at (see
+# Task.dispatch_grace_until's own docstring in database.py) knows not to
+# flag this task/agent while the step is still legitimately running.
+# grace_seconds should comfortably exceed the callable's own worst-case
+# duration (_run_ash_scan's own subprocess.run has timeout=300) to leave
+# margin for worktree/dispatch overhead around it, not just the
+# subprocess itself.
+PRE_DISPATCH_BLOCKING_STEPS: Dict[str, Tuple[Callable[[Path, "OrchestratorLogger"], None], int]] = {
+    "security_review": (_run_ash_scan, 360),
+}
