@@ -16,9 +16,11 @@
 
 ## Why "NG"?
 
-Hephaestus NG is the next generation of [Ido Levi's original Hephaestus](https://github.com/Ido-Levi/Hephaestus) — the semi-structured agentic framework described below, built around a simple, powerful idea: define phase *types* (analysis, implementation, validation) and let agents spawn tasks into any of them based on what they actually discover, instead of forcing every branch of a workflow to be predicted and written up front. That core engine, and the "Hephaestus Dev" pre-built workflows it ships with, are still here — unchanged in spirit.
+Hephaestus NG is the next generation of [Ido Levi's original Hephaestus](https://github.com/Ido-Levi/Hephaestus) — the semi-structured agentic framework described below, built around a simple, powerful idea: define phase *types* (analysis, implementation, validation) and let agents spawn tasks into any of them based on what they actually discover, instead of forcing every branch of a workflow to be predicted and written up front. That engine, and the "Hephaestus Dev" pre-built workflows it ships with, are still here, unchanged.
 
-NG is what got built on top of it: **Autopilot**, a fixed, hardened, 14-phase pipeline purpose-built for one job — running real software development end-to-end, unattended, without an agent's confident-but-wrong "done" silently becoming your team's problem. Getting there meant rebuilding most of the system underneath: a FastAPI/SQLAlchemy backend, a live React dashboard, multi-project and multi-repo support, crash-safe git worktree isolation, real authentication, and a monitoring layer that watches every agent and mechanically recovers the ones that get stuck.
+NG's flagship addition, **Autopilot**, is a deliberate departure from that premise, not a variation on it — worth saying plainly rather than dressing up as the same idea. Self-organizing branching is the right call when you genuinely don't know the shape of the work in advance: a testing agent stumbles on an optimization, and the workflow needs the freedom to grow a new branch to chase it. Running one specific, well-understood, high-stakes job unattended — take a design spec to a deployed, tested feature, with nobody watching — is a different problem: you already know the shape (requirements → architecture → build → review → ship), and what you need isn't the freedom to invent a new phase on the fly, it's the discipline to never silently skip a step or trust an agent's word for it. So Autopilot fixes the pipeline shape and spends its flexibility elsewhere: inside each phase, an agent still has full judgment; across phases, `goto`/retry/arbitration handle the "this didn't work, go back and redo it differently" case a rigid straight-line pipeline can't. It's a real trade, made on purpose, for a case where the original's own freedom would be a liability, not a feature.
+
+Getting there also meant rebuilding most of the system underneath: a FastAPI/SQLAlchemy backend, a live React dashboard, multi-project and multi-repo support, crash-safe git worktree isolation, real authentication, and a monitoring layer that watches every agent and mechanically recovers the ones that get stuck.
 
 ---
 
@@ -43,7 +45,7 @@ NG is what got built on top of it: **Autopilot**, a fixed, hardened, 14-phase pi
 | 13 | `git_expert` | Autonomous git hand-off — commit, push, and (gated by review mode) merge. |
 | 14 | `deploy` | Executes the feature's deployment steps. |
 
-Autopilot deliberately trades the framework's free-form "spawn a task in any phase" branching (below) for a fixed pipeline with a narrower, more disciplined branching mechanism: any phase can `goto` an earlier one with a specific, targeted instruction, instead of inventing a new phase type on the fly. That trade is what makes it safe to run unattended:
+Why a fixed pipeline instead of the framework's own self-organizing branching — see "Why NG?" above. What that trade buys, concretely:
 
 - **Verifiable completion, not self-report.** Key phases declare a required output artifact. If an agent calls a phase "done" without producing it, completion is rejected at the source — a hallucinated "done" never gets the chance to propagate downstream.
 - **Real security scanning, not a prompt asking nicely.** `security_review` runs [AWS's Automated Security Helper](https://github.com/awslabs/automated-security-helper) (`ash`) unconditionally, orchestrator-side, *before* the review agent even starts — not left to the agent to remember. The phase's completion is gated on those scan results being read and reported, and the check fails closed if it can't read them, so a skipped or silently-lost scan blocks the phase instead of shipping unreviewed.
@@ -238,7 +240,7 @@ And **flexibility where you need it**:
 - Discoveries drive workflow expansion in real-time
 - New work types emerge as agents explore
 
-Autopilot is this same sweet spot held to a tighter, fixed shape for one specific, high-stakes job — see above.
+Autopilot (above) deliberately sits outside this sweet spot — see "Why NG?" for why trading it away was the right call for that one job.
 
 ## 🚀 Getting Started
 
