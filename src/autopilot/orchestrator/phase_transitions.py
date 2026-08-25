@@ -1401,13 +1401,32 @@ def _case_in_progress_no_tasks(db, workflow_id: str, in_progress: list, logger: 
         # in_progress for hours with only a "duplicated" task from a
         # resolved ticket, deploy never budging, because this exact count
         # never dropped to zero.
+        #
+        # cycle_filter alone isn't a reliable belt: it depends on
+        # execution.started_at actually being refreshed to a timestamp
+        # AFTER the stale task the moment this phase re-enters
+        # "in_progress" -- if anything sets status="in_progress" directly
+        # without going through reopen_phase_execution/_create_phase_task's
+        # own reopening logic (which always stamps started_at="now"), the
+        # boundary stays stale and a "duplicated" task still satisfies
+        # `>=` it forever. "duplicated" is this codebase's own established
+        # convention for "does not count as this phase's real work" (see
+        # _retry_failed_tasks's sibling check, _case_in_progress_complete's
+        # own incomplete-count query) -- excluding it directly here closes
+        # that gap regardless of why started_at didn't advance. Observed
+        # live: workflow 81b399c7's git_expert phase stuck exactly this
+        # way, cycle_filter notwithstanding.
         execution = ps.get("execution")
         cycle_filter = (
             (Task.created_at >= execution.started_at,)
             if execution and execution.started_at
             else ()
         )
-        task_count = db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
+        task_count = (
+            db.query(Task)
+            .filter(Task.phase_id == phase.id, Task.status != "duplicated", *cycle_filter)
+            .count()
+        )
         if task_count == 0 and not _claim_phase_task_creation(db, phase.id):
             # Same race as _case_start_first_phase: other paths (e.g. the
             # spec-gate immediate-fire path in task_completion_service.py,
@@ -1424,7 +1443,7 @@ def _case_in_progress_no_tasks(db, workflow_id: str, in_progress: list, logger: 
             # attempt, so a task committed by another claim-protected path
             # on a separate DB session in that window would otherwise still
             # look like zero here.
-            if db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count() > 0:
+            if db.query(Task).filter(Task.phase_id == phase.id, Task.status != "duplicated", *cycle_filter).count() > 0:
                 # We won the claim ourselves -- release it, since
                 # _create_phase_task's own success path (which normally
                 # does so) is never reached for this phase.
@@ -1554,7 +1573,7 @@ def _case_completed_with_successor(db, workflow_id: str, completed: list, pendin
                 if last_completed_execution and last_completed_execution.completed_at
                 else ()
             )
-            existing_tasks = db.query(Task).filter(Task.phase_id == successor["phase"].id, *cycle_filter).count()
+            existing_tasks = db.query(Task).filter(Task.phase_id == successor["phase"].id, Task.status != "duplicated", *cycle_filter).count()
             # This case only fires when last_completed's PhaseExecution.status
             # is ALREADY "completed" (that's what put it in the `completed`
             # list). Re-running the transition via _fire_phase_transition ->
@@ -1582,7 +1601,7 @@ def _case_completed_with_successor(db, workflow_id: str, completed: list, pendin
                 # BEFORE the claim attempt, so a task committed by another
                 # claim-protected path on a separate DB session in that
                 # window would otherwise still look like zero here.
-                existing_tasks = db.query(Task).filter(Task.phase_id == successor["phase"].id, *cycle_filter).count()
+                existing_tasks = db.query(Task).filter(Task.phase_id == successor["phase"].id, Task.status != "duplicated", *cycle_filter).count()
             if existing_tasks > 0:
                 if won_claim:
                     # We won the claim ourselves -- release it, since
@@ -1788,7 +1807,12 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
             # unscoped count still sees the phase's pre-cycle task and
             # concludes nothing needs creating). Treat a genuinely empty
             # cycle the same as Case 0b: dispatch a fresh task.
-            total_cycle_tasks = db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
+            # Excludes "duplicated" for the same reason Case 0b's own
+            # count does (see _case_in_progress_no_tasks) -- a leftover
+            # duplicated task from a ticket-blocked routing to development
+            # would otherwise still read as "has a task" and this branch
+            # would never fire.
+            total_cycle_tasks = db.query(Task).filter(Task.phase_id == phase.id, Task.status != "duplicated", *cycle_filter).count()
             if total_cycle_tasks == 0:
                 if not _claim_phase_task_creation(db, phase.id):
                     continue
@@ -1798,7 +1822,7 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                 # claim attempt, so a task committed by another
                 # claim-protected path on a separate DB session in that
                 # window would otherwise still look like zero here.
-                if db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count() > 0:
+                if db.query(Task).filter(Task.phase_id == phase.id, Task.status != "duplicated", *cycle_filter).count() > 0:
                     # We won the claim ourselves -- release it, since
                     # _create_phase_task (whose own success path would
                     # normally do so) is never reached on this branch.
