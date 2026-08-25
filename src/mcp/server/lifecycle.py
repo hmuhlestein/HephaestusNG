@@ -411,56 +411,64 @@ async def startup_event():
 
         all_definitions = get_all_workflow_definitions()
 
-        with server_state.db_manager.get_session() as session:
-            for defn in all_definitions:
-                # Build phases_config from source
-                phases_config = [_build_phase_dict(phase) for phase in defn.phases]
+        # Plain synchronous SQLAlchemy run directly on the event loop stalls
+        # it for this call's whole duration, same class of bug fixed in
+        # _resume_interrupted_workflows just below in this file (see its
+        # docstring) -- this registration runs on every server startup too,
+        # in the same window /health must already be answerable in.
+        def _register_definitions_sync():
+            with server_state.db_manager.get_session() as session:
+                for defn in all_definitions:
+                    # Build phases_config from source
+                    phases_config = [_build_phase_dict(phase) for phase in defn.phases]
 
-                workflow_config = {
-                    "has_result": defn.config.has_result,
-                    "result_criteria": defn.config.result_criteria,
-                    "on_result_found": defn.config.on_result_found,
-                    "enable_tickets": defn.config.enable_tickets,
-                    "board_config": defn.config.board_config,
-                }
+                    workflow_config = {
+                        "has_result": defn.config.has_result,
+                        "result_criteria": defn.config.result_criteria,
+                        "on_result_found": defn.config.on_result_found,
+                        "enable_tickets": defn.config.enable_tickets,
+                        "board_config": defn.config.board_config,
+                    }
 
-                # Include launch_template in workflow_config if present
-                if defn.launch_template:
-                    from dataclasses import asdict
+                    # Include launch_template in workflow_config if present
+                    if defn.launch_template:
+                        from dataclasses import asdict
 
-                    workflow_config["launch_template"] = asdict(defn.launch_template)
+                        workflow_config["launch_template"] = asdict(defn.launch_template)
 
-                # Get orchestrator_config if present
-                orchestrator_config = getattr(defn, "orchestrator_config", None)
+                    # Get orchestrator_config if present
+                    orchestrator_config = getattr(defn, "orchestrator_config", None)
 
-                existing = session.query(DBWorkflowDefinition).filter_by(id=defn.id).first()
-                if existing:
-                    # Update from source files (source of truth)
-                    existing.name = defn.name
-                    existing.description = defn.description
-                    existing.phases_config = phases_config
-                    existing.workflow_config = workflow_config
-                    existing.orchestrator_config = orchestrator_config
-                    logger.info(f"Updated workflow from source: {defn.id}")
-                else:
-                    db_def = DBWorkflowDefinition(
-                        id=defn.id,
-                        name=defn.name,
-                        description=defn.description,
-                        phases_config=phases_config,
-                        workflow_config=workflow_config,
-                        orchestrator_config=orchestrator_config,
-                    )
-                    session.add(db_def)
-                    logger.info(f"Registered workflow: {defn.id}")
-            # Remove stale definitions that no longer exist on disk
-            loaded_ids = {d.id for d in all_definitions}
-            stale = session.query(DBWorkflowDefinition).filter(DBWorkflowDefinition.id.notin_(loaded_ids)).all()
-            for stale_def in stale:
-                logger.info(f"Removing stale workflow definition: {stale_def.id}")
-                session.delete(stale_def)
+                    existing = session.query(DBWorkflowDefinition).filter_by(id=defn.id).first()
+                    if existing:
+                        # Update from source files (source of truth)
+                        existing.name = defn.name
+                        existing.description = defn.description
+                        existing.phases_config = phases_config
+                        existing.workflow_config = workflow_config
+                        existing.orchestrator_config = orchestrator_config
+                        logger.info(f"Updated workflow from source: {defn.id}")
+                    else:
+                        db_def = DBWorkflowDefinition(
+                            id=defn.id,
+                            name=defn.name,
+                            description=defn.description,
+                            phases_config=phases_config,
+                            workflow_config=workflow_config,
+                            orchestrator_config=orchestrator_config,
+                        )
+                        session.add(db_def)
+                        logger.info(f"Registered workflow: {defn.id}")
+                # Remove stale definitions that no longer exist on disk
+                loaded_ids = {d.id for d in all_definitions}
+                stale = session.query(DBWorkflowDefinition).filter(DBWorkflowDefinition.id.notin_(loaded_ids)).all()
+                for stale_def in stale:
+                    logger.info(f"Removing stale workflow definition: {stale_def.id}")
+                    session.delete(stale_def)
 
-            session.commit()
+                session.commit()
+
+        await asyncio.get_event_loop().run_in_executor(None, _register_definitions_sync)
         logger.info(f"Workflow registration complete: {len(all_definitions)} definitions")
     except Exception as e:
         logger.error(f"Failed to register workflows: {e}")
@@ -598,16 +606,25 @@ async def _notify_agents_of_restart(project_id: str) -> int:
     asks for.
     """
 
-    agent_ids: list = []
-    try:
+    # Plain synchronous SQLAlchemy run directly on the event loop stalls it
+    # for this call's whole duration -- same class of bug fixed in
+    # _resume_interrupted_workflows (see its docstring). This fires during
+    # a graceful restart's own shutdown window, while the server may still
+    # be answering /health, so it's offloaded the same way.
+    def _enumerate_working_agents_sync():
         with server_state.db_manager.session_scope() as session:
             wf_ids = [w.id for w in session.query(Workflow).filter_by(project_id=project_id).all()]
             if not wf_ids:
-                return 0
+                return []
             task_ids = [t.id for t in session.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()]
-            agent_ids = [a.id for a in session.query(Agent).filter(Agent.status == "working", Agent.current_task_id.in_(task_ids)).all()]
+            return [a.id for a in session.query(Agent).filter(Agent.status == "working", Agent.current_task_id.in_(task_ids)).all()]
+
+    try:
+        agent_ids = await asyncio.get_event_loop().run_in_executor(None, _enumerate_working_agents_sync)
     except Exception as e:
         logger.warning(f"[SAFE-RESTART] Could not enumerate agents to notify for project {project_id[:8]}: {e}")
+        return 0
+    if not agent_ids:
         return 0
 
     notified = 0
