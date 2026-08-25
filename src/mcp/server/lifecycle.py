@@ -216,7 +216,7 @@ async def _resume_interrupted_workflows(
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
                 landed = task and await loop.run_in_executor(None, _git_expert_already_landed, session, task, config)
                 if landed:
-                    logger.info(f"[RESUME] Workflow {wf.id[:8]}: orphaned agent {agent.id[:8]}'s git_expert work already landed on {config.base_branch} -- marking done instead of redispatching")
+                    logger.info(f"[RESUME] Workflow {wf.id[:8]}: orphaned agent {agent.id[:8]}'s git_expert work already landed on {config.git.base_branch} -- marking done instead of redispatching")
                     task.status = "done"
                     task.completed_at = utc_now()
                     task.failure_reason = None
@@ -514,31 +514,40 @@ async def startup_event():
         logger.error(f"[RESUME] Failed to enumerate persisted autopilot state: {e}")
 
     # Resume any workflows that were mid-flight when the server last stopped
-    # (crash / laptop sleep / manual restart) so real work isn't stranded.
+    # (crash / laptop sleep / manual restart), and sweep worktrees for
+    # workflows that finished but never got their post-completion cleanup
+    # call to run -- backgrounded (not awaited here) so the server starts
+    # accepting connections immediately instead of blocking on however many
+    # agents were orphaned by the last restart. _resume_interrupted_
+    # workflows's own per-orphan loop already offloads the actual
+    # subprocess/git work, but the loop itself is sequential and this
+    # whole call used to be awaited directly in startup_event -- "blocking
+    # every request until it finishes" per that loop's own comment.
+    # Confirmed live: several orphaned agents across multiple workflows
+    # after a long outage made port 8300 refuse/hang on every connection,
+    # including a zero-I/O /health check, for minutes on every restart.
+    server_state.startup_recovery_task = asyncio.create_task(_run_startup_recovery())
+
+    logger.info("Server started successfully")
+
+
+async def _run_startup_recovery() -> None:
+    """Backgrounded body of startup_event's post-restart recovery -- see
+    its call site's comment for why this isn't awaited inline."""
     try:
         await _resume_interrupted_workflows()
     except Exception as e:
         logger.error(f"[RESUME] resume scan failed: {e}")
 
-    # Sweep worktrees for workflows that finished ("completed") but never
-    # got their normal post-completion cleanup call to run -- the same
-    # restart window _resume_interrupted_workflows exists to cover, just
-    # for the opposite case (the workflow finished, not that it was
-    # interrupted mid-flight).
     try:
         from src.autopilot.orchestrator.worktree_integration import sweep_completed_workflow_worktrees
 
-        # Loops over every orphaned worktree doing `git worktree remove
-        # --force` -- offloaded so it doesn't add real git-removal time,
-        # per stale worktree, to the server's startup latency.
         loop = asyncio.get_event_loop()
         swept = await loop.run_in_executor(None, sweep_completed_workflow_worktrees, logger)
         if swept:
             logger.info(f"[SWEEP] Cleaned up {swept} orphaned completed-workflow worktree(s)")
     except Exception as e:
         logger.error(f"[SWEEP] Completed-workflow worktree sweep failed: {e}")
-
-    logger.info("Server started successfully")
 
 
 SAFE_RESTART_GRACE_SECONDS = 10
@@ -690,6 +699,15 @@ async def shutdown_event():
         except asyncio.TimeoutError:
             logger.warning("Background phase advancement sweep did not stop gracefully, cancelling...")
             server_state.phase_advancement_sweep_task.cancel()
+
+    # Stop the one-shot startup recovery task if it's still running --
+    # unlike the two loops above it doesn't watch shutdown_event (it's not
+    # a loop), so a still-running one just gets cancelled outright rather
+    # than waited on; _resume_interrupted_workflows's own claim guards make
+    # a partial/interrupted pass safe to pick back up on the next restart.
+    if server_state.startup_recovery_task and not server_state.startup_recovery_task.done():
+        logger.info("Cancelling in-progress startup recovery task...")
+        server_state.startup_recovery_task.cancel()
 
     # Close all WebSocket connections
     for ws in server_state.active_websockets:
