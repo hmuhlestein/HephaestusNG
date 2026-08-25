@@ -269,7 +269,14 @@ def _resolve_recovery_project_path(workflow_id: str) -> Optional[str]:
                     logger.warning(f"[RECOVERY] repo_id={repo_id!r} for workflow {workflow_id[:8]} does not resolve: {e} -- skipping repo recovery rather than guessing a path")
                     return None
                 except ValueError as e:
-                    logger.warning(f"[RECOVERY] could not resolve repo path for workflow {workflow_id[:8]}: {e}")
+                    # Workflow.project_id itself doesn't resolve to any
+                    # AutopilotProject row (deleted project, orphaned FK) --
+                    # same reasoning as the RepoNotFoundError branch above:
+                    # this is a positive signal the workflow's own scoping
+                    # data is broken, not "nothing to go on," so degrade to
+                    # no-op rather than guessing $PROJECT_PATH.
+                    logger.warning(f"[RECOVERY] project_id={_wf.project_id!r} for workflow {workflow_id[:8]} does not resolve: {e} -- skipping repo recovery rather than guessing a path")
+                    return None
     except Exception:
         logger.exception(f"[RECOVERY] failed to resolve recovery project path for workflow {workflow_id[:8]}")
     return os.getenv("PROJECT_PATH")
