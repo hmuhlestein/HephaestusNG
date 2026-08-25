@@ -766,6 +766,37 @@ class WorktreeManager:
         except GitCommandError:
             return {"action": "skipped", "branch": branch_name}
 
+        base_branch = self.config.git.base_branch
+
+        # Predict the outcome with `git merge-tree --write-tree` first --
+        # a real three-way merge computation that touches no working-tree
+        # file, index entry, or ref (unlike an actual `git merge` attempt,
+        # which rewrites files in place even on a conflict it then aborts).
+        # For this project (self-hosted: main_repo IS the live checkout
+        # the dev server watches), that in-place churn was enough to
+        # trigger a full Vite reload on every attempt, clean or not --
+        # confirmed live: a startup sweep merge-attempting several
+        # already-known-conflicting branches in a tight burst produced a
+        # matching burst of "reset: moving to HEAD" reflog entries (each
+        # a `merge --abort`), one per conflicting branch, well inside a
+        # few seconds. Exit code 1 from merge-tree means real conflicts;
+        # anything else is a genuine error worth surfacing.
+        try:
+            self.main_repo.git.merge_tree("--write-tree", base_branch, branch_name)
+            predicted_conflict = False
+        except GitCommandError as e:
+            if e.status != 1:
+                raise
+            predicted_conflict = True
+
+        if predicted_conflict:
+            logger.warning(
+                f"[WORKTREE] Merge conflict predicted for {branch_name} -> "
+                f"{base_branch} -- branch preserved for manual merge/PR "
+                "(working tree never touched)"
+            )
+            return {"action": "preserved", "branch": branch_name}
+
         msg = message or f"[Cleanup] Merged {branch_name}"
         try:
             self.main_repo.git.merge(
@@ -774,6 +805,10 @@ class WorktreeManager:
             return {"action": "merged", "branch": branch_name}
         except GitCommandError as e:
             if "CONFLICT" in str(e):
+                # Rare now that merge-tree predicted clean -- e.g. a
+                # concurrent write landed in the window between the
+                # prediction and this real merge. Same abort-and-preserve
+                # fallback as before for that residual race.
                 logger.warning(
                     f"[WORKTREE] Merge conflict on {branch_name} -> "
                     f"{self.config.git.base_branch}, aborting -- branch preserved "

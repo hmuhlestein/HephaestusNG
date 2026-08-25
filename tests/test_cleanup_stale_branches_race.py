@@ -474,6 +474,47 @@ class TestMergeSharedBranch:
         branch_names = [b.name for b in temp_repo.branches]
         assert "agent-conflict" in branch_names
 
+    def test_conflict_prediction_never_touches_the_working_tree(self, temp_repo, db_manager):
+        """Regression, observed live on this self-hosted project: main_repo
+        IS the live checkout the dev server watches. A real `git merge`
+        attempt-then-abort-on-conflict cycle rewrites files in place for
+        the duration of the attempt, and reflog shows an actual reset;
+        both are enough to trigger a full Vite reload. A startup sweep
+        merge-attempting several already-known-conflicting branches
+        produced a matching burst of these within a few seconds.
+        `git merge-tree --write-tree` predicts the same conflict without
+        ever touching the working tree, index, or HEAD -- this test fails
+        if that guarantee regresses (e.g. back to a real merge-then-abort)."""
+        wt_mgr = WorktreeManager(db_manager=db_manager)
+        wt_mgr.reload(Path(temp_repo.working_dir))
+
+        shared = Path(temp_repo.working_dir) / "shared.txt"
+        shared.write_text("original")
+        temp_repo.git.add("shared.txt")
+        temp_repo.git.commit("-m", "Add shared.txt")
+
+        temp_repo.git.checkout("-b", "agent-conflict")
+        shared.write_text("branch version")
+        temp_repo.git.add("shared.txt")
+        temp_repo.git.commit("-m", "Modify shared.txt on branch")
+
+        temp_repo.git.checkout("main")
+        shared.write_text("main version")
+        temp_repo.git.add("shared.txt")
+        temp_repo.git.commit("-m", "Modify shared.txt on main")
+
+        head_before = temp_repo.head.commit.hexsha
+        reflog_len_before = len(temp_repo.git.reflog("show", "--all").splitlines())
+
+        result = wt_mgr.merge_shared_branch("agent-conflict")
+
+        assert result["action"] == "preserved"
+        assert temp_repo.head.commit.hexsha == head_before, "HEAD must not move"
+        assert not temp_repo.is_dirty(untracked_files=True), "working tree must stay clean"
+        assert shared.read_text() == "main version", "the watched file must never be rewritten"
+        reflog_len_after = len(temp_repo.git.reflog("show", "--all").splitlines())
+        assert reflog_len_after == reflog_len_before, "no reset/merge should land in the reflog"
+
     def test_skips_nonexistent_branch(self, temp_repo, db_manager):
         """A nonexistent branch is skipped."""
         wt_mgr = WorktreeManager(db_manager=db_manager)
