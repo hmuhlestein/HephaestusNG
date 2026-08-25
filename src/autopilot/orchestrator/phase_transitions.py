@@ -1618,9 +1618,20 @@ def _case_completed_with_successor(db, workflow_id: str, completed: list, pendin
             # 'done' row from three weeks earlier -- every poll saw
             # existing_tasks > 0 and silently backed off forever.
             last_completed_execution = last_completed.get("execution")
+            # 10s grace window on the boundary itself -- same clock-skew
+            # class _correct_skewed_cycle_start guards against elsewhere
+            # (independent utc_now() calls, here last_completed_execution's
+            # own completed_at vs. the successor's first task's created_at,
+            # can land a few milliseconds apart in either order). A bare
+            # `>=` would otherwise exclude a successor task created moments
+            # before completed_at was stamped, making this see 0 existing
+            # tasks and create a duplicate. 10s is negligible against the
+            # "weeks-old task" case this cycle_filter exists to exclude
+            # (see the comment above) so it doesn't reopen that gap.
+            last_completed_at = last_completed_execution.completed_at if last_completed_execution else None
             cycle_filter = (
-                (Task.created_at >= last_completed_execution.completed_at,)
-                if last_completed_execution and last_completed_execution.completed_at
+                (Task.created_at >= last_completed_at - timedelta(seconds=10),)
+                if last_completed_at
                 else ()
             )
             existing_tasks = db.query(Task).filter(Task.phase_id == successor["phase"].id, Task.status != "duplicated", *cycle_filter).count()

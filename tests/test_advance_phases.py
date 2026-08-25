@@ -3063,6 +3063,52 @@ class TestCaseCompletedWithSuccessor:
         assert mock_create.call_args[0][:4] == ("wf-1", "phase-2", "implementation", "continue")
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    def test_does_not_duplicate_a_real_successor_task_created_a_few_ms_before_completion(
+        self, mock_create, db_manager, sample_workflow
+    ):
+        """Regression, same clock-skew class as _correct_skewed_cycle_start
+        (see its docstring): last_completed_execution.completed_at and the
+        successor's own first task's created_at are stamped by independent
+        utc_now() calls that can land a few milliseconds apart in either
+        order. A bare `Task.created_at >= completed_at` would exclude a
+        genuine successor task created moments before completed_at was
+        stamped, see existing_tasks == 0, and dispatch a duplicate. The
+        10s grace window on the boundary must not reopen the "weeks-old
+        stale task" gap the test above guards against."""
+        from datetime import datetime, timedelta
+
+        from src.autopilot.orchestrator.phase_transitions import _case_completed_with_successor, _get_phase_statuses
+
+        self._seed_completed_with_pending_successor(db_manager)
+        completed_at = datetime.utcnow()
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.completed_at = completed_at
+            session.add(
+                Task(
+                    id="task-real-successor",
+                    workflow_id="wf-1",
+                    phase_id="phase-2",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                    created_at=completed_at - timedelta(milliseconds=15),
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            completed = [p for p in phase_statuses if p["status"] == "completed"]
+            pending = [p for p in phase_statuses if p["status"] == "pending"]
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_completed_with_successor(
+                session, "wf-1", completed, pending, in_progress, MagicMock()
+            )
+
+        assert result is False  # "already fired" -- the real task is found, no duplicate
+        mock_create.assert_not_called()
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
     def test_advance_phases_skips_this_case_when_workflow_paused_for_review(
         self, mock_create, db_manager, sample_workflow
     ):
