@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 
-from src.core.constants import CONTEXT_DIR_NAME
 from src.mcp.autopilot import _shared
 from src.mcp.autopilot._shared import (
     FeatureDetail,
@@ -27,6 +26,7 @@ from src.mcp.autopilot._shared import (
 from src.mcp.autopilot.feature_record_routes import (
     _feature_record_cost,
     _find_archived_feature_report,
+    _resolve_live_feature_report,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,8 +62,7 @@ def _scan_features() -> List[Dict[str, Any]]:
                 if f.workflow_id:
                     wf = session.query(Workflow).filter_by(id=f.workflow_id).first()
                     if wf and wf.working_directory:
-                        report = Path(wf.working_directory) / CONTEXT_DIR_NAME / "feature_report.html"
-                        has_report = report.is_file()
+                        has_report = _resolve_live_feature_report(wf.working_directory) is not None
                     if not has_report:
                         project_base = None
                         if wf and wf.project_id:
