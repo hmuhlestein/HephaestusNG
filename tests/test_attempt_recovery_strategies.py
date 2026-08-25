@@ -186,12 +186,92 @@ class TestStrategyIndependence:
             ),
             patch(
                 "src.autopilot.orchestrator.policy.os.getenv",
-                return_value="/tmp/does-not-matter",
+                return_value="/tmp/proj/.worktrees/wt_does-not-matter",
             ),
         ):
             attempt_recovery("wf-1", logger)
 
         terminate.assert_called_once_with("agent-dead")
+
+
+class TestCleanStaleRepoStateWorktreeGuard:
+    """_clean_stale_repo_state must never run its destructive git sequence
+    (merge --abort / checkout main / clean -fd / reset --hard) against a
+    project's primary checkout -- only an isolated .worktrees/ path.
+    _resolve_recovery_project_path falls back to the primary repo path for
+    any workflow with no live working_directory, and that primary path is
+    the one a human's uncommitted work (e.g. a design spec added via the
+    dashboard) or another agent's in-progress edits can legitimately be
+    sitting in. Confirmed live: an untracked docs/bugfix/*.md spec was
+    deleted this way."""
+
+    def test_primary_checkout_path_is_never_cleaned(self, logger, no_db):
+        from src.autopilot.orchestrator.policy import attempt_recovery
+
+        calls = []
+
+        def record_and_succeed(*args, **kwargs):
+            calls.append(args[0] if args else [])
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "M some_dirty_file.py"  # repo looks dirty
+            return result
+
+        with (
+            patch("src.core.database.get_db", return_value=no_db),
+            patch("src.autopilot.orchestrator.policy.get_db", return_value=no_db),
+            patch(
+                "src.autopilot.orchestrator.phase_transitions.get_tasks",
+                return_value=[],
+            ),
+            patch("src.autopilot.orchestrator.policy.get_agents", return_value=[]),
+            patch(
+                "src.autopilot.orchestrator.policy.subprocess.run",
+                side_effect=record_and_succeed,
+            ),
+            patch(
+                "src.autopilot.orchestrator.policy.os.getenv",
+                return_value="/Users/someone/code/some-project",
+            ),
+        ):
+            attempt_recovery("wf-1", logger)
+
+        git_calls = [c for c in calls if c and c[0] == "git"]
+        assert git_calls == [], f"expected no git subprocess calls against the primary checkout, got {git_calls}"
+
+    def test_worktree_path_is_still_cleaned(self, logger, no_db):
+        from src.autopilot.orchestrator.policy import attempt_recovery
+
+        calls = []
+
+        def record_and_succeed(*args, **kwargs):
+            calls.append(args[0] if args else [])
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "M some_dirty_file.py"
+            return result
+
+        with (
+            patch("src.core.database.get_db", return_value=no_db),
+            patch("src.autopilot.orchestrator.policy.get_db", return_value=no_db),
+            patch(
+                "src.autopilot.orchestrator.phase_transitions.get_tasks",
+                return_value=[],
+            ),
+            patch("src.autopilot.orchestrator.policy.get_agents", return_value=[]),
+            patch(
+                "src.autopilot.orchestrator.policy.subprocess.run",
+                side_effect=record_and_succeed,
+            ),
+            patch(
+                "src.autopilot.orchestrator.policy.os.getenv",
+                return_value="/Users/someone/code/some-project/.worktrees/wt_feature-abc",
+            ),
+        ):
+            attempt_recovery("wf-1", logger)
+
+        git_calls = [c for c in calls if c and c[0] == "git"]
+        assert ["git", "reset", "--hard", "HEAD"] in git_calls
 
 
 class TestStaleTaskFailureReason:
