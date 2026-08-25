@@ -556,6 +556,64 @@ class TestCaseStartFirstPhase:
                 )
                 mock_create.assert_not_called()
 
+    def test_reverifies_existing_right_before_creating(self, db_manager, sample_workflow):
+        """Regression, observed live: two Task rows (ed82ce49, 83e86c54) for
+        the same brand-new phase 1, ~15s apart -- the original existing==0
+        read happens BEFORE the claim attempt, so a task committed by the
+        OTHER claim-protected path (workflow_execution_routes.py's own
+        initial-task flow, on a separate DB connection/session) in the
+        window between that read and this call winning ITS OWN claim would
+        previously go unnoticed: the stale existing==0 snapshot survives
+        untouched all the way to _create_phase_task. Simulates that window
+        by having the claim call itself, as a side effect of "winning", also
+        commit a competing Task row -- exactly what a slow concurrent
+        creator finishing in that gap would look like from this function's
+        perspective."""
+        from src.autopilot.orchestrator.phase_transitions import (
+    _case_start_first_phase,
+    _get_phase_statuses,
+)
+
+        with db_manager.session_scope() as session:
+            exec = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            if exec:
+                exec.status = "pending"
+
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            pending = [p for p in phase_statuses if p["status"] == "pending"]
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            completed = [p for p in phase_statuses if p["status"] == "completed"]
+
+        def _win_claim_but_race_a_task_in(*_args, **_kwargs):
+            with db_manager.session_scope() as race_session:
+                race_session.add(Task(
+                    id="task-raced-in",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                ))
+            return True
+
+        logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions._claim_phase_task_creation",
+            side_effect=_win_claim_but_race_a_task_in,
+        ), patch(
+            "src.autopilot.orchestrator.phase_transitions._create_phase_task", return_value=True
+        ) as mock_create:
+            with db_manager.session_scope() as session:
+                result = _case_start_first_phase(
+                    session, "wf-1", pending, in_progress, completed, logger
+                )
+                assert result is None, (
+                    "must not create a duplicate task for a phase that "
+                    "picked up a task in the window between the initial "
+                    "existing==0 read and winning the claim"
+                )
+                mock_create.assert_not_called()
+
 
 class TestCaseInProgressNoTasks:
     """Tests for _case_in_progress_no_tasks function."""
