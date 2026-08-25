@@ -141,6 +141,33 @@ else
     warn "Install with: brew install coreutils (macOS) or apt install coreutils (Linux)"
 fi
 
+# Rust/cargo (only needed if turbovec has no prebuilt wheel for this
+# platform -- it ships wheels for macOS arm64, Linux x86_64/aarch64
+# (manylinux_2_28), and Windows x86_64, but NOT macOS x86_64 (Intel), so
+# `uv pip install -e .` below falls back to building it from source via
+# maturin/cargo there. Verified live: on an Intel Mac with no cargo
+# toolchain configured, that build fails outright and the whole install
+# aborts with a cryptic maturin/rustup error -- warn up front instead of
+# letting the user hit that cold.
+UNAME_S="$(uname -s)"
+UNAME_M="$(uname -m)"
+# command -v only confirms the `cargo` binary exists on PATH -- with
+# rustup-managed installs that binary is a shim that still fails at
+# runtime if no default toolchain is configured (rustup's own error text,
+# not a version string). Check it actually runs, not just that it's there.
+# A plain `X="$(cargo --version)"` assignment would itself trip set -e on
+# failure (the substitution's exit code IS the assignment's), so capture
+# inside an `if` -- conditions are exempt from set -e by design.
+CARGO_VERSION_OUTPUT=""
+if CARGO_VERSION_OUTPUT="$(cargo --version 2>&1)"; then
+    ok "Rust/cargo: $CARGO_VERSION_OUTPUT"
+elif [ "$UNAME_S" = "Darwin" ] && [ "$UNAME_M" != "arm64" ]; then
+    warn "cargo not usable ($CARGO_VERSION_OUTPUT) — turbovec (default vector store) has no prebuilt wheel for Intel macOS and will fail to build from source without it"
+    warn "Install Rust: https://rustup.rs (then: rustup default stable)"
+else
+    log "cargo not usable — only needed if turbovec has no prebuilt wheel for this platform; the install below will report clearly if that's the case here"
+fi
+
 # Docker (only needed for qdrant)
 if [ "$SKIP_DOCKER" = false ]; then
     VECTOR_BACKEND="${VECTOR_STORE_BACKEND:-turbovec}"
@@ -255,8 +282,16 @@ if "$PYTHON" -c "from src.cli.main import main; import git; from jose import jwt
     ok "Package already installed"
 else
     log "Installing package in editable mode..."
-    "$UV_BIN" pip install -e "$PREFIX" --quiet --python "$PYTHON" 2>&1 | tail -3
-    ok "Package installed (heph entry point created)"
+    "$UV_BIN" pip install -e "$PREFIX" --quiet --python "$PYTHON" 2>&1 | tail -20
+    # PIPESTATUS[0] is uv's own exit code -- the pipeline's own exit code is
+    # tail's (near-always 0), so checking $? here would silently treat a
+    # real uv failure as success and print "ok" over a broken install.
+    if [ "${PIPESTATUS[0]}" -eq 0 ]; then
+        ok "Package installed (heph entry point created)"
+    else
+        err "Package install failed -- see output above"
+        exit 1
+    fi
 fi
 
 if [ "$DEV_MODE" = true ]; then
@@ -389,11 +424,22 @@ if command -v gh >/dev/null 2>&1; then
         # never fire for that install path, only warn.
         warn "GitHub CLI is not authenticated — required for the pipeline to create pull requests"
         printf "${BLUE}[heph]${NC} Run 'gh auth login' now? [Y/n] "
-        read -r _gh_reply </dev/tty
-        case "${_gh_reply:-Y}" in
-            [Nn]*) warn "Skipped — run 'gh auth login' later, or PR creation will be skipped" ;;
-            *) gh auth login ;;
-        esac
+        # [ -r /dev/tty ] only confirms the device node exists -- it can
+        # still fail to actually open (e.g. no controlling terminal in a
+        # container/CI job), and an unguarded `read` failing there aborts
+        # the ENTIRE install under set -e. Reproduced live: the script died
+        # here with nothing installed past this point -- no heph binary, no
+        # .env, no database -- despite gh auth being optional (PR creation
+        # only). Guard the read itself, and don't blindly call `gh auth
+        # login` (which also needs a real terminal) if it failed.
+        if read -r _gh_reply </dev/tty 2>/dev/null; then
+            case "${_gh_reply:-Y}" in
+                [Nn]*) warn "Skipped — run 'gh auth login' later, or PR creation will be skipped" ;;
+                *) gh auth login ;;
+            esac
+        else
+            warn "Could not read from /dev/tty — run 'gh auth login' manually (or set GH_TOKEN) before running the pipeline"
+        fi
     else
         warn "GitHub CLI is not authenticated — run 'gh auth login' (or set GH_TOKEN) before running the pipeline, or PR creation will be skipped"
     fi
@@ -428,10 +474,20 @@ else
             _pw_tty="/dev/stdin"
         fi
         printf "${BLUE}[heph]${NC} Install Playwright (browser automation + CDP support)? [Y/n] "
-        read -r _pw_reply <"$_pw_tty"
-        case "${_pw_reply:-Y}" in
-            [Nn]*) _install_pw=false ;;
-        esac
+        # [ -r /dev/tty ] only confirms the device node exists -- it can
+        # still fail to actually open (e.g. no controlling terminal in a
+        # container/CI job), and an unguarded `read` failing there aborts
+        # the ENTIRE install under set -e (same failure mode as the gh-auth
+        # prompt above). Guard the read so a broken tty just skips this
+        # optional step instead of killing everything after it.
+        if read -r _pw_reply <"$_pw_tty" 2>/dev/null; then
+            case "${_pw_reply:-Y}" in
+                [Nn]*) _install_pw=false ;;
+            esac
+        else
+            warn "Could not read a response — skipping Playwright (run 'playwright install' manually later if needed)"
+            _install_pw=false
+        fi
     fi
 
     if $_install_pw; then
