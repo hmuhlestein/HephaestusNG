@@ -3334,17 +3334,32 @@ class TestCheckApiCredits:
     @patch("src.autopilot.orchestrator.policy.get_tasks")
     @patch("src.autopilot.orchestrator.policy.get_agents")
     def test_agent_output_log_credit(self, mock_agents, mock_tasks, mock_peek):
-        """Even an agent NOT (yet) marked status="error" is checked -- the
-        output-phrase scan runs unconditionally, so a credit message that
-        shows up before the agent is formally marked errored is still
-        caught."""
+        """A credit phrase in an errored agent's output is caught even when
+        it doesn't match the narrower credit_keywords_in_error list."""
+        from src.autopilot.orchestrator.policy import check_api_credits
+
+        mock_agents.return_value = [{"id": "a1", "status": "error"}]
+        mock_tasks.return_value = []
+        mock_peek.return_value = "quota exceeded"
+        found, msg = check_api_credits()
+        assert found is True
+
+    @patch("src.autopilot.orchestrator.policy.peek_agent_output")
+    @patch("src.autopilot.orchestrator.policy.get_tasks")
+    @patch("src.autopilot.orchestrator.policy.get_agents")
+    def test_working_agent_output_is_not_peeked(self, mock_agents, mock_tasks, mock_peek):
+        """peek_agent_output is a real tmux subprocess call -- it must stay
+        scoped to agents already flagged "error", not run for every
+        active/idle/working agent on every poll tick (confirmed live: doing
+        so made the backend intermittently unresponsive)."""
         from src.autopilot.orchestrator.policy import check_api_credits
 
         mock_agents.return_value = [{"id": "a1", "status": "working"}]
         mock_tasks.return_value = []
         mock_peek.return_value = "quota exceeded"
         found, msg = check_api_credits()
-        assert found is True
+        assert found is False
+        mock_peek.assert_not_called()
 
 
 class TestIsDesignFullyComplete:

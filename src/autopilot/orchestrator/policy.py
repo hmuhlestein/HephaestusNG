@@ -457,21 +457,29 @@ def check_api_credits() -> Tuple[bool, str]:
     # docstring names as its motivating example). The only place an
     # agent's actual output text lives is peek_agent_output (tmux), and a
     # task's real failure text is failure_reason, not "error".
+    #
+    # peek_agent_output is a real subprocess spawn (libtmux -> tmux CLI)
+    # plus a DB query -- NOT a cheap dict read. This runs once per poll
+    # tick (~15-20s) per active workflow's own polling loop, so it must
+    # stay scoped to agents already flagged "error" (rare), not every
+    # agent get_agents() returns (every active/idle agent, system-wide,
+    # every tick). Confirmed live: broadening this to peek every agent
+    # unconditionally made the backend's event loop intermittently
+    # unresponsive to plain requests like /health within minutes of a
+    # restart with several active workflows.
     agents = get_agents()
     for agent in agents:
         agent_status = (agent.get("status", "") or "").lower()
+        if agent_status != "error":
+            continue
         output = (peek_agent_output(agent.get("id", "")) or "").lower()
 
-        # Check for explicit error status with credit keywords
-        if agent_status == "error":
-            for keyword in credit_keywords_in_error:
-                if keyword in output:
-                    return (
-                        True,
-                        f"API credit issue in agent {agent.get('id', '')[:8]}: {keyword}",
-                    )
-
-        # Check output log for specific phrases (not broad keywords)
+        for keyword in credit_keywords_in_error:
+            if keyword in output:
+                return (
+                    True,
+                    f"API credit issue in agent {agent.get('id', '')[:8]}: {keyword}",
+                )
         for phrase in credit_phrases:
             if phrase in output:
                 return True, f"API credit issue in agent {agent.get('id', '')[:8]}: {phrase}"
