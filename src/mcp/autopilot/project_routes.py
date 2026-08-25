@@ -43,13 +43,9 @@ def _apply_active_project(proj):
 
     # Validate path exists and is a git repo (fast check — just look for .git)
     if not new_path.exists() or not new_path.is_dir():
-        raise ValueError(
-            f"Cannot activate project — path does not exist: {new_path}"
-        )
+        raise ValueError(f"Cannot activate project — path does not exist: {new_path}")
     if not (new_path / ".git").exists():
-        raise ValueError(
-            f"Cannot activate project — not a git repository: {new_path}"
-        )
+        raise ValueError(f"Cannot activate project — not a git repository: {new_path}")
 
     # Update config immediately — no git reload here
     config.git.main_repo_path = new_path
@@ -60,6 +56,7 @@ def _design_id(project_id: str, filename: str) -> str:
     """Generate a stable, deterministic ID for a design document."""
     h = hashlib.sha256(f"{project_id}:{filename}".encode()).hexdigest()[:12]
     return f"des-{h}"
+
 
 class ProjectItem(BaseModel):
     id: str
@@ -73,10 +70,12 @@ class ProjectItem(BaseModel):
     cost_total_usd: float = 0.0
     cost_limit_usd: Optional[float] = None
 
+
 class ProjectCreate(BaseModel):
     name: str
     base_dir: str
     is_default: bool = False
+
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
@@ -104,19 +103,16 @@ class ProjectUpdate(BaseModel):
         return v
 
 
-
-
-
 _project_sync_locks: Dict[str, asyncio.Lock] = {}
 
 _project_lock_guard = asyncio.Lock()
+
 
 async def _get_project_lock(project_id: str) -> asyncio.Lock:
     async with _project_lock_guard:
         if project_id not in _project_sync_locks:
             _project_sync_locks[project_id] = asyncio.Lock()
         return _project_sync_locks[project_id]
-
 
 
 def _extract_ordinal(filename: str) -> Optional[int]:
@@ -128,6 +124,7 @@ def _extract_ordinal(filename: str) -> Optional[int]:
     stem = Path(filename).stem
     m = _ORDINAL_RE.match(stem)
     return int(m.group(1)) if m else None
+
 
 def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[str, Any]]:
     """Scan filesystem and sync designs with DB using the provided session.
@@ -252,6 +249,7 @@ def _detect_workflow_type_for_file(name: str, fpath: Path) -> str:
         content = ""
     return detect_workflow_type(name, content)
 
+
 def _validate_base_dir(base_dir: str) -> str:
     """Validate and resolve a project base directory. Returns resolved path or raises."""
     base = Path(base_dir).expanduser().resolve()
@@ -262,6 +260,7 @@ def _validate_base_dir(base_dir: str) -> str:
     if not os.access(base, os.R_OK | os.W_OK):
         raise HTTPException(403, f"Insufficient permissions: {base}")
     return str(base)
+
 
 @router.get("/projects", response_model=List[ProjectItem])
 async def list_projects():
@@ -287,6 +286,7 @@ async def list_projects():
                 )
             )
         return result
+
 
 def _init_codegraph_index(resolved: str, project_name: str) -> None:
     """`codegraph init` in a freshly-created project's directory, if
@@ -317,6 +317,7 @@ def _init_codegraph_index(resolved: str, project_name: str) -> None:
         logger.debug("codegraph not installed, skipping index initialization")
     except Exception as e:
         logger.debug(f"CodeGraph init skipped for {project_name}: {e}")
+
 
 @router.post("/projects", response_model=ProjectItem)
 async def create_project(
@@ -372,15 +373,15 @@ async def create_project(
     await loop.run_in_executor(None, _init_codegraph_index, resolved, proj.name)
 
     return ProjectItem(
-            id=proj.id,
-            name=proj.name,
-            base_dir=proj.base_dir,
-            is_default=proj.is_default,
-            is_active=getattr(proj, "is_active", False),
-            design_count=len(designs),
-            created_at=proj.created_at.isoformat() if proj.created_at else "",
-            updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
-        )
+        id=proj.id,
+        name=proj.name,
+        base_dir=proj.base_dir,
+        is_default=proj.is_default,
+        is_active=getattr(proj, "is_active", False),
+        design_count=len(designs),
+        created_at=proj.created_at.isoformat() if proj.created_at else "",
+        updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+    )
 
 
 @router.get("/projects/active", response_model=List[ProjectItem])
@@ -429,22 +430,20 @@ async def activate_project(project_id: str):
         # "already occupies a slot" exemption (src/autopilot/service.py)
         # for re-activating an already-active project.
         if not proj.is_active:
-            active_projects = (
-                db.query(AutopilotProject).filter_by(is_active=True).all()
-            )
+            active_projects = db.query(AutopilotProject).filter_by(is_active=True).all()
             max_concurrent = get_config().autopilot.max_concurrent_projects
             if len(active_projects) >= max_concurrent:
                 names = ", ".join(p.name for p in active_projects)
                 raise HTTPException(
                     409,
-                    f"Max concurrent projects ({max_concurrent}) reached: "
-                    f"{names}. Stop one before starting another.",
+                    f"Max concurrent projects ({max_concurrent}) reached: {names}. Stop one before starting another.",
                 )
             proj.is_active = True
         db.flush()
 
         # Apply to runtime config
         from types import SimpleNamespace
+
         _apply_active_project(SimpleNamespace(base_dir=proj.base_dir))
 
         count = db.query(AutopilotDesign).filter_by(project_id=proj.id).count()
@@ -513,6 +512,7 @@ async def get_project(project_id: str):
             cost_limit_usd=proj.cost_limit_usd,
         )
 
+
 @router.put("/projects/{project_id}", response_model=ProjectItem)
 async def update_project(
     project_id: str,
@@ -565,6 +565,7 @@ async def update_project(
             )
             if budget_paused:
                 from src.autopilot.orchestrator.engine_client import resume_workflow
+
                 for wf in budget_paused:
                     # force=True: raising/clearing the cost limit is an
                     # explicit override of the budget pause, same as this
@@ -593,6 +594,7 @@ async def update_project(
             cost_limit_usd=proj.cost_limit_usd,
         )
 
+
 @router.delete("/projects/{project_id}")
 async def delete_project(
     project_id: str,
@@ -606,7 +608,18 @@ async def delete_project(
             detail="Agent not authenticated. Provide valid X-Agent-ID header.",
         )
 
-    from src.core.database import AutopilotProject, get_db
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.database import (
+        AgentWorktree,
+        AutopilotProject,
+        Feature,
+        ProjectRepo,
+        Task,
+        Ticket,
+        TicketCommit,
+        get_db,
+    )
 
     replacement_base_dir = None
 
@@ -616,8 +629,29 @@ async def delete_project(
             raise HTTPException(404, "Project not found")
 
         was_active = getattr(proj, "is_active", False)
-        db.delete(proj)
-        db.flush()
+
+        # BLOCKER fix (adversarial review): repo_id FKs on these five tables
+        # have no ondelete clause, so SQLite's FK enforcement rejects the
+        # cascade delete of ProjectRepo rows (AutopilotProject.repos,
+        # cascade="all, delete-orphan") if any row still references one.
+        # Null the FK first, in the same transaction, so the cascade delete
+        # below always succeeds — matches repo_id=None's existing meaning
+        # ("use the primary repo").
+        repo_ids = [r.id for r in db.query(ProjectRepo.id).filter_by(project_id=project_id).all()]
+        if repo_ids:
+            for model in (Task, Ticket, TicketCommit, AgentWorktree, Feature):
+                db.query(model).filter(model.repo_id.in_(repo_ids)).update({"repo_id": None}, synchronize_session=False)
+
+        try:
+            db.delete(proj)
+            db.flush()
+        except IntegrityError as e:
+            db.rollback()
+            logger.error(f"Failed to delete project {project_id}: {e}")
+            raise HTTPException(
+                status_code=409,
+                detail="Project cannot be deleted: it still has references that block deletion.",
+            ) from e
 
         if was_active:
             next_proj = db.query(AutopilotProject).order_by(AutopilotProject.name).first()
@@ -638,33 +672,3 @@ async def delete_project(
 
     _invalidate("queue", "status", f"project_designs:{project_id}")
     return {"deleted": project_id}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
