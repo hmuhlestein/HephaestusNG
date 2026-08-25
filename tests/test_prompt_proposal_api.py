@@ -114,6 +114,43 @@ class TestCreateProposal:
                 workflow_definition="demo",
             )
 
+    def test_done_definitions_accepts_a_json_array_string(self, prompt_repo, db):
+        """ticket-cdb9fa63: the MCP tool schema leaves proposed_value untyped,
+        so an agent submitting done_definitions reliably sends it JSON-encoded
+        as a string rather than as a real array -- create_proposal must accept
+        that encoding instead of rejecting it as 'must be a list of strings'."""
+        result = svc.create_proposal(
+            phase_name="demo_phase",
+            field="done_definitions",
+            proposed_value='["do the thing", "do another thing"]',
+            rationale="the run showed the old list was incomplete",
+            workflow_definition="demo",
+        )
+        assert result["status"] == "pending"
+
+        from src.core.database import PromptProposal, get_db
+
+        with get_db() as session:
+            row = session.query(PromptProposal).filter_by(id=result["id"]).one()
+            assert row.proposed_value == ["do the thing", "do another thing"]
+
+    def test_done_definitions_accepts_a_yaml_block_string(self, prompt_repo, db):
+        """Same encoding gap, YAML-block form instead of JSON-array form."""
+        result = svc.create_proposal(
+            phase_name="demo_phase",
+            field="done_definitions",
+            proposed_value='- "do the thing"\n- "do another thing"\n',
+            rationale="the run showed the old list was incomplete",
+            workflow_definition="demo",
+        )
+        assert result["status"] == "pending"
+
+        from src.core.database import PromptProposal, get_db
+
+        with get_db() as session:
+            row = session.query(PromptProposal).filter_by(id=result["id"]).one()
+            assert row.proposed_value == ["do the thing", "do another thing"]
+
 
 class TestMcpToolPath:
     """The forensics agent's entry point. It must never edit anything itself,

@@ -315,6 +315,11 @@ def sweep_completed_workflow_worktrees(logger: "OrchestratorLogger") -> int:
                 continue  # already gone -- nothing to remove
 
             lp = launch_params if isinstance(launch_params, dict) else {}
+            # Already repo-scoped (REQ-03, des-c7b9 recovery/cleanup threading):
+            # launch_params["project_path"] was resolved via resolve_repo_path()
+            # at workflow-launch time in pipeline.py's feature-workflow launch, so
+            # it already targets the correct child repo in a multi-repo project.
+            # No further repo_id threading needed here.
             project_path_str = lp.get("project_path")
             if not project_path_str:
                 logger.warning(f"[SWEEP] Workflow {wf_id[:8]} has an orphaned worktree {worktree} but no launch_params.project_path to scope cleanup to -- skipping rather than guessing")
