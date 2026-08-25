@@ -3814,10 +3814,12 @@ class TestCleanupStaleWorktrees:
     async def test_sweeps_every_active_project_with_its_own_worktree_manager(
         self, make_monitoring_loop, mock_db
     ):
-        """Each active project must get its own fresh WorktreeManager
-        (reload()ed to that project's base_dir), not the shared long-lived
-        instance -- reload()ing a shared instance would race a concurrent
-        request relying on it pointing at a different project."""
+        """Each active project must get its own fresh WorktreeManager scoped
+        via the repo_path= constructor kwarg (never .reload() on a shared
+        long-lived instance, and never a fresh instance left pointed at the
+        default config path) -- reload()ing or omitting repo_path would
+        leave _explicit_repo_path=False, silently redirecting the sweep to
+        the wrong project for a configured worktree_base_path override."""
         fake_session = MagicMock()
         proj1 = MagicMock(id="proj-1", base_dir="/path/one")
         proj2 = MagicMock(id="proj-2", base_dir="/path/two")
@@ -3831,17 +3833,19 @@ class TestCleanupStaleWorktrees:
             inst.cleanup_all_stale_branches.return_value = {
                 "worktrees_cleaned": 0, "cleaned": 0, "merged": 0, "failed": 0,
             }
-            instances.append(inst)
+            instances.append((inst, kw))
             return inst
 
-        with patch("src.core.worktree_manager.WorktreeManager", side_effect=_make_instance):
+        with patch("src.core.worktree_manager.WorktreeManager", side_effect=_make_instance) as mock_wt_cls:
             await make_monitoring_loop._cleanup_stale_worktrees()
 
         assert len(instances) == 2
-        instances[0].reload.assert_called_once_with("/path/one")
-        instances[1].reload.assert_called_once_with("/path/two")
-        instances[0].cleanup_all_stale_branches.assert_called_once()
-        instances[1].cleanup_all_stale_branches.assert_called_once()
+        assert mock_wt_cls.call_args_list[0].kwargs["repo_path"] == "/path/one"
+        assert mock_wt_cls.call_args_list[1].kwargs["repo_path"] == "/path/two"
+        instances[0][0].reload.assert_not_called()
+        instances[1][0].reload.assert_not_called()
+        instances[0][0].cleanup_all_stale_branches.assert_called_once()
+        instances[1][0].cleanup_all_stale_branches.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_skips_projects_with_no_base_dir(self, make_monitoring_loop, mock_db):

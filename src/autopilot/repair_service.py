@@ -377,11 +377,11 @@ class RepairService:
             from src.core.worktree_manager import WorktreeManager
 
             # A fresh WorktreeManager instance is deliberate here (not the
-            # shared server_state.branch_manager) -- .reload(project) below
-            # points it at an arbitrary project, and reload()ing the shared
-            # long-lived instance would race with any other concurrent request
-            # relying on it pointing at a different project. Only db_manager
-            # itself should be the shared instance (see SOLID review 1.12).
+            # shared server_state.branch_manager) -- repo_path= below points
+            # it at an arbitrary project, and reusing the shared long-lived
+            # instance would race with any other concurrent request relying
+            # on it pointing at a different project. Only db_manager itself
+            # should be the shared instance (see SOLID review 1.12).
             db_manager = get_app_state().db_manager
             bm = WorktreeManager(db_manager, repo_path=project)
             # Run cleanup in background thread to not block pipeline start

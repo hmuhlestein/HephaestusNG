@@ -779,7 +779,7 @@ class MonitoringLoop:
         creation just accumulated under .worktrees/ indefinitely. Scoped
         to every active project (see the concurrent-active-projects
         invariant), each swept with its own WorktreeManager instance
-        (never the shared one -- .reload() on a shared long-lived instance
+        (never the shared one -- reusing a shared long-lived instance
         would race a concurrent request relying on it pointing elsewhere).
         """
         import asyncio
@@ -797,8 +797,7 @@ class MonitoringLoop:
         loop = asyncio.get_event_loop()
         for project_id, base_dir in active_projects:
             try:
-                bm = WorktreeManager(self.db_manager)
-                bm.reload(base_dir)
+                bm = WorktreeManager(self.db_manager, repo_path=base_dir)
                 # Real git/filesystem work -- offload so it doesn't block
                 # the event loop, same reasoning as the identical pattern
                 # in control_routes.py's /cleanup-branches endpoint.
