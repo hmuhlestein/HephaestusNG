@@ -268,6 +268,12 @@ def _make_git_repo_with_worktree(tmp_path, branch_merged: bool):
     run("git", "init", "-b", "main")
     run("git", "config", "user.email", "t@t.com")
     run("git", "config", "user.name", "t")
+    # The scripts/agent-safe-bin/git wrapper on PATH during CLI-agent test
+    # runs blocks `git merge` unless a .hephaestus/review_approved marker
+    # is found walking up from cwd -- this repo's own merge below is the
+    # thing under test here, not a review-gated feature landing.
+    (repo / ".hephaestus").mkdir()
+    (repo / ".hephaestus" / "review_approved").write_text("test fixture pre-approval\n")
     (repo / "f.txt").write_text("base")
     run("git", "add", ".")
     run("git", "commit", "-m", "base")

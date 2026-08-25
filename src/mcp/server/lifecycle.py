@@ -201,7 +201,7 @@ async def _resume_interrupted_workflows(
                     None, _git_expert_already_landed, session, task, config
                 )
                 if landed:
-                    logger.info(f"[RESUME] Workflow {wf.id[:8]}: orphaned agent {agent.id[:8]}'s git_expert work already landed on {config.base_branch} -- marking done instead of redispatching")
+                    logger.info(f"[RESUME] Workflow {wf.id[:8]}: orphaned agent {agent.id[:8]}'s git_expert work already landed on {config.git.base_branch} -- marking done instead of redispatching")
                     task.status = "done"
                     task.completed_at = datetime.utcnow()
                     task.failure_reason = None
