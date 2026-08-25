@@ -3173,6 +3173,69 @@ class TestPeekAgentOutput:
         assert result == ""
 
 
+class TestBuildEscalationContext:
+    """A human answering a stuck-task/crashed-agent/credit-issue escalation
+    previously got only a bare ID -- they had to go find the agent's tmux
+    session or transcript log themselves before they could tell whether it
+    was truly wedged or quietly still working. _build_escalation_context
+    rides a short live-output tail along with the escalation instead."""
+
+    def test_includes_agent_status_and_output_tail(self):
+        from src.autopilot.orchestrator.pipeline import _build_escalation_context
+
+        agents = [{"id": "agent-111", "status": "working", "last_activity": "2026-01-01T00:00:00"}]
+        with patch(
+            "src.autopilot.orchestrator.pipeline.peek_agent_output",
+            return_value="line one\nline two",
+        ):
+            context = _build_escalation_context(agents, MagicMock())
+
+        assert "agent-111"[:8] in context
+        assert "status=working" in context
+        assert "line one" in context
+        assert "line two" in context
+
+    def test_empty_when_no_output_available(self):
+        from src.autopilot.orchestrator.pipeline import _build_escalation_context
+
+        agents = [{"id": "agent-111", "status": "working"}]
+        with patch("src.autopilot.orchestrator.pipeline.peek_agent_output", return_value=""):
+            context = _build_escalation_context(agents, MagicMock())
+
+        assert context == ""
+
+    def test_a_peek_failure_does_not_raise_or_block_other_agents(self):
+        from src.autopilot.orchestrator.pipeline import _build_escalation_context
+
+        agents = [
+            {"id": "agent-fails", "status": "working"},
+            {"id": "agent-ok", "status": "working"},
+        ]
+
+        def _side_effect(agent_id, lines=15):
+            if agent_id == "agent-fails":
+                raise RuntimeError("tmux session gone")
+            return "still going"
+
+        with patch("src.autopilot.orchestrator.pipeline.peek_agent_output", side_effect=_side_effect):
+            context = _build_escalation_context(agents, MagicMock())
+
+        assert "still going" in context
+        assert "agent-fails"[:8] not in context
+
+    def test_capped_to_max_agents(self):
+        from src.autopilot.orchestrator.pipeline import _build_escalation_context
+
+        agents = [{"id": f"agent-{i}", "status": "working"} for i in range(5)]
+        with patch(
+            "src.autopilot.orchestrator.pipeline.peek_agent_output",
+            return_value="working on it",
+        ):
+            context = _build_escalation_context(agents, MagicMock(), max_agents=2)
+
+        assert context.count("working on it") == 2
+
+
 class TestGetTaskProgress:
     @patch("src.autopilot.orchestrator.engine_client.get_tasks")
     def test_counts(self, mock_tasks):

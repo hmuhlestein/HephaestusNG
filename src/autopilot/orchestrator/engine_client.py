@@ -861,6 +861,13 @@ def get_tasks(status: str = None, workflow_id: str = None) -> list:
                     "workflow_id": t.workflow_id,
                     "phase_id": t.phase_id,
                     "status": t.status,
+                    "priority": t.priority,
+                    # "description" is the key detect_hard_error's critical-
+                    # failure/architectural-issue checks actually read (see
+                    # policy.py) -- without it, both checks silently compare
+                    # against "" forever and can never fire, no matter how
+                    # critical or architectural a real failure is.
+                    "description": t.enriched_description or t.raw_description,
                     "raw_description": t.raw_description,
                     "enriched_description": t.enriched_description,
                     "assigned_agent_id": t.assigned_agent_id,

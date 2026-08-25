@@ -216,6 +216,37 @@ def _peek_active_agent_output(active_agents: list, logger: OrchestratorLogger) -
             logger.info(f"  [{aid[:8]}] {preview}")
 
 
+def _build_escalation_context(active_agents: list, logger: OrchestratorLogger, max_agents: int = 2) -> str:
+    """Append a short live-output tail for the workflow's own active agents
+    to a human escalation reason. Without this, a human answering
+    "Task X stuck for 1800s" or "Crashed agents: a1" has nothing to act on
+    beyond an ID -- they'd have to go find the tmux session or transcript
+    log themselves before they could tell whether it's truly wedged, still
+    quietly working, or failed on something specific. Capped to a handful
+    of agents/lines each -- this rides along on every escalation, not just
+    rare ones, so it must stay small regardless of how many agents are
+    active. Best-effort: a peek failure must not block the escalation
+    itself, just omit that agent's context."""
+    blocks = []
+    for agent in active_agents[:max_agents]:
+        aid = agent.get("id", "")
+        try:
+            output = peek_agent_output(aid, lines=15)
+        except Exception as e:
+            logger.debug(f"[ESCALATION-CONTEXT] Could not peek agent {aid[:8]}: {e}")
+            continue
+        lines = [ln.strip() for ln in (output or "").strip().split("\n") if ln.strip()][-5:]
+        if not lines:
+            continue
+        status = agent.get("status", "?")
+        last_activity = agent.get("last_activity", "?")
+        blocks.append(
+            f"Agent {aid[:8]} (status={status}, last_activity={last_activity}):\n"
+            + "\n".join(f"  {ln}" for ln in lines)
+        )
+    return "\n\n".join(blocks)
+
+
 def _has_unfinished_phases(exec_id: str, done_count: int, logger: OrchestratorLogger) -> bool:
     """Whether any phase is still pending/in_progress.
 
@@ -716,7 +747,9 @@ def run_single_workflow(
                 credit_stuck_count += 1
                 stuck_count = 0  # reset impasse counter during credit issues
                 if credit_stuck_count >= 1:
-                    choice = prompt_human(credit_reason, logger, project_id=project_id)
+                    context = _build_escalation_context(activity.active_agents, logger)
+                    full_reason = f"{credit_reason}\n\n{context}" if context else credit_reason
+                    choice = prompt_human(full_reason, logger, project_id=project_id)
                     if choice == "q":
                         return FeatureRunStatus.INTERRUPTED
                     elif choice == "s":
@@ -778,8 +811,10 @@ def run_single_workflow(
                         logger.debug(f"[ORCHESTRATOR] Could not resolve feature name for impasse message: {e}")
                     context_label = " / ".join(p for p in (design_name, feature_name) if p)
                     prefixed_reason = f"[{context_label}] {impasse_reason}" if context_label else impasse_reason
+                    agent_context = _build_escalation_context(activity.active_agents, logger)
+                    full_reason = f"{prefixed_reason}\n\n{agent_context}" if agent_context else prefixed_reason
 
-                    choice = prompt_human(prefixed_reason, logger, project_id=project_id)
+                    choice = prompt_human(full_reason, logger, project_id=project_id)
                     if choice == "q":
                         return FeatureRunStatus.INTERRUPTED
                     elif choice == "s":

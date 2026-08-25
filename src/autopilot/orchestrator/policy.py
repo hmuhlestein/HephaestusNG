@@ -487,12 +487,33 @@ def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None)
     # Check for crashed/errored agents (agents list is already scoped by get_agents)
     crashed_agents = [a for a in agents if a.get("status") == "error"]
     if crashed_agents:
-        names = [a.get("id", "unknown")[:20] for a in crashed_agents[:3]]
-        return True, f"Crashed agents: {', '.join(names)}"
+        # current_task_id rides along for free (already on every agent
+        # dict get_agents() returns) -- without it, whoever answers the
+        # escalation has no way to tell which task/phase actually died
+        # with the agent short of a manual DB lookup.
+        descs = []
+        for a in crashed_agents[:3]:
+            desc = a.get("id", "unknown")[:20]
+            task_id = a.get("current_task_id")
+            if task_id:
+                desc += f" (task {task_id[:8]})"
+            descs.append(desc)
+        return True, f"Crashed agents: {', '.join(descs)}"
 
     critical_failures = [t for t in failed_tasks if t.get("priority") == "critical" or "architectural" in (t.get("description", "") or "").lower()]
     if critical_failures:
-        descs = [t.get("description", "")[:60] for t in critical_failures[:3]]
+        # failure_reason (why it actually failed) and the task/phase ids
+        # ride along for free -- the truncated description alone couldn't
+        # tell a human WHY it failed, only what it was supposed to do.
+        descs = []
+        for t in critical_failures[:3]:
+            entry = f"{t.get('id', '?')[:8]}"
+            if t.get("phase_id"):
+                entry += f"/phase {t['phase_id'][:8]}"
+            entry += f": {(t.get('description', '') or '')[:60]}"
+            if t.get("failure_reason"):
+                entry += f" -- {t['failure_reason'][:120]}"
+            descs.append(entry)
         return True, f"Critical task failures: {descs}"
 
     return False, ""
@@ -533,10 +554,23 @@ def detect_impasse(agents: list, pending_tasks: list, in_progress_tasks: list, e
                         started_dt = started_dt.replace(tzinfo=timezone.utc)
                     elapsed = (datetime.now(timezone.utc) - started_dt).total_seconds()
                     if elapsed > 1800:  # 30 minutes
-                        return (
-                            True,
-                            f"Task {task.get('id', '?')[:8]} stuck for {int(elapsed)}s",
-                        )
+                        # phase_id/assigned_agent_id ride along for free --
+                        # both are already on every task dict get_tasks()
+                        # returns. Bare task IDs forced whoever answered
+                        # the escalation to go look up which phase/agent
+                        # was actually involved before they could act;
+                        # the caller (pipeline.py's escalation site) can
+                        # resolve these further into names and a live
+                        # output tail.
+                        phase_id = task.get("phase_id")
+                        agent_id = task.get("assigned_agent_id")
+                        detail = f"Task {task.get('id', '?')[:8]} stuck for {int(elapsed)}s"
+                        if phase_id:
+                            detail += f" (phase {phase_id[:8]}"
+                            detail += f", agent {agent_id[:8]})" if agent_id else ")"
+                        elif agent_id:
+                            detail += f" (agent {agent_id[:8]})"
+                        return (True, detail)
                 except Exception:
                     pass
 
