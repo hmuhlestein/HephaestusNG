@@ -2889,6 +2889,112 @@ class TestWorkflowFeatureReport:
         assert "phase0 synopsis" in resp.text
 
 
+class TestFeatureRecordReport:
+    """GET /feature-records/{feature_id}/report -- regression: this
+    endpoint's candidate paths didn't include .hephaestus/doc_review/,
+    where doc_review actually writes feature_report.html, even though
+    the workflow-scoped sibling endpoint (get_workflow_feature_report)
+    and design_status_service.py's has_report computation both already
+    checked it. A real feature's review modal correctly showed the
+    Report tab (feature.has_report was True) but its iframe 404'd,
+    rendering blank -- the report existed and was reachable directly via
+    /workflows/{id}/feature_report, just not through this endpoint."""
+
+    def _create_project(self, client, dirs):
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={"name": "Test", "base_dir": str(dirs["project_dir"])},
+        )
+        return resp.json()["id"]
+
+    def test_serves_report_from_doc_review_subdirectory(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, Feature, Workflow, get_db
+
+        worktree_dir = dirs["project_dir"] / "worktree"
+        (worktree_dir / ".hephaestus" / "doc_review").mkdir(parents=True)
+        (worktree_dir / ".hephaestus" / "doc_review" / "feature_report.html").write_text(
+            "<html>doc_review report</html>"
+        )
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-feat-report",
+                    project_id=pid,
+                    filename="d.md",
+                    name="D",
+                )
+            )
+            db.add(
+                Workflow(
+                    id="wf-feat-report",
+                    name="autopilot",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    project_id=pid,
+                    working_directory=str(worktree_dir),
+                )
+            )
+            db.add(
+                Feature(
+                    id="feat-report-test",
+                    design_id="des-feat-report",
+                    workflow_id="wf-feat-report",
+                    feature_key="commit-resolution",
+                    name="Commit Resolution",
+                    scope="Test scope",
+                    status="paused",
+                )
+            )
+
+        resp = client.get("/api/autopilot/feature-records/feat-report-test/report")
+        assert resp.status_code == 200
+        assert "doc_review report" in resp.text
+
+    def test_404_when_no_report_anywhere(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, Feature, Workflow, get_db
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-feat-no-report",
+                    project_id=pid,
+                    filename="d.md",
+                    name="D",
+                )
+            )
+            db.add(
+                Workflow(
+                    id="wf-feat-no-report",
+                    name="autopilot",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    project_id=pid,
+                    working_directory=None,
+                )
+            )
+            db.add(
+                Feature(
+                    id="feat-no-report-test",
+                    design_id="des-feat-no-report",
+                    workflow_id="wf-feat-no-report",
+                    feature_key="no-report",
+                    name="No Report",
+                    scope="Test scope",
+                    status="paused",
+                )
+            )
+
+        resp = client.get("/api/autopilot/feature-records/feat-no-report-test/report")
+        assert resp.status_code == 404
+
+
 class TestPhase0PseudoFeatureReviewFields:
     """The synthetic "Feature Architect" row get_project_design_status
     inserts for Phase 0 -- must report review_pending/has_report/status

@@ -351,13 +351,26 @@ async def get_feature_record_report(feature_id: str):
 
     report_path = None
     if base_dir:
-        candidate = Path(base_dir) / CONTEXT_DIR_NAME / "feature_report.html"
-        if candidate.is_file():
-            report_path = candidate
-        else:
-            candidate = Path(base_dir) / "docs" / "feature_report.html"
+        # Same candidate order as get_workflow_feature_report -- doc_review
+        # is where the report actually lands (doc_review phase writes it
+        # there), checked before the flatter fallback locations. This
+        # endpoint's own docstring claims it already serves "the same
+        # underlying file" as that one; it didn't -- a real feature's
+        # report 404s here whenever it's still in the live worktree,
+        # even though feature.has_report (design_status_service.py,
+        # which does check doc_review/) correctly reports it exists,
+        # so the review modal's iframe renders blank instead of the report.
+        for rel in (
+            Path(CONTEXT_DIR_NAME) / "doc_review" / "feature_report.html",
+            Path(CONTEXT_DIR_NAME) / "feature_review" / "feature_report.html",
+            Path(CONTEXT_DIR_NAME) / "feature_report.html",
+            Path("docs") / "doc_review" / "feature_report.html",
+            Path("docs") / "feature_report.html",
+        ):
+            candidate = Path(base_dir) / rel
             if candidate.is_file():
                 report_path = candidate
+                break
     if report_path is None:
         # Worktree may have been cleaned up after completion — check the
         # archived features gallery (copied there by PhaseManager before
