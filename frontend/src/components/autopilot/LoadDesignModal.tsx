@@ -36,7 +36,7 @@ interface RemoteEntry {
 const TYPE_COPY = {
   feature: {
     icon: Sparkles,
-    title: 'Feature Spec',
+    title: 'Design Spec',
     subtitle: 'Select or drag & drop design documents describing what to build.',
     accent: 'blue',
     defaultFolder: 'docs/spec',
@@ -88,6 +88,14 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
   // just no longer the primary composition surface.
   const [textContent, setTextContent] = useState('');
   const [textFilename, setTextFilename] = useState('bug-report.md');
+  // Set only immediately after a remote-select fills the filename/textarea
+  // pair, and cleared the instant either one is edited -- see the two
+  // onChange handlers below. Lets addMutation tell the backend "this is
+  // still exactly the file the user picked, unedited," so re-submitting
+  // an existing design back to itself can be treated as a no-op instead
+  // of a name collision -- without also swallowing a genuine collision
+  // from a freshly typed/uploaded name.
+  const [textSourceRemotePath, setTextSourceRemotePath] = useState<string | null>(null);
   const remoteRequestId = useRef(0);
 
   const copy = workflowType ? TYPE_COPY[workflowType] : null;
@@ -106,6 +114,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
       setBrowsingForFolder(false);
       setTextContent('');
       setTextFilename('bug-report.md');
+      setTextSourceRemotePath(null);
     } else {
       const defaultFolder = copy?.defaultFolder ?? '';
       setDestinationFolder(defaultFolder);
@@ -126,7 +135,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
   }, [open, workflowType]);
 
   // Close on Escape, same as the existing backdrop-click-to-close --
-  // applies to both the Feature Spec and Bug Spec flows (and the plain
+  // applies to both the Design Spec and Bug Spec flows (and the plain
   // "Load Design" entry point), since this one component renders all of
   // them via workflowType.
   useEffect(() => {
@@ -137,6 +146,14 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [open, onClose]);
+
+  // Destination Folder picker: keep the textbox above in sync with
+  // whatever folder is currently being browsed, not just on "Create" --
+  // otherwise navigating into (or back out of) a folder silently left the
+  // textbox showing a stale path until the user explicitly confirmed.
+  useEffect(() => {
+    if (browsingForFolder) setDestinationFolder(remotePath);
+  }, [remotePath, browsingForFolder]);
 
   const loadRemoteDir = async (path: string) => {
     if (!projectId) return;
@@ -176,8 +193,27 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
     setAddingRemotePath(entry.path);
     try {
       const file = await apiService.getAutopilotProjectFileContent(projectId, entry.path);
-      setLoadedFiles(prev => [...prev, { name: file.name, content: file.content, size: file.size_bytes, remotePath: entry.path }]);
-      setAddedRemotePaths(prev => new Set(prev).add(entry.path));
+      // Selecting a file implies where it already lives -- update the
+      // Destination Folder textbox above to match, instead of leaving it
+      // at whatever it was (typically the workflow's default), so the
+      // file doesn't silently get re-saved somewhere else on submit.
+      if (workflowType) {
+        const lastSlash = entry.path.lastIndexOf('/');
+        setDestinationFolder(lastSlash === -1 ? '' : entry.path.slice(0, lastSlash));
+      }
+      // Bug Spec: same single filename/textarea preview "Select Local
+      // File" already fills (see handleFileSelect) -- replace its content
+      // instead of appending to loadedFiles, which rendered as an inert
+      // "1 file(s) selected" row with no visible content, inconsistent
+      // with the local-file path.
+      if (workflowType === 'bugfix') {
+        setTextFilename(file.name);
+        setTextContent(file.content);
+        setTextSourceRemotePath(entry.path);
+      } else {
+        setLoadedFiles(prev => [...prev, { name: file.name, content: file.content, size: file.size_bytes, remotePath: entry.path }]);
+        setAddedRemotePaths(prev => new Set(prev).add(entry.path));
+      }
     } catch (error: any) {
       toast.error(error?.response?.data?.detail || 'Failed to load file');
     } finally {
@@ -216,7 +252,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
         const destination = workflowType
           ? destinationFolder
           : (file.remotePath ? 'queue' : 'docs');
-        const result = await apiService.addAutopilotProjectDesign(projectId, name, file.content, ext, destination, workflowType ?? null);
+        const result = await apiService.addAutopilotProjectDesign(projectId, name, file.content, ext, destination, workflowType ?? null, file.remotePath ?? null);
         results.push(result);
       }
       return results;
@@ -249,6 +285,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
       reader.onload = (event) => {
         setTextFilename(file.name);
         setTextContent((event.target?.result as string) ?? '');
+        setTextSourceRemotePath(null);
       };
       reader.readAsText(file);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -332,6 +369,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
           name: textFilename.trim() || 'bug-report.md',
           content: textContent,
           size: new Blob([textContent]).size,
+          remotePath: textSourceRemotePath ?? undefined,
         }]
       : [];
   const filesToSubmit = [...typedFile, ...loadedFiles];
@@ -392,7 +430,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                       className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 flex-shrink-0"
                     >
                       <FolderInput className="w-3.5 h-3.5" />
-                      Select or Create
+                      Create
                     </button>
                   </div>
                   <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
@@ -410,7 +448,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                     <input
                       type="text"
                       value={textFilename}
-                      onChange={(e) => setTextFilename(e.target.value)}
+                      onChange={(e) => { setTextFilename(e.target.value); setTextSourceRemotePath(null); }}
                       placeholder="bug-report.md"
                       className={`w-48 px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-xs font-mono bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 ${accent.ring}`}
                     />
@@ -421,7 +459,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                   </div>
                   <textarea
                     value={textContent}
-                    onChange={(e) => setTextContent(e.target.value)}
+                    onChange={(e) => { setTextContent(e.target.value); setTextSourceRemotePath(null); }}
                     placeholder="Describe what's broken: steps to reproduce, expected vs. actual behavior, error messages…"
                     rows={6}
                     className={`w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 ${accent.ring}`}

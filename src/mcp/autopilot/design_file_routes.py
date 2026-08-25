@@ -72,6 +72,16 @@ class DesignAddRequest(BaseModel):
     # docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md). None (default): auto-detect via
     # detect_workflow_type() at add-time.
     workflow_type: Optional[str] = None
+    # Set only when this content was just read from an existing project
+    # file via the remote browser (LoadDesignModal's handleSelectRemoteFile)
+    # and hasn't been retyped/edited since -- the project-relative path of
+    # that file. Lets the "already exists" check below recognize "this is
+    # the exact file the user picked, re-submitting it back to itself" and
+    # return it as-is instead of erroring, WITHOUT silently swallowing a
+    # genuine name collision against some unrelated existing design (e.g.
+    # a freshly typed/uploaded name that happens to match one already in
+    # the queue) -- that case is still a real error.
+    source_remote_path: Optional[str] = None
 
 
 def _get_design_queue_dir(project_base: str) -> Path:
@@ -237,8 +247,47 @@ async def add_project_design(
     filename = f"{safe_name}{ext}"
     filepath = _safe_path(str(design_dir), filename)
 
+    # Selecting an already-queued design via the remote file browser (see
+    # LoadDesignModal's handleSelectRemoteFile) re-submits that exact file
+    # right back to its own folder -- previously a guaranteed 409 on every
+    # such re-submission. Only short-circuit when source_remote_path names
+    # THIS SAME file (the client clears it the moment the name/content is
+    # edited) -- a name collision with some unrelated existing design (a
+    # freshly typed/uploaded name that just happens to match) must still
+    # be a real 409, not silently swallowed. If a design row already
+    # exists for this project + filename, this is that same design;
+    # return it as-is instead of erroring or inserting a duplicate row
+    # (which would double its ordinal position in the queue). The file on
+    # disk is left untouched either way -- nothing upstream has actually
+    # changed it.
+    reselected_same_file = (
+        req.source_remote_path is not None
+        and Path(req.source_remote_path).name == filename
+    )
     if filepath.exists():
-        raise HTTPException(409, f"Design '{filename}' already exists")
+        if not reselected_same_file:
+            raise HTTPException(409, f"Design '{filename}' already exists")
+        with get_db() as db:
+            existing = (
+                db.query(AutopilotDesign)
+                .filter_by(project_id=project_id, filename=filename)
+                .first()
+            )
+            if existing:
+                return DesignItem(
+                    id=existing.id,
+                    filename=existing.filename,
+                    name=existing.name,
+                    ordinal=existing.ordinal,
+                    size_bytes=existing.size_bytes,
+                    extension=existing.extension,
+                    modified_at=existing.modified_at.isoformat() if existing.modified_at else None,
+                    workflow_type=existing.workflow_type,
+                )
+        # File exists on disk but no matching design row (e.g. left over
+        # from a previous run outside this endpoint) -- fall through and
+        # register it normally; overwriting with the same content it was
+        # just read from is a no-op.
 
     filepath.write_text(req.content)
     stat = filepath.stat()

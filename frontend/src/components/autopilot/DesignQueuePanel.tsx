@@ -350,7 +350,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
         </Button>
         <Button onClick={() => onAddDesign('feature')} className="bg-blue-600 hover:bg-blue-700 text-white">
           <Sparkles className="w-4 h-4 mr-1" />
-          Feature Spec
+          Design Spec
         </Button>
         <Button onClick={() => onAddDesign('bugfix')} className="bg-amber-600 hover:bg-amber-700 text-white">
           <Bug className="w-4 h-4 mr-1" />
@@ -435,7 +435,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           </p>
           <Button onClick={() => onAddDesign('feature')} className="bg-blue-600 hover:bg-blue-700 text-white">
             <Sparkles className="w-4 h-4 mr-1" />
-            Feature Spec
+            Design Spec
           </Button>
           <Button onClick={() => onAddDesign('bugfix')} className="bg-amber-600 hover:bg-amber-700 text-white">
             <Bug className="w-4 h-4 mr-1" />
