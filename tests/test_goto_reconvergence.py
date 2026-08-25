@@ -487,6 +487,39 @@ def test_start_next_phase_returns_true_for_completed(db_session, db_manager, pha
     )
 
 
+def test_start_next_phase_skipped_when_workflow_paused_by_review(
+    db_session, db_manager, phase_ids
+):
+    """Regression, observed live: a review-paused workflow (every phase
+    already "completed", paused_by="review" awaiting human approval) must
+    not advance when a later completion event (e.g. a goto back from
+    deploy) fires _start_next_phase again. "paused" alone is in the
+    allowed-status set (a plain pause resumes later without losing its
+    place), but paused_by must still block advancement regardless -- feature
+    e6437c3f kept cycling qa_validation -> ... -> deploy every ~6 minutes
+    for hours after being review-paused, because nothing here checked
+    paused_by."""
+    from src.phases.phase_manager import PhaseManager
+
+    pm = PhaseManager(db_manager)
+
+    db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[1]).update(
+        {"status": "completed"}
+    )
+    workflow = db_session.query(Workflow).first()
+    workflow.status = "paused"
+    workflow.paused_by = "review"
+    db_session.commit()
+
+    result = pm._start_next_phase(db_session, phase_ids[1])
+
+    assert result is None
+    assert (
+        db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[2]).first().status
+        == "pending"
+    )
+
+
 def test_start_next_phase_resets_task_creation_claim(db_session, db_manager, phase_ids):
     """Regression: task_creation_claimed_at is a one-time-per-cycle lock
     (see orchestrator.py's _claim_phase_task_creation), not permanent.
