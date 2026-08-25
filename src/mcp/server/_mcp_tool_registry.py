@@ -735,7 +735,10 @@ MCP_TOOL_REGISTRY: List[MCPToolSpec] = [
                     "description": (
                         "The COMPLETE new value for that field, not a diff or a "
                         "description of the change. A string, except for "
-                        "done_definitions which is a list of strings."
+                        "done_definitions, which is a list of strings -- pass it "
+                        "either as a real JSON array or as a JSON/YAML-encoded "
+                        "string (e.g. '[\"item one\", \"item two\"]'); both are "
+                        "parsed the same way."
                     ),
                 },
                 "current_value": {
