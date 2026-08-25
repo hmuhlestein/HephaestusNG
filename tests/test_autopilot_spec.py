@@ -635,6 +635,24 @@ class TestReviewFindingsHistory:
         history = S.get_review_findings_history("wf-history-4", "architectural_review")
         assert len(history[0]["summary"]) == 500
 
+    def test_warning_count_round_trips(self, db_manager):
+        S.record_review_finding(
+            "wf-history-5", "adversarial_review", blocker_count=0,
+            summary="2 pre-existing warnings", warning_count=2,
+        )
+        history = S.get_review_findings_history("wf-history-5", "adversarial_review")
+        assert history[0]["warning_count"] == 2
+
+    def test_warning_count_defaults_to_zero(self, db_manager):
+        """Every caller but adversarial_review's own leaves warning_count
+        unset -- must not error, and must not look like a real 0-warning run
+        that a future comparison could mistake for meaningful history."""
+        S.record_review_finding(
+            "wf-history-6", "architectural_review", blocker_count=1, summary="B-1"
+        )
+        history = S.get_review_findings_history("wf-history-6", "architectural_review")
+        assert history[0]["warning_count"] == 0
+
 
 class TestResolveDeclaredOutputPath:
     """Phase 2 §4.9: resolve_declared_output_path is the single search

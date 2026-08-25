@@ -180,7 +180,8 @@ def _phase_currently_passes(
 
     try:
         phase_output = build_phase_output(
-            phase_name, Path(working_directory), skip_independent_verification=True
+            phase_name, Path(working_directory), skip_independent_verification=True,
+            workflow_id=workflow_id,
         )
 
         pm = PhaseManager(get_default_db_manager())

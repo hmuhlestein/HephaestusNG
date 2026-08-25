@@ -2271,6 +2271,7 @@ def _fire_phase_transition(
                     phase_output = build_phase_output(
                         phase_name, Path(wf.working_directory),
                         skip_independent_verification=True,
+                        workflow_id=workflow_id,
                     )
 
         # Mark phase complete and get engine decision
@@ -3363,7 +3364,10 @@ async def fire_spec_gate_if_ready(session, task) -> None:
         loop = asyncio.get_event_loop()
         phase_output = await loop.run_in_executor(
             None,
-            functools.partial(build_phase_output, phase.name, Path(wf.working_directory)),
+            functools.partial(
+                build_phase_output, phase.name, Path(wf.working_directory),
+                workflow_id=task.workflow_id,
+            ),
         )
         logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
         pm = PhaseManager(get_default_db_manager(), workflow_id=task.workflow_id)

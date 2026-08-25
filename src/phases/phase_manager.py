@@ -1065,6 +1065,7 @@ class PhaseManager:
                         phase.name,
                         blocker_count=gate_finding_count(phase.name, result),
                         summary=report_text or (result or {}).get("reason", ""),
+                        warning_count=int((result or {}).get("warning_count") or 0),
                     )
 
                 consume_gate_artifacts(phase.name, workflow.working_directory)
