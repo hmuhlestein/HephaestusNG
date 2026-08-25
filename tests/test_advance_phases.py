@@ -1227,6 +1227,56 @@ class TestCaseInProgressComplete:
             assert task.status == "in_progress"
             assert task.assigned_agent_id == "fresh-agent"
 
+    def test_stale_cycle_start_later_than_own_earliest_task_is_corrected(
+        self, db_manager, sample_workflow
+    ):
+        """Regression: PhaseExecution.started_at and a task's created_at
+        are stamped by independent utc_now() calls that can land a few
+        milliseconds apart in either order. When started_at ends up LATER
+        than the phase's own earliest real task, every cycle-scoped query
+        in this function (Task.created_at >= cycle_start) silently
+        excludes that task forever -- the "genuinely empty cycle"
+        fresh-dispatch fallback further down correctly refuses to fire
+        (its own unscoped total_cycle_tasks check still sees the task),
+        but nothing else ever looks at it again either. Observed live:
+        workflow 81b399c7's product_requirements phase stuck 18+ minutes
+        this way, with a real pending task sitting right there the whole
+        time. started_at must self-correct back to the earliest task."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
+        from src.core.database import Task as _Task
+
+        task_created_at = datetime.utcnow()
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-pending-1",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                    created_at=task_created_at,
+                )
+            )
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            execution.started_at = task_created_at + timedelta(milliseconds=14)
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(id="exec-1").first()
+            assert execution.started_at <= task_created_at
+            # The task itself is untouched by this correction alone -- it's
+            # not yet a minute stale, so _mark_orphaned_and_stale_pending_
+            # tasks_failed correctly leaves it "pending" here. What matters
+            # is it's now visible to every cycle-scoped check from here on,
+            # instead of permanently invisible.
+            task = session.query(_Task).filter_by(id="task-pending-1").first()
+            assert task.status == "pending"
+
     def test_pending_task_pointing_at_working_agent_is_left_alone(
         self, db_manager, sample_workflow
     ):

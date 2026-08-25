@@ -445,12 +445,16 @@ class TestDetectHardError:
 
 
 class TestDetectImpasse:
-    def test_no_agents_pending_tasks(self):
+    def test_no_agents_pending_tasks_is_not_an_impasse(self):
+        """No active agents + pending tasks is left to the background
+        self-heal (phase_transitions.py's orphaned-pending-task recovery),
+        not escalated to a human -- see detect_impasse's own comment for
+        why this specific check was removed (false positives against a
+        self-heal that already handles it)."""
         from src.autopilot.orchestrator.policy import detect_impasse
 
         found, msg = detect_impasse([], [{"id": "t1"}], [], elapsed_seconds=700)
-        assert found is True
-        assert "No active agents" in msg
+        assert found is False
 
     def test_grace_period(self):
         from src.autopilot.orchestrator.policy import detect_impasse

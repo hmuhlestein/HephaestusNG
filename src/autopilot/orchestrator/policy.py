@@ -466,31 +466,18 @@ def detect_impasse(agents: list, pending_tasks: list, in_progress_tasks: list, e
     """
     active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
 
-    # If there are pending tasks but no active agents, something is wrong
-    # But give a generous grace period for agents to start. The monitor needs
-    # time to: detect phase completion → evaluate with engine → create task →
-    # spawn agent. With 60s polling intervals, this can take 2-3 minutes.
-    # Also check if any pending task was recently created (monitor is working on it).
-    if not active_agents and pending_tasks and elapsed_seconds > 600:
-        # Check if any pending task was created recently (within last 120s)
-        # If so, the monitor is likely about to spawn an agent — don't trigger impasse.
-        from datetime import datetime, timezone
-
-        now = datetime.now(timezone.utc)
-        for task in pending_tasks:
-            created = task.get("created_at")
-            if created:
-                try:
-                    created_dt = datetime.fromisoformat(created)
-                    if created_dt.tzinfo is None:
-                        created_dt = created_dt.replace(tzinfo=timezone.utc)
-                    task_age = (now - created_dt).total_seconds()
-                    if task_age < 120:
-                        # Task was just created — monitor is likely spawning agent
-                        return False, ""
-                except Exception:
-                    pass
-        return True, f"No active agents but {len(pending_tasks)} tasks pending"
+    # "No active agents but pending tasks" is deliberately NOT treated as an
+    # impasse: it's the background phase-advancement sweep's own job to
+    # notice a pending task with no agent and redispatch it (see
+    # _mark_orphaned_and_stale_pending_tasks_failed / _retry_failed_tasks in
+    # phase_transitions.py), and this human-escalation path had no way to
+    # tell "the self-heal just hasn't gotten to it yet" apart from "it's
+    # genuinely wedged" other than a fixed elapsed-time guess -- every
+    # threshold tried here still produced false-positive human escalations
+    # for cases the self-heal already recovers from on its own. A stuck
+    # pending task with a real, unrecoverable cause (e.g. permanently
+    # exhausted retries) surfaces instead via _retry_exhausted_paused_
+    # workflows' terminal "system-exhausted" state, which does escalate.
 
     # Check for agents that have been working too long without progress
     # (assigned tasks that never move to done)
