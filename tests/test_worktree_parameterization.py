@@ -17,8 +17,8 @@ from src.core.database import (
     AutopilotProject,
     Base,
     ProjectRepo,
-    resolve_repo_path,
 )
+from src.core.repo_resolution import RepoNotFoundError, resolve_repo_path
 from src.core.worktree_manager import WorktreeManager
 
 
@@ -146,13 +146,17 @@ class TestResolveRepoPath:
         result = resolve_repo_path(db_session, "proj-test-123", None)
         assert result == Path("/tmp/test-project")
 
-    def test_resolve_with_invalid_repo_id_falls_back(self, db_session, sample_project):
-        """Test that invalid repo_id falls back to primary."""
-        result = resolve_repo_path(db_session, "proj-test-123", "repo-nonexistent")
-        assert result == Path("/tmp/test-project")
+    def test_resolve_with_invalid_repo_id_raises(self, db_session, sample_project):
+        """An explicit but unknown repo_id must never silently fall back to
+        primary -- that would target git operations at the wrong tree with
+        no visible error (see RepoNotFoundError's docstring)."""
+        with pytest.raises(RepoNotFoundError):
+            resolve_repo_path(db_session, "proj-test-123", "repo-nonexistent")
 
-    def test_resolve_falls_back_to_any_repo_when_no_primary(self, db_session):
-        """Test fallback when no primary repo is marked."""
+    def test_resolve_falls_back_to_base_dir_when_no_primary_marked(self, db_session):
+        """repo_id=None with ProjectRepo rows present but none marked primary
+        falls back to AutopilotProject.base_dir, not to an arbitrary row --
+        the primary flag is the only signal for "the" repo (REQ-06)."""
         project = AutopilotProject(
             id="proj-no-primary",
             name="No Primary",
@@ -171,7 +175,7 @@ class TestResolveRepoPath:
         db_session.commit()
 
         result = resolve_repo_path(db_session, "proj-no-primary", None)
-        assert result == Path("/tmp/only-repo")
+        assert result == Path("/tmp/no-primary")
 
     def test_resolve_falls_back_to_base_dir_when_no_repos(self, db_session):
         """Test fallback to AutopilotProject.base_dir when no ProjectRepo rows exist."""
@@ -188,7 +192,7 @@ class TestResolveRepoPath:
 
     def test_resolve_raises_on_unknown_project(self, db_session):
         """Test that unknown project_id raises ValueError."""
-        with pytest.raises(ValueError, match="No repo path found"):
+        with pytest.raises(ValueError, match="does not resolve to a project"):
             resolve_repo_path(db_session, "proj-nonexistent", None)
 
 
@@ -398,8 +402,6 @@ class TestWorktreeManagerParameterization:
 
     def test_resolve_repo_path_with_project_repo(self, db_session):
         """WARNING-2: Verify resolve_repo_path uses ProjectRepo table."""
-        from src.core.database import resolve_repo_path
-
         project = AutopilotProject(
             id="proj-multi",
             name="Multi Repo",
@@ -421,9 +423,9 @@ class TestWorktreeManagerParameterization:
         result = resolve_repo_path(db_session, "proj-multi", "repo-frontend")
         assert result == Path("/tmp/frontend")
 
-        # Should fall back to primary (none set, so any repo)
+        # No primary marked -> falls back to base_dir, not an arbitrary repo
         result = resolve_repo_path(db_session, "proj-multi", None)
-        assert result == Path("/tmp/frontend")
+        assert result == Path("/tmp/base")
 
     def test_explicit_repo_path_ignores_config_override(self, temp_repo, monkeypatch):
         """BLOCKER-1: Verify explicit repo_path ignores global worktree_base_path.
