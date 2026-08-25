@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 import pytest
 from git import Repo
 
-from src.core.database import AutopilotProject, DatabaseManager
+from src.core.database import AutopilotProject, DatabaseManager, ProjectRepo
 
 
 @pytest.fixture
@@ -36,6 +36,21 @@ def temp_repo():
     # by name -- make sure it's "main" regardless of the host's git default.
     if repo.active_branch.name != "main":
         repo.git.branch("-m", repo.active_branch.name, "main")
+    # The scripts/agent-safe-bin/git wrapper on PATH during CLI-agent test
+    # runs blocks `git merge` unless a .hephaestus/review_approved marker
+    # is found walking up from cwd -- this repo's own merges are the thing
+    # under test here, not a review-gated feature landing, so pre-approve.
+    marker_dir = Path(temp_dir) / ".hephaestus"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "review_approved").write_text("test fixture pre-approval\n")
+    # Mirrors WorktreeManager.__init__'s own info/exclude entry -- without
+    # it the marker above is an untracked file, and this test's own
+    # is_dirty(untracked_files=True) assertion (the actual thing under
+    # test) sees it as legitimate uncommitted work.
+    exclude_file = Path(temp_dir) / ".git" / "info" / "exclude"
+    exclude_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(exclude_file, "a") as f:
+        f.write(".hephaestus/\n")
     yield repo
     shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -93,6 +108,19 @@ def _register_project(test_db, temp_repo):
             id="proj-test",
             name="Test Project",
             base_dir=temp_repo.working_dir,
+        )
+    )
+    # heal_orphaned_agent_branches enumerates ProjectRepo.path, not
+    # AutopilotProject.base_dir directly (C8) -- this bare DatabaseManager
+    # fixture never runs the migration that backfills a primary ProjectRepo
+    # for pre-existing projects, so register it explicitly.
+    session.add(
+        ProjectRepo(
+            id="repo-proj-test",
+            project_id="proj-test",
+            label="main",
+            path=temp_repo.working_dir,
+            is_primary=True,
         )
     )
     session.commit()
