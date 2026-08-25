@@ -342,6 +342,10 @@ def sweep_completed_workflow_worktrees(logger: "OrchestratorLogger") -> int:
     return removed
 
 
+# See _heal_orphaned_branches_for_project's own comment at its cap check.
+_BRANCH_HEAL_MAX_CANDIDATES_PER_TICK = 20
+
+
 def heal_orphaned_agent_branches(logger: "OrchestratorLogger") -> int:
     """Detect and heal agent-branch worktrees left behind by a stranded
     agent: real, committed work that never got merged because the task
@@ -439,10 +443,33 @@ def _heal_orphaned_branches_for_project(project_dir: Path, cfg, logger: "Orchest
             checked_out_branches[branch_name] = current_path
 
     healed = 0
+    candidates_checked = 0
     for head in repo.heads:
         name = head.name
         if not name.startswith(prefix) or name == base_branch or name in checked_out_branches:
             continue
+
+        # Cap subprocess-invoking work per tick: each candidate costs 1-2
+        # real `git` subprocess spawns (fork+exec), and this self-hosting
+        # repo alone has accumulated 100+ agent- branches over its
+        # lifetime. Unbounded, a single sweep tick (the first one after
+        # every restart, since _LAST_BRANCH_HEAL_TIME resets to None) could
+        # burn through 200+ spawns back-to-back on this thread -- enough
+        # sustained GIL/CPU contention to make the main event loop
+        # intermittently unable to service even a zero-I/O /health check
+        # for extended stretches. Confirmed live: exactly this pattern kept
+        # a freshly-restarted backend flaky for minutes. Branches past the
+        # cap are simply picked up on the NEXT tick (_BRANCH_HEAL_INTERVAL_
+        # SECONDS already throttles how often this whole function runs at
+        # all), not lost -- this only spreads the same total work out
+        # instead of doing it all in one burst.
+        if candidates_checked >= _BRANCH_HEAL_MAX_CANDIDATES_PER_TICK:
+            logger.debug(
+                f"[BRANCH-HEAL] {project_dir}: hit the {_BRANCH_HEAL_MAX_CANDIDATES_PER_TICK}-candidate "
+                f"per-tick cap -- remaining branches will be checked on a later sweep"
+            )
+            break
+        candidates_checked += 1
 
         try:
             ahead = repo.git.rev_list(f"{base_branch}..{name}", "--count").strip()

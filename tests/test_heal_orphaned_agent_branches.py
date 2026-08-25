@@ -283,3 +283,56 @@ class TestHealOrphanedAgentBranches:
 
         assert healed == 0
         assert "agent-empty" in _branch_names(temp_repo)
+
+    def test_caps_git_subprocess_work_per_tick(self, test_db, temp_repo, config, monkeypatch):
+        """Regression, found live: this self-hosting repo alone had
+        accumulated 129 agent- branches. Each real candidate costs 1-2 git
+        subprocess spawns (fork+exec) -- unbounded, the first sweep tick
+        after every restart (branch healing's own interval throttle resets
+        on every process restart) could burn through 200+ spawns back to
+        back on this thread, enough sustained GIL/CPU contention to make
+        the main event loop intermittently unable to service even a
+        zero-I/O /health check for minutes. Caps subprocess-invoking work
+        per call; anything past the cap is picked up on a later tick, not
+        lost.
+
+        Asserts on the number of `git rev-list` invocations rather than the
+        `healed` count -- healing branch N advances base_branch's tip, so
+        every branch created (as all of these are) from the same original
+        base commit stops being a clean fast-forward once an earlier one in
+        the same pass has already merged, regardless of the cap. The cap
+        itself governs how many candidates get subprocess-checked at all,
+        which is the actual regression."""
+        import git.cmd
+        import src.autopilot.orchestrator.worktree_integration as _wi
+        from src.autopilot.orchestrator.worktree_integration import heal_orphaned_agent_branches
+
+        monkeypatch.setattr(_wi, "_BRANCH_HEAL_MAX_CANDIDATES_PER_TICK", 3)
+        _register_project(test_db, temp_repo)
+
+        for i in range(5):
+            branch = f"agent-cap{i}"
+            wt_path = Path(tempfile.mkdtemp())
+            temp_repo.git.branch(branch)
+            temp_repo.git.worktree("add", str(wt_path), branch)
+            (wt_path / f"fix{i}.py").write_text(f"# fix {i}\n")
+            wt_repo = Repo(wt_path)
+            wt_repo.git.add("-A")
+            wt_repo.git.commit("-m", f"phase(security_review): fix {i}")
+            temp_repo.git.worktree("remove", str(wt_path), "--force")
+
+        rev_list_calls = []
+        real_execute = git.cmd.Git.execute
+
+        def counting_execute(self, command, *args, **kwargs):
+            if "rev-list" in command:
+                rev_list_calls.append(command)
+            return real_execute(self, command, *args, **kwargs)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(git.cmd.Git, "execute", counting_execute)
+            heal_orphaned_agent_branches(MagicMock())
+
+        # 5 orphaned candidates exist; only the first 3 (the monkeypatched
+        # cap) get a rev-list check at all.
+        assert len(rev_list_calls) == 3
