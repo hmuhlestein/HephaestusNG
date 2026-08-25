@@ -4,13 +4,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-
-
-from src.core.database import (
-    Workflow,
-    get_db,
-)
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from src.autopilot.orchestrator.engine_client import (
     get_agents,
@@ -20,8 +14,12 @@ from src.autopilot.orchestrator.engine_client import (
 from src.autopilot.orchestrator.phase_transitions import (
     _retry_failed_tasks,
 )
-
-from typing import TYPE_CHECKING
+from src.core.database import (
+    Feature,
+    Workflow,
+    get_db,
+)
+from src.core.repo_resolution import RepoNotFoundError, resolve_repo_path
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -232,14 +230,35 @@ def _fail_tasks_with_terminated_agents(workflow_id: str, logger: "OrchestratorLo
 
 
 def _resolve_recovery_project_path(workflow_id: str) -> Optional[str]:
-    """The workflow's working directory, falling back to $PROJECT_PATH."""
+    """The workflow's working directory, falling back to the workflow's own
+    repo (via resolve_repo_path) rather than the single global $PROJECT_PATH
+    env var (REQ-01). In a multi-repo project, $PROJECT_PATH points at
+    whatever repo happens to be configured globally -- not necessarily the
+    repo this workflow's feature actually belongs to, so blindly falling
+    back to it risks running recovery's destructive git commands
+    (_clean_stale_repo_state) against the wrong repo's working tree.
+
+    repo_id is discovered via Workflow.feature_id -> Feature.repo_id; a
+    workflow with no feature (design-phase workflows) or a feature with no
+    repo_id resolves to the project's primary ProjectRepo, matching prior
+    single-repo behavior unchanged (REQ-06).
+    """
     try:
         with get_db() as _db:
             _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
             if _wf and _wf.working_directory and Path(_wf.working_directory).exists():
                 return _wf.working_directory
+            if _wf and _wf.project_id:
+                repo_id = None
+                if _wf.feature_id:
+                    feature = _db.query(Feature).filter_by(id=_wf.feature_id).first()
+                    repo_id = feature.repo_id if feature else None
+                try:
+                    return str(resolve_repo_path(_db, _wf.project_id, repo_id))
+                except (RepoNotFoundError, ValueError) as e:
+                    logger.warning(f"[RECOVERY] could not resolve repo path for workflow {workflow_id[:8]}: {e}")
     except Exception:
-        pass
+        logger.exception(f"[RECOVERY] failed to resolve recovery project path for workflow {workflow_id[:8]}")
     return os.getenv("PROJECT_PATH")
 
 

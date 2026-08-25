@@ -490,6 +490,11 @@ class Terminator:
         bypassing the AgentBranch/agent_worktrees machinery entirely. Best-
         effort: logs and returns on any failure rather than blocking
         termination on it.
+
+        Already repo-scoped (REQ-03, des-c7b9 recovery/cleanup threading):
+        Workflow.working_directory is populated at launch time from the same
+        resolve_repo_path()-resolved project_path, so this is correct for a
+        multi-repo project without any further repo_id threading here.
         """
         if not task_id:
             return
