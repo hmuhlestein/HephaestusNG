@@ -107,9 +107,7 @@ def _resolve_dedup_phase_id(agent_id: str, request: CreateTaskRequest) -> Option
     return dedup_phase_id
 
 
-def _check_duplicate_active_task_for_phase(
-    request: CreateTaskRequest, dedup_phase_id: Optional[str]
-) -> Optional[CreateTaskResponse]:
+def _check_duplicate_active_task_for_phase(request: CreateTaskRequest, dedup_phase_id: Optional[str]) -> Optional[CreateTaskResponse]:
     """Content-aware dedup: if the phase already has a near-identical active
     task, return the existing task's response so the caller can short-circuit
     instead of creating a duplicate. Returns None if no dedup match (or no
@@ -352,6 +350,7 @@ async def _resolve_phase_and_enrich(request: CreateTaskRequest, agent_id: str) -
         done_definition=request.done_definition,
         phase_context_str=phase_context_str,
         requesting_agent_id=agent_id,
+        workflow_id=workflow_id,
     )
 
     return {
@@ -364,9 +363,7 @@ async def _resolve_phase_and_enrich(request: CreateTaskRequest, agent_id: str) -
     }
 
 
-def _apply_enrichment_to_task(
-    task_id: str, request: CreateTaskRequest, phase_id: Optional[str], workflow_id: Optional[str], enriched_task: dict
-) -> Optional[dict]:
+def _apply_enrichment_to_task(task_id: str, request: CreateTaskRequest, phase_id: Optional[str], workflow_id: Optional[str], enriched_task: dict) -> Optional[dict]:
     """Write enriched fields back to the task row, inheriting phase
     validation if enabled. Returns the task_data dict later steps need, or
     None if the task row is gone (log + let caller stop)."""
@@ -513,9 +510,7 @@ def _has_unmet_dependencies(depends_on) -> bool:
     session = server_state.db_manager.get_session()
     try:
         for dep_id in depends_on:
-            dep_status = (
-                session.query(Task.status).filter_by(id=dep_id).first()
-            )
+            dep_status = session.query(Task.status).filter_by(id=dep_id).first()
             if dep_status is None or dep_status[0] != "done":
                 return True
         return False
@@ -556,11 +551,7 @@ async def _dispatch_ready_dependents(completed_task_id: str, workflow_id: Option
 
     session = server_state.db_manager.get_session()
     try:
-        candidates = (
-            session.query(Task)
-            .filter(Task.workflow_id == workflow_id, Task.status == "pending")
-            .all()
-        )
+        candidates = session.query(Task).filter(Task.workflow_id == workflow_id, Task.status == "pending").all()
         # Snapshot the fields each candidate needs before the session that
         # produced them closes -- dispatch below does its own session work
         # per candidate and must not hold this one open across it.
@@ -593,10 +584,7 @@ async def _dispatch_ready_dependents(completed_task_id: str, workflow_id: Option
             # each is an independent task that will surface its own error
             # (or sit pending for the next promotion event / manual retry)
             # rather than silently blocking unrelated dependents.
-            logger.error(
-                f"[DEPENDENCY-PROMOTE] Failed to dispatch {task_data['id']} "
-                f"after its dependencies cleared: {e}"
-            )
+            logger.error(f"[DEPENDENCY-PROMOTE] Failed to dispatch {task_data['id']} after its dependencies cleared: {e}")
 
 
 async def _dispatch_or_queue_promoted_task(task_data: dict) -> None:
@@ -634,6 +622,7 @@ async def _dispatch_or_queue_promoted_task(task_data: dict) -> None:
     dispatch_context = await TaskEnrichmentService.gather_dispatch_context(
         raw_description=task_data["raw_description"],
         requesting_agent_id=agent_id,
+        workflow_id=task_data["workflow_id"],
     )
 
     enriched_task = {"enriched_description": task_data["enriched_description"]}
@@ -655,9 +644,7 @@ async def _dispatch_or_queue_promoted_task(task_data: dict) -> None:
         return  # queued by the per-cli/model concurrency gate instead
 
     await _finalize_task_dispatch(task_id, task_data, agent, enriched_task)
-    logger.info(
-        f"[DEPENDENCY-PROMOTE] Dispatched {task_id} -- its dependencies just cleared"
-    )
+    logger.info(f"[DEPENDENCY-PROMOTE] Dispatched {task_id} -- its dependencies just cleared")
 
 
 async def _dispatch_agent_for_task(
@@ -710,14 +697,9 @@ async def _dispatch_agent_for_task(
     _reservation = None
     if qs.cli_model_concurrency_limits:
         with qs.db_manager.session_scope() as _qsession:
-            _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(
-                _qsession, temp_task
-            )
+            _cli_override, _model_override, _reservation, _saturated = qs.resolve_cli_model_dispatch(_qsession, temp_task)
         if _saturated:
-            logger.info(
-                f"Task {task_id}'s combo is already at its concurrency limit with no "
-                "usable fallback -- queueing instead of dispatching"
-            )
+            logger.info(f"Task {task_id}'s combo is already at its concurrency limit with no usable fallback -- queueing instead of dispatching")
             qs.enqueue_task(task_id)
             queue_status = qs.get_queue_status()
             from src.core.database import resolve_project_for_workflow
@@ -736,10 +718,7 @@ async def _dispatch_agent_for_task(
             )
             return None
         if _cli_override:
-            logger.info(
-                f"Task {task_id}'s primary combo at its concurrency limit -- "
-                f"dispatching on fallback model {_model_override} instead"
-            )
+            logger.info(f"Task {task_id}'s primary combo at its concurrency limit -- dispatching on fallback model {_model_override} instead")
             dispatch_context["phase_cli_tool"] = _cli_override
             dispatch_context["phase_cli_model"] = _model_override
 
@@ -801,10 +780,6 @@ async def _handle_task_processing_failure(task_id: str, error: Exception) -> Non
             session.commit()
     except Exception as recovery_error:
         session.rollback()
-        logger.error(
-            f"Failed to mark task {task_id} as failed during recovery: {recovery_error}"
-        )
+        logger.error(f"Failed to mark task {task_id} as failed during recovery: {recovery_error}")
     finally:
         session.close()
-
-

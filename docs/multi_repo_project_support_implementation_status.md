@@ -109,14 +109,68 @@ Full suite (`pytest tests/ -q`): 3435 passed, 51 skipped, 4 known failed
 (the documented `test_task_deduplication_flow.py` pre-existing issue,
 tracked separately from this feature).
 
+## Review Bounce — Unmet Requirements Fixed (this pass)
+
+Re-entered development after the architectural reviewer found that several
+C1-C10 pieces existed but were never actually wired to production call
+sites, so their behavior never reached agents/users despite the code
+technically existing:
+
+- `REQ-09`/`REQ-17` — `AgentDispatchService.resolve_task_project_context`
+  (repo-aware wrapper around `get_project_context`) had zero callers, and
+  the real dispatch site (`agent_dispatch_service.py:70`) called
+  `get_project_context()` bare, so the multi-repo section never reached an
+  agent prompt in production. Fixed by adding an optional `task` param to
+  `build_dispatch_context` that routes through
+  `resolve_task_project_context` when given, and threading `task=`
+  through all 4 real call sites (`task_admin_routes.py` x2,
+  `background_loops.py`, `lifecycle.py`). Also wired `workflow_id` into
+  the enrichment-time path (`TaskEnrichmentService.enrich` /
+  `gather_dispatch_context`) so the plain repo list (architect mode)
+  reaches the prompt even before a task exists to resolve `repo_id`
+  against. Stash-verified new tests in `test_agent_dispatch_service.py`.
+- `REQ-18` — writable-vs-read-only repo distinction: same root cause/fix
+  as REQ-17 (it rides through `resolve_task_project_context`, which
+  already implemented the WRITABLE/read-only split correctly — it just
+  had no caller).
+- `REQ-16` — `policy.py`'s `_resolve_recovery_project_path` fell back to
+  a single process-wide `$PROJECT_PATH` env var when a workflow had no
+  `working_directory`, ignoring which project/repo the workflow actually
+  belonged to — a real risk of `git reset --hard`/`git clean -fd` running
+  against an unrelated repo. Fixed to resolve via the workflow's
+  `project_id` + primary `ProjectRepo` first, env var only as the true
+  last resort (no project association at all). `terminator.py`'s
+  `_commit_wip_in_shared_worktree` assumed the workflow's single
+  `working_directory` was always the right repo for a task's WIP commit;
+  now checks the task's own `repo_id` (when set) against the resolved
+  repo path and skips the commit (logging why) on a mismatch, rather than
+  silently committing into what could be the wrong git tree. Both
+  stash-verified in new `test_policy_recovery_repo_awareness.py` /
+  `test_terminator_repo_awareness.py`.
+- `REQ-23` — `CommitDiffResponse` had no `repo_label` field, so
+  `GitDiffModal`'s repo-badge render branch (already present in the
+  frontend) was fed a field the backend never populated. Added
+  `repo_label: Optional[str]`, populated via `_resolve_repo_info_for_commit`
+  (already resolved path+label, previously only the path half was used).
+  Stash-verified in `test_commit_resolution_multi_repo.py`.
+- `REQ-24` — `ProjectSettingsModal` had no add/label-repo form, so
+  `apiService.addProjectRepo()` (already implemented) had zero call
+  sites. Added an inline add-repo form (label + path inputs) per project
+  row, wired to a new `addRepoMutation`. No frontend test harness exists
+  in this repo (no `test`/`vitest`/`jest` script, no existing test
+  files) — verified via `npm run type-check` (clean) instead of a
+  stash-verified test.
+
 ## Code Quality
 
 - `ruff check` / `ruff format --check`: clean on every file touched this
   pass (pre-existing lint debt in files outside this pass's scope was left
   alone per minimal-touch policy, and verified unchanged by this pass).
-- `mypy`: no new errors introduced; the two touched source files
-  (`feature_review_routes.py`, `lifecycle.py`) have the same pre-existing
-  error counts before and after (confirmed by diffing against the
-  pre-pass commit) — all stem from `Config`'s dynamic `setattr`-based
-  domain attributes, which mypy can't see statically, and a handful of
-  `Optional` server-state accessors elsewhere in `lifecycle.py`.
+- `mypy`: no new errors introduced. QA-bounce pass: `feature_review_routes.py`
+  and `lifecycle.py` have the same pre-existing error counts before/after.
+  Review-bounce pass (REQ-09/16/17/18/23/24): diffed all 9 touched source
+  files' mypy output against this pass's own starting commit — identical
+  error messages, only line numbers shifted from the inserted code (one
+  new `no-any-return` did appear from a new `return repo.path` line in
+  `policy.py`; fixed with an explicit `str()` cast rather than leaving it
+  as new debt).

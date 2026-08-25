@@ -80,17 +80,10 @@ class TaskEnrichmentService:
                 if len(matches) == 1:
                     return matches[0].id
                 if len(matches) > 1:
-                    logger.warning(
-                        f"resolve_phase_id: phase name {phase_id_raw!r} matched "
-                        f"{len(matches)} phases (workflow_id={resolved_workflow_id!r} "
-                        "did not narrow it to one) -- refusing to guess"
-                    )
+                    logger.warning(f"resolve_phase_id: phase name {phase_id_raw!r} matched {len(matches)} phases (workflow_id={resolved_workflow_id!r} did not narrow it to one) -- refusing to guess")
                     return None
 
-            logger.warning(
-                f"resolve_phase_id: {phase_id_raw!r} is neither a known Phase.id "
-                "nor a phase name resolvable in this workflow"
-            )
+            logger.warning(f"resolve_phase_id: {phase_id_raw!r} is neither a known Phase.id nor a phase name resolvable in this workflow")
             return None
         else:
             return server_state.phase_manager.get_phase_for_task(
@@ -129,6 +122,7 @@ class TaskEnrichmentService:
         raw_description: str,
         requesting_agent_id: str,
         phase_context_str: str = "",
+        workflow_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """The RAG-memory + project-context half of enrich(), split out so a
         task that was already enriched once (its enriched_description is
@@ -138,6 +132,11 @@ class TaskEnrichmentService:
         (see _create_task_steps._dispatch_ready_dependents). Re-running
         enrich_task there would rewrite an already-good description a second
         time for no benefit and a real LLM-call cost.
+
+        workflow_id: when given, project_context includes the multi-repo
+        section (REQ-09/17) scoped to that workflow's project -- repo_id
+        isn't known yet at enrichment time (the task doesn't exist), so
+        this is always architect-mode (plain repo list, no writable marker).
 
         Returns a dict with `context_memories` (list of RAG memory dicts)
         and `project_context` (str, with phase context appended).
@@ -154,7 +153,7 @@ class TaskEnrichmentService:
                 task_description=raw_description,
                 requesting_agent_id=requesting_agent_id,
             ),
-            server_state.agent_manager.get_project_context(),
+            server_state.agent_manager.get_project_context(workflow_id=workflow_id),
         )
         if phase_context_str:
             project_context = f"{project_context}\n\n{phase_context_str}"
@@ -167,6 +166,7 @@ class TaskEnrichmentService:
         done_definition: Optional[str],
         phase_context_str: str,
         requesting_agent_id: str,
+        workflow_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run the RAG + LLM enrichment pipeline for a task description.
 
@@ -179,9 +179,7 @@ class TaskEnrichmentService:
 
         server_state = get_app_state()
 
-        dispatch_context = await TaskEnrichmentService.gather_dispatch_context(
-            raw_description, requesting_agent_id, phase_context_str
-        )
+        dispatch_context = await TaskEnrichmentService.gather_dispatch_context(raw_description, requesting_agent_id, phase_context_str, workflow_id=workflow_id)
         context_memories = dispatch_context["context_memories"]
         project_context = dispatch_context["project_context"]
 
@@ -202,9 +200,7 @@ class TaskEnrichmentService:
                 "required_capabilities": ["general"],
                 "estimated_complexity": 5,
             }
-        TaskEnrichmentService._normalize_enriched_description(
-            enriched_task, raw_description
-        )
+        TaskEnrichmentService._normalize_enriched_description(enriched_task, raw_description)
 
         return {
             "enriched_task": enriched_task,

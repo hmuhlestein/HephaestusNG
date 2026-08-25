@@ -52,22 +52,31 @@ class AgentDispatchService:
         phase_id: Optional[str],
         requesting_agent_id: str = "system",
         explicit_working_directory: Optional[str] = None,
+        task: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Gather everything needed to create an agent for a task.
 
         explicit_working_directory takes precedence over the phase's
         working_directory (used by create_task, which honors an
         explicit request.cwd before falling back to the phase).
+
+        task: when given, project_context is resolved via
+        resolve_task_project_context (REQ-09/17/18) so the multi-repo
+        section (sibling repos, writable-vs-read-only) reaches the agent
+        prompt. Without it, falls back to the no-args call (no repo
+        awareness) -- unchanged from before repo awareness existed.
         """
         from src.core.app_context import get_app_state
 
         server_state = get_app_state()
 
+        project_context_coro = AgentDispatchService.resolve_task_project_context(task) if task is not None else server_state.agent_manager.get_project_context()
+
         # get_project_context() (DB reads) and retrieve_for_task() (embedding
         # + vector search) don't read each other's output -- the phase-context
         # merge below only needs project_context, and is itself synchronous.
         project_context, context_memories = await asyncio.gather(
-            server_state.agent_manager.get_project_context(),
+            project_context_coro,
             server_state.rag_system.retrieve_for_task(
                 task_description=task_description_for_rag,
                 requesting_agent_id=requesting_agent_id,

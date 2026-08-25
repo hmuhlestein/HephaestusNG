@@ -4,13 +4,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-
-
-from src.core.database import (
-    Workflow,
-    get_db,
-)
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from src.autopilot.orchestrator.engine_client import (
     get_agents,
@@ -20,8 +14,10 @@ from src.autopilot.orchestrator.engine_client import (
 from src.autopilot.orchestrator.phase_transitions import (
     _retry_failed_tasks,
 )
-
-from typing import TYPE_CHECKING
+from src.core.database import (
+    Workflow,
+    get_db,
+)
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -89,6 +85,7 @@ def _workflow_appears_abandoned(workflow_id: str) -> bool:
         # the "all tasks done ≠ all phases done" mistake has recurred
         # independently at least four times in this codebase's history.
         from src.core.status_derivation import derive_workflow_status
+
         with get_db() as db:
             derived = derive_workflow_status(db, workflow_id, write_back=False)
             if derived == "completed":
@@ -232,12 +229,28 @@ def _fail_tasks_with_terminated_agents(workflow_id: str, logger: "OrchestratorLo
 
 
 def _resolve_recovery_project_path(workflow_id: str) -> Optional[str]:
-    """The workflow's working directory, falling back to $PROJECT_PATH."""
+    """The workflow's working directory, falling back to its project's
+    primary repo path.
+
+    REQ-16: the old fallback (a single process-wide $PROJECT_PATH env var)
+    ignored which project this workflow belongs to entirely -- with more
+    than one project configured (or a multi-repo project), it could point
+    the destructive git ops below (reset --hard, clean -fd) at a repo
+    completely unrelated to this workflow. Resolve via the workflow's own
+    project_id + primary ProjectRepo instead; $PROJECT_PATH remains the
+    last resort only when the workflow has no project association at all.
+    """
     try:
         with get_db() as _db:
             _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
             if _wf and _wf.working_directory and Path(_wf.working_directory).exists():
                 return _wf.working_directory
+            if _wf and _wf.project_id:
+                from src.core.repo_resolution import resolve_primary_repo
+
+                repo = resolve_primary_repo(_db, _wf.project_id)
+                if repo and repo.path and Path(repo.path).exists():
+                    return str(repo.path)
     except Exception:
         pass
     return os.getenv("PROJECT_PATH")

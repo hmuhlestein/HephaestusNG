@@ -152,6 +152,7 @@ async def _resume_interrupted_workflows(
                             dispatch_context = await AgentDispatchService.build_dispatch_context(
                                 task_description_for_rag=t.enriched_description or t.raw_description,
                                 phase_id=t.phase_id,
+                                task=t,
                             )
                             agent = await AgentDispatchService.dispatch(
                                 task=t,

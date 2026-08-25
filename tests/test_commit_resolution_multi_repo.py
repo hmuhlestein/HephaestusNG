@@ -144,6 +144,82 @@ class TestDocStorageResolution:
             assert repo.is_primary is True
 
 
+class TestCommitDiffRepoLabel:
+    """REQ-23: the commit-diff endpoint must surface repo_label so the
+    frontend's GitDiffModal repo badge (which already renders it when
+    present) isn't dead code fed a field the backend never populates."""
+
+    async def test_commit_diff_response_includes_repo_label(self, tmp_path):
+        import git as git_module
+
+        from src.mcp.tickets_api import get_commit_diff_endpoint
+
+        repo_dir = tmp_path / "backend-repo"
+        repo_dir.mkdir()
+        repo = git_module.Repo.init(repo_dir)
+        repo.index.commit(
+            "initial commit",
+            author=git_module.Actor("t", "t@t.com"),
+            committer=git_module.Actor("t", "t@t.com"),
+        )
+        (repo_dir / "file.txt").write_text("hello")
+        repo.index.add(["file.txt"])
+        repo.index.commit(
+            "second commit",
+            author=git_module.Actor("t", "t@t.com"),
+            committer=git_module.Actor("t", "t@t.com"),
+        )
+        commit_sha = repo.head.commit.hexsha
+
+        with patch(
+            "src.mcp.tickets_api._resolve_repo_info_for_commit",
+            return_value=(str(repo_dir), "backend"),
+        ):
+            result = await get_commit_diff_endpoint(commit_sha, agent_id="ui-user")
+
+        assert result.repo_label == "backend"
+        assert result.success is True
+
+    async def test_commit_diff_response_repo_label_none_when_unresolved(self, tmp_path):
+        """Falls back to config.git.main_repo_path with no repo_label --
+        unchanged behavior for commits outside the ticket-linking flow."""
+        import git as git_module
+
+        from src.mcp.tickets_api import get_commit_diff_endpoint
+
+        repo_dir = tmp_path / "main-repo"
+        repo_dir.mkdir()
+        repo = git_module.Repo.init(repo_dir)
+        repo.index.commit(
+            "initial commit",
+            author=git_module.Actor("t", "t@t.com"),
+            committer=git_module.Actor("t", "t@t.com"),
+        )
+        (repo_dir / "file.txt").write_text("hello")
+        repo.index.add(["file.txt"])
+        repo.index.commit(
+            "second commit",
+            author=git_module.Actor("t", "t@t.com"),
+            committer=git_module.Actor("t", "t@t.com"),
+        )
+        commit_sha = repo.head.commit.hexsha
+
+        mock_config = MagicMock()
+        mock_config.git.main_repo_path = str(repo_dir)
+
+        with (
+            patch(
+                "src.mcp.tickets_api._resolve_repo_info_for_commit",
+                return_value=(None, None),
+            ),
+            patch("src.core.simple_config.get_config", return_value=mock_config),
+        ):
+            result = await get_commit_diff_endpoint(commit_sha, agent_id="ui-user")
+
+        assert result.repo_label is None
+        assert result.success is True
+
+
 class TestRecoveryRepoScoping:
     def test_enumerates_project_repos(self, engine):
         """C8/REQ-16: heal_orphaned_agent_branches scans all ProjectRepo paths."""

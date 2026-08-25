@@ -1121,6 +1121,7 @@ class CommitDiffResponse(BaseModel):
     total_deletions: int
     total_files: int
     files: List[FileDiff]
+    repo_label: Optional[str] = None
 
 
 @router.post("/approve", response_model=ApproveTicketResponse)
@@ -1290,7 +1291,7 @@ async def get_commit_diff_endpoint(
         # it's linked to -- falls back to the process-wide "active project"
         # singleton (today's behavior) when the commit isn't linked to any
         # ticket, e.g. commits made outside the ticket-linking flow.
-        main_repo_path = _resolve_repo_path_for_commit(commit_sha)
+        main_repo_path, repo_label = _resolve_repo_info_for_commit(commit_sha)
         if main_repo_path is None:
             config = get_config()
             main_repo_path = str(config.git.main_repo_path)
@@ -1406,6 +1407,7 @@ async def get_commit_diff_endpoint(
             total_deletions=total_deletions,
             total_files=len(files_data),
             files=files_data,
+            repo_label=repo_label,
         )
 
     except subprocess.CalledProcessError as e:

@@ -18,6 +18,7 @@ from src.mcp.server._shared import server_state
 
 logger = logging.getLogger("src.mcp.server.background_loops")
 
+
 async def process_queue(project_id: Optional[str] = None):
     """Process the next queued task by creating an agent for it.
 
@@ -66,6 +67,7 @@ async def process_queue(project_id: Optional[str] = None):
     loop = asyncio.get_event_loop()
 
     try:
+
         def _dequeue_and_resolve_phase_sync():
             # claim_next_queued_task does the capacity check, selection, and
             # dequeue atomically under one lock -- see its docstring (and
@@ -109,9 +111,7 @@ async def process_queue(project_id: Optional[str] = None):
         logger.info(f"[QUEUE_ENRICHMENT] Task {next_task.id} needs_enrichment={needs_enrichment}")
 
         if needs_enrichment:
-            phase_context_str, ctx_workflow_id = await loop.run_in_executor(
-                None, TaskEnrichmentService.get_phase_context_str, resolved_phase_id
-            )
+            phase_context_str, ctx_workflow_id = await loop.run_in_executor(None, TaskEnrichmentService.get_phase_context_str, resolved_phase_id)
             workflow_id = ctx_workflow_id or next_task.workflow_id
 
             enrichment_result = await TaskEnrichmentService.enrich(
@@ -119,6 +119,7 @@ async def process_queue(project_id: Optional[str] = None):
                 done_definition=next_task.done_definition,
                 phase_context_str=phase_context_str,
                 requesting_agent_id="system",
+                workflow_id=workflow_id,
             )
             enriched_task = enrichment_result["enriched_task"]
 
@@ -212,6 +213,7 @@ async def process_queue(project_id: Optional[str] = None):
                 task_description_for_rag=task_description_for_rag,
                 phase_id=task_for_agent.phase_id,
                 requesting_agent_id="system",
+                task=task_for_agent,
             )
 
         # QueueService.get_next_queued_task set this when the phase's
@@ -291,12 +293,7 @@ async def process_queue(project_id: Optional[str] = None):
                 server_state.queue_service.enqueue_task(dequeued_task_id)
                 logger.info(f"Requeued task {dequeued_task_id} after failed dispatch")
             except Exception as requeue_error:
-                logger.error(
-                    f"Failed to requeue task {dequeued_task_id} after failed "
-                    f"dispatch -- it is now stranded in 'assigned' with no "
-                    f"agent: {requeue_error}"
-                )
-
+                logger.error(f"Failed to requeue task {dequeued_task_id} after failed dispatch -- it is now stranded in 'assigned' with no agent: {requeue_error}")
 
 
 # FIX #11: Register queue processor with app_context so services can
@@ -306,9 +303,7 @@ from src.core.app_context import set_queue_processor as _set_queue_processor  # 
 _set_queue_processor(process_queue)
 
 
-async def terminate_agents_and_process_queue(
-    agent_manager, agent_ids: List[str], project_id: Optional[str] = None
-) -> None:
+async def terminate_agents_and_process_queue(agent_manager, agent_ids: List[str], project_id: Optional[str] = None) -> None:
     """Terminate one or more agents, then advance the queue once.
 
     Consolidates the 4 near-identical "terminate + advance queue" closures
@@ -343,16 +338,11 @@ async def background_queue_processor():
             def _get_active_project_ids_sync():
                 session = server_state.db_manager.get_session()
                 try:
-                    return [
-                        p.id
-                        for p in session.query(AutopilotProject).filter_by(is_active=True).all()
-                    ]
+                    return [p.id for p in session.query(AutopilotProject).filter_by(is_active=True).all()]
                 finally:
                     session.close()
 
-            active_project_ids = await asyncio.get_event_loop().run_in_executor(
-                None, _get_active_project_ids_sync
-            )
+            active_project_ids = await asyncio.get_event_loop().run_in_executor(None, _get_active_project_ids_sync)
 
             if not active_project_ids:
                 queue_status = server_state.queue_service.get_queue_status()
@@ -367,10 +357,7 @@ async def background_queue_processor():
                     queue_status = server_state.queue_service.get_queue_status(proj_id)
                     queued_count = queue_status.get("queued_tasks_count", 0)
                     if queued_count > 0:
-                        logger.info(
-                            f"[BACKGROUND_QUEUE] Found {queued_count} queued task(s) for "
-                            f"project {proj_id[:8]}, processing queue..."
-                        )
+                        logger.info(f"[BACKGROUND_QUEUE] Found {queued_count} queued task(s) for project {proj_id[:8]}, processing queue...")
                         await process_queue(proj_id)
                     else:
                         logger.debug(f"[BACKGROUND_QUEUE] No queued tasks for project {proj_id[:8]}, skipping")
@@ -391,6 +378,7 @@ async def background_queue_processor():
             pass
 
     logger.info("Background queue processor stopped")
+
 
 async def background_phase_advancement_sweep():
     """Background task that re-drives phase advancement for every active
@@ -460,9 +448,11 @@ async def background_phase_advancement_sweep():
 
     logger.info("Background phase advancement sweep stopped")
 
+
 _LAST_BRANCH_HEAL_TIME: Optional[datetime] = None
 
 _BRANCH_HEAL_INTERVAL_SECONDS = 900  # 15 minutes
+
 
 def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     """Synchronous body of one background_phase_advancement_sweep tick --
@@ -554,9 +544,8 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         # from OTHER, non-active projects that are constantly failing and
         # retrying, starving the ones currently in use.
         from src.core.database import AutopilotProject
-        active_proj_ids = [
-            p.id for p in session.query(AutopilotProject).filter_by(is_active=True).all()
-        ]
+
+        active_proj_ids = [p.id for p in session.query(AutopilotProject).filter_by(is_active=True).all()]
         query = session.query(Workflow.id, Workflow.status).filter(Workflow.status.in_(["active", "paused"]))
         if active_proj_ids:
             query = query.filter(Workflow.project_id.in_(active_proj_ids))
@@ -592,6 +581,7 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         # still have orphaned tasks (assigned to terminated agents) that
         # were never cleaned up while active.
         from src.core.log_context import set_log_context
+
         set_log_context(workflow=wf_id)
         try:
             _clean_stale_assigned_tasks(wf_id, sweep_logger)
@@ -617,6 +607,7 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
             # if this check races a workflow's poll loop just starting up,
             # only one of the two callers actually runs _advance_phases.
             from src.autopilot.orchestrator import _is_workflow_monitored
+
             if not _is_workflow_monitored(wf_id):
                 _try_advance_phases(wf_id, sweep_logger)
         except Exception as e:

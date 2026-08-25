@@ -66,6 +66,9 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [editingBudget, setEditingBudget] = useState<string | null>(null);
   const [budgetValue, setBudgetValue] = useState('');
+  const [addingRepoFor, setAddingRepoFor] = useState<string | null>(null);
+  const [newRepoLabel, setNewRepoLabel] = useState('');
+  const [newRepoPath, setNewRepoPath] = useState('');
 
   const { data: projects, isLoading } = useQuery({
     queryKey: ['projects'],
@@ -147,6 +150,30 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
 
   const handleDelete = (projectId: string) => {
     deleteMutation.mutate(projectId);
+  };
+
+  // REQ-24: add/label a sibling repo on a multi-repo project.
+  const addRepoMutation = useMutation({
+    mutationFn: ({ projectId, label, path }: { projectId: string; label: string; path: string }) =>
+      apiService.addProjectRepo(projectId, label, path),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      toast.success('Repo added');
+      setAddingRepoFor(null);
+      setNewRepoLabel('');
+      setNewRepoPath('');
+    },
+    onError: (error: any) => {
+      toast.error(error?.response?.data?.detail || 'Failed to add repo');
+    },
+  });
+
+  const handleAddRepo = (projectId: string) => {
+    if (!newRepoLabel.trim() || !newRepoPath.trim()) {
+      toast.error('Label and path are required');
+      return;
+    }
+    addRepoMutation.mutate({ projectId, label: newRepoLabel.trim(), path: newRepoPath.trim() });
   };
 
   const inputClass = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent text-sm bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500";
@@ -368,6 +395,51 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                                 </span>
                               ))}
                             </div>
+                          )}
+                          {/* REQ-24: add/label a sibling repo */}
+                          {addingRepoFor === project.id ? (
+                            <div className="mt-2 flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="text"
+                                value={newRepoLabel}
+                                onChange={(e) => setNewRepoLabel(e.target.value)}
+                                placeholder="label (e.g. backend)"
+                                className="w-32 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
+                                autoFocus
+                              />
+                              <input
+                                type="text"
+                                value={newRepoPath}
+                                onChange={(e) => setNewRepoPath(e.target.value)}
+                                placeholder="/absolute/path"
+                                className="w-48 px-2 py-1 text-xs font-mono border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-violet-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleAddRepo(project.id);
+                                  if (e.key === 'Escape') { setAddingRepoFor(null); setNewRepoLabel(''); setNewRepoPath(''); }
+                                }}
+                              />
+                              <button
+                                onClick={() => handleAddRepo(project.id)}
+                                disabled={addRepoMutation.isPending}
+                                className="px-2 py-1 text-xs bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-50"
+                              >
+                                {addRepoMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Add'}
+                              </button>
+                              <button
+                                onClick={() => { setAddingRepoFor(null); setNewRepoLabel(''); setNewRepoPath(''); }}
+                                className="px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setAddingRepoFor(project.id); setNewRepoLabel(''); setNewRepoPath(''); }}
+                              className="mt-1.5 flex items-center text-xs text-violet-600 dark:text-violet-400 hover:text-violet-700 dark:hover:text-violet-300"
+                            >
+                              <Plus className="w-3 h-3 mr-1" />
+                              Add repo
+                            </button>
                           )}
                         </div>
                       </div>
