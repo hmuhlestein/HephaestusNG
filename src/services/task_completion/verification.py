@@ -192,7 +192,21 @@ def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]
                     found_path = candidate
                     break
         if found_path is None:
-            missing.append(declared_output)
+            # Show the task-id-suffixed name this task was actually
+            # expected to write (suffixed_output_name is checked FIRST by
+            # resolve_declared_output_path above), not the bare declared
+            # name -- otherwise the rejection message reads identically
+            # whether the agent wrote nothing at all or wrote a real
+            # report under the wrong id (e.g. a stale id carried over from
+            # a dropped/retried complete_my_task call), and neither the
+            # agent nor a human debugging it can tell which happened.
+            # Same scoping as the wrong_name check below: a declared name
+            # with its own subdirectory or template placeholder was never
+            # meant to carry this suffix.
+            if "/" not in declared_output and "<" not in declared_output:
+                missing.append(f"{suffixed_output_name(declared_output, task.id)} (bare name: {declared_output})")
+            else:
+                missing.append(declared_output)
             continue
 
         # Existence alone isn't enough for a declared .md (OKF) output: a
