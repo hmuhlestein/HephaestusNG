@@ -1745,6 +1745,87 @@ async def request_ticket_clarification(
         return f"❌ Error requesting clarification: {str(e)}"
 
 
+# ==================== PROMPT PROPOSAL TOOLS ====================
+
+
+@mcp.tool(name="propose_prompt_change")
+async def propose_prompt_change(
+    phase_name: str,
+    field: str,
+    proposed_value: str,
+    rationale: str,
+    current_value: str = None,
+    evidence: str = None,
+    workflow_definition: str = "autopilot",
+    workflow_id: str = None,
+    proposing_phase: str = None,
+    agent_id: str = None,
+) -> str:
+    """File a prompt-rewrite proposal for human review in the autopilot
+    Improvements tab. Changes NOTHING on its own -- only on approval is the
+    phase YAML written and committed.
+
+    Args:
+        phase_name: The phase whose prompt should change (e.g. "architecture_design")
+        field: One of "description", "done_definitions", "additional_notes" -- no other field is editable
+        proposed_value: The COMPLETE new value for that field, not a diff or a description of the change
+        rationale: Why, citing what actually went wrong in THIS run -- required
+        current_value: The value you read, verbatim, from phase_prompts/
+        evidence: Quoted tmux lines or artifact text backing the rationale
+        workflow_definition: Which workflow.yaml this phase belongs to (default: autopilot)
+        workflow_id: Your workflow ID
+        proposing_phase: Your own phase name (e.g. "forensics_analysis")
+        agent_id: Your agent ID
+
+    Rules the API enforces: only description/done_definitions/additional_notes
+    are proposable (spec_gate, outputs, thresholds and everything in
+    workflow.yaml are off limits); you may not propose changes to your own
+    phase's prompt. A rejection returns success=false with a reason -- note it
+    in your report and move on, do not retry with a reworded proposal.
+    """
+    import logging
+    import os
+
+    logger = logging.getLogger(__name__)
+
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    workflow_id = workflow_id or os.environ.get("HEPHAESTUS_WORKFLOW_ID")
+
+    payload = {
+        "phase_name": phase_name,
+        "field": field,
+        "proposed_value": proposed_value,
+        "rationale": rationale,
+        "evidence": evidence,
+        "quoted_current_value": current_value,
+        "workflow_definition": workflow_definition,
+        "workflow_id": workflow_id,
+        "proposing_phase": proposing_phase,
+        "created_by_agent_id": agent_id,
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{HEPHAESTUS_URL}/api/autopilot/prompt_proposals",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=10.0,
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                proposal_id = result.get("proposal", {}).get("id", "unknown")
+                logger.info(f"[MCP_PROMPT_PROPOSAL] Filed proposal {proposal_id} for {phase_name}.{field}")
+                return f"✅ Proposal filed (id: {proposal_id}) for {phase_name}.{field} -- awaiting human review in the Improvements tab."
+            else:
+                logger.warning(f"[MCP_PROMPT_PROPOSAL] Rejected: {response.status_code} - {response.text}")
+                return f"❌ Proposal rejected: {response.text}"
+    except Exception as e:
+        logger.error(f"[MCP_PROMPT_PROPOSAL] Exception: {e}", exc_info=True)
+        return f"❌ Error filing proposal: {str(e)}"
+
+
 # ==================== WORKFLOW MANAGEMENT TOOLS ====================
 
 
