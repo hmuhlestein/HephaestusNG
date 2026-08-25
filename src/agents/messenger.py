@@ -123,7 +123,7 @@ class AgentMessenger:
             # alive" -- without this, a message gets silently sent into a
             # dead pane instead of surfacing that the agent is gone.
             pane_dead = await loop.run_in_executor(
-                None, self.agent_manager.is_pane_dead, agent.tmux_session_name
+                None, self._agent_manager.is_pane_dead, agent.tmux_session_name
             )
             if pane_dead:
                 logger.warning(f"Tmux session {agent.tmux_session_name}'s pane is dead -- agent process has exited")

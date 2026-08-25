@@ -15,6 +15,12 @@ from src.core.database import Agent
 @pytest.fixture
 def messenger(db_manager):
     agent_manager = Mock()
+    # Regression (self.agent_manager -> self._agent_manager typo, e897c0b8):
+    # a bare Mock() auto-vivifies is_pane_dead() as a truthy MagicMock,
+    # which every existing test here would misread as "pane is dead" the
+    # moment the real check is actually reached -- default to alive so
+    # these tests exercise message delivery, not pane-dead detection.
+    agent_manager.is_pane_dead = Mock(return_value=False)
     return AgentMessenger(db_manager, agent_manager)
 
 
@@ -76,6 +82,44 @@ async def test_send_message_to_agent_offloads_blocking_calls(messenger, db_manag
         assert agent.pending_message_sent_at is not None
     finally:
         session.close()
+
+
+@pytest.mark.asyncio
+async def test_send_message_to_agent_skips_delivery_to_a_dead_pane(
+    messenger, db_manager, monkeypatch
+):
+    """Regression: this check was written as self.agent_manager.is_pane_dead
+    (e897c0b8), but AgentMessenger only ever stores self._agent_manager --
+    every real call raised AttributeError, silently caught somewhere
+    upstream and logged as "Failed to send message to agent", breaking
+    every nudge/steering/messaging path system-wide. This test exercises
+    the actual feature (remain-on-exit means has_session alone no longer
+    proves the agent process is alive) end-to-end, not just the attribute
+    name, so a regression fails loudly here instead of only in production
+    logs."""
+    _seed_agent(db_manager)
+
+    tmux_session = Mock(name="agent_agent-1")
+    tmux_session.name = "agent_agent-1"
+    pane = Mock()
+    tmux_session.attached_window.attached_pane = pane
+
+    messenger._agent_manager.tmux_server.has_session = Mock(return_value=True)
+    messenger._agent_manager.tmux_server.sessions = [tmux_session]
+    messenger._agent_manager.is_pane_dead = Mock(return_value=True)
+
+    fake_loop = MagicMock()
+
+    async def run_now(_executor, func, *args):
+        return func(*args)
+
+    fake_loop.run_in_executor = AsyncMock(side_effect=run_now)
+    monkeypatch.setattr("asyncio.get_event_loop", lambda: fake_loop)
+
+    await messenger.send_message_to_agent("agent-1", "hello agent")
+
+    messenger._agent_manager.is_pane_dead.assert_called_once_with("agent_agent-1")
+    pane.send_keys.assert_not_called()
 
 
 @pytest.mark.asyncio
