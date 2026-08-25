@@ -63,9 +63,6 @@ from src.autopilot.orchestrator.engine_client import (
 from src.autopilot.orchestrator.queue import (
     _assess_run_health,
 )
-from src.autopilot.orchestrator.worktree_integration import (
-    _run_ash_scan,
-)
 from src.autopilot.spec import build_phase_output, get_gated_phases
 from src.core.constants import (
     CONTEXT_DIR_NAME,
@@ -2577,13 +2574,12 @@ def _create_phase_task(
     try:
 
         with get_db() as db:
-            # Run the mandatory automated security scan ourselves before the
-            # agent starts (see _run_ash_scan) — don't rely on the agent to
-            # remember a "MANDATORY" prompt instruction.
-            if phase_name == "security_review":
-                wf = db.query(Workflow).filter_by(id=workflow_id).first()
-                if wf and wf.working_directory and Path(wf.working_directory).exists():
-                    _run_ash_scan(Path(wf.working_directory), logger)
+            # Note: security_review's mandatory ash scan used to run here,
+            # unconditionally before this function ever created a Task row
+            # -- moved to launch_pipeline.py's create_agent_for_task (see
+            # PRE_DISPATCH_BLOCKING_STEPS in worktree_integration.py) so the
+            # Task/Agent/tmux session exist and show real activity for the
+            # phase during the scan, instead of nothing at all.
 
             # forensics_analysis reviews every artifact + full tmux transcript
             # of a completed feature run to propose prompt/methodology fixes —

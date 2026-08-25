@@ -6,6 +6,7 @@ import logging
 import shlex
 import time
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
@@ -1726,6 +1727,55 @@ class LaunchPipeline:
                 phase_name=phase_name,
                 phase_order=phase_order,
             )
+
+            # Some phases have real, uninterruptible work that must finish
+            # before the agent's first prompt is meaningful (e.g.
+            # security_review's mandatory ash scan -- the agent is meant to
+            # read its results, which don't exist until the scan
+            # completes). The Agent/tmux session and Task row above already
+            # exist and show real, live activity for this phase -- unlike
+            # the old approach (running the scan before any of that
+            # existed at all), so a stuck/orphan detector reading Task.
+            # status or Agent.status sees exactly what's true: dispatched,
+            # working. dispatch_grace_until is the piece those detectors
+            # still need explicitly: elapsed-time-based ones (Task.created_at
+            # or Agent.launched_at) would otherwise judge this same window
+            # as staleness on their own, shorter defaults. See
+            # PRE_DISPATCH_BLOCKING_STEPS' own docstring and
+            # Task.dispatch_grace_until's in database.py.
+            from src.autopilot.orchestrator.worktree_integration import (
+                PRE_DISPATCH_BLOCKING_STEPS,
+            )
+
+            blocking_step = PRE_DISPATCH_BLOCKING_STEPS.get(phase_name)
+            if blocking_step and prep.branch_path:
+                # Don't start a multi-minute blocking step for a launch
+                # that's already doomed -- _deliver_initial_prompt_flow's
+                # OWN termination-race check further below would still
+                # catch a stop/pause that happened by now and correctly
+                # abort before delivering the prompt, but only after
+                # burning the full scan first. This is the cheap half of
+                # that gap: a stop/pause that lands WHILE the blocking step
+                # itself is running (it's a plain blocking subprocess call,
+                # no cancellation point mid-flight) still isn't caught
+                # until the step naturally finishes -- accepted tradeoff,
+                # not fixed here.
+                pre_scan_abort = await self._check_termination_race(
+                    agent_id, task.id, session_name,
+                    agent_id_to_return=launch.agent_id_to_return, task=task,
+                )
+                if pre_scan_abort is not None:
+                    return pre_scan_abort
+
+                blocking_fn, grace_seconds = blocking_step
+                with self.db_manager.session_scope() as grace_session:
+                    grace_task = grace_session.query(Task).filter_by(id=task.id).first()
+                    if grace_task:
+                        grace_task.dispatch_grace_until = utc_now() + timedelta(seconds=grace_seconds)
+                await asyncio.get_event_loop().run_in_executor(
+                    None, blocking_fn, Path(prep.branch_path), logger
+                )
+
             term_race_result = await _deliver_initial_prompt_flow(
                 self,
                 prep=prep,

@@ -2027,6 +2027,23 @@ class MechanicalRecoveryDetector:
             if elapsed < self.NEVER_STARTED_GRACE_SECONDS:
                 return False
 
+            # A phase with a registered pre-dispatch blocking step (see
+            # PRE_DISPATCH_BLOCKING_STEPS in worktree_integration.py, e.g.
+            # security_review's mandatory ash scan, up to several minutes)
+            # holds this agent's first real prompt until that step
+            # finishes -- last_activity legitimately doesn't move during
+            # it. Without this, NEVER_STARTED_GRACE_SECONDS (a few minutes)
+            # can be shorter than the blocking step's own worst case,
+            # terminating a genuinely-working agent mid-step.
+            with self.db_manager.session_scope() as grace_session:
+                grace_until = (
+                    grace_session.query(Task.dispatch_grace_until)
+                    .filter_by(id=agent.current_task_id)
+                    .scalar()
+                )
+            if grace_until and utc_now() < grace_until:
+                return False
+
             if not hasattr(self, "_never_started_handled"):
                 self._never_started_handled = set()
             if agent.id in self._never_started_handled:

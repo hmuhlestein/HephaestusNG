@@ -721,6 +721,20 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                 {statusReason}
               </p>
             )}
+            {status === 'active' && statusReason && (
+              // Same status_reason field as the failed case above, but a
+              // neutral tone here -- e.g. "Running mandatory automated
+              // security scan (ash) before starting the review agent…"
+              // while a phase's task-creation step is doing real,
+              // uninterruptible work (a blocking subprocess, up to
+              // several minutes) with no Task/agent row to show for it
+              // yet. Without this, that window looks identical to a
+              // genuinely stuck workflow -- nothing else here changes
+              // during it.
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate" title={statusReason}>
+                {statusReason}
+              </p>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
