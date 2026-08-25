@@ -259,6 +259,15 @@ class ProcessWatchdog:
         background thread holds connections, not a crash. A watchdog that
         only checks "is the PID alive" waits forever for a process that will
         never die on its own.
+
+        The per-check timeout below was raised from 15s to 30s after the
+        SAME contention (this time traced to a per-second cost-recalculation
+        cascade -- see src.core.cost_derivation's [COST-HEAL] logging --
+        hammering SQLite's single StaticPool connection while several
+        agents are active) was observed causing individual checks to fail
+        at 15s even though the backend was genuinely still alive and
+        working, not hung -- killing a busy-but-healthy backend on live
+        traffic rather than an actual deadlock.
         """
         pid = read_pid("backend")
         if not pid or not is_process_running(pid):
@@ -279,7 +288,7 @@ class ProcessWatchdog:
         try:
             import httpx
 
-            resp = httpx.get(f"http://127.0.0.1:{port}/health", timeout=15)
+            resp = httpx.get(f"http://127.0.0.1:{port}/health", timeout=30)
             healthy = resp.status_code == 200 and resp.json().get("status") == "healthy"
         except Exception:
             healthy = False
