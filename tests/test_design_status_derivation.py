@@ -31,11 +31,21 @@ def status_env(tmp_path, monkeypatch):
     it directly), plus a seeded AutopilotProject/AutopilotDesign pair."""
     db_path = tmp_path / "test.db"
     monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
-    # Mock authentication to always pass in tests (async function)
+
+    # Mock authentication to always pass in tests (async function).
+    # design_file_routes.py does `from ... import verify_agent_authentication`
+    # (a name import, not a module reference) -- patching _shared's copy only
+    # works if this is the very first time design_file_routes gets imported
+    # in the whole pytest session (its own `from` import captures whatever
+    # _shared.verify_agent_authentication is AT THAT MOMENT). Any earlier
+    # test file importing design_file_routes first binds the real function
+    # there permanently; patch the actual binding site instead so this
+    # doesn't depend on suite-wide import order.
     async def mock_verify_auth(agent_id):
         return True
+
     monkeypatch.setattr(
-        "src.mcp.server._shared.verify_agent_authentication",
+        "src.mcp.autopilot.design_file_routes.verify_agent_authentication",
         mock_verify_auth,
     )
 
@@ -52,9 +62,7 @@ def status_env(tmp_path, monkeypatch):
 
     session = manager.get_session()
     try:
-        session.add(
-            AutopilotProject(id=project_id, name="Test Project", base_dir=str(tmp_path))
-        )
+        session.add(AutopilotProject(id=project_id, name="Test Project", base_dir=str(tmp_path)))
         session.add(
             AutopilotDesign(
                 id=design_id,
@@ -76,9 +84,7 @@ def status_env(tmp_path, monkeypatch):
     }
 
 
-def _make_workflow(
-    session, design_id, filename, status="active", definition_id="autopilot", **overrides
-):
+def _make_workflow(session, design_id, filename, status="active", definition_id="autopilot", **overrides):
     wf_id = f"wf-{uuid.uuid4().hex[:8]}"
     wf = Workflow(
         id=wf_id,
@@ -153,9 +159,7 @@ class TestFeatureStatusDerivation:
         finally:
             session.close()
 
-        result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
-        )
+        result = _run(get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test"))
         feature = next(f for f in result["features"] if f["id"] == feat_id)
         assert feature["status"] == "completed"
 
@@ -190,17 +194,13 @@ class TestFeatureStatusDerivation:
         manager = status_env["manager"]
         session = manager.get_session()
         try:
-            wf_id = _make_workflow(
-                session, status_env["design_id"], status_env["filename"], status="paused"
-            )
+            wf_id = _make_workflow(session, status_env["design_id"], status_env["filename"], status="paused")
             feat_id = _make_feature(session, status_env["design_id"], wf_id, status="paused")
             _make_task(session, wf_id, "blocked")
         finally:
             session.close()
 
-        result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
-        )
+        result = _run(get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test"))
         feature = next(f for f in result["features"] if f["id"] == feat_id)
         assert feature["status"] == "paused"
 
@@ -223,9 +223,7 @@ class TestFeatureStatusDerivation:
         finally:
             session.close()
 
-        result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
-        )
+        result = _run(get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test"))
         feature = next(f for f in result["features"] if f["id"] == feat_id)
         assert feature["status"] == "active"
 
@@ -240,46 +238,30 @@ class TestDesignOverallStatusDerivation:
         manager = status_env["manager"]
         session = manager.get_session()
         try:
-            design = (
-                session.query(AutopilotDesign)
-                .filter_by(id=status_env["design_id"])
-                .first()
-            )
+            design = session.query(AutopilotDesign).filter_by(id=status_env["design_id"]).first()
             design.status = "active"
             session.commit()
-            _make_workflow(
-                session, status_env["design_id"], status_env["filename"], status="paused"
-            )
+            _make_workflow(session, status_env["design_id"], status_env["filename"], status="paused")
         finally:
             session.close()
 
-        result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
-        )
+        result = _run(get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test"))
         assert result["status"] == "paused"
 
     def test_active_workflow_beats_paused_design_status(self, status_env):
         manager = status_env["manager"]
         session = manager.get_session()
         try:
-            design = (
-                session.query(AutopilotDesign)
-                .filter_by(id=status_env["design_id"])
-                .first()
-            )
+            design = session.query(AutopilotDesign).filter_by(id=status_env["design_id"]).first()
             design.status = "active"
             session.commit()
-            _make_workflow(
-                session, status_env["design_id"], status_env["filename"], status="active"
-            )
+            _make_workflow(session, status_env["design_id"], status_env["filename"], status="active")
         finally:
             session.close()
 
         from src.mcp.autopilot.design_file_routes import get_project_design_status
 
-        result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
-        )
+        result = _run(get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test"))
         assert result["status"] == "active"
 
 
@@ -308,9 +290,7 @@ class TestPhase0FeatureArchitectVisibility:
         finally:
             session.close()
 
-        result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
-        )
+        result = _run(get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test"))
 
         phase0_entries = [f for f in result["features"] if f["name"] == "Feature Architect"]
         assert len(phase0_entries) == 1
@@ -335,16 +315,12 @@ class TestPhase0FeatureArchitectVisibility:
             )
             _make_task(session, phase0_wf_id, "done")
 
-            feature_wf_id = _make_workflow(
-                session, status_env["design_id"], status_env["filename"]
-            )
+            feature_wf_id = _make_workflow(session, status_env["design_id"], status_env["filename"])
             _make_feature(session, status_env["design_id"], feature_wf_id, status="active")
         finally:
             session.close()
 
-        result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
-        )
+        result = _run(get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test"))
 
         assert result["features"][0]["name"] == "Feature Architect"
 
@@ -365,9 +341,7 @@ class TestPhase0FeatureArchitectVisibility:
         finally:
             session.close()
 
-        result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
-        )
+        result = _run(get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test"))
 
         phase0_entry = next(f for f in result["features"] if f["name"] == "Feature Architect")
         assert phase0_entry["status"] == "completed"
@@ -385,9 +359,7 @@ class TestPhase0FeatureArchitectVisibility:
         finally:
             session.close()
 
-        result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
-        )
+        result = _run(get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test"))
 
         assert not any(f["name"] == "Feature Architect" for f in result["features"])
 
@@ -409,8 +381,6 @@ class TestPhase0FeatureArchitectVisibility:
         finally:
             session.close()
 
-        result = _run(
-            get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test")
-        )
+        result = _run(get_project_design_status(status_env["project_id"], status_env["filename"], agent_id="test"))
 
         assert not any(f["name"] == "Feature Architect" for f in result["features"])
