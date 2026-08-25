@@ -473,6 +473,32 @@ class WorktreeManager:
                     )
                 )
 
+            # Preserve anything genuinely dirty/untracked in the main repo
+            # BEFORE the destructive cleanup below -- reset --hard/clean -fd
+            # have no way to tell "leftover conflict debris from an old
+            # failed merge" apart from "someone's real uncommitted work
+            # sitting here" (a design spec added via the dashboard's New
+            # Feature/Report Bug flow, which writes into the primary
+            # checkout outside any worktree; another agent's in-progress
+            # edit; a human working directly in the checkout). Stashing
+            # first means the reset/clean below only ever has actual
+            # merge-conflict debris left to discard, and the stash pop
+            # after the merge (below) restores anything real. Previously
+            # this ran AFTER reset/clean, so it only ever caught leftovers
+            # from a FAILED reset/clean -- the common case (reset/clean
+            # succeeding) silently destroyed whatever was there first.
+            # Confirmed live: an untracked docs/bugfix/*.md spec a user had
+            # just added was deleted by this exact sequence, on an
+            # unrelated feature's routine merge.
+            if self.main_repo.is_dirty() or self.main_repo.untracked_files:
+                try:
+                    self.main_repo.git.stash(
+                        "push", "-u", "-m", f"Auto-stash before merge for {agent_id}"
+                    )
+                    stashed = True
+                except GitCommandError:
+                    pass
+
             # Ensure main repo is on the base branch and clean
             if self.main_repo.active_branch.name != target_branch:
                 self.main_repo.heads[target_branch].checkout()
@@ -483,21 +509,15 @@ class WorktreeManager:
             except GitCommandError:
                 pass  # No merge in progress
 
-            # Hard reset to clean state — previous failed merges leave conflicts
+            # Hard reset to clean state — previous failed merges leave
+            # conflicts. Whatever was genuinely dirty/untracked is already
+            # safe in the stash above, so this only ever discards actual
+            # merge-conflict debris.
             try:
                 self.main_repo.git.reset("--hard", "HEAD")
                 self.main_repo.git.clean("-fd")
             except GitCommandError:
                 pass
-
-            if self.main_repo.is_dirty() or self.main_repo.untracked_files:
-                try:
-                    self.main_repo.git.stash(
-                        "push", "-u", "-m", f"Auto-stash before merge for {agent_id}"
-                    )
-                    stashed = True
-                except GitCommandError:
-                    pass
 
             conflicts_resolved = []
             try:

@@ -13,6 +13,7 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
+from unittest.mock import MagicMock
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -131,6 +132,82 @@ def test_merge_on_success_brings_work_to_main(manager, test_db, temp_repo):
     main_files = temp_repo.git.ls_files().splitlines()
     assert "feature.py" in main_files
     assert not any(".hephaestus" in f for f in main_files)
+
+
+def test_merge_stashes_and_restores_uncommitted_main_repo_work(manager, test_db, temp_repo):
+    """Regression: uncommitted/untracked content sitting in the main repo
+    at merge time (e.g. a design spec a user just added via the dashboard,
+    or another agent's in-progress edit) must survive an unrelated agent's
+    merge, not be silently discarded by the pre-merge reset --hard/clean
+    -fd cleanup. Previously the dirty-check-and-stash ran AFTER that
+    cleanup, so it only ever caught leftovers the cleanup itself failed to
+    remove -- the common case (cleanup succeeding) destroyed real,
+    uncommitted work with no trace."""
+    agent_id = str(uuid.uuid4())
+    _make_agent(test_db, agent_id)
+    result = manager.create_agent_worktree(agent_id)
+    wt_path = Path(result["working_directory"])
+
+    # Untracked file sitting in the MAIN repo (not the agent's worktree) --
+    # e.g. docs/bugfix/my_spec.md added via the dashboard, uncommitted.
+    untracked = Path(temp_repo.working_dir) / "untracked_spec.md"
+    untracked.write_text("# my in-progress spec\n")
+    # Also a modification to an already-tracked file, uncommitted.
+    readme = Path(temp_repo.working_dir) / "README.md"
+    readme.write_text("# Test\nsome uncommitted edit\n")
+
+    (wt_path / "feature.py").write_text("print('hi')\n")
+    manager.commit_for_validation(agent_id, iteration=1)
+    merge = manager.merge_to_main(agent_id)
+
+    assert merge["status"] in ("success", "conflict_resolved")
+    assert untracked.exists(), "uncommitted untracked file in main repo was destroyed by merge cleanup"
+    assert untracked.read_text() == "# my in-progress spec\n"
+    assert "some uncommitted edit" in readme.read_text(), "uncommitted tracked-file edit was destroyed by merge cleanup"
+
+
+def test_final_design_merge_stashes_and_restores_uncommitted_main_repo_work(
+    test_db, temp_repo, monkeypatch
+):
+    """Same regression as test_merge_stashes_and_restores_uncommitted_main_
+    repo_work, for the OTHER call site with the identical unconditional
+    reset --hard/clean -fd sequence: _merge_design_branch_into_main, run
+    once a whole design's workflow completes and its shared branch merges
+    into main. This one had no stash protection at all before the fix."""
+    import src.core.simple_config
+    from src.autopilot.orchestrator.pipeline import _merge_design_branch_into_main
+
+    config = src.core.simple_config.Config()
+    config.git.main_repo_path = Path(temp_repo.working_dir)
+    config.paths.project_root = Path(temp_repo.working_dir)
+    config.git.base_branch = "main"
+    monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
+    monkeypatch.setattr("src.core.worktree_manager.get_config", lambda: config)
+
+    # A design branch with real work, ready to merge into main.
+    temp_repo.git.checkout("-b", "design-branch")
+    design_file = Path(temp_repo.working_dir) / "design_feature.py"
+    design_file.write_text("print('design work')\n")
+    temp_repo.index.add([str(design_file)])
+    temp_repo.index.commit("Design branch work")
+    temp_repo.git.checkout("main")
+
+    # Uncommitted/untracked content sitting in main at merge time.
+    untracked = Path(temp_repo.working_dir) / "untracked_spec.md"
+    untracked.write_text("# my in-progress spec\n")
+    readme = Path(temp_repo.working_dir) / "README.md"
+    readme.write_text("# Test\nsome uncommitted edit\n")
+
+    logger = MagicMock()
+    _merge_design_branch_into_main(
+        "design-branch", temp_repo.working_dir, logger, db_manager=test_db
+    )
+
+    main_files = temp_repo.git.ls_files().splitlines()
+    assert "design_feature.py" in main_files
+    assert untracked.exists(), "uncommitted untracked file in main repo was destroyed by final design merge"
+    assert untracked.read_text() == "# my in-progress spec\n"
+    assert "some uncommitted edit" in readme.read_text(), "uncommitted tracked-file edit was destroyed by final design merge"
 
 
 def test_discard_on_failure_leaves_main_clean(manager, test_db, temp_repo):
