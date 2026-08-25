@@ -602,7 +602,9 @@ class TestCaseStartFirstPhase:
             side_effect=_win_claim_but_race_a_task_in,
         ), patch(
             "src.autopilot.orchestrator.phase_transitions._create_phase_task", return_value=True
-        ) as mock_create:
+        ) as mock_create, patch(
+            "src.autopilot.orchestrator.phase_transitions._release_phase_task_creation_claim"
+        ) as mock_release:
             with db_manager.session_scope() as session:
                 result = _case_start_first_phase(
                     session, "wf-1", pending, in_progress, completed, logger
@@ -613,6 +615,7 @@ class TestCaseStartFirstPhase:
                     "existing==0 read and winning the claim"
                 )
                 mock_create.assert_not_called()
+                mock_release.assert_called_once_with(session, "phase-1")
 
 
 class TestCaseInProgressNoTasks:
@@ -672,6 +675,50 @@ class TestCaseInProgressNoTasks:
                 result = _case_in_progress_no_tasks(session, "wf-1", in_progress, logger)
                 assert result is True
                 mock_create.assert_called_once()
+
+    def test_releases_its_own_claim_when_a_task_raced_in(self, db_manager, sample_workflow):
+        """Same TOCTOU gap as _case_start_first_phase's own regression
+        (see test_reverifies_existing_right_before_creating): a task
+        committed by another claim-protected path in the window between
+        this function's initial task_count read and winning its own claim
+        must be caught by a fresh re-check -- but the fix must also
+        release the claim it just won when that happens, or it stays held
+        (up to CLAIM_STALE_TIMEOUT_SECONDS) for no reason, since
+        _create_phase_task's own success path (which normally releases
+        it) is never reached."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_no_tasks
+
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            in_progress = [{"phase": phase, "execution": execution, "status": "in_progress"}]
+
+        def _win_claim_but_race_a_task_in(*_args, **_kwargs):
+            with db_manager.session_scope() as race_session:
+                race_session.add(Task(
+                    id="task-raced-in",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                ))
+            return True
+
+        logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions._claim_phase_task_creation",
+            side_effect=_win_claim_but_race_a_task_in,
+        ), patch(
+            "src.autopilot.orchestrator.phase_transitions._create_phase_task", return_value=True
+        ) as mock_create, patch(
+            "src.autopilot.orchestrator.phase_transitions._release_phase_task_creation_claim"
+        ) as mock_release:
+            with db_manager.session_scope() as session:
+                result = _case_in_progress_no_tasks(session, "wf-1", in_progress, logger)
+                assert result is None
+                mock_create.assert_not_called()
+                mock_release.assert_called_once_with(session, "phase-1")
 
 
 class TestMaybeRetryFailedTasks:
@@ -1734,6 +1781,53 @@ class TestCaseInProgressComplete:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.status == "in_progress"
 
+    def test_empty_cycle_dispatch_releases_its_own_claim_when_a_task_raced_in(
+        self, db_manager, sample_workflow
+    ):
+        """Same TOCTOU gap as _case_start_first_phase's own regression
+        (see test_reverifies_existing_right_before_creating), for the
+        "in_progress but no tasks within its own cycle (stale started_at?)"
+        empty-cycle dispatch: a task committed by another claim-protected
+        path in the window between the total_cycle_tasks read and winning
+        the claim must be caught by a fresh re-check, releasing the claim
+        it just won rather than leaving it held for no reason."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
+
+        cycle_start = datetime.utcnow()
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.started_at = cycle_start
+
+        def _win_claim_but_race_a_task_in(*_args, **_kwargs):
+            with db_manager.session_scope() as race_session:
+                race_session.add(Task(
+                    id="task-raced-in",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                    created_at=cycle_start,
+                ))
+            return True
+
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions._claim_phase_task_creation",
+            side_effect=_win_claim_but_race_a_task_in,
+        ), patch(
+            "src.autopilot.orchestrator.phase_transitions._create_phase_task", return_value=True
+        ) as mock_create, patch(
+            "src.autopilot.orchestrator.phase_transitions._release_phase_task_creation_claim"
+        ) as mock_release:
+            with db_manager.session_scope() as session:
+                phase_statuses = _get_phase_statuses(session, "wf-1")
+                in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+                result = _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+                assert result is None
+                mock_create.assert_not_called()
+                mock_release.assert_called_once_with(session, "phase-1")
+
 
 class TestReleaseStaleTaskCreationClaims:
     """Regression, found live: _case_in_progress_complete's own claim check
@@ -2340,6 +2434,52 @@ class TestCaseCompletedWithSuccessor:
 
         assert result is True
         assert mock_create.call_args[0][:4] == ("wf-1", "phase-2", "implementation", "continue")
+
+    def test_releases_its_own_claim_when_a_task_raced_in(self, db_manager, sample_workflow):
+        """Same TOCTOU gap as _case_start_first_phase's own regression
+        (see test_reverifies_existing_right_before_creating): a task
+        committed by another claim-protected path in the window between
+        this function's initial existing_tasks read and winning its own
+        claim must be caught by a fresh re-check -- but the fix must also
+        release the claim it just won when that happens, or it stays held
+        for no reason, since _create_phase_task's own success path (which
+        normally releases it) is never reached."""
+        from src.autopilot.orchestrator.phase_transitions import _case_completed_with_successor, _get_phase_statuses
+
+        self._seed_completed_with_pending_successor(db_manager)
+
+        def _win_claim_but_race_a_task_in(*_args, **_kwargs):
+            with db_manager.session_scope() as race_session:
+                race_session.add(Task(
+                    id="task-raced-in",
+                    workflow_id="wf-1",
+                    phase_id="phase-2",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                ))
+            return True
+
+        with patch(
+            "src.autopilot.orchestrator.phase_transitions._claim_phase_task_creation",
+            side_effect=_win_claim_but_race_a_task_in,
+        ), patch(
+            "src.autopilot.orchestrator.phase_transitions._create_phase_task", return_value=True
+        ) as mock_create, patch(
+            "src.autopilot.orchestrator.phase_transitions._release_phase_task_creation_claim"
+        ) as mock_release:
+            with db_manager.session_scope() as session:
+                phase_statuses = _get_phase_statuses(session, "wf-1")
+                completed = [p for p in phase_statuses if p["status"] == "completed"]
+                pending = [p for p in phase_statuses if p["status"] == "pending"]
+                in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+                result = _case_completed_with_successor(
+                    session, "wf-1", completed, pending, in_progress, MagicMock()
+                )
+
+                assert result is False
+                mock_create.assert_not_called()
+                mock_release.assert_called_once_with(session, "phase-2")
 
     @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
     def test_skips_when_successor_already_has_task(self, mock_create, db_manager, sample_workflow):
