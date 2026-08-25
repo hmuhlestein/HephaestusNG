@@ -551,6 +551,31 @@ class TestBuildPhaseOutput:
         assert result["spec_gate"]["blocker_count"] == 6
         assert "result_missing" not in result["spec_gate"]
 
+    def test_adversarial_review_warnings_unchanged_from_history_passes(self, tmp_path, db_manager):
+        """End-to-end wiring: build_phase_output looks up the workflow's own
+        review-findings history and passes prior_warning_count through to
+        score_adversarial_review, so a re-run with the same warning_count as
+        last time passes instead of looping back to development forever."""
+        from src.autopilot.spec import record_review_finding
+
+        record_review_finding(
+            "wf-bpo-adv-1", "adversarial_review", blocker_count=0,
+            summary="2 pre-existing, out-of-scope warnings", warning_count=2,
+        )
+        docs = tmp_path / ".hephaestus" / "adversarial_review"
+        docs.mkdir(parents=True)
+        (docs / "adversarial.md").write_text(_okf(
+            "type: adversarial_review_result\n"
+            "blocker_count: 0\n"
+            "warning_count: 2\n"
+            "nit_count: 1"
+        ))
+        result = build_phase_output(
+            "adversarial_review", tmp_path, workflow_id="wf-bpo-adv-1"
+        )
+        assert result["score"] >= 0.7
+        assert result["spec_gate"]["band"] == "pass"
+
     def test_architectural_review_with_blockers(self, tmp_path):
         docs = tmp_path / ".hephaestus" / "architectural_review"
         docs.mkdir(parents=True)
@@ -756,6 +781,37 @@ class TestScoreAdversarialReview:
     def test_warnings_only_still_passes(self):
         score, meta = score_adversarial_review(
             {"blocker_count": 0, "warning_count": 3, "nit_count": 0}
+        )
+        assert score < 0.6
+        assert meta["band"] == "development"
+
+    def test_warnings_unchanged_from_prior_run_passes(self):
+        """The exact loop observed live: the same pre-existing, out-of-scope
+        warnings recur every run because development has nothing new to fix.
+        Without prior_warning_count, this routed to development forever."""
+        score, meta = score_adversarial_review(
+            {"blocker_count": 0, "warning_count": 2, "nit_count": 1},
+            prior_warning_count=2,
+        )
+        assert score >= 0.7
+        assert meta["band"] == "pass"
+        assert meta["warning_count"] == 2
+
+    def test_warnings_fewer_than_prior_run_passes(self):
+        score, meta = score_adversarial_review(
+            {"blocker_count": 0, "warning_count": 1, "nit_count": 0},
+            prior_warning_count=2,
+        )
+        assert score >= 0.7
+        assert meta["band"] == "pass"
+
+    def test_new_warning_beyond_prior_run_still_routes_to_development(self):
+        """A HIGHER warning_count than last run is real signal something
+        changed -- still worth another development pass, unlike the
+        unchanged case above."""
+        score, meta = score_adversarial_review(
+            {"blocker_count": 0, "warning_count": 3, "nit_count": 0},
+            prior_warning_count=2,
         )
         assert score < 0.6
         assert meta["band"] == "development"

@@ -871,7 +871,11 @@ def gate_finding_count(phase_name: str, result: Optional[Dict[str, Any]]) -> int
 
 
 def record_review_finding(
-    workflow_id: str, phase_name: str, blocker_count: int, summary: str
+    workflow_id: str,
+    phase_name: str,
+    blocker_count: int,
+    summary: str,
+    warning_count: int = 0,
 ) -> None:
     """Append one run's findings to this phase's persistent history.
 
@@ -879,6 +883,10 @@ def record_review_finding(
     already written use it) but the VALUE should come from
     gate_finding_count above, not from result["blocker_count"] -- "blocker"
     is only three of the seven gated phases' vocabulary.
+
+    warning_count: only meaningful for adversarial_review today (see
+    score_adversarial_review's prior_warning_count param) -- 0 for every
+    other phase, which is harmless since nothing else reads this field.
 
     Called right before consume_gate_artifacts deletes the result files
     those findings were read from -- the NEXT run of this phase is a fresh
@@ -899,6 +907,7 @@ def record_review_finding(
             {
                 "run_number": len(history) + 1,
                 "blocker_count": blocker_count,
+                "warning_count": warning_count,
                 # Bounded -- this gets echoed into a task description, not
                 # stored for its own sake.
                 "summary": (summary or "")[:500],
@@ -1569,6 +1578,7 @@ def score_product_validation(
 def score_adversarial_review(
     result: Optional[Dict[str, Any]],
     report_text: Optional[str] = None,
+    prior_warning_count: Optional[int] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     """Score an adversarial.md by BLOCKER/WARNING/NIT counts.
 
@@ -1585,6 +1595,19 @@ def score_adversarial_review(
     apart from "needs an architectural redesign" (workflow.yaml's `score <
     0.3 -> architecture_design` band), so any BLOCKER routes to development
     rather than architecture_design -- a known limitation, not a silent gap.
+
+    prior_warning_count: this phase's warning_count from its own last
+    recorded run (get_review_findings_history), or None on a first run /
+    when history isn't available. Without this, a report with 0 BLOCKERs but
+    lingering WARNINGs the reviewer itself already called pre-existing and
+    out-of-scope still routed back to development every single run -- and
+    since development can't fix a finding it didn't cause and isn't in
+    scope, the SAME warning_count came back every time, burning the phase's
+    entire max_review_runs budget on a goto loop that could never converge.
+    warnings <= prior_warning_count (no NEW warning beyond what was already
+    outstanding last run) now passes instead of looping -- a warning_count
+    that grows still routes to development, since that's real signal
+    something changed.
     """
     if not result:
         # The agent may have written the markdown report but failed (or
@@ -1623,6 +1646,16 @@ def score_adversarial_review(
             "reason": reason,
         }
     if warnings > 0:
+        if prior_warning_count is not None and warnings <= prior_warning_count:
+            return 0.9, {
+                "gate": "adversarial_review",
+                "band": "pass",
+                "warning_count": warnings,
+                "reason": (
+                    f"{warnings} WARNING(s) found, unchanged from the prior run's "
+                    f"{prior_warning_count} -- no new findings, passing"
+                ),
+            }
         reason = (
             f"{warnings} WARNING(s) found in adversarial review:\n\n{report_text}"
             if report_text
@@ -2282,6 +2315,7 @@ def build_phase_output(
     working_directory: Any,
     spec: Optional[Dict[str, Any]] = None,
     skip_independent_verification: bool = False,
+    workflow_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the engine phase_output (carrying `score`) for a gated phase.
 
@@ -2289,6 +2323,11 @@ def build_phase_output(
     For gated phases, returns {"score": float, "spec_gate": {...}} — the engine's
     heuristic evaluator honours an explicit `score`, so this drives goto/retry/
     continue against the configured thresholds.
+
+    workflow_id: only used to look up adversarial_review's prior_warning_count
+    (see score_adversarial_review) -- optional and harmless to omit for every
+    other phase, but omitting it for adversarial_review means each run is
+    scored with no memory of the last one's warning_count.
     """
     if phase_name not in get_gated_phases():
         return {}
@@ -2314,7 +2353,14 @@ def build_phase_output(
         result, report_text = read_okf_report(
             working_directory, "adversarial.md", phase_name=phase_name
         )
-        score, meta = score_adversarial_review(result, report_text=report_text)
+        prior_warning_count = None
+        if workflow_id:
+            history = get_review_findings_history(workflow_id, phase_name)
+            if history:
+                prior_warning_count = history[-1].get("warning_count")
+        score, meta = score_adversarial_review(
+            result, report_text=report_text, prior_warning_count=prior_warning_count
+        )
     elif phase_name == "security_review":
         result, report_text = read_okf_report(
             working_directory, "security.md", phase_name=phase_name
