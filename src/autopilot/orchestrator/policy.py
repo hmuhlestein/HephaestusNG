@@ -3,6 +3,7 @@
 import logging
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
@@ -15,6 +16,7 @@ from src.autopilot.orchestrator.engine_client import (
 from src.autopilot.orchestrator.phase_transitions import (
     _retry_failed_tasks,
 )
+from src.core.constants import WORKTREES_SUBDIR
 from src.core.database import (
     Feature,
     Workflow,
@@ -26,6 +28,21 @@ if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
 
 logger = logging.getLogger(__name__)
+
+# One lock per resolved repo path, mirroring phase_transitions.py's
+# _advance_phases_locks pattern. _clean_stale_repo_state's own git
+# subprocess sequence (merge --abort / checkout main / clean -fd / reset
+# --hard) was never serialized against a concurrent call for the SAME
+# path -- multiple workflows sharing one repo (the common case: every
+# feature in a single-repo project resolves to the same primary
+# ProjectRepo) could each independently decide the repo looked "stale"
+# and race their own clean/reset sequences against each other, or against
+# a different workflow's legitimate git_expert merge landing in the same
+# window. Flagged (not fixed) by an earlier adversarial_review pass on
+# this exact function -- see its own WARNING finding, "Two workflows
+# sharing one repo can run destructive git recovery concurrently."
+_clean_repo_locks: Dict[str, threading.Lock] = {}
+_clean_repo_locks_guard = threading.Lock()
 
 
 ACTIVE_AGENT_STATUSES = {
@@ -284,12 +301,32 @@ def _resolve_recovery_project_path(workflow_id: str) -> Optional[str]:
 
 
 def _clean_stale_repo_state(workflow_id: str, logger: "OrchestratorLogger") -> List[str]:
-    """Clear a wedged repo (dirty tree or half-finished merge).
+    """Clear a wedged repo (dirty tree or half-finished merge) -- but ONLY
+    inside an isolated .worktrees/ checkout, never the project's primary
+    repo path.
 
     Deliberately does NOT merge branches -- WorktreeManager handles merges in
     update_task_status. A raw git merge here corrupts the repo, because this
     runs on the orchestrator's thread rather than in the agent's worktree
     context.
+
+    The primary-checkout guard below exists because _resolve_recovery_
+    project_path falls back to the project's primary ProjectRepo path
+    whenever a workflow has no live working_directory (an orphaned/stale
+    workflow, or one that hasn't been assigned a worktree yet) -- and that
+    primary path is the SAME shared checkout git_expert legitimately merges
+    into, a human might have uncommitted work sitting in (e.g. a design
+    spec added via the dashboard's New Feature/Report Bug flow, which
+    writes into a git-tracked folder under the primary repo, not a
+    worktree), or an agent (including this one) might have uncommitted
+    edits in mid-session. `git clean -fd`/`reset --hard HEAD` there doesn't
+    distinguish "abandoned merge debris" from "someone's real, not-yet-
+    committed work" -- confirmed live: an untracked docs/bugfix/*.md spec
+    a user had just added was deleted this way while an unrelated
+    workflow's merge/cleanup ran against the same primary checkout minutes
+    later. Recovering a genuinely wedged PRIMARY checkout (as opposed to a
+    worktree) needs a human or a narrower, path-aware strategy -- not this
+    blanket sweep.
     """
     recovered: List[str] = []
     try:
@@ -301,46 +338,66 @@ def _clean_stale_repo_state(workflow_id: str, logger: "OrchestratorLogger") -> L
             # still run.
             return recovered
 
-        status_result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=project_path,
-        )
-        is_dirty = bool(status_result.stdout.strip())
-        merge_in_progress = Path(project_path, ".git", "MERGE_HEAD").exists()
+        resolved_path = Path(project_path).resolve()
+        if WORKTREES_SUBDIR not in resolved_path.parts:
+            logger.info(
+                f"  [RECOVERY] {resolved_path} is not an isolated {WORKTREES_SUBDIR}/ "
+                "checkout -- skipping destructive repo cleanup rather than risking "
+                "someone else's uncommitted work in the shared primary checkout"
+            )
+            return recovered
 
-        if is_dirty or merge_in_progress:
-            # Abort any in-progress merge that's blocking the repo
-            subprocess.run(
-                ["git", "merge", "--abort"],
+        with _clean_repo_locks_guard:
+            lock = _clean_repo_locks.setdefault(str(resolved_path), threading.Lock())
+        if not lock.acquire(blocking=False):
+            logger.info(
+                f"  [RECOVERY] Repo cleanup for {resolved_path} already in progress "
+                "elsewhere -- skipping concurrent call"
+            )
+            return recovered
+        try:
+            status_result = subprocess.run(
+                ["git", "status", "--porcelain"],
                 capture_output=True,
+                text=True,
                 timeout=10,
                 cwd=project_path,
             )
-            # Ensure we're on main
-            subprocess.run(
-                ["git", "checkout", "main"],
-                capture_output=True,
-                timeout=10,
-                cwd=project_path,
-            )
-            # Clean untracked files that accumulate from failed merges
-            subprocess.run(
-                ["git", "clean", "-fd"],
-                capture_output=True,
-                timeout=10,
-                cwd=project_path,
-            )
-            # Reset any staged but uncommitted changes
-            subprocess.run(
-                ["git", "reset", "--hard", "HEAD"],
-                capture_output=True,
-                timeout=10,
-                cwd=project_path,
-            )
-            recovered.append("cleaned repo state")
+            is_dirty = bool(status_result.stdout.strip())
+            merge_in_progress = Path(project_path, ".git", "MERGE_HEAD").exists()
+
+            if is_dirty or merge_in_progress:
+                # Abort any in-progress merge that's blocking the repo
+                subprocess.run(
+                    ["git", "merge", "--abort"],
+                    capture_output=True,
+                    timeout=10,
+                    cwd=project_path,
+                )
+                # Ensure we're on main
+                subprocess.run(
+                    ["git", "checkout", "main"],
+                    capture_output=True,
+                    timeout=10,
+                    cwd=project_path,
+                )
+                # Clean untracked files that accumulate from failed merges
+                subprocess.run(
+                    ["git", "clean", "-fd"],
+                    capture_output=True,
+                    timeout=10,
+                    cwd=project_path,
+                )
+                # Reset any staged but uncommitted changes
+                subprocess.run(
+                    ["git", "reset", "--hard", "HEAD"],
+                    capture_output=True,
+                    timeout=10,
+                    cwd=project_path,
+                )
+                recovered.append("cleaned repo state")
+        finally:
+            lock.release()
     except Exception as e:
         logger.warning(f"  Failed to clean repo state: {e}")
     return recovered
