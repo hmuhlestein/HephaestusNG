@@ -15,6 +15,7 @@ Usage:
 """
 
 import logging
+import time
 import uuid
 from typing import Optional
 
@@ -32,6 +33,32 @@ from src.core.database import (
 )
 
 logger = logging.getLogger(__name__)
+
+# derive_workflow_cost's write_back=True cascade (feature -> design ->
+# project) fires on EVERY record_cost() call -- one per LLM call, across
+# every active agent. Each level is its own SUM() query over potentially
+# many child rows on SQLite's single StaticPool connection; under several
+# concurrent agents this became a per-second cascade hammering that one
+# connection, observed live degrading backend responsiveness badly enough
+# to trip the watchdog's health check (see start.py's 15s->30s fix, same
+# incident). Coalesces same-entity cascades within this window into one --
+# the SUM query always reflects the current total regardless of how many
+# record_cost calls happened in between, so a throttled call just catches
+# up on all of them at once instead of losing any. Only gates the
+# write_back=True (recording) path -- an on-demand write_back=False display
+# read (cost_routes.py) always computes fresh, since throttling THAT would
+# show stale data to someone actively asking for a current number.
+_COST_CASCADE_THROTTLE_SECONDS = 5.0
+_last_cost_cascade_time: dict = {}
+
+
+def _should_cascade(entity_key: str) -> bool:
+    now = time.monotonic()
+    last = _last_cost_cascade_time.get(entity_key)
+    if last is not None and now - last < _COST_CASCADE_THROTTLE_SECONDS:
+        return False
+    _last_cost_cascade_time[entity_key] = now
+    return True
 
 
 def record_cost(
@@ -189,11 +216,16 @@ def derive_workflow_cost(db: Session, workflow_id: str, write_back: bool = True)
         feature = db.query(Feature).filter_by(workflow_id=workflow_id).first()
         if feature:
             feature_id = feature.id
-    if feature_id:
+    # Throttled only on the write_back=True (recording) path -- see
+    # _COST_CASCADE_THROTTLE_SECONDS' comment above. A skipped cascade
+    # isn't lost: the next call past the window recomputes the current
+    # SUM(), which already reflects every record_cost() in between.
+    cascade_gate = _should_cascade if write_back else (lambda _key: True)
+    if feature_id and cascade_gate(f"feature:{feature_id}"):
         derive_feature_cost(db, feature_id, write_back=write_back)
-    if workflow.design_id:
+    if workflow.design_id and cascade_gate(f"design:{workflow.design_id}"):
         derive_design_cost(db, workflow.design_id, write_back=write_back)
-    if workflow.project_id:
+    if workflow.project_id and cascade_gate(f"project:{workflow.project_id}"):
         derive_project_cost(db, workflow.project_id, write_back=write_back)
 
     return total
