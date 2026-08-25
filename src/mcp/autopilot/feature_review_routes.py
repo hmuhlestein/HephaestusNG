@@ -6,7 +6,6 @@ docs/SOLID_OO_REVIEW_UPDATE_2026-08-21.md §1)."""
 import asyncio
 import logging
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException
@@ -24,9 +23,11 @@ router = APIRouter()
 class ReviewModeUpdate(BaseModel):
     review_mode: bool
 
+
 class FeatureReviewRequest(BaseModel):
     action: str  # "approve" or "request_changes"
     feedback: Optional[str] = None
+
 
 @router.patch("/projects/{project_id}/review-mode")
 async def set_review_mode(project_id: str, req: ReviewModeUpdate, agent_id: str = Header("ui-user", alias="X-Agent-ID")):
@@ -45,6 +46,7 @@ async def set_review_mode(project_id: str, req: ReviewModeUpdate, agent_id: str 
         db.commit()
     _invalidate("status")
     return {"review_mode": req.review_mode}
+
 
 async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewRequest):
     """Approve or request changes for a Phase 0 (Feature Architect) decomposition.
@@ -69,11 +71,7 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
         if wf.paused_by != "review":
             return {"success": True, "message": "Decomposition was not awaiting review"}
 
-        arch_phase = (
-            db.query(Phase)
-            .filter(Phase.workflow_id == workflow_id, Phase.name == "feature_architect")
-            .first()
-        )
+        arch_phase = db.query(Phase).filter(Phase.workflow_id == workflow_id, Phase.name == "feature_architect").first()
 
         if req.action == "approve":
             # A prior request_changes may still have a redo agent working in
@@ -101,6 +99,7 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
             # No Feature row to cascade to at this point -- Phase 0 is what
             # creates them, same as _pause_phase0_for_review's own reasoning.
             from src.autopilot.orchestrator.engine_client import resume_workflow
+
             resume_workflow(workflow_id, force=True, cascade_to_feature=False, session=db)
             db.commit()
             _invalidate("status")
@@ -115,6 +114,7 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
             # idempotent, so calling it here unconditionally is a safe
             # no-op in the run_phase0-is-still-waiting case.
             from src.autopilot.orchestrator import finalize_phase0_workflow
+
             finalize_phase0_workflow(workflow_id, logger, skip_review_gate=True)
 
             return {"success": True, "message": "Feature decomposition approved"}
@@ -124,6 +124,7 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
             raise HTTPException(status_code=500, detail="feature_architect phase not found")
 
         import uuid
+
         # This one-off task redoes both feature_architect's decomposition and
         # feature_review's adversarial pass in a single agent run -- there is
         # no orchestration engine left running to hand off between the two
@@ -174,6 +175,7 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
                 restartable.append(t)
             elif t.assigned_agent_id:
                 from src.core.database import Agent
+
                 agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
                 if not agent or agent.status == "terminated":
                     restartable.append(t)
@@ -193,11 +195,13 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
                 override.user_prompt = feedback_prompt + "\n\n---\n\n" + (override.user_prompt or "")
                 override.updated_by = "ui-user"
             else:
-                db.add(TaskPromptOverride(
-                    task_id=reuse_task.id,
-                    user_prompt=feedback_prompt,
-                    updated_by="ui-user",
-                ))
+                db.add(
+                    TaskPromptOverride(
+                        task_id=reuse_task.id,
+                        user_prompt=feedback_prompt,
+                        updated_by="ui-user",
+                    )
+                )
             task_id, phase_id = reuse_task.id, reuse_task.phase_id
         else:
             new_task = Task(
@@ -212,11 +216,13 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
             )
             db.add(new_task)
             db.flush()
-            db.add(TaskPromptOverride(
-                task_id=new_task.id,
-                user_prompt=feedback_prompt,
-                updated_by="ui-user",
-            ))
+            db.add(
+                TaskPromptOverride(
+                    task_id=new_task.id,
+                    user_prompt=feedback_prompt,
+                    updated_by="ui-user",
+                )
+            )
             task_id, phase_id = new_task.id, new_task.phase_id
 
         # Keep the workflow paused for review — the human must approve
@@ -230,6 +236,7 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
 
     _invalidate("status")
     return {"success": True, "message": "Changes requested — re-decomposition queued"}
+
 
 @router.post("/features/{feature_id}/review")
 async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: str = Header("ui-user", alias="X-Agent-ID")):
@@ -247,7 +254,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
         raise HTTPException(status_code=400, detail="feedback is required when requesting changes")
 
     if feature_id.startswith("phase0-"):
-        return await _review_phase0_decomposition(feature_id[len("phase0-"):], req)
+        return await _review_phase0_decomposition(feature_id[len("phase0-") :], req)
 
     from src.core.database import Feature, Phase, Task, Workflow, get_db
 
@@ -276,6 +283,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
             # cascade_to_feature=False: this endpoint already owns the
             # write for `feature` specifically, below.
             from src.autopilot.orchestrator.engine_client import resume_workflow
+
             resume_workflow(feature.workflow_id, force=True, cascade_to_feature=False, session=db)
             # Restore Feature.status to "active" so derive_feature_status
             # doesn't short-circuit on "paused" forever after approval.
@@ -287,6 +295,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
             # script blocks all merge commands.
             if wf.working_directory:
                 from pathlib import Path
+
                 marker_dir = Path(wf.working_directory) / ".hephaestus"
                 marker_dir.mkdir(parents=True, exist_ok=True)
                 marker = marker_dir / "review_approved"
@@ -299,6 +308,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
             if pr_url:
                 import functools
                 import subprocess
+
                 try:
                     # Try gh pr merge first -- offloaded, this can take up
                     # to the full 30s timeout and would otherwise block the
@@ -310,7 +320,9 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
                         functools.partial(
                             subprocess.run,
                             ["gh", "pr", "merge", pr_url, "--merge"],
-                            capture_output=True, text=True, timeout=30,
+                            capture_output=True,
+                            text=True,
+                            timeout=30,
                         ),
                     )
                     if result.returncode == 0:
@@ -355,9 +367,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
                         # here too so the merge itself isn't blocked.
                         base_marker_dir = Path(project.base_dir) / ".hephaestus"
                         base_marker_dir.mkdir(parents=True, exist_ok=True)
-                        (base_marker_dir / "review_approved").write_text(
-                            f"Approved at {datetime.utcnow().isoformat()}\n"
-                        )
+                        (base_marker_dir / "review_approved").write_text(f"Approved at {datetime.utcnow().isoformat()}\n")
 
                         wt_repo = Repo(wf.working_directory)
                         branch_name = wt_repo.active_branch.name
@@ -383,6 +393,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
                                 raise
 
                         import functools
+
                         loop = asyncio.get_event_loop()
                         merge_result = await loop.run_in_executor(None, _local_merge)
                         logger.info(f"[REVIEW] Local merge fallback for {branch_name}: {merge_result}")
@@ -394,6 +405,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
             # all phases done" mistake has recurred independently at
             # least four times in this codebase's history.
             from src.core.status_derivation import derive_workflow_status
+
             derived = derive_workflow_status(db, wf.id, write_back=False)
             if derived == "completed":
                 wf.status = "completed"
@@ -444,6 +456,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
                 restartable.append(t)
             elif t.assigned_agent_id:
                 from src.core.database import Agent
+
                 agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
                 if not agent or agent.status == "terminated":
                     restartable.append(t)
@@ -452,6 +465,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
         # to address the feedback directly
         if not restartable:
             from src.core.database import Phase
+
             # Find the development phase
             dev_phase = (
                 db.query(Phase)
@@ -463,12 +477,14 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
             )
             if dev_phase:
                 import uuid
+
                 # Load feedback prompt template from YAML
                 feedback_prompt = f"## Human Review Feedback\n\n{req.feedback.strip()}\n\nRead the feature report for context: .hephaestus/feature_report.html\n\nAddress all feedback items and make the necessary code changes."
                 try:
                     from pathlib import Path as _Path
 
                     import yaml as _yaml
+
                     prompt_file = _Path(__file__).parent.parent.parent / "config" / "prompts" / "review_feedback.yaml"
                     if prompt_file.exists():
                         with open(prompt_file) as f:
@@ -506,6 +522,7 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
                 # to every sweep tick.
                 from src.autopilot.orchestrator.phase_transitions import reopen_phase_execution
                 from src.core.database import PhaseExecution
+
                 dev_execution = db.query(PhaseExecution).filter_by(phase_id=dev_phase.id).first()
                 if dev_execution and dev_execution.status != "in_progress":
                     reopen_phase_execution(dev_execution, status="in_progress", started_at="now")
@@ -525,20 +542,20 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest, agent_id: s
         # Inject feedback into each restarted task via TaskPromptOverride
         if req.feedback and to_restart:
             from src.core.database import TaskPromptOverride
-            feedback_prefix = (
-                f"## Human Review Feedback\n\n{req.feedback.strip()}\n\n"
-                "Please address the above feedback in your implementation.\n\n---\n\n"
-            )
+
+            feedback_prefix = f"## Human Review Feedback\n\n{req.feedback.strip()}\n\nPlease address the above feedback in your implementation.\n\n---\n\n"
             for task_id, _ in to_restart:
                 existing = db.query(TaskPromptOverride).filter_by(task_id=task_id).first()
                 if existing:
                     existing.user_prompt = feedback_prefix + (existing.user_prompt or "")
                 else:
-                    db.add(TaskPromptOverride(
-                        task_id=task_id,
-                        user_prompt=feedback_prefix,
-                        updated_by="ui-user",
-                    ))
+                    db.add(
+                        TaskPromptOverride(
+                            task_id=task_id,
+                            user_prompt=feedback_prefix,
+                            updated_by="ui-user",
+                        )
+                    )
 
         # Keep feature paused for review - user must approve after fixes
         # feature.status stays "paused" and wf.paused_by stays "review"

@@ -58,12 +58,8 @@ def _seed_workflow(db_manager, workflow_id="wf-1", with_board=True):
     from src.core.database import Agent, BoardConfig, Workflow
 
     with db_manager.session_scope() as session:
-        session.add(
-            Workflow(id=workflow_id, name="t", phases_folder_path="/tmp", status="active")
-        )
-        session.add(
-            Agent(id="agent-1", system_prompt="t", status="working", cli_type="pi", agent_type="phase")
-        )
+        session.add(Workflow(id=workflow_id, name="t", phases_folder_path="/tmp", status="active"))
+        session.add(Agent(id="agent-1", system_prompt="t", status="working", cli_type="pi", agent_type="phase"))
         if with_board:
             session.add(
                 BoardConfig(
@@ -163,7 +159,8 @@ class TestGetTicketsTrailingSlash:
             headers={"X-Agent-ID": "agent-1"},
             json={
                 "workflow_id": "wf-1",
-                "title": "findme ticket", "description": "a description long enough",
+                "title": "findme ticket",
+                "description": "a description long enough",
                 "ticket_type": "bug",
                 "priority": "low",
             },

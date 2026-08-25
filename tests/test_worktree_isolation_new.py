@@ -74,9 +74,7 @@ def manager(test_db, temp_repo, monkeypatch):
 
 def _make_agent(test_db, agent_id):
     session = test_db.get_session()
-    session.add(
-        Agent(id=agent_id, system_prompt="t", status="working", cli_type="test")
-    )
+    session.add(Agent(id=agent_id, system_prompt="t", status="working", cli_type="test"))
     session.commit()
     session.close()
 
@@ -97,9 +95,7 @@ def test_info_exclude_managed(manager, temp_repo):
 def test_context_dir_populated(manager, test_db):
     agent_id = str(uuid.uuid4())
     _make_agent(test_db, agent_id)
-    result = manager.create_agent_worktree(
-        agent_id, context_files={"design.md": "# Design", "qa_spec.json": "{}"}
-    )
+    result = manager.create_agent_worktree(agent_id, context_files={"design.md": "# Design", "qa_spec.json": "{}"})
     ctx = Path(result["context_dir"])
     assert ctx == Path(result["working_directory"]) / ".hephaestus"
     assert (ctx / "design.md").read_text() == "# Design"

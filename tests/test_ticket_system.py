@@ -6,15 +6,6 @@ import sys
 
 import pytest
 
-
-def _real_head_sha() -> str:
-    """A commit SHA that actually exists in this repo -- _link_commit_impl
-    now verifies existence via `git cat-file -e` and rejects fake SHAs like
-    the old hardcoded 'abc123def456' (adversarial-review fix, REQ-10)."""
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), capture_output=True, text=True, check=True
-    ).stdout.strip()
-
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -29,6 +20,13 @@ from src.core.database import (
 )
 from src.services.ticket_history_service import TicketHistoryService
 from src.services.ticket_service import TicketService
+
+
+def _real_head_sha() -> str:
+    """A commit SHA that actually exists in this repo -- _link_commit_impl
+    now verifies existence via `git cat-file -e` and rejects fake SHAs like
+    the old hardcoded 'abc123def456' (adversarial-review fix, REQ-10)."""
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), capture_output=True, text=True, check=True).stdout.strip()
 
 
 @pytest.fixture
@@ -117,9 +115,7 @@ def test_board_config(db_manager, test_workflow):
 
 
 @pytest.mark.asyncio
-async def test_create_ticket_basic(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_create_ticket_basic(db_manager, test_workflow, test_agent, test_board_config):
     """Test basic ticket creation."""
     result = await TicketService.create_ticket(
         workflow_id=test_workflow,
@@ -151,9 +147,7 @@ async def test_create_ticket_basic(
 
 
 @pytest.mark.asyncio
-async def test_create_ticket_with_blocking(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_create_ticket_with_blocking(db_manager, test_workflow, test_agent, test_board_config):
     """Test creating a ticket with blocked_by_ticket_ids."""
     # Create first ticket
     ticket1 = await TicketService.create_ticket(
@@ -181,18 +175,14 @@ async def test_create_ticket_with_blocking(
     # Verify blocking relationship
     session = db_manager.get_session()
     try:
-        blocked_ticket = (
-            session.query(Ticket).filter_by(id=ticket2["ticket_id"]).first()
-        )
+        blocked_ticket = session.query(Ticket).filter_by(id=ticket2["ticket_id"]).first()
         assert blocked_ticket.blocked_by_ticket_ids == [ticket1["ticket_id"]]
     finally:
         session.close()
 
 
 @pytest.mark.asyncio
-async def test_blocked_ticket_cannot_change_status(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_blocked_ticket_cannot_change_status(db_manager, test_workflow, test_agent, test_board_config):
     """Test that blocked tickets cannot change status."""
     # Create blocking ticket
     ticket1 = await TicketService.create_ticket(
@@ -231,9 +221,7 @@ async def test_blocked_ticket_cannot_change_status(
 
 
 @pytest.mark.asyncio
-async def test_resolve_ticket_unblocks_dependencies(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_resolve_ticket_unblocks_dependencies(db_manager, test_workflow, test_agent, test_board_config):
     """Test that resolving a ticket unblocks dependent tickets."""
     # Create blocking ticket
     ticket1 = await TicketService.create_ticket(
@@ -296,9 +284,7 @@ async def test_resolve_ticket_unblocks_dependencies(
 
 
 @pytest.mark.asyncio
-async def test_update_ticket_fields(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_update_ticket_fields(db_manager, test_workflow, test_agent, test_board_config):
     """Test updating ticket fields."""
     # Create ticket
     ticket = await TicketService.create_ticket(
@@ -341,9 +327,7 @@ async def test_update_ticket_fields(
 
 
 @pytest.mark.asyncio
-async def test_update_ticket_shares_one_db_session_across_fields(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_update_ticket_shares_one_db_session_across_fields(db_manager, test_workflow, test_agent, test_board_config):
     """Regression: update_ticket's per-field TicketHistoryService.record_change
     call opened its own independent get_db() session for EACH field instead
     of participating in the caller's own transaction -- non-atomic (a
@@ -374,9 +358,7 @@ async def test_update_ticket_shares_one_db_session_across_fields(
         call_count += 1
         return real_get_db(*args, **kwargs)
 
-    with patch(
-        "src.services.ticket_history_service.get_db", side_effect=counting_get_db
-    ):
+    with patch("src.services.ticket_history_service.get_db", side_effect=counting_get_db):
         result = await TicketService.update_ticket(
             ticket_id=ticket["ticket_id"],
             agent_id=test_agent,
@@ -395,9 +377,7 @@ async def test_update_ticket_shares_one_db_session_across_fields(
 
 
 @pytest.mark.asyncio
-async def test_change_status_unblocked_ticket(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_change_status_unblocked_ticket(db_manager, test_workflow, test_agent, test_board_config):
     """Test changing status of an unblocked ticket."""
     # Create ticket
     ticket = await TicketService.create_ticket(
@@ -460,9 +440,7 @@ async def test_add_comment(db_manager, test_workflow, test_agent, test_board_con
     # Verify comment in database
     session = db_manager.get_session()
     try:
-        comment = (
-            session.query(TicketComment).filter_by(id=result["comment_id"]).first()
-        )
+        comment = session.query(TicketComment).filter_by(id=result["comment_id"]).first()
         assert comment is not None
         assert comment.comment_text == "This is a test comment"
         assert comment.comment_type == "general"
@@ -472,9 +450,7 @@ async def test_add_comment(db_manager, test_workflow, test_agent, test_board_con
 
 
 @pytest.mark.asyncio
-async def test_get_ticket_full_details(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_get_ticket_full_details(db_manager, test_workflow, test_agent, test_board_config):
     """Test getting full ticket details."""
     # Create ticket
     ticket = await TicketService.create_ticket(
@@ -507,9 +483,7 @@ async def test_get_ticket_full_details(
 
 
 @pytest.mark.asyncio
-async def test_ticket_history_tracking(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_ticket_history_tracking(db_manager, test_workflow, test_agent, test_board_config):
     """Test that all changes are tracked in history."""
     # Create ticket
     ticket = await TicketService.create_ticket(
@@ -556,9 +530,7 @@ async def test_ticket_history_tracking(
 
 
 @pytest.mark.asyncio
-async def test_invalid_ticket_type_rejected(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_invalid_ticket_type_rejected(db_manager, test_workflow, test_agent, test_board_config):
     """Test that invalid ticket types are rejected."""
     with pytest.raises(ValueError, match="Invalid ticket type"):
         await TicketService.create_ticket(
@@ -572,9 +544,7 @@ async def test_invalid_ticket_type_rejected(
 
 
 @pytest.mark.asyncio
-async def test_invalid_status_rejected(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_invalid_status_rejected(db_manager, test_workflow, test_agent, test_board_config):
     """Test that invalid statuses are rejected."""
     # Create ticket
     ticket = await TicketService.create_ticket(
@@ -597,9 +567,7 @@ async def test_invalid_status_rejected(
 
 
 @pytest.mark.asyncio
-async def test_link_commit_to_ticket(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_link_commit_to_ticket(db_manager, test_workflow, test_agent, test_board_config):
     """Test linking git commits to tickets."""
     # Create ticket
     ticket = await TicketService.create_ticket(
@@ -628,11 +596,7 @@ async def test_link_commit_to_ticket(
     # Verify commit link in database
     session = db_manager.get_session()
     try:
-        commit = (
-            session.query(TicketCommit)
-            .filter_by(ticket_id=ticket["ticket_id"], commit_sha=commit_sha)
-            .first()
-        )
+        commit = session.query(TicketCommit).filter_by(ticket_id=ticket["ticket_id"], commit_sha=commit_sha).first()
         assert commit is not None
         assert commit.commit_message == "Fix issue related to ticket"
         assert commit.link_method == "manual"
@@ -641,9 +605,7 @@ async def test_link_commit_to_ticket(
 
 
 @pytest.mark.asyncio
-async def test_link_commit_offloads_get_commit_stats(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_link_commit_offloads_get_commit_stats(db_manager, test_workflow, test_agent, test_board_config):
     """Regression: _get_commit_stats shells out to `git show --numstat`
     directly on the event loop -- blocking. Must go through
     run_in_executor instead."""
@@ -686,9 +648,7 @@ async def test_link_commit_offloads_get_commit_stats(
 
 
 @pytest.mark.asyncio
-async def test_change_status_with_commit_sha_shares_one_db_session(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_change_status_with_commit_sha_shares_one_db_session(db_manager, test_workflow, test_agent, test_board_config):
     """Regression: change_status's commit-linking call opened its own,
     independent get_db() session instead of participating in the
     caller's own transaction -- non-atomic (an exception in one session
@@ -727,9 +687,7 @@ async def test_change_status_with_commit_sha_shares_one_db_session(
 
     commit_sha = _real_head_sha()
 
-    with patch(
-        "src.services.ticket_service.get_db", side_effect=counting_get_db
-    ), patch("asyncio.get_event_loop", return_value=fake_loop):
+    with patch("src.services.ticket_service.get_db", side_effect=counting_get_db), patch("asyncio.get_event_loop", return_value=fake_loop):
         result = await TicketService.change_status(
             ticket_id=ticket["ticket_id"],
             agent_id=test_agent,
@@ -743,20 +701,14 @@ async def test_change_status_with_commit_sha_shares_one_db_session(
 
     session = db_manager.get_session()
     try:
-        commit = (
-            session.query(TicketCommit)
-            .filter_by(ticket_id=ticket["ticket_id"], commit_sha=commit_sha)
-            .first()
-        )
+        commit = session.query(TicketCommit).filter_by(ticket_id=ticket["ticket_id"], commit_sha=commit_sha).first()
         assert commit is not None
     finally:
         session.close()
 
 
 @pytest.mark.asyncio
-async def test_get_tickets_by_workflow(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_get_tickets_by_workflow(db_manager, test_workflow, test_agent, test_board_config):
     """Test getting all tickets for a workflow."""
     # Create multiple tickets
     ticket1 = await TicketService.create_ticket(
@@ -787,9 +739,7 @@ async def test_get_tickets_by_workflow(
 
 
 @pytest.mark.asyncio
-async def test_get_tickets_by_status(
-    db_manager, test_workflow, test_agent, test_board_config
-):
+async def test_get_tickets_by_status(db_manager, test_workflow, test_agent, test_board_config):
     """Test getting tickets by status."""
     # Create tickets with different statuses
     ticket1 = await TicketService.create_ticket(
@@ -819,16 +769,12 @@ async def test_get_tickets_by_status(
     )
 
     # Get backlog tickets
-    backlog_tickets = await TicketService.get_tickets_by_status(
-        test_workflow, "backlog"
-    )
+    backlog_tickets = await TicketService.get_tickets_by_status(test_workflow, "backlog")
     assert len(backlog_tickets) >= 1
     assert any(t["ticket_id"] == ticket1["ticket_id"] for t in backlog_tickets)
 
     # Get in_progress tickets
-    in_progress_tickets = await TicketService.get_tickets_by_status(
-        test_workflow, "in_progress"
-    )
+    in_progress_tickets = await TicketService.get_tickets_by_status(test_workflow, "in_progress")
     assert len(in_progress_tickets) >= 1
     assert any(t["ticket_id"] == ticket2["ticket_id"] for t in in_progress_tickets)
 

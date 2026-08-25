@@ -32,9 +32,7 @@ async def _run_resume(test_db, workflow_id=None, project_id=None):
         mock_state.agent_manager = MagicMock()
         mock_state.agent_manager.restart_agent = AsyncMock()
         mock_state.queue_service.should_queue_task.return_value = True
-        return await server_module._resume_interrupted_workflows(
-            workflow_id=workflow_id, project_id=project_id, reactivate=True
-        )
+        return await server_module._resume_interrupted_workflows(workflow_id=workflow_id, project_id=project_id, reactivate=True)
 
 
 class TestResumeInterruptedWorkflowsUnblocksTasks:
@@ -43,15 +41,22 @@ class TestResumeInterruptedWorkflowsUnblocksTasks:
         session = test_db.get_session()
         session.add(
             Workflow(
-                id="wf-blocked", name="t", phases_folder_path="/tmp",
-                status="paused", definition_id="feature_architect",
+                id="wf-blocked",
+                name="t",
+                phases_folder_path="/tmp",
+                status="paused",
+                definition_id="feature_architect",
             )
         )
         session.add(
             Task(
-                id="task-blocked", workflow_id="wf-blocked", phase_id="phase-1",
-                raw_description="r", done_definition="d",
-                status="blocked", assigned_agent_id="old-agent",
+                id="task-blocked",
+                workflow_id="wf-blocked",
+                phase_id="phase-1",
+                raw_description="r",
+                done_definition="d",
+                status="blocked",
+                assigned_agent_id="old-agent",
             )
         )
         session.commit()
@@ -75,15 +80,22 @@ class TestResumeInterruptedWorkflowsUnblocksTasks:
         session = test_db.get_session()
         session.add(
             Workflow(
-                id="wf-failed", name="t", phases_folder_path="/tmp",
-                status="paused", definition_id="feature_architect",
+                id="wf-failed",
+                name="t",
+                phases_folder_path="/tmp",
+                status="paused",
+                definition_id="feature_architect",
             )
         )
         session.add(
             Task(
-                id="task-failed", workflow_id="wf-failed", phase_id="phase-1",
-                raw_description="r", done_definition="d",
-                status="failed", failure_reason="boom",
+                id="task-failed",
+                workflow_id="wf-failed",
+                phase_id="phase-1",
+                raw_description="r",
+                done_definition="d",
+                status="failed",
+                failure_reason="boom",
             )
         )
         session.commit()
@@ -112,9 +124,13 @@ class TestResumeInterruptedWorkflowsResetsGotoBudget:
         session = test_db.get_session()
         session.add(
             Workflow(
-                id="wf-exhausted", name="t", phases_folder_path="/tmp",
-                status="failed", status_reason="scope_review: arbitrated 3 times without converging",
-                definition_id="autopilot", total_gotos=676,
+                id="wf-exhausted",
+                name="t",
+                phases_folder_path="/tmp",
+                status="failed",
+                status_reason="scope_review: arbitrated 3 times without converging",
+                definition_id="autopilot",
+                total_gotos=676,
             )
         )
         session.commit()
@@ -137,8 +153,11 @@ class TestResumeInterruptedWorkflowsResetsGotoBudget:
         session = test_db.get_session()
         session.add(
             Workflow(
-                id="wf-stale-reason", name="t", phases_folder_path="/tmp",
-                status="paused", paused_by="system",
+                id="wf-stale-reason",
+                name="t",
+                phases_folder_path="/tmp",
+                status="paused",
+                paused_by="system",
                 status_reason="scope_review: exhausted retries",
                 definition_id="autopilot",
             )
@@ -171,13 +190,19 @@ class TestResumeInterruptedWorkflowsProjectScoping:
         session.add_all(
             [
                 Workflow(
-                    id="wf-proj-a-1", name="t", phases_folder_path="/tmp",
-                    status="paused", definition_id="feature_architect",
+                    id="wf-proj-a-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    definition_id="feature_architect",
                     project_id="proj-a",
                 ),
                 Workflow(
-                    id="wf-proj-a-2", name="t", phases_folder_path="/tmp",
-                    status="failed", definition_id="feature_architect",
+                    id="wf-proj-a-2",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="failed",
+                    definition_id="feature_architect",
                     project_id="proj-a",
                 ),
             ]
@@ -185,12 +210,20 @@ class TestResumeInterruptedWorkflowsProjectScoping:
         session.add_all(
             [
                 Task(
-                    id="task-a1", workflow_id="wf-proj-a-1", phase_id="phase-1",
-                    raw_description="r", done_definition="d", status="blocked",
+                    id="task-a1",
+                    workflow_id="wf-proj-a-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="blocked",
                 ),
                 Task(
-                    id="task-a2", workflow_id="wf-proj-a-2", phase_id="phase-1",
-                    raw_description="r", done_definition="d", status="failed",
+                    id="task-a2",
+                    workflow_id="wf-proj-a-2",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
                 ),
             ]
         )
@@ -217,13 +250,19 @@ class TestResumeInterruptedWorkflowsProjectScoping:
         session.add_all(
             [
                 Workflow(
-                    id="wf-proj-a", name="t", phases_folder_path="/tmp",
-                    status="paused", definition_id="feature_architect",
+                    id="wf-proj-a",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    definition_id="feature_architect",
                     project_id="proj-a",
                 ),
                 Workflow(
-                    id="wf-proj-b", name="t", phases_folder_path="/tmp",
-                    status="paused", definition_id="feature_architect",
+                    id="wf-proj-b",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    definition_id="feature_architect",
                     project_id="proj-b",
                 ),
             ]
@@ -231,12 +270,20 @@ class TestResumeInterruptedWorkflowsProjectScoping:
         session.add_all(
             [
                 Task(
-                    id="task-a", workflow_id="wf-proj-a", phase_id="phase-1",
-                    raw_description="r", done_definition="d", status="blocked",
+                    id="task-a",
+                    workflow_id="wf-proj-a",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="blocked",
                 ),
                 Task(
-                    id="task-b", workflow_id="wf-proj-b", phase_id="phase-1",
-                    raw_description="r", done_definition="d", status="blocked",
+                    id="task-b",
+                    workflow_id="wf-proj-b",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="blocked",
                 ),
             ]
         )
@@ -262,9 +309,7 @@ def _make_git_repo_with_worktree(tmp_path, branch_merged: bool):
     git_expert task whose work already landed."""
     repo = tmp_path / "project"
     repo.mkdir()
-    run = lambda *args, cwd=repo: subprocess.run(
-        args, cwd=cwd, check=True, capture_output=True, text=True
-    )
+    run = lambda *args, cwd=repo: subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True)
     run("git", "init", "-b", "main")
     run("git", "config", "user.email", "t@t.com")
     run("git", "config", "user.name", "t")
@@ -306,26 +351,43 @@ class TestResumeInterruptedWorkflowsGitCommitPushRecovery:
         session = test_db.get_session()
         session.add(
             Workflow(
-                id="wf-git", name="t", phases_folder_path="/tmp", status="active",
-                definition_id="autopilot", working_directory=str(working_directory),
+                id="wf-git",
+                name="t",
+                phases_folder_path="/tmp",
+                status="active",
+                definition_id="autopilot",
+                working_directory=str(working_directory),
             )
         )
         session.add(
             Phase(
-                id="phase-gcp", workflow_id="wf-git", order=12, name=phase_name,
-                description="d", done_definitions=["x"],
+                id="phase-gcp",
+                workflow_id="wf-git",
+                order=12,
+                name=phase_name,
+                description="d",
+                done_definitions=["x"],
             )
         )
         session.add(
             Agent(
-                id="agent-old", system_prompt="p", status="working", cli_type="claude",
-                agent_type="phase", tmux_session_name="agent_old", current_task_id="task-git",
+                id="agent-old",
+                system_prompt="p",
+                status="working",
+                cli_type="claude",
+                agent_type="phase",
+                tmux_session_name="agent_old",
+                current_task_id="task-git",
             )
         )
         session.add(
             Task(
-                id="task-git", workflow_id="wf-git", phase_id="phase-gcp",
-                raw_description="r", done_definition="d", status="in_progress",
+                id="task-git",
+                workflow_id="wf-git",
+                phase_id="phase-gcp",
+                raw_description="r",
+                done_definition="d",
+                status="in_progress",
                 assigned_agent_id="agent-old",
             )
         )

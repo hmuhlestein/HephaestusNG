@@ -132,9 +132,7 @@ def _branch_names(temp_repo):
 
 
 class TestHealOrphanedAgentBranches:
-    def test_fast_forwards_orphaned_branch_with_no_live_worktree(
-        self, test_db, temp_repo, config
-    ):
+    def test_fast_forwards_orphaned_branch_with_no_live_worktree(self, test_db, temp_repo, config):
         from src.autopilot.orchestrator.worktree_integration import heal_orphaned_agent_branches
 
         _register_project(test_db, temp_repo)
@@ -165,9 +163,7 @@ class TestHealOrphanedAgentBranches:
         assert (Path(temp_repo.working_dir) / "fix.py").read_text() == "# real fix\n"
         assert not temp_repo.is_dirty(untracked_files=True)
 
-    def test_skips_healing_when_primary_checkout_of_base_branch_is_dirty(
-        self, test_db, temp_repo, config
-    ):
+    def test_skips_healing_when_primary_checkout_of_base_branch_is_dirty(self, test_db, temp_repo, config):
         """base_branch is checked out (as usual) in the project's primary
         directory, which has uncommitted changes sitting in it. Healing
         must not merge on top of that unattended -- skip and leave both
@@ -196,9 +192,7 @@ class TestHealOrphanedAgentBranches:
         assert (Path(temp_repo.working_dir) / "README.md").read_text() == "# dirty\n"
         assert "agent-def456" in _branch_names(temp_repo)
 
-    def test_does_not_touch_branch_still_checked_out_in_a_live_worktree(
-        self, test_db, temp_repo, config
-    ):
+    def test_does_not_touch_branch_still_checked_out_in_a_live_worktree(self, test_db, temp_repo, config):
         from src.autopilot.orchestrator.worktree_integration import heal_orphaned_agent_branches
 
         _register_project(test_db, temp_repo)
@@ -251,9 +245,7 @@ class TestHealOrphanedAgentBranches:
         assert temp_repo.heads["main"].commit.hexsha == main_tip_before
         assert "agent-diverged" in _branch_names(temp_repo)
 
-    def test_ignores_branches_not_matching_the_agent_prefix(
-        self, test_db, temp_repo, config
-    ):
+    def test_ignores_branches_not_matching_the_agent_prefix(self, test_db, temp_repo, config):
         from src.autopilot.orchestrator.worktree_integration import heal_orphaned_agent_branches
 
         _register_project(test_db, temp_repo)

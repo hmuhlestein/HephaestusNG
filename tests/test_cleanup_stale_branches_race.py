@@ -89,9 +89,7 @@ def _add_worktree(temp_repo, base_path: Path, branch: str) -> Path:
 
 
 class TestCleanupDoesNotRemoveActiveWorktree:
-    def test_active_workflows_worktree_survives_cleanup(
-        self, test_db, temp_repo, worktree_manager
-    ):
+    def test_active_workflows_worktree_survives_cleanup(self, test_db, temp_repo, worktree_manager):
         import src.core.simple_config
 
         base_path = src.core.simple_config.get_config().paths.worktree_base_path
@@ -127,15 +125,11 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         # could still merge the live branch into main and force-delete it out
         # from under the active worktree even after Step 1 stopped removing
         # the directory. Confirm the branch itself also survived untouched.
-        branch_names = Repo(temp_repo.working_dir).git.branch(
-            "--format=%(refname:short)"
-        ).split("\n")
+        branch_names = Repo(temp_repo.working_dir).git.branch("--format=%(refname:short)").split("\n")
         assert "feature_architect/live-design" in branch_names
         assert "feature_architect/old-design" not in branch_names
 
-    def test_worktree_with_uncommitted_changes_survives_cleanup_even_if_workflow_is_failed(
-        self, test_db, temp_repo, worktree_manager
-    ):
+    def test_worktree_with_uncommitted_changes_survives_cleanup_even_if_workflow_is_failed(self, test_db, temp_repo, worktree_manager):
         """Regression, observed live: a workflow can be wrongly marked
         "failed" by an unrelated self-heal (e.g. "abandoned: no activity"
         firing because the *backend itself* crashed and stopped recording
@@ -174,9 +168,7 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         assert dirty_path.exists(), "a worktree with uncommitted changes must never be deleted"
         assert (dirty_path / "uncommitted_fix.py").exists(), "the uncommitted work itself must survive"
 
-    def test_paused_workflows_worktree_survives_cleanup(
-        self, test_db, temp_repo, worktree_manager
-    ):
+    def test_paused_workflows_worktree_survives_cleanup(self, test_db, temp_repo, worktree_manager):
         """Found on adversarial review: pause_feature (autopilot_api.py) sets
         a workflow to 'paused' while deliberately keeping working_directory
         intact so _resume_interrupted_workflows can restart the agent on its
@@ -215,14 +207,10 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         worktree_manager.cleanup_all_stale_branches()
 
         assert paused_path.exists(), "worktree claimed by a paused (resumable) workflow must survive cleanup"
-        branch_names = Repo(temp_repo.working_dir).git.branch(
-            "--format=%(refname:short)"
-        ).split("\n")
+        branch_names = Repo(temp_repo.working_dir).git.branch("--format=%(refname:short)").split("\n")
         assert "feature_architect/paused-design" in branch_names
 
-    def test_agent_branch_still_in_progress_is_not_merged_and_deleted(
-        self, test_db, temp_repo, worktree_manager
-    ):
+    def test_agent_branch_still_in_progress_is_not_merged_and_deleted(self, test_db, temp_repo, worktree_manager):
         """AgentBranch.merge_status == 'active' only means 'not yet merged',
         the state for every currently-in-progress agent's branch -- not
         'the agent is done'. Without protection, any agent still genuinely
@@ -259,13 +247,8 @@ class TestCleanupDoesNotRemoveActiveWorktree:
 
         worktree_manager.cleanup_all_stale_branches()
 
-        branch_names = Repo(temp_repo.working_dir).git.branch(
-            "--format=%(refname:short)"
-        ).split("\n")
-        assert "agent-still-working" in branch_names, (
-            "an agent's branch still marked 'active' must survive cleanup "
-            "while its worktree belongs to an active workflow"
-        )
+        branch_names = Repo(temp_repo.working_dir).git.branch("--format=%(refname:short)").split("\n")
+        assert "agent-still-working" in branch_names, "an agent's branch still marked 'active' must survive cleanup while its worktree belongs to an active workflow"
         assert working_path.exists()
 
 
@@ -284,9 +267,7 @@ class TestCleanupDoesNotRemoveActiveAgentWorktree:
     branches started running on a periodic sweep instead of only rare
     manual/rerun triggers."""
 
-    def test_still_alive_agents_fresh_worktree_survives_cleanup(
-        self, test_db, temp_repo, worktree_manager
-    ):
+    def test_still_alive_agents_fresh_worktree_survives_cleanup(self, test_db, temp_repo, worktree_manager):
         import src.core.simple_config
 
         base_path = src.core.simple_config.get_config().paths.worktree_base_path
@@ -300,28 +281,40 @@ class TestCleanupDoesNotRemoveActiveAgentWorktree:
         session = test_db.get_session()
         session.add(
             Agent(
-                id="dead-agent", system_prompt="p", status="terminated",
-                cli_type="pi", tmux_session_name="tmux-dead",
+                id="dead-agent",
+                system_prompt="p",
+                status="terminated",
+                cli_type="pi",
+                tmux_session_name="tmux-dead",
             )
         )
         session.add(
             AgentBranch(
-                agent_id="dead-agent", worktree_path=str(stale_path),
-                branch_name="agent-dead-agent", parent_commit_sha="abc123",
-                base_commit_sha="abc123", merge_status="active",
+                agent_id="dead-agent",
+                worktree_path=str(stale_path),
+                branch_name="agent-dead-agent",
+                parent_commit_sha="abc123",
+                base_commit_sha="abc123",
+                merge_status="active",
             )
         )
         session.add(
             Agent(
-                id="still-alive", system_prompt="p", status="working",
-                cli_type="pi", tmux_session_name="tmux-alive",
+                id="still-alive",
+                system_prompt="p",
+                status="working",
+                cli_type="pi",
+                tmux_session_name="tmux-alive",
             )
         )
         session.add(
             AgentBranch(
-                agent_id="still-alive", worktree_path=str(fresh_path),
-                branch_name="agent-still-alive", parent_commit_sha="abc123",
-                base_commit_sha="abc123", merge_status="active",
+                agent_id="still-alive",
+                worktree_path=str(fresh_path),
+                branch_name="agent-still-alive",
+                parent_commit_sha="abc123",
+                base_commit_sha="abc123",
+                merge_status="active",
             )
         )
         session.commit()
@@ -333,13 +326,8 @@ class TestCleanupDoesNotRemoveActiveAgentWorktree:
         assert fresh_path.exists(), "a still-alive agent's worktree must survive cleanup"
         assert result["worktrees_cleaned"] >= 1
 
-        branch_names = Repo(temp_repo.working_dir).git.branch(
-            "--format=%(refname:short)"
-        ).split("\n")
-        assert "agent-still-alive" in branch_names, (
-            "an alive agent's branch must survive cleanup while its worktree "
-            "is protected"
-        )
+        branch_names = Repo(temp_repo.working_dir).git.branch("--format=%(refname:short)").split("\n")
+        assert "agent-still-alive" in branch_names, "an alive agent's branch must survive cleanup while its worktree is protected"
 
 
 class TestCleanupHandlesLegacyBranchPrefix:
@@ -353,25 +341,16 @@ class TestCleanupHandlesLegacyBranchPrefix:
     mechanical test-fixture updates left nothing else creating an
     "autopilot-*" branch anymore."""
 
-    def test_legacy_autopilot_prefixed_branch_still_cleaned_up(
-        self, test_db, temp_repo, worktree_manager
-    ):
+    def test_legacy_autopilot_prefixed_branch_still_cleaned_up(self, test_db, temp_repo, worktree_manager):
         import src.core.simple_config
 
         base_path = src.core.simple_config.get_config().paths.worktree_base_path
-        legacy_path = _add_worktree(
-            temp_repo, base_path, "autopilot-phase0/pre-rename-design"
-        )
+        legacy_path = _add_worktree(temp_repo, base_path, "autopilot-phase0/pre-rename-design")
 
         worktree_manager.cleanup_all_stale_branches()
 
-        assert not legacy_path.exists(), (
-            "a genuinely stale worktree using the pre-rename branch prefix "
-            "must still be cleaned up"
-        )
-        branch_names = Repo(temp_repo.working_dir).git.branch(
-            "--format=%(refname:short)"
-        ).split("\n")
+        assert not legacy_path.exists(), "a genuinely stale worktree using the pre-rename branch prefix must still be cleaned up"
+        branch_names = Repo(temp_repo.working_dir).git.branch("--format=%(refname:short)").split("\n")
         assert "autopilot-phase0/pre-rename-design" not in branch_names
 
 
@@ -387,9 +366,7 @@ class TestCleanupNeverTouchesMainRepo:
     shutil.rmtree on failure. Confirmed live via direct reproduction.
     """
 
-    def test_main_repo_directory_and_git_history_survive(
-        self, test_db, temp_repo, worktree_manager
-    ):
+    def test_main_repo_directory_and_git_history_survive(self, test_db, temp_repo, worktree_manager):
         import src.core.simple_config
 
         # Sanity-check the assumption this bug depended on: tempfile.mkdtemp()
@@ -409,9 +386,7 @@ class TestCleanupNeverTouchesMainRepo:
         # A real commit from before cleanup must still be reachable.
         assert temp_repo.head.commit.message.strip() == "Initial commit"
 
-    def test_remove_worktree_refuses_main_repo_path_directly(
-        self, test_db, temp_repo, worktree_manager
-    ):
+    def test_remove_worktree_refuses_main_repo_path_directly(self, test_db, temp_repo, worktree_manager):
         """Defense-in-depth: _remove_worktree itself must refuse to touch the
         main repo, independent of whether any caller's own path-matching
         logic correctly identified it as such. This is the sole choke point

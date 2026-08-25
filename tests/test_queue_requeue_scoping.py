@@ -61,11 +61,9 @@ def _make_workflow(db, wf_id, project_id, design_doc):
 
 
 @pytest.mark.asyncio
-async def test_requeue_does_not_pause_another_projects_same_named_design(
-    queue_db, isolate_queue_order
-):
-    from src.mcp.autopilot.queue_routes import requeue_design
+async def test_requeue_does_not_pause_another_projects_same_named_design(queue_db, isolate_queue_order):
     from src.core.database import Workflow
+    from src.mcp.autopilot.queue_routes import requeue_design
 
     _make_workflow(queue_db, "wf-mine", "proj-a", "/repos/a/designs/design.md")
     _make_workflow(queue_db, "wf-theirs", "proj-b", "/repos/b/designs/design.md")
@@ -79,12 +77,10 @@ async def test_requeue_does_not_pause_another_projects_same_named_design(
 
 
 @pytest.mark.asyncio
-async def test_requeue_does_not_match_a_design_merely_containing_the_name(
-    queue_db, isolate_queue_order
-):
+async def test_requeue_does_not_match_a_design_merely_containing_the_name(queue_db, isolate_queue_order):
     """`filename in design_doc` also matched supersets of the name."""
-    from src.mcp.autopilot.queue_routes import requeue_design
     from src.core.database import Workflow
+    from src.mcp.autopilot.queue_routes import requeue_design
 
     _make_workflow(queue_db, "wf-exact", "proj-a", "/repos/a/designs/api.md")
     _make_workflow(queue_db, "wf-superset", "proj-a", "/repos/a/designs/legacy-api.md")
@@ -98,9 +94,7 @@ async def test_requeue_does_not_match_a_design_merely_containing_the_name(
 
 
 @pytest.mark.asyncio
-async def test_requeue_resets_a_queued_task_through_the_locked_path(
-    queue_db, isolate_queue_order, monkeypatch
-):
+async def test_requeue_resets_a_queued_task_through_the_locked_path(queue_db, isolate_queue_order, monkeypatch):
     """Regression: the batch reset here used to include "queued" tasks in
     the same unlocked status="pending" write as "assigned"/"in_progress"
     ones -- an unlocked write racing claim_next_queued_task's locked
@@ -116,8 +110,11 @@ async def test_requeue_resets_a_queued_task_through_the_locked_path(
     with queue_db.session_scope() as session:
         session.add(
             Task(
-                id="task-queued", workflow_id="wf-mine", raw_description="r",
-                done_definition="d", status="queued",
+                id="task-queued",
+                workflow_id="wf-mine",
+                raw_description="r",
+                done_definition="d",
+                status="queued",
             )
         )
 

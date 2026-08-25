@@ -81,9 +81,7 @@ def test_create_agent_worktree(worktree_manager, test_db):
 
     # Create a test agent
     session = test_db.get_session()
-    agent = Agent(
-        id=agent_id, system_prompt="Test agent", status="working", cli_type="test"
-    )
+    agent = Agent(id=agent_id, system_prompt="Test agent", status="working", cli_type="test")
     session.add(agent)
     session.commit()
     session.close()
@@ -122,16 +120,12 @@ def test_get_agent_branch_path_returns_none_when_no_record(worktree_manager, tes
     assert worktree_manager.get_agent_branch_path(agent_id) is None
 
 
-def test_get_agent_branch_path_returns_real_path_when_record_exists(
-    worktree_manager, test_db
-):
+def test_get_agent_branch_path_returns_real_path_when_record_exists(worktree_manager, test_db):
     """Companion to the None-fallback test above -- confirms the fix didn't
     also break the normal, working case."""
     agent_id = str(uuid.uuid4())
     session = test_db.get_session()
-    agent = Agent(
-        id=agent_id, system_prompt="Test agent", status="working", cli_type="test"
-    )
+    agent = Agent(id=agent_id, system_prompt="Test agent", status="working", cli_type="test")
     session.add(agent)
     session.commit()
     session.close()
@@ -151,9 +145,7 @@ def test_parent_child_inheritance(worktree_manager, test_db):
 
     # Create parent agent
     session = test_db.get_session()
-    parent_agent = Agent(
-        id=parent_id, system_prompt="Parent", status="working", cli_type="test"
-    )
+    parent_agent = Agent(id=parent_id, system_prompt="Parent", status="working", cli_type="test")
     session.add(parent_agent)
     session.commit()
     session.close()
@@ -173,17 +165,13 @@ def test_parent_child_inheritance(worktree_manager, test_db):
 
     # Create child agent
     session = test_db.get_session()
-    child_agent = Agent(
-        id=child_id, system_prompt="Child", status="working", cli_type="test"
-    )
+    child_agent = Agent(id=child_id, system_prompt="Child", status="working", cli_type="test")
     session.add(child_agent)
     session.commit()
     session.close()
 
     # Create child worktree with parent
-    child_result = worktree_manager.create_agent_worktree(
-        child_id, parent_agent_id=parent_id
-    )
+    child_result = worktree_manager.create_agent_worktree(child_id, parent_agent_id=parent_id)
     child_path = Path(child_result["working_directory"])
 
     # Verify child has parent's file
@@ -203,12 +191,8 @@ def test_parallel_isolation(worktree_manager, test_db):
 
     # Create two agents
     session = test_db.get_session()
-    agent1 = Agent(
-        id=agent1_id, system_prompt="Agent 1", status="working", cli_type="test"
-    )
-    agent2 = Agent(
-        id=agent2_id, system_prompt="Agent 2", status="working", cli_type="test"
-    )
+    agent1 = Agent(id=agent1_id, system_prompt="Agent 1", status="working", cli_type="test")
+    agent2 = Agent(id=agent2_id, system_prompt="Agent 2", status="working", cli_type="test")
     session.add(agent1)
     session.add(agent2)
     session.commit()
@@ -334,9 +318,7 @@ class TestReloadInstanceIsolation:
         finally:
             config.paths.worktree_base_path = original_worktree_base_path
 
-    def test_two_instances_scoped_to_different_projects_dont_interfere(
-        self, test_db, tmp_path, monkeypatch
-    ):
+    def test_two_instances_scoped_to_different_projects_dont_interfere(self, test_db, tmp_path, monkeypatch):
         import src.core.simple_config as simple_config
 
         config = simple_config.Config()

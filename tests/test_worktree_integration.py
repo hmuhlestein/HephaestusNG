@@ -156,9 +156,7 @@ async def test_agent_manager_with_worktree_integration(agent_manager, test_db):
     task = session.query(Task).filter_by(id=task_id).first()
 
     # Create agent with worktree
-    agent = await agent_manager.create_agent_for_task(
-        task=task, enriched_data={}, memories=[], project_context="Test context"
-    )
+    agent = await agent_manager.create_agent_for_task(task=task, enriched_data={}, memories=[], project_context="Test context")
     session.close()
 
     # Verify agent was created
@@ -169,9 +167,7 @@ async def test_agent_manager_with_worktree_integration(agent_manager, test_db):
     session = test_db.get_session()
     worktree = session.query(AgentWorktree).filter_by(agent_id=agent.id).first()
     assert worktree is not None
-    assert worktree.branch_name.startswith(
-        "agent-"
-    )  # Uses agent- prefix, not test-agent-
+    assert worktree.branch_name.startswith("agent-")  # Uses agent- prefix, not test-agent-
     assert Path(worktree.worktree_path).exists()
 
     # Cleanup
@@ -212,9 +208,7 @@ async def test_parent_child_agent_integration(agent_manager, test_db):
     parent_task = session.query(Task).filter_by(id=parent_task_id).first()
 
     # Create parent agent
-    parent_agent = await agent_manager.create_agent_for_task(
-        task=parent_task, enriched_data={}, memories=[], project_context="Test context"
-    )
+    parent_agent = await agent_manager.create_agent_for_task(task=parent_task, enriched_data={}, memories=[], project_context="Test context")
     session.close()
 
     # Update child task to reference parent agent (for worktree inheritance)
@@ -226,9 +220,7 @@ async def test_parent_child_agent_integration(agent_manager, test_db):
 
     # Get parent worktree and create a file
     session = test_db.get_session()
-    parent_worktree = (
-        session.query(AgentWorktree).filter_by(agent_id=parent_agent.id).first()
-    )
+    parent_worktree = session.query(AgentWorktree).filter_by(agent_id=parent_agent.id).first()
     parent_path = Path(parent_worktree.worktree_path)
     parent_file = parent_path / "analysis.md"
     parent_file.write_text("# Analysis Results\nImportant findings here")
@@ -254,9 +246,7 @@ async def test_parent_child_agent_integration(agent_manager, test_db):
 
     # Verify child has parent's work
     session = test_db.get_session()
-    child_worktree = (
-        session.query(AgentWorktree).filter_by(agent_id=child_agent.id).first()
-    )
+    child_worktree = session.query(AgentWorktree).filter_by(agent_id=child_agent.id).first()
     child_path = Path(child_worktree.worktree_path)
     child_parent_file = child_path / "analysis.md"
     assert child_parent_file.exists()
@@ -290,9 +280,7 @@ async def test_agent_termination_with_merge(agent_manager, test_db, worktree_man
     task = session.query(Task).filter_by(id=task_id).first()
 
     # Create agent
-    agent = await agent_manager.create_agent_for_task(
-        task=task, enriched_data={}, memories=[], project_context="Test context"
-    )
+    agent = await agent_manager.create_agent_for_task(task=task, enriched_data={}, memories=[], project_context="Test context")
     session.close()
 
     # Get worktree and create work
@@ -345,9 +333,7 @@ def test_merge_conflict_resolution(worktree_manager, test_db):
     agent1_id = str(uuid.uuid4())
 
     session = test_db.get_session()
-    agent1 = Agent(
-        id=agent1_id, system_prompt="Agent 1", status="working", cli_type="test"
-    )
+    agent1 = Agent(id=agent1_id, system_prompt="Agent 1", status="working", cli_type="test")
     session.add(agent1)
     session.commit()
     session.close()
@@ -416,10 +402,7 @@ def test_workspace_changes_tracking(worktree_manager, test_db):
     # Verify changes tracked correctly
     assert "new_feature.py" in changes["files_created"]
     # README.md was modified from initial state
-    assert (
-        "README.md" in changes["files_modified"]
-        or "README.md" in changes["files_created"]
-    )
+    assert "README.md" in changes["files_modified"] or "README.md" in changes["files_created"]
     assert changes["total_changes"] >= 1  # At least new_feature.py was created
 
     # Cleanup
@@ -473,17 +456,13 @@ def test_cleanup_policies(worktree_manager, test_db):
 
     # Active agent
     active_id = str(uuid.uuid4())
-    active_agent = Agent(
-        id=active_id, system_prompt="Active", status="working", cli_type="test"
-    )
+    active_agent = Agent(id=active_id, system_prompt="Active", status="working", cli_type="test")
     session.add(active_agent)
     agents.append(active_id)
 
     # Merged agent
     merged_id = str(uuid.uuid4())
-    merged_agent = Agent(
-        id=merged_id, system_prompt="Merged", status="working", cli_type="test"
-    )
+    merged_agent = Agent(id=merged_id, system_prompt="Merged", status="working", cli_type="test")
     session.add(merged_agent)
     agents.append(merged_id)
 
@@ -498,9 +477,7 @@ def test_cleanup_policies(worktree_manager, test_db):
     session = test_db.get_session()
     merged_worktree = session.query(AgentWorktree).filter_by(agent_id=merged_id).first()
     merged_worktree.merge_status = "merged"
-    merged_worktree.merged_at = datetime.utcnow() - timedelta(
-        hours=2
-    )  # Merged 2 hours ago
+    merged_worktree.merged_at = datetime.utcnow() - timedelta(hours=2)  # Merged 2 hours ago
     session.commit()
 
     # Check retention policies
@@ -510,9 +487,7 @@ def test_cleanup_policies(worktree_manager, test_db):
     # Merged worktree should be eligible for cleanup after retention period
     config = worktree_manager.config
     retention_hours = config.git.branch_retention_hours["merged"]  # 1 hour by default
-    assert merged_worktree.merged_at < datetime.utcnow() - timedelta(
-        hours=retention_hours
-    )
+    assert merged_worktree.merged_at < datetime.utcnow() - timedelta(hours=retention_hours)
 
     session.close()
 
@@ -566,9 +541,7 @@ def test_child_merge_with_active_parent_worktree(worktree_manager, test_db):
     # Create parent agent
     parent_id = str(uuid.uuid4())
     session = test_db.get_session()
-    parent_agent = Agent(
-        id=parent_id, system_prompt="Parent agent", status="working", cli_type="test"
-    )
+    parent_agent = Agent(id=parent_id, system_prompt="Parent agent", status="working", cli_type="test")
     session.add(parent_agent)
     session.commit()
     session.close()
@@ -591,9 +564,7 @@ def test_child_merge_with_active_parent_worktree(worktree_manager, test_db):
     # Create child agent (relationship to parent tracked via worktree)
     child_id = str(uuid.uuid4())
     session = test_db.get_session()
-    child_agent = Agent(
-        id=child_id, system_prompt="Child agent", status="working", cli_type="test"
-    )
+    child_agent = Agent(id=child_id, system_prompt="Child agent", status="working", cli_type="test")
     session.add(child_agent)
     session.commit()
     session.close()
@@ -658,9 +629,7 @@ def test_child_creation_with_detached_parent_head(worktree_manager, test_db):
     # Create parent agent
     parent_id = str(uuid.uuid4())
     session = test_db.get_session()
-    parent_agent = Agent(
-        id=parent_id, system_prompt="Parent agent", status="working", cli_type="test"
-    )
+    parent_agent = Agent(id=parent_id, system_prompt="Parent agent", status="working", cli_type="test")
     session.add(parent_agent)
     session.commit()
     session.close()
@@ -690,9 +659,7 @@ def test_child_creation_with_detached_parent_head(worktree_manager, test_db):
     # Now try to create a child - this should NOT crash
     child_id = str(uuid.uuid4())
     session = test_db.get_session()
-    child_agent = Agent(
-        id=child_id, system_prompt="Child agent", status="working", cli_type="test"
-    )
+    child_agent = Agent(id=child_id, system_prompt="Child agent", status="working", cli_type="test")
     session.add(child_agent)
     session.commit()
     session.close()
@@ -706,9 +673,7 @@ def test_child_creation_with_detached_parent_head(worktree_manager, test_db):
         assert child_result["working_directory"] is not None
     except TypeError as e:
         if "detached symbolic reference" in str(e):
-            raise AssertionError(
-                f"Should handle detached HEAD gracefully, but got: {e}"
-            )
+            raise AssertionError(f"Should handle detached HEAD gracefully, but got: {e}")
         raise
     finally:
         # Cleanup
@@ -733,9 +698,7 @@ def test_detached_head_after_child_merge(worktree_manager, test_db):
     # Create parent agent
     parent_id = str(uuid.uuid4())
     session = test_db.get_session()
-    parent_agent = Agent(
-        id=parent_id, system_prompt="Parent agent", status="working", cli_type="test"
-    )
+    parent_agent = Agent(id=parent_id, system_prompt="Parent agent", status="working", cli_type="test")
     session.add(parent_agent)
     session.commit()
     session.close()
@@ -754,16 +717,12 @@ def test_detached_head_after_child_merge(worktree_manager, test_db):
 
     # Verify parent is on a branch (not detached)
     parent_repo = Repo(parent_path)
-    assert parent_repo.active_branch.name == parent_branch, (
-        "Parent should be on its branch"
-    )
+    assert parent_repo.active_branch.name == parent_branch, "Parent should be on its branch"
 
     # Create first child
     child1_id = str(uuid.uuid4())
     session = test_db.get_session()
-    child1_agent = Agent(
-        id=child1_id, system_prompt="Child 1 agent", status="working", cli_type="test"
-    )
+    child1_agent = Agent(id=child1_id, system_prompt="Child 1 agent", status="working", cli_type="test")
     session.add(child1_agent)
     session.commit()
     session.close()
@@ -790,23 +749,17 @@ def test_detached_head_after_child_merge(worktree_manager, test_db):
     try:
         current_branch = parent_repo.active_branch.name
         print(f"After child1 merge - Parent branch: {current_branch}")
-        assert current_branch == parent_branch, (
-            f"Parent should still be on {parent_branch}, not {current_branch}"
-        )
+        assert current_branch == parent_branch, f"Parent should still be on {parent_branch}, not {current_branch}"
     except TypeError as e:
         print("ERROR: Parent HEAD is DETACHED after child merge!")
         print(f"Error: {e}")
         print(f"HEAD points to: {parent_repo.head.commit.hexsha}")
-        raise AssertionError(
-            f"Parent HEAD should not be detached after child merge: {e}"
-        )
+        raise AssertionError(f"Parent HEAD should not be detached after child merge: {e}")
 
     # Now try to create a second child - this should not crash
     child2_id = str(uuid.uuid4())
     session = test_db.get_session()
-    child2_agent = Agent(
-        id=child2_id, system_prompt="Child 2 agent", status="working", cli_type="test"
-    )
+    child2_agent = Agent(id=child2_id, system_prompt="Child 2 agent", status="working", cli_type="test")
     session.add(child2_agent)
     session.commit()
     session.close()

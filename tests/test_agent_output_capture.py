@@ -36,14 +36,10 @@ class TestAgentOutputCapture:
     @pytest.fixture
     def agent_manager(self, mock_db_manager, mock_llm_provider, mock_tmux_server):
         """Create an agent manager with mocked dependencies."""
-        return AgentManager(
-            mock_db_manager, mock_llm_provider, tmux_server=mock_tmux_server
-        )
+        return AgentManager(mock_db_manager, mock_llm_provider, tmux_server=mock_tmux_server)
 
     @pytest.mark.asyncio
-    async def test_terminate_agent_captures_output(
-        self, agent_manager, mock_db_manager, mock_tmux_server
-    ):
+    async def test_terminate_agent_captures_output(self, agent_manager, mock_db_manager, mock_tmux_server):
         """Test that terminate_agent captures output before killing the session."""
         # Setup
         agent_id = str(uuid.uuid4())
@@ -116,9 +112,7 @@ class TestAgentOutputCapture:
         mock_db_session.commit.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_terminate_agent_handles_no_session(
-        self, agent_manager, mock_db_manager, mock_tmux_server
-    ):
+    async def test_terminate_agent_handles_no_session(self, agent_manager, mock_db_manager, mock_tmux_server):
         """Test that terminate_agent handles missing tmux session gracefully."""
         # Setup
         agent_id = str(uuid.uuid4())
@@ -169,9 +163,7 @@ class TestAgentOutputCapture:
         # Verify database commit
         mock_db_session.commit.assert_called_once()
 
-    def test_get_agent_output_retrieves_from_log_for_terminated(
-        self, agent_manager, mock_db_manager
-    ):
+    def test_get_agent_output_retrieves_from_log_for_terminated(self, agent_manager, mock_db_manager):
         """Test that get_agent_output retrieves from AgentLog for terminated agents."""
         # Setup
         agent_id = str(uuid.uuid4())
@@ -206,7 +198,7 @@ class TestAgentOutputCapture:
 
         mock_db_session.query.side_effect = [
             mock_agent_query,  # Agent query
-            mock_log_query,    # AgentLog query
+            mock_log_query,  # AgentLog query
         ]
         mock_db_manager.get_session.return_value = mock_db_session
 
@@ -216,9 +208,7 @@ class TestAgentOutputCapture:
         # Verify
         assert output == stored_output
 
-    def test_get_agent_output_retrieves_last_n_lines_for_terminated(
-        self, agent_manager, mock_db_manager
-    ):
+    def test_get_agent_output_retrieves_last_n_lines_for_terminated(self, agent_manager, mock_db_manager):
         """Test that get_agent_output respects lines parameter for terminated agents."""
         # Setup
         agent_id = str(uuid.uuid4())
@@ -253,7 +243,7 @@ class TestAgentOutputCapture:
 
         mock_db_session.query.side_effect = [
             mock_agent_query,  # Agent query
-            mock_log_query,    # AgentLog query
+            mock_log_query,  # AgentLog query
         ]
         mock_db_manager.get_session.return_value = mock_db_session
 
@@ -264,9 +254,7 @@ class TestAgentOutputCapture:
         expected_lines = ["Line 6", "Line 7", "Line 8", "Line 9", "Line 10"]
         assert output == "\n".join(expected_lines)
 
-    def test_get_agent_output_from_tmux_for_active_agent(
-        self, agent_manager, mock_db_manager, mock_tmux_server
-    ):
+    def test_get_agent_output_from_tmux_for_active_agent(self, agent_manager, mock_db_manager, mock_tmux_server):
         """Test that get_agent_output retrieves from tmux for active agents."""
         # Setup
         agent_id = str(uuid.uuid4())
@@ -320,9 +308,7 @@ class TestAgentOutputCapture:
         # Verify output
         assert output == "\n".join(test_output_lines)
 
-    def test_get_agent_output_handles_no_stored_output(
-        self, agent_manager, mock_db_manager
-    ):
+    def test_get_agent_output_handles_no_stored_output(self, agent_manager, mock_db_manager):
         """Test that get_agent_output handles terminated agents with no stored output."""
         # Setup
         agent_id = str(uuid.uuid4())
@@ -337,9 +323,7 @@ class TestAgentOutputCapture:
 
         # No AgentLog found
         mock_db_session = Mock()
-        mock_db_session.query.return_value.filter_by.return_value.first.return_value = (
-            mock_agent
-        )
+        mock_db_session.query.return_value.filter_by.return_value.first.return_value = mock_agent
         mock_db_session.query.return_value.filter_by.return_value.order_by.return_value.first.return_value = None
         mock_db_session.query.return_value.filter_by.return_value.order_by.return_value.limit.return_value.all.return_value = []
         mock_db_manager.get_session.return_value = mock_db_session
@@ -351,9 +335,7 @@ class TestAgentOutputCapture:
         assert output == "Agent terminated - no output was captured"
 
     @pytest.mark.asyncio
-    async def test_terminate_agent_handles_output_capture_failure(
-        self, agent_manager, mock_db_manager, mock_tmux_server
-    ):
+    async def test_terminate_agent_handles_output_capture_failure(self, agent_manager, mock_db_manager, mock_tmux_server):
         """Test that terminate_agent handles output capture failure gracefully."""
         # Setup
         agent_id = str(uuid.uuid4())
@@ -438,12 +420,17 @@ class TestResolveTmuxTranscriptDirSurvivesTermination:
         working_directory = str(tmp_path / "worktree")
 
         session = db_manager.get_session()
-        session.add(Agent(
-            id=agent_id, system_prompt="p", status="terminated",
-            cli_type="pi", tmux_session_name="agent_test",
-            working_directory=working_directory,
-            current_task_id=None,  # cleared, as termination does
-        ))
+        session.add(
+            Agent(
+                id=agent_id,
+                system_prompt="p",
+                status="terminated",
+                cli_type="pi",
+                tmux_session_name="agent_test",
+                working_directory=working_directory,
+                current_task_id=None,  # cleared, as termination does
+            )
+        )
         session.commit()
         session.close()
 
@@ -454,9 +441,7 @@ class TestResolveTmuxTranscriptDirSurvivesTermination:
 
         assert transcript_dir == Path(working_directory) / ".hephaestus" / "tmux"
 
-    def test_legacy_agent_without_working_directory_falls_back_to_task_lookup(
-        self, db_manager, tmp_path
-    ):
+    def test_legacy_agent_without_working_directory_falls_back_to_task_lookup(self, db_manager, tmp_path):
         """An agent created before the working_directory column existed
         has no value to read directly -- falls back to the old
         task->workflow.working_directory resolution."""
@@ -469,21 +454,36 @@ class TestResolveTmuxTranscriptDirSurvivesTermination:
         working_directory = str(tmp_path / "worktree")
 
         session = db_manager.get_session()
-        session.add(Workflow(
-            id=workflow_id, name="wf", phases_folder_path="phases",
-            working_directory=working_directory, status="active",
-        ))
-        session.add(Task(
-            id=task_id, raw_description="do it", done_definition="done",
-            status="in_progress", workflow_id=workflow_id,
-            assigned_agent_id=agent_id,
-        ))
-        session.add(Agent(
-            id=agent_id, system_prompt="p", status="working",
-            cli_type="pi", tmux_session_name="agent_test",
-            working_directory=None,  # pre-migration row
-            current_task_id=task_id,
-        ))
+        session.add(
+            Workflow(
+                id=workflow_id,
+                name="wf",
+                phases_folder_path="phases",
+                working_directory=working_directory,
+                status="active",
+            )
+        )
+        session.add(
+            Task(
+                id=task_id,
+                raw_description="do it",
+                done_definition="done",
+                status="in_progress",
+                workflow_id=workflow_id,
+                assigned_agent_id=agent_id,
+            )
+        )
+        session.add(
+            Agent(
+                id=agent_id,
+                system_prompt="p",
+                status="working",
+                cli_type="pi",
+                tmux_session_name="agent_test",
+                working_directory=None,  # pre-migration row
+                current_task_id=task_id,
+            )
+        )
         session.commit()
         session.close()
 

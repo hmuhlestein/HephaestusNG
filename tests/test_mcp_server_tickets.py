@@ -19,9 +19,7 @@ def _real_head_sha() -> str:
     """A commit SHA that actually exists in this repo -- _link_commit_impl
     now verifies existence via `git cat-file -e` and rejects fake SHAs like
     the old hardcoded 'abc123def456' (adversarial-review fix, REQ-10)."""
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), capture_output=True, text=True, check=True
-    ).stdout.strip()
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), capture_output=True, text=True, check=True).stdout.strip()
 
 
 @pytest.fixture(scope="module")
@@ -173,12 +171,12 @@ class TestMCPTicketEndpoints:
         assert "ticket_id" in data
         assert data["message"] == "Ticket created successfully"
 
-        test_state['ticket_id_1'] = data["ticket_id"]
+        test_state["ticket_id_1"] = data["ticket_id"]
         print(f"✅ Created ticket: {test_state['ticket_id_1']}")
 
     def test_02_get_ticket(self, client, headers):
         """Test GET /tickets/{ticket_id} - Get ticket details."""
-        if test_state['ticket_id_1'] is None:
+        if test_state["ticket_id_1"] is None:
             pytest.skip("Requires ticket from test_01")
 
         response = client.get(
@@ -189,7 +187,7 @@ class TestMCPTicketEndpoints:
         assert response.status_code == 200
         data = response.json()
         ticket_data = data["ticket"]
-        assert ticket_data["ticket_id"] == test_state['ticket_id_1']
+        assert ticket_data["ticket_id"] == test_state["ticket_id_1"]
         assert ticket_data["title"] == "MCP Test Ticket 1"
         assert ticket_data["ticket_type"] == "feature"
         assert ticket_data["priority"] == "high"
@@ -201,14 +199,14 @@ class TestMCPTicketEndpoints:
 
     def test_04_add_comment(self, client, headers):
         """Test POST /tickets/comment - Add comment to ticket."""
-        if test_state['ticket_id_1'] is None:
+        if test_state["ticket_id_1"] is None:
             pytest.skip("Requires ticket from test_01")
 
         response = client.post(
             "/api/tickets/comment",
             headers=headers,
             json={
-                "ticket_id": test_state['ticket_id_1'],
+                "ticket_id": test_state["ticket_id_1"],
                 "comment_text": "This is a test comment via MCP endpoint",
                 "comment_type": "general",
             },
@@ -222,14 +220,14 @@ class TestMCPTicketEndpoints:
 
     def test_05_update_ticket(self, client, headers):
         """Test POST /tickets/update - Update ticket fields."""
-        if test_state['ticket_id_1'] is None:
+        if test_state["ticket_id_1"] is None:
             pytest.skip("Requires ticket from test_01")
 
         response = client.post(
             "/api/tickets/update",
             headers=headers,
             json={
-                "ticket_id": test_state['ticket_id_1'],
+                "ticket_id": test_state["ticket_id_1"],
                 "updates": {
                     "priority": "critical",
                     "tags": ["mcp", "testing", "updated"],
@@ -247,14 +245,14 @@ class TestMCPTicketEndpoints:
 
     def test_06_change_status(self, client, headers):
         """Test POST /tickets/change-status - Change ticket status."""
-        if test_state['ticket_id_1'] is None:
+        if test_state["ticket_id_1"] is None:
             pytest.skip("Requires ticket from test_01")
 
         response = client.post(
             "/api/tickets/change-status",
             headers=headers,
             json={
-                "ticket_id": test_state['ticket_id_1'],
+                "ticket_id": test_state["ticket_id_1"],
                 "new_status": "todo",
                 "comment": "Moving to todo via MCP endpoint",
             },
@@ -286,7 +284,7 @@ class TestMCPTicketEndpoints:
 
     def test_08_link_commit(self, client, headers):
         """Test POST /tickets/link-commit - Link commit to ticket."""
-        if test_state['ticket_id_1'] is None:
+        if test_state["ticket_id_1"] is None:
             pytest.skip("Requires ticket from test_01")
 
         commit_sha = _real_head_sha()
@@ -294,7 +292,7 @@ class TestMCPTicketEndpoints:
             "/api/tickets/link-commit",
             headers=headers,
             json={
-                "ticket_id": test_state['ticket_id_1'],
+                "ticket_id": test_state["ticket_id_1"],
                 "commit_sha": commit_sha,
                 "commit_message": "feat: Add MCP test feature",
                 "link_method": "manual",
@@ -326,13 +324,11 @@ class TestMCPTicketEndpoints:
 
     def test_10_resolve_ticket(self, client, headers):
         """Test POST /tickets/resolve - Resolve a ticket."""
-        if test_state['ticket_id_1'] is None:
+        if test_state["ticket_id_1"] is None:
             pytest.skip("Requires ticket from test_01")
 
         # Move to done first if needed
-        get_response = client.get(
-            f"/api/tickets/{test_state['ticket_id_1']}", headers=headers
-        )
+        get_response = client.get(f"/api/tickets/{test_state['ticket_id_1']}", headers=headers)
         if get_response.status_code == 200:
             ticket_data = get_response.json()["ticket"]
             if ticket_data.get("status") != "done":
@@ -340,7 +336,7 @@ class TestMCPTicketEndpoints:
                     "/api/tickets/change-status",
                     headers=headers,
                     json={
-                        "ticket_id": test_state['ticket_id_1'],
+                        "ticket_id": test_state["ticket_id_1"],
                         "new_status": "done",
                         "comment": "Moving to done for resolve test",
                     },
@@ -350,7 +346,7 @@ class TestMCPTicketEndpoints:
             "/api/tickets/resolve",
             headers=headers,
             json={
-                "ticket_id": test_state['ticket_id_1'],
+                "ticket_id": test_state["ticket_id_1"],
                 "resolution_comment": "Resolved via MCP endpoint test",
                 "commit_sha": _real_head_sha(),
             },
@@ -382,9 +378,7 @@ class TestMCPTicketEndpoints:
 class TestCreateTaskValidation:
     """Test that create_task validates ticket_id when tracking is enabled."""
 
-    def test_create_task_requires_ticket_id_when_tracking_enabled(
-        self, client, headers, phase_id
-    ):
+    def test_create_task_requires_ticket_id_when_tracking_enabled(self, client, headers, phase_id):
         """Test that create_task rejects requests without ticket_id when tracking enabled."""
         if not phase_id:
             pytest.skip("No phases in workflow-e2e-test")
@@ -437,10 +431,7 @@ class TestCreateTaskValidation:
                 "phase_id": phase_id,
             },
         )
-        assert response_phase_agent.status_code == 200, (
-            "a phase agent (workflow_id + phase_id) is exempt from the "
-            "ticket_id requirement"
-        )
+        assert response_phase_agent.status_code == 200, "a phase agent (workflow_id + phase_id) is exempt from the ticket_id requirement"
 
         # With ticket_id — should succeed
         response_with = client.post(

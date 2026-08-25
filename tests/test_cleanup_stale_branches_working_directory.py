@@ -86,9 +86,7 @@ def _add_worktree(temp_repo, base_path: Path, branch: str) -> Path:
 
 
 class TestCleanupClearsWorkingDirectoryOfRemovedWorktree:
-    def test_completed_workflow_working_directory_is_cleared(
-        self, test_db, temp_repo, worktree_manager
-    ):
+    def test_completed_workflow_working_directory_is_cleared(self, test_db, temp_repo, worktree_manager):
         import src.core.simple_config
 
         base_path = src.core.simple_config.get_config().paths.worktree_base_path
@@ -123,9 +121,7 @@ class TestCleanupClearsWorkingDirectoryOfRemovedWorktree:
         )
         session.close()
 
-    def test_already_orphaned_workflow_working_directory_is_cleared(
-        self, test_db, temp_repo, worktree_manager
-    ):
+    def test_already_orphaned_workflow_working_directory_is_cleared(self, test_db, temp_repo, worktree_manager):
         """The worktree is already gone from disk and untracked by git (no
         `git worktree add` was ever run for it in this test) -- simulating a
         directory removed by some path other than this function's own Step 1
@@ -155,16 +151,10 @@ class TestCleanupClearsWorkingDirectoryOfRemovedWorktree:
 
         session = test_db.get_session()
         wf = session.query(Workflow).filter_by(id=wf_id).first()
-        assert wf.working_directory is None, (
-            "a terminal workflow's working_directory must be cleared even "
-            "when the directory was removed outside this function's own "
-            "git-worktree-list-driven loop"
-        )
+        assert wf.working_directory is None, "a terminal workflow's working_directory must be cleared even when the directory was removed outside this function's own git-worktree-list-driven loop"
         session.close()
 
-    def test_resurrected_stub_directory_working_directory_is_cleared(
-        self, test_db, temp_repo, worktree_manager
-    ):
+    def test_resurrected_stub_directory_working_directory_is_cleared(self, test_db, temp_repo, worktree_manager):
         """Observed live: something keeps writing to a removed worktree's
         .hephaestus/tmux/ path after `git worktree remove` deletes
         everything, resurrecting an empty parent directory with no `.git` --
@@ -197,15 +187,10 @@ class TestCleanupClearsWorkingDirectoryOfRemovedWorktree:
 
         session = test_db.get_session()
         wf = session.query(Workflow).filter_by(id=wf_id).first()
-        assert wf.working_directory is None, (
-            "an existing-but-not-a-real-worktree stub directory must not be "
-            "trusted just because Path.exists() is True"
-        )
+        assert wf.working_directory is None, "an existing-but-not-a-real-worktree stub directory must not be trusted just because Path.exists() is True"
         session.close()
 
-    def test_active_workflow_working_directory_survives(
-        self, test_db, temp_repo, worktree_manager
-    ):
+    def test_active_workflow_working_directory_survives(self, test_db, temp_repo, worktree_manager):
         """Sanity check the guard isn't overbroad: an active workflow's
         worktree survives cleanup entirely (covered elsewhere), so its
         working_directory must also survive untouched."""

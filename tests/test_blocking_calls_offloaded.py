@@ -45,9 +45,7 @@ async def test_get_system_health_offloads_run_health_audit():
     assert fn_arg.__name__ == "run_health_audit"
 
 
-def test_run_health_audit_checks_unmerged_branches_for_every_active_project(
-    db, tmp_path, monkeypatch
-):
+def test_run_health_audit_checks_unmerged_branches_for_every_active_project(db, tmp_path, monkeypatch):
     """Regression: run_health_audit's unmerged-branches check used
     .filter_by(is_active=True).first() -- under the documented
     concurrent-active-projects model (max_concurrent_projects), more than
@@ -65,14 +63,26 @@ def test_run_health_audit_checks_unmerged_branches_for_every_active_project(
     project_b.mkdir()
 
     session = db.get_session()
-    session.add(AutopilotProject(
-        id="proj-a", name="proj-a", base_dir=str(project_a),
-        is_active=True, created_at=datetime.utcnow(), updated_at=datetime.utcnow(),
-    ))
-    session.add(AutopilotProject(
-        id="proj-b", name="proj-b", base_dir=str(project_b),
-        is_active=True, created_at=datetime.utcnow(), updated_at=datetime.utcnow(),
-    ))
+    session.add(
+        AutopilotProject(
+            id="proj-a",
+            name="proj-a",
+            base_dir=str(project_a),
+            is_active=True,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+    )
+    session.add(
+        AutopilotProject(
+            id="proj-b",
+            name="proj-b",
+            base_dir=str(project_b),
+            is_active=True,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+    )
     session.commit()
     session.close()
 
@@ -224,9 +234,7 @@ async def test_review_feature_offloads_gh_pr_merge(db):
     session.close()
 
     fake_loop = MagicMock()
-    fake_loop.run_in_executor = AsyncMock(
-        return_value=MagicMock(returncode=0, stdout="", stderr="")
-    )
+    fake_loop.run_in_executor = AsyncMock(return_value=MagicMock(returncode=0, stdout="", stderr=""))
 
     with (
         patch("asyncio.get_event_loop", return_value=fake_loop),
@@ -243,9 +251,7 @@ async def test_review_feature_offloads_gh_pr_merge(db):
     ):
         from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest
 
-        await feature_review_routes.review_feature(
-            "feat-1", FeatureReviewRequest(action="approve"), agent_id="ui-user"
-        )
+        await feature_review_routes.review_feature("feat-1", FeatureReviewRequest(action="approve"), agent_id="ui-user")
 
     fake_loop.run_in_executor.assert_called_once()
     executor_arg, fn_arg = fake_loop.run_in_executor.call_args.args

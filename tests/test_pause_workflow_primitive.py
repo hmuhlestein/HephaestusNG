@@ -25,7 +25,12 @@ def orch_db_env(tmp_path, monkeypatch):
 
 
 def _make_workflow(
-    db, wf_id, status="active", paused_by=None, paused_at=None, status_reason=None,
+    db,
+    wf_id,
+    status="active",
+    paused_by=None,
+    paused_at=None,
+    status_reason=None,
     paused_retry_count=0,
 ):
     from src.core.database import Workflow
@@ -160,8 +165,12 @@ class TestResumeWorkflowPrimitive:
         from src.core.database import Workflow
 
         _make_workflow(
-            orch_db_env, "wf-1", status="paused", paused_by="system",
-            paused_at=datetime.utcnow(), status_reason="something broke",
+            orch_db_env,
+            "wf-1",
+            status="paused",
+            paused_by="system",
+            paused_at=datetime.utcnow(),
+            status_reason="something broke",
         )
 
         assert resume_workflow("wf-1") is True
@@ -237,7 +246,10 @@ class TestResumeWorkflowPrimitive:
         from src.core.database import Workflow
 
         _make_workflow(
-            orch_db_env, "wf-1", status="paused", paused_by="system",
+            orch_db_env,
+            "wf-1",
+            status="paused",
+            paused_by="system",
             paused_retry_count=2,
         )
 
@@ -255,7 +267,10 @@ class TestResumeWorkflowPrimitive:
         from src.core.database import Workflow
 
         _make_workflow(
-            orch_db_env, "wf-1", status="paused", paused_by="user",
+            orch_db_env,
+            "wf-1",
+            status="paused",
+            paused_by="user",
             paused_retry_count=2,
         )
 
@@ -300,8 +315,13 @@ class TestHistoricalPauseSiteConsistency:
         with orch_db_env.session_scope() as session:
             session.add(
                 Feature(
-                    id="feat-1", design_id="des-1", feature_key="k", name="n",
-                    scope="s", workflow_id="wf-1", status="active",
+                    id="feat-1",
+                    design_id="des-1",
+                    feature_key="k",
+                    name="n",
+                    scope="s",
+                    workflow_id="wf-1",
+                    status="active",
                     review_status="approved",
                 )
             )
@@ -347,26 +367,33 @@ class TestHistoricalPauseSiteConsistency:
         with orch_db_env.session_scope() as session:
             session.add(
                 Workflow(
-                    id="wf-1", name="t", phases_folder_path="/tmp",
-                    status="paused", paused_by="user",
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="user",
                 )
             )
             session.add(
                 Phase(
-                    id="phase-1", workflow_id="wf-1", order=1,
-                    name="dev", description="d", done_definitions=["x"],
+                    id="phase-1",
+                    workflow_id="wf-1",
+                    order=1,
+                    name="dev",
+                    description="d",
+                    done_definitions=["x"],
                 )
             )
             session.add(
                 PhaseExecution(
-                    id="exec-1", phase_id="phase-1",
-                    workflow_execution_id="wf-1", status="completed",
+                    id="exec-1",
+                    phase_id="phase-1",
+                    workflow_execution_id="wf-1",
+                    status="completed",
                 )
             )
 
-        with patch(
-            "src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct"
-        ) as mock_create_agent:
+        with patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct") as mock_create_agent:
             result = _create_corrective_task("wf-1", "phase-1", "dev", "feedback", Mock())
 
         assert result is None
@@ -398,21 +425,32 @@ class TestHistoricalPauseSiteConsistency:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp"))
             session.add(
                 Workflow(
-                    id="wf-1", name="t", phases_folder_path="/tmp",
-                    status="active", project_id="proj-1",
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    project_id="proj-1",
                     definition_id="autopilot",
                 )
             )
             session.add(
                 Feature(
-                    id="feat-1", design_id="des-1", feature_key="k", name="n",
-                    scope="s", workflow_id="wf-1", status="active",
+                    id="feat-1",
+                    design_id="des-1",
+                    feature_key="k",
+                    name="n",
+                    scope="s",
+                    workflow_id="wf-1",
+                    status="active",
                 )
             )
 
         with orch_db_env.session_scope() as session:
             pause_project_workflows(
-                session, "proj-1", paused_by="user", definition_ids=("autopilot",),
+                session,
+                "proj-1",
+                paused_by="user",
+                definition_ids=("autopilot",),
             )
 
         with orch_db_env.session_scope() as session:
@@ -436,28 +474,40 @@ class TestHistoricalPauseSiteConsistency:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp"))
             session.add(
                 Workflow(
-                    id="wf-1", name="t", phases_folder_path="/tmp",
-                    status="active", project_id="proj-1",
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    project_id="proj-1",
                     definition_id="autopilot",
                 )
             )
             session.add(
                 Agent(
-                    id="agent-1", system_prompt="p", status="working",
-                    cli_type="claude", current_task_id="task-1",
+                    id="agent-1",
+                    system_prompt="p",
+                    status="working",
+                    cli_type="claude",
+                    current_task_id="task-1",
                 )
             )
             session.add(
                 Task(
-                    id="task-1", workflow_id="wf-1", raw_description="r",
-                    done_definition="d", status="in_progress",
+                    id="task-1",
+                    workflow_id="wf-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="in_progress",
                     assigned_agent_id="agent-1",
                 )
             )
 
         with orch_db_env.session_scope() as session:
             pause_project_workflows(
-                session, "proj-1", paused_by="user", definition_ids=("autopilot",),
+                session,
+                "proj-1",
+                paused_by="user",
+                definition_ids=("autopilot",),
             )
 
         with orch_db_env.session_scope() as session:
@@ -467,7 +517,7 @@ class TestHistoricalPauseSiteConsistency:
             assert task.failure_reason == "User terminated: workflow was paused"
 
     def test_pause_project_workflows_collects_queued_task_ids(self, orch_db_env):
-        """"queued" tasks were previously left untouched entirely -- still
+        """ "queued" tasks were previously left untouched entirely -- still
         eligible for claim_next_queued_task to dispatch even after their
         workflow was just paused. Not reset here (see this function's
         docstring for why -- the caller must apply
@@ -481,27 +531,39 @@ class TestHistoricalPauseSiteConsistency:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp"))
             session.add(
                 Workflow(
-                    id="wf-1", name="t", phases_folder_path="/tmp",
-                    status="active", project_id="proj-1",
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    project_id="proj-1",
                     definition_id="autopilot",
                 )
             )
             session.add(
                 Task(
-                    id="task-queued", workflow_id="wf-1", raw_description="r",
-                    done_definition="d", status="queued",
+                    id="task-queued",
+                    workflow_id="wf-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="queued",
                 )
             )
             session.add(
                 Task(
-                    id="task-pending", workflow_id="wf-1", raw_description="r",
-                    done_definition="d", status="pending",
+                    id="task-pending",
+                    workflow_id="wf-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
                 )
             )
 
         with orch_db_env.session_scope() as session:
             paused_count, queued_task_ids = pause_project_workflows(
-                session, "proj-1", paused_by="user", definition_ids=("autopilot",),
+                session,
+                "proj-1",
+                paused_by="user",
+                definition_ids=("autopilot",),
             )
 
         assert paused_count == 1
@@ -530,36 +592,46 @@ class TestHistoricalPauseSiteConsistency:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp"))
             session.add(
                 Workflow(
-                    id="wf-1", name="t", phases_folder_path="/tmp",
-                    status="active", project_id="proj-1",
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    project_id="proj-1",
                     definition_id="autopilot",
                 )
             )
             session.add(
                 Agent(
-                    id="agent-1", system_prompt="p", status="working",
-                    cli_type="claude", current_task_id="task-1",
+                    id="agent-1",
+                    system_prompt="p",
+                    status="working",
+                    cli_type="claude",
+                    current_task_id="task-1",
                 )
             )
             session.add(
                 Task(
-                    id="task-1", workflow_id="wf-1", raw_description="r",
-                    done_definition="d", status=task_status,
+                    id="task-1",
+                    workflow_id="wf-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status=task_status,
                     assigned_agent_id="agent-1",
                 )
             )
 
         with orch_db_env.session_scope() as session:
             pause_project_workflows(
-                session, "proj-1", paused_by="user", definition_ids=("autopilot",),
+                session,
+                "proj-1",
+                paused_by="user",
+                definition_ids=("autopilot",),
             )
 
         with orch_db_env.session_scope() as session:
             task = session.query(Task).filter_by(id="task-1").first()
             assert task.status == "pending", (
-                f"task left {task_status!r} with a live agent that was just "
-                "terminated -- uncaught by this reset, only findable later "
-                "via a different sweep's generic reason"
+                f"task left {task_status!r} with a live agent that was just terminated -- uncaught by this reset, only findable later via a different sweep's generic reason"
             )
             assert task.assigned_agent_id is None
             assert task.failure_reason == "User terminated: workflow was paused"
@@ -576,28 +648,40 @@ class TestHistoricalPauseSiteConsistency:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp"))
             session.add(
                 Workflow(
-                    id="wf-1", name="t", phases_folder_path="/tmp",
-                    status="active", project_id="proj-1",
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    project_id="proj-1",
                     definition_id="autopilot",
                 )
             )
             session.add(
                 Agent(
-                    id="agent-1", system_prompt="p", status="working",
-                    cli_type="claude", current_task_id="task-1",
+                    id="agent-1",
+                    system_prompt="p",
+                    status="working",
+                    cli_type="claude",
+                    current_task_id="task-1",
                 )
             )
             session.add(
                 Task(
-                    id="task-1", workflow_id="wf-1", raw_description="r",
-                    done_definition="d", status="in_progress",
+                    id="task-1",
+                    workflow_id="wf-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="in_progress",
                     assigned_agent_id="agent-1",
                 )
             )
 
         with orch_db_env.session_scope() as session:
             pause_project_workflows(
-                session, "proj-1", paused_by=paused_by, definition_ids=("autopilot",),
+                session,
+                "proj-1",
+                paused_by=paused_by,
+                definition_ids=("autopilot",),
             )
 
         with orch_db_env.session_scope() as session:
@@ -620,26 +704,39 @@ class TestHistoricalPauseSiteConsistency:
             with orch_db_env.session_scope() as session:
                 session.add(
                     Workflow(
-                        id=wf_id, name="t", phases_folder_path="/tmp",
-                        status="paused", paused_by=paused_by,
+                        id=wf_id,
+                        name="t",
+                        phases_folder_path="/tmp",
+                        status="paused",
+                        paused_by=paused_by,
                     )
                 )
                 session.add(
                     Phase(
-                        id=f"phase-{wf_id}", workflow_id=wf_id, order=1,
-                        name="dev", description="d", done_definitions=["x"],
+                        id=f"phase-{wf_id}",
+                        workflow_id=wf_id,
+                        order=1,
+                        name="dev",
+                        description="d",
+                        done_definitions=["x"],
                     )
                 )
                 session.add(
                     PhaseExecution(
-                        id=f"exec-{wf_id}", phase_id=f"phase-{wf_id}",
-                        workflow_execution_id=wf_id, status="in_progress",
+                        id=f"exec-{wf_id}",
+                        phase_id=f"phase-{wf_id}",
+                        workflow_execution_id=wf_id,
+                        status="in_progress",
                     )
                 )
                 session.add(
                     Task(
-                        id=f"task-{wf_id}", workflow_id=wf_id, phase_id=f"phase-{wf_id}",
-                        raw_description="r", done_definition="d", status="done",
+                        id=f"task-{wf_id}",
+                        workflow_id=wf_id,
+                        phase_id=f"phase-{wf_id}",
+                        raw_description="r",
+                        done_definition="d",
+                        status="done",
                     )
                 )
 
@@ -679,21 +776,32 @@ class TestHistoricalPauseSiteConsistency:
         with orch_db_env.session_scope() as session:
             session.add(
                 AutopilotProject(
-                    id="proj-1", name="project-reactivate",
-                    base_dir=str(project_dir.resolve()), is_active=False,
+                    id="proj-1",
+                    name="project-reactivate",
+                    base_dir=str(project_dir.resolve()),
+                    is_active=False,
                 )
             )
             session.add(
                 Workflow(
-                    id="wf-1", project_id="proj-1", definition_id="autopilot",
-                    name="t", phases_folder_path="/tmp",
-                    status="paused", paused_by="user",
+                    id="wf-1",
+                    project_id="proj-1",
+                    definition_id="autopilot",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="user",
                 )
             )
             session.add(
                 Feature(
-                    id="feat-1", design_id="des-1", feature_key="k", name="n",
-                    scope="s", workflow_id="wf-1", status="paused",
+                    id="feat-1",
+                    design_id="des-1",
+                    feature_key="k",
+                    name="n",
+                    scope="s",
+                    workflow_id="wf-1",
+                    status="paused",
                 )
             )
 
@@ -718,14 +826,22 @@ class TestHistoricalPauseSiteConsistency:
         with orch_db_env.session_scope() as session:
             session.add(
                 Workflow(
-                    id="wf-1", name="t", phases_folder_path="/tmp",
-                    status="paused", paused_by="review",
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="review",
                 )
             )
             session.add(
                 Feature(
-                    id="feat-1", design_id="des-1", feature_key="k", name="n",
-                    scope="s", workflow_id="wf-1", status="paused",
+                    id="feat-1",
+                    design_id="des-1",
+                    feature_key="k",
+                    name="n",
+                    scope="s",
+                    workflow_id="wf-1",
+                    status="paused",
                 )
             )
 
@@ -752,8 +868,11 @@ class TestHistoricalPauseSiteConsistency:
         with orch_db_env.session_scope() as session:
             session.add(
                 Workflow(
-                    id="wf-1", name="t", phases_folder_path="/tmp",
-                    status="paused", paused_by="review",
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="review",
                 )
             )
 
@@ -763,9 +882,7 @@ class TestHistoricalPauseSiteConsistency:
         )
 
         with patch("src.autopilot.orchestrator.pipeline.finalize_phase0_workflow"):
-            result = await _review_phase0_decomposition(
-                "wf-1", FeatureReviewRequest(action="approve")
-            )
+            result = await _review_phase0_decomposition("wf-1", FeatureReviewRequest(action="approve"))
 
         assert result["success"] is True
         with orch_db_env.session_scope() as session:
@@ -784,9 +901,7 @@ class TestPauseReasonValidation:
     path that can resume it. Validating at the single write site is what
     makes that unrepresentable."""
 
-    @pytest.mark.parametrize(
-        "reason", ["user", "budget", "review", "system", "system-exhausted"]
-    )
+    @pytest.mark.parametrize("reason", ["user", "budget", "review", "system", "system-exhausted"])
     def test_every_documented_reason_is_accepted(self, orch_db_env, reason):
         from src.autopilot.orchestrator.engine_client import pause_workflow
         from src.core.database import Workflow
@@ -794,7 +909,9 @@ class TestPauseReasonValidation:
         with orch_db_env.session_scope() as session:
             session.add(
                 Workflow(
-                    id=f"wf-{reason}", name="w", phases_folder_path="/tmp",
+                    id=f"wf-{reason}",
+                    name="w",
+                    phases_folder_path="/tmp",
                     status="active",
                 )
             )
@@ -805,18 +922,12 @@ class TestPauseReasonValidation:
             assert wf.paused_by == reason
 
     @pytest.mark.parametrize("reason", ["users", "USER", "", "manual", "paused"])
-    def test_an_unrecognised_reason_raises_instead_of_writing_it(
-        self, orch_db_env, reason
-    ):
+    def test_an_unrecognised_reason_raises_instead_of_writing_it(self, orch_db_env, reason):
         from src.autopilot.orchestrator.engine_client import pause_workflow
         from src.core.database import Workflow
 
         with orch_db_env.session_scope() as session:
-            session.add(
-                Workflow(
-                    id="wf-bad", name="w", phases_folder_path="/tmp", status="active"
-                )
-            )
+            session.add(Workflow(id="wf-bad", name="w", phases_folder_path="/tmp", status="active"))
 
         with pytest.raises(ValueError, match="unknown reason"):
             pause_workflow("wf-bad", reason=reason)
@@ -853,48 +964,72 @@ class TestReviewFeatureReopensCompletedDevelopmentPhase:
 
     @pytest.mark.asyncio
     async def test_request_changes_reopens_a_completed_development_phase(
-        self, orch_db_env,
+        self,
+        orch_db_env,
     ):
         from src.core.database import AutopilotProject, Feature, Phase, PhaseExecution, Workflow
 
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp", review_mode=True))
-            session.add(Workflow(
-                id="wf-1", name="t", phases_folder_path="/tmp",
-                status="paused", paused_by="review", project_id="proj-1",
-            ))
-            session.add(Feature(
-                id="feat-1", design_id="des-1", feature_key="k", name="n",
-                scope="s", workflow_id="wf-1", status="paused",
-            ))
-            session.add(Phase(
-                id="wf-1-dev", workflow_id="wf-1", name="development",
-                order=5, description="d", done_definitions=["d"],
-            ))
-            session.add(PhaseExecution(
-                id="exec-dev", phase_id="wf-1-dev", workflow_execution_id="wf-1",
-                status="completed",
-            ))
+            session.add(
+                Workflow(
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="review",
+                    project_id="proj-1",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feat-1",
+                    design_id="des-1",
+                    feature_key="k",
+                    name="n",
+                    scope="s",
+                    workflow_id="wf-1",
+                    status="paused",
+                )
+            )
+            session.add(
+                Phase(
+                    id="wf-1-dev",
+                    workflow_id="wf-1",
+                    name="development",
+                    order=5,
+                    description="d",
+                    done_definitions=["d"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-dev",
+                    phase_id="wf-1-dev",
+                    workflow_execution_id="wf-1",
+                    status="completed",
+                )
+            )
 
         from src.mcp.autopilot import feature_review_routes
+
         spawn_mock = AsyncMock()
         monkeypatch_target = feature_review_routes
         import unittest.mock
+
         with unittest.mock.patch.object(monkeypatch_target, "_spawn_agent_for_task", spawn_mock):
             from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
+
             result = await review_feature(
-                "feat-1", FeatureReviewRequest(action="request_changes", feedback="do another lint check"),
+                "feat-1",
+                FeatureReviewRequest(action="request_changes", feedback="do another lint check"),
                 agent_id="ui-user",
             )
         assert result["success"] is True
 
         with orch_db_env.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="wf-1-dev").first()
-            assert execution.status == "in_progress", (
-                "the development phase must be reopened to match its "
-                "freshly-created task, or nothing will ever pick that "
-                "task up again"
-            )
+            assert execution.status == "in_progress", "the development phase must be reopened to match its freshly-created task, or nothing will ever pick that task up again"
 
 
 class TestReviewAndResumeReuseOldPendingTasks:
@@ -918,48 +1053,82 @@ class TestReviewAndResumeReuseOldPendingTasks:
     cycle left it pending with no agent."""
 
     def _seed_review_mode_project_and_workflow(
-        self, db, project_id="proj-1", workflow_id="wf-1", feature_id="feat-1",
+        self,
+        db,
+        project_id="proj-1",
+        workflow_id="wf-1",
+        feature_id="feat-1",
     ):
         from src.core.database import AutopilotProject, Feature, Phase, Workflow
 
         with db.session_scope() as session:
             session.add(AutopilotProject(id=project_id, name="p", base_dir="/tmp", review_mode=True))
-            session.add(Workflow(
-                id=workflow_id, name="t", phases_folder_path="/tmp",
-                status="paused", paused_by="review", project_id=project_id,
-            ))
-            session.add(Feature(
-                id=feature_id, design_id="des-1", feature_key="k", name="n",
-                scope="s", workflow_id=workflow_id, status="paused",
-            ))
-            session.add(Phase(
-                id=f"{workflow_id}-dev", workflow_id=workflow_id, name="development",
-                order=5, description="d", done_definitions=["d"],
-            ))
+            session.add(
+                Workflow(
+                    id=workflow_id,
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="review",
+                    project_id=project_id,
+                )
+            )
+            session.add(
+                Feature(
+                    id=feature_id,
+                    design_id="des-1",
+                    feature_key="k",
+                    name="n",
+                    scope="s",
+                    workflow_id=workflow_id,
+                    status="paused",
+                )
+            )
+            session.add(
+                Phase(
+                    id=f"{workflow_id}-dev",
+                    workflow_id=workflow_id,
+                    name="development",
+                    order=5,
+                    description="d",
+                    done_definitions=["d"],
+                )
+            )
 
     def _seed_old_pending_task(self, db, workflow_id="wf-1"):
         from src.core.database import Task
 
         with db.session_scope() as session:
-            session.add(Task(
-                id="task-old-pending", workflow_id=workflow_id, phase_id=f"{workflow_id}-dev",
-                raw_description="r", done_definition="d", status="pending",
-            ))
+            session.add(
+                Task(
+                    id="task-old-pending",
+                    workflow_id=workflow_id,
+                    phase_id=f"{workflow_id}-dev",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                )
+            )
 
     @pytest.mark.asyncio
     async def test_request_changes_reuses_an_old_pending_task_instead_of_duplicating(
-        self, orch_db_env, monkeypatch,
+        self,
+        orch_db_env,
+        monkeypatch,
     ):
         self._seed_review_mode_project_and_workflow(orch_db_env)
         self._seed_old_pending_task(orch_db_env)
 
         from src.mcp.autopilot import feature_review_routes
+
         spawn_mock = AsyncMock()
         monkeypatch.setattr(feature_review_routes, "_spawn_agent_for_task", spawn_mock)
 
         from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
+
         result = await review_feature(
-            "feat-1", FeatureReviewRequest(action="request_changes", feedback="do another lint check"),
+            "feat-1",
+            FeatureReviewRequest(action="request_changes", feedback="do another lint check"),
             agent_id="ui-user",
         )
         assert result["success"] is True
@@ -983,10 +1152,12 @@ class TestReviewAndResumeReuseOldPendingTasks:
         self._seed_old_pending_task(orch_db_env)
 
         from src.mcp.autopilot import feature_routes
+
         spawn_mock = AsyncMock()
         monkeypatch.setattr(feature_routes, "_spawn_agent_for_task", spawn_mock)
 
         from src.mcp.autopilot.feature_routes import resume_feature
+
         result = await resume_feature("feat-1", agent_id="ui-user")
         assert result["success"] is True
 
@@ -997,15 +1168,23 @@ class TestReviewAndResumeReuseOldPendingTasks:
 
         with db.session_scope() as session:
             session.add(Agent(id="agent-dead", system_prompt="p", status="terminated", cli_type="pi"))
-            session.add(Task(
-                id="task-needs-work", workflow_id=workflow_id, phase_id=f"{workflow_id}-dev",
-                raw_description="r", done_definition="d", status="needs_work",
-                assigned_agent_id="agent-dead",
-            ))
+            session.add(
+                Task(
+                    id="task-needs-work",
+                    workflow_id=workflow_id,
+                    phase_id=f"{workflow_id}-dev",
+                    raw_description="r",
+                    done_definition="d",
+                    status="needs_work",
+                    assigned_agent_id="agent-dead",
+                )
+            )
 
     @pytest.mark.asyncio
     async def test_resume_feature_restarts_a_needs_work_task_with_a_dead_agent(
-        self, orch_db_env, monkeypatch,
+        self,
+        orch_db_env,
+        monkeypatch,
     ):
         """needs_work is set when a validator rejects a task and sends
         feedback back to the same (still-running) agent -- assigned_
@@ -1016,10 +1195,12 @@ class TestReviewAndResumeReuseOldPendingTasks:
         self._seed_needs_work_task_with_terminated_agent(orch_db_env)
 
         from src.mcp.autopilot import feature_routes
+
         spawn_mock = AsyncMock()
         monkeypatch.setattr(feature_routes, "_spawn_agent_for_task", spawn_mock)
 
         from src.mcp.autopilot.feature_routes import resume_feature
+
         result = await resume_feature("feat-1", agent_id="ui-user")
         assert result["success"] is True
 
@@ -1066,35 +1247,52 @@ class TestReviewFeatureApproveLocalMergeFallback:
 
     @pytest.mark.asyncio
     async def test_approve_merges_locally_when_no_pr_exists(
-        self, orch_db_env, git_project_with_feature_branch,
+        self,
+        orch_db_env,
+        git_project_with_feature_branch,
     ):
         project_dir, worktree_dir = git_project_with_feature_branch
         from src.core.database import AutopilotProject, Feature, Workflow
 
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(project_dir)))
-            session.add(Workflow(
-                id="wf-1", name="t", phases_folder_path="/tmp",
-                status="paused", paused_by="review", project_id="proj-1",
-                working_directory=str(worktree_dir),
-            ))
-            session.add(Feature(
-                id="feat-1", design_id="des-1", feature_key="k", name="n",
-                scope="s", workflow_id="wf-1", status="paused", pr_url=None,
-            ))
+            session.add(
+                Workflow(
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="review",
+                    project_id="proj-1",
+                    working_directory=str(worktree_dir),
+                )
+            )
+            session.add(
+                Feature(
+                    id="feat-1",
+                    design_id="des-1",
+                    feature_key="k",
+                    name="n",
+                    scope="s",
+                    workflow_id="wf-1",
+                    status="paused",
+                    pr_url=None,
+                )
+            )
 
         from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
+
         result = await review_feature("feat-1", FeatureReviewRequest(action="approve"), agent_id="ui-user")
         assert result["success"] is True
 
-        assert (project_dir / "new_file.txt").exists(), (
-            "the feature branch's work must be merged into the project's "
-            "main branch when no PR exists to merge instead"
-        )
+        assert (project_dir / "new_file.txt").exists(), "the feature branch's work must be merged into the project's main branch when no PR exists to merge instead"
 
     @pytest.mark.asyncio
     async def test_does_not_attempt_local_merge_when_a_pr_exists(
-        self, orch_db_env, git_project_with_feature_branch, monkeypatch,
+        self,
+        orch_db_env,
+        git_project_with_feature_branch,
+        monkeypatch,
     ):
         """The gh pr merge path stays authoritative when a PR actually
         exists -- the local-merge fallback must not also run and double-
@@ -1104,16 +1302,29 @@ class TestReviewFeatureApproveLocalMergeFallback:
 
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(project_dir)))
-            session.add(Workflow(
-                id="wf-1", name="t", phases_folder_path="/tmp",
-                status="paused", paused_by="review", project_id="proj-1",
-                working_directory=str(worktree_dir),
-            ))
-            session.add(Feature(
-                id="feat-1", design_id="des-1", feature_key="k", name="n",
-                scope="s", workflow_id="wf-1", status="paused",
-                pr_url="https://github.com/org/repo/pull/1",
-            ))
+            session.add(
+                Workflow(
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="review",
+                    project_id="proj-1",
+                    working_directory=str(worktree_dir),
+                )
+            )
+            session.add(
+                Feature(
+                    id="feat-1",
+                    design_id="des-1",
+                    feature_key="k",
+                    name="n",
+                    scope="s",
+                    workflow_id="wf-1",
+                    status="paused",
+                    pr_url="https://github.com/org/repo/pull/1",
+                )
+            )
 
         from unittest.mock import MagicMock, patch
 
@@ -1122,11 +1333,10 @@ class TestReviewFeatureApproveLocalMergeFallback:
             return_value=MagicMock(returncode=0, stdout="", stderr=""),
         ) as mock_run:
             from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
+
             result = await review_feature("feat-1", FeatureReviewRequest(action="approve"), agent_id="ui-user")
         assert result["success"] is True
         mock_run.assert_called_once()
         assert mock_run.call_args.args[0][:3] == ["gh", "pr", "merge"]
 
-        assert not (project_dir / "new_file.txt").exists(), (
-            "no local merge should happen when a PR already exists to merge"
-        )
+        assert not (project_dir / "new_file.txt").exists(), "no local merge should happen when a PR already exists to merge"
