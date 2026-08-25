@@ -477,6 +477,7 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     from src.autopilot.orchestrator import _resync_pipeline_registry
     from src.autopilot.orchestrator.features import (
         _clean_stale_assigned_tasks,
+        _pause_stale_completed_workflows_for_review,
         _sync_stale_design_statuses,
         _sync_stale_feature_statuses,
     )
@@ -493,6 +494,18 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         heal_orphaned_agent_branches,
         sweep_completed_workflow_worktrees,
     )
+
+    # Runs BEFORE the feature-status sync below, which only acts on
+    # workflows already "completed" -- this catches a workflow whose
+    # phases all finished but whose own _run_one_feature call was
+    # interrupted before it could pause for review, so a review_mode
+    # project's feature gets the review gate here instead of a later
+    # /design-status poll silently deriving "completed" with no review
+    # flag at all. See its own docstring for the observed-live incident.
+    try:
+        _pause_stale_completed_workflows_for_review(sweep_logger)
+    except Exception as e:
+        logger.error(f"[PHASE-SWEEP] Review-pause sync error: {e}")
 
     # Feature-table-wide, not scoped to any one workflow -- see its own
     # docstring for why this can't just live inside _run_one_feature.

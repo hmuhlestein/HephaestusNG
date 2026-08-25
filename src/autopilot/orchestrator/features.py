@@ -312,6 +312,98 @@ def _sync_stale_feature_statuses(logger: "OrchestratorLogger") -> int:
     return repaired
 
 
+def _pause_stale_completed_workflows_for_review(logger: "OrchestratorLogger") -> int:
+    """Self-heal: pause-for-review any workflow whose phases have all
+    finished (derive_workflow_status would call it "completed") but whose
+    Workflow.status is still "active" and review_mode is pending.
+
+    _pause_feature_for_review only ever runs as a side effect of
+    _run_one_feature's own single, long-running call reaching its "if
+    wf_status == COMPLETED: pause for review" check -- if that call gets
+    interrupted (e.g. a backend restart) after the generic per-phase sweep
+    (_advance_phases, driven by this same background loop) finishes
+    marking every phase "completed", but before _run_one_feature's own
+    post-completion branch runs, nothing ever revisits it:
+    _run_one_feature only runs once per feature launch, so there is no
+    other path back to _pause_feature_for_review. The workflow then sits
+    "active" forever with a PR up and no review_pending flag, invisible to
+    the UI's Review button (which only checks Workflow.paused_by ==
+    "review"). Observed live: feat-775d44f6 (commit-resolution) --
+    git_expert's own completion notes said it pushed a PR and deferred the
+    merge pending review approval, but the workflow was never marked
+    paused_by="review", and its Review button never appeared.
+
+    Deliberately narrower than derive_workflow_status's own "no incomplete
+    phase -> completed" derivation, and runs from the same sweep tick
+    (before _sync_stale_feature_statuses above, which only acts on
+    workflows ALREADY "completed") so a genuinely-finished-but-never-paused
+    feature gets the review gate here first, rather than a later
+    /design-status poll's derive_workflow_status silently marking it
+    "completed" with no review flag at all. Does NOT retroactively fix a
+    workflow that already raced ahead to "completed" that way -- flipping
+    an already-"completed"-looking feature back to "paused" out from under
+    a user who may already be treating it as done is a different, riskier
+    correction this function doesn't attempt.
+
+    Returns the number of workflows paused for review.
+    """
+    from sqlalchemy import or_
+
+    from src.autopilot.orchestrator.pipeline import (
+        _pause_feature_for_review,
+        _should_pause_for_review,
+    )
+    from src.core.database import Feature, Phase
+
+    paused = 0
+    with get_db() as db:
+        candidates = (
+            db.query(Feature)
+            .join(Workflow, Feature.workflow_id == Workflow.id)
+            .filter(
+                Workflow.status == "active",
+                Workflow.paused_by.is_(None),
+                Workflow.project_id.isnot(None),
+                # NULL-safe: a never-reviewed feature's review_status is
+                # NULL, and `!= "approved"` alone excludes NULL rows too
+                # under SQL's three-valued logic -- the exact common case
+                # this function exists to catch.
+                or_(Feature.review_status.is_(None), Feature.review_status != "approved"),
+            )
+            .all()
+        )
+        targets = []
+        for feature in candidates:
+            wf_id = feature.workflow_id
+            if db.query(Phase).filter_by(workflow_id=wf_id).first() is None:
+                continue  # not a phase-tracked workflow -- not this function's case
+            incomplete = (
+                db.query(PhaseExecution)
+                .join(Phase, PhaseExecution.phase_id == Phase.id)
+                .filter(
+                    Phase.workflow_id == wf_id,
+                    PhaseExecution.status.notin_(["completed", "skipped"]),
+                )
+                .first()
+            )
+            if incomplete is not None:
+                continue  # genuinely still in progress -- leave it alone
+            wf = db.query(Workflow).filter_by(id=wf_id).first()
+            if not wf or not _should_pause_for_review(wf.project_id):
+                continue  # review_mode off for this project -- nothing to pause for
+            targets.append((feature.id, feature.feature_key))
+
+    for feature_id, feature_key in targets:
+        logger.warning(
+            f"[REVIEW-SYNC] Feature {feature_key}: every phase already "
+            "completed but workflow was never paused for review -- pausing now"
+        )
+        _pause_feature_for_review(feature_id, logger)
+        paused += 1
+
+    return paused
+
+
 def _sync_stale_design_statuses(logger: "OrchestratorLogger") -> int:
     """Self-heal: flip AutopilotDesign.status to "completed" for any
     "active" design whose every Feature has reached completed/skipped.
