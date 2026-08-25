@@ -259,6 +259,12 @@ class TestCreateAgentForTask:
         # Mock dependencies — must mock create_agent_worktree (not create_worktree)
         # because the workflow's working_directory doesn't contain '.worktrees/'
         # so the code takes the isolated-worktree branch.
+        # wf-1 has no project_id, so WARNING-1's fallback constructs a FRESH
+        # WorktreeManager rather than returning branch_manager -- pin
+        # _scoped_worktree_manager back to branch_manager so mocking it works.
+        mock_agent_manager._launch._scoped_worktree_manager = (
+            lambda workflow_id: mock_agent_manager.branch_manager
+        )
         mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-agent",
@@ -338,6 +344,9 @@ class TestCreateAgentForTask:
         BaseException subclass -- see its own docstring for why not
         SystemExit) already has the claim durably committed.
         """
+        mock_agent_manager._launch._scoped_worktree_manager = (
+            lambda workflow_id: mock_agent_manager.branch_manager
+        )
         mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             side_effect=_SimulatedProcessKill("simulated process kill mid-dispatch")
         )
@@ -745,6 +754,9 @@ class TestCreateAgentForTask:
         -- without it, every session-reuse launch always tries --session-id
         first and eats a guaranteed "already in use" error before falling
         back to --resume."""
+        mock_agent_manager._launch._scoped_worktree_manager = (
+            lambda workflow_id: mock_agent_manager.branch_manager
+        )
         mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-agent",
@@ -878,12 +890,7 @@ class TestProjectScopedWorktreeManager:
                 )
             )
 
-        captured = {}
-
         class FakeScopedManager:
-            def reload(self, path):
-                captured["reloaded_to"] = path
-
             def create_agent_worktree(self, **kwargs):
                 return {
                     "working_directory": "/tmp/project-x-repo/.worktrees/wt_x",
@@ -909,7 +916,7 @@ class TestProjectScopedWorktreeManager:
             with patch(
                 "src.agents.launch_pipeline.WorktreeManager",
                 return_value=FakeScopedManager(),
-            ), patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, patch(
+            ) as mock_wt_cls, patch("src.agents.launch_pipeline.get_cli_agent") as mock_get_cli, patch(
                 "src.agents.launch_pipeline.asyncio.sleep", new_callable=AsyncMock
             ):
                 mock_cli = MagicMock()
@@ -925,20 +932,28 @@ class TestProjectScopedWorktreeManager:
                     cli_type="pi",
                 )
 
-        assert captured["reloaded_to"] == Path("/tmp/project-x-repo")
+        # WARNING-1 fix: _scoped_worktree_manager constructs a FRESH
+        # WorktreeManager scoped via the repo_path constructor kwarg instead
+        # of reload()-ing a shared instance -- assert on the construction
+        # call, not a .reload() side effect that no longer happens.
+        assert mock_wt_cls.call_args.kwargs["repo_path"] == Path("/tmp/project-x-repo")
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_shared_instance_without_project_id(
+    async def test_falls_back_to_fresh_instance_without_project_id(
         self, mock_agent_manager, sample_task
     ):
         """sample_task's workflow ('wf-1') has no project_id -- confirms the
-        fallback path is exercised (not silently broken) when there's
-        nothing to resolve a project from."""
+        WARNING-1 fallback path creates a FRESH WorktreeManager scoped to
+        the default config repo path, not the shared branch_manager
+        singleton (which would race under concurrent dispatch,
+        MAX_PARALLEL_FEATURES). Closes the adversarial-review NIT: no test
+        previously verified this fresh-instance fallback."""
         assert mock_agent_manager._resolve_project_base_dir("wf-1") is None
-        assert (
-            mock_agent_manager._scoped_worktree_manager("wf-1")
-            is mock_agent_manager.branch_manager
-        )
+
+        fallback = mock_agent_manager._scoped_worktree_manager("wf-1")
+
+        assert fallback is not mock_agent_manager.branch_manager
+        assert fallback._project_root == mock_agent_manager._launch.config.git.main_repo_path
 
 
 class TestCreateAgentForTaskFallback:
@@ -987,6 +1002,9 @@ class TestCreateAgentForTaskFallback:
                 )
             )
 
+        mock_agent_manager._launch._scoped_worktree_manager = (
+            lambda workflow_id: mock_agent_manager.branch_manager
+        )
         mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-fb-agent",
@@ -1087,6 +1105,9 @@ class TestCreateAgentForTaskFallback:
                 )
             )
 
+        mock_agent_manager._launch._scoped_worktree_manager = (
+            lambda workflow_id: mock_agent_manager.branch_manager
+        )
         mock_agent_manager.branch_manager.create_agent_worktree = MagicMock(
             return_value={
                 "working_directory": "/tmp/test-project-badmodel-agent",
