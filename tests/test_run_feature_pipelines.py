@@ -168,3 +168,78 @@ class TestRunFeaturePipelinesHaltsOnNonTerminalStatus:
 
         assert "svc-c" not in call_order
         assert set(call_order) == {"svc-a", "svc-b"}
+
+
+class TestRunFeaturePipelinesRunsSameLayerGroupsConcurrently:
+    """Regression, observed live: feature frontend-multi-repo (sequential,
+    depends on commit-resolution + project-repo-api, both long since
+    completed) sat untouched for hours behind an unrelated,
+    still-running, multi-hour feature -- same dependency layer, zero
+    actual dependency relationship, but listed earlier in features.json.
+    _resolve_execution_order's grouping correctly splits a "sequential"
+    feature into its own group, but the OLD `for group in
+    execution_groups` loop drained every group strictly one at a time
+    regardless of whether groups shared a layer -- so frontend-multi-repo's
+    solo group waited on the unrelated group's completion for no reason.
+    """
+
+    def test_a_same_layer_sequential_feature_does_not_wait_on_an_unrelated_parallel_one(
+        self, mock_logger, design_entry, tmp_path
+    ):
+        import threading
+        import time
+
+        features_json = {
+            "features": [
+                {"id": "root", "name": "Root", "depends_on": [], "execution": "parallel"},
+                {
+                    "id": "unrelated-long-runner",
+                    "name": "Unrelated",
+                    "depends_on": ["root"],
+                    "execution": "parallel",
+                },
+                {
+                    "id": "frontend-multi-repo",
+                    "name": "Frontend",
+                    "depends_on": ["root"],
+                    "execution": "sequential",
+                },
+            ]
+        }
+        long_runner_still_running = threading.Event()
+        frontend_started_while_long_runner_still_running = threading.Event()
+
+        def fake_run_one_feature(sdk, design_entry, feat, designs_folder, project_path, logger, state, max_iterations, project_id):
+            feat_id = feat["id"]
+            if feat_id == "unrelated-long-runner":
+                long_runner_still_running.set()
+                time.sleep(0.3)
+                long_runner_still_running.clear()
+                return FeatureRunStatus.COMPLETED
+            if feat_id == "frontend-multi-repo":
+                # Give unrelated-long-runner's thread a moment to actually
+                # start (submission order to a ThreadPoolExecutor doesn't
+                # guarantee simultaneous start) before checking -- set only
+                # while its own sleep is still in flight, proving true
+                # overlap, not merely that both ran at some point in
+                # either order.
+                if long_runner_still_running.wait(timeout=0.2):
+                    frontend_started_while_long_runner_still_running.set()
+                return FeatureRunStatus.COMPLETED
+            return FeatureRunStatus.COMPLETED  # root
+
+        with patch("src.autopilot.orchestrator.pipeline._run_one_feature", side_effect=fake_run_one_feature):
+            run_feature_pipelines(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                features_json=features_json,
+                designs_folder=tmp_path,
+                project_path=tmp_path,
+                logger=mock_logger,
+            )
+
+        assert frontend_started_while_long_runner_still_running.is_set(), (
+            "frontend-multi-repo must be dispatched concurrently with its "
+            "same-layer, dependency-unrelated sibling, not wait for it to "
+            "finish first"
+        )

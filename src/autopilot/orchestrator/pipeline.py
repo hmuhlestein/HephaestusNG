@@ -2178,8 +2178,25 @@ def run_feature_pipelines(
     features = features_json.get("features", [])
     feature_results: Dict[str, FeatureRunStatus] = {}
 
-    # Resolve execution order
-    execution_groups = _resolve_execution_order(features, logger)
+    # Resolve execution order. group_layers gives each execution_groups
+    # entry's Kahn layer -- see _resolve_execution_order's own docstring.
+    # Groups sharing a layer have NO dependency relationship (that's what
+    # a Kahn layer means), so they're merged into one flat feature list
+    # below and run concurrently, rather than draining execution_groups
+    # strictly one at a time. Observed live: feature frontend-multi-repo
+    # (same layer as, but listed after, the long-running recovery-cleanup-
+    # threading feature) sat untouched for hours despite having zero
+    # dependency relationship with it, purely because the old
+    # `for group in execution_groups` loop blocked on every earlier group
+    # regardless of layer.
+    execution_groups, group_layers = _resolve_execution_order(features, logger)
+    layer_batches: List[List[dict]] = []
+    current_layer_index = None
+    for group, layer_index in zip(execution_groups, group_layers):
+        if layer_index != current_layer_index:
+            layer_batches.append([])
+            current_layer_index = layer_index
+        layer_batches[-1].extend(group)
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -2204,8 +2221,8 @@ def run_feature_pipelines(
     # fired in production; _run_one_feature now preserves them distinctly.
     halted_early = False
 
-    for group in execution_groups:
-        # Every feature in the group is attempted -- a failed dependency no
+    for features_to_run in layer_batches:
+        # Every feature in the layer is attempted -- a failed dependency no
         # longer auto-skips its dependents. Skipping was a one-shot,
         # permanent decision that nothing ever revisits (observed live: a
         # dependency that failed transiently, e.g. from an unrelated
@@ -2214,8 +2231,6 @@ def run_feature_pipelines(
         # never reconsidered). _resolve_execution_order's grouping still
         # runs dependents after their dependencies complete; it just no
         # longer discards them if a dependency didn't succeed.
-        features_to_run = list(group)
-
         if not features_to_run:
             continue
 

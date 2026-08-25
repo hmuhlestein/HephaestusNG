@@ -3,7 +3,7 @@
 import logging
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from src.core.database import (
     Agent,
@@ -777,7 +777,7 @@ def _validate_features_json(features_json: dict) -> None:
 def _resolve_execution_order(
     features: List[dict],
     logger: "OrchestratorLogger",
-) -> List[List[dict]]:
+) -> Tuple[List[List[dict]], List[int]]:
     """Resolve execution order using Kahn's algorithm with parallel/sequential handling.
 
     Args:
@@ -785,7 +785,26 @@ def _resolve_execution_order(
         logger: Orchestrator logger
 
     Returns:
-        List of execution groups, each group is a list of features
+        (execution_groups, group_layers): execution_groups is a list of
+        groups, each group a list of features -- unchanged from before.
+        group_layers is a same-length list giving each group's Kahn layer
+        index, so a caller can tell which groups have NO dependency
+        relationship to each other (same layer) and are therefore safe to
+        run concurrently, vs. groups that genuinely must wait (different
+        layers). Two groups can share a layer index despite being split
+        apart below (a "sequential" feature always gets its own group,
+        even from a same-layer "parallel" batch) -- see
+        run_feature_pipelines's own use of this, which submits every
+        group sharing a layer index to one concurrent round instead of
+        draining execution_groups strictly one at a time. Observed live:
+        feature frontend-multi-repo (sequential, layer 2, depends on
+        commit-resolution + project-repo-api, both layer 1 and long since
+        completed) sat untouched for hours behind recovery-cleanup-
+        threading's still-running multi-hour pipeline -- same layer, zero
+        dependency relationship, but listed earlier in features.json, so
+        _resolve_execution_order's grouping split them into separate
+        groups and the old strictly-sequential consumer loop waited on
+        recovery-cleanup-threading anyway.
     """
     from collections import defaultdict, deque
 
@@ -803,6 +822,7 @@ def _resolve_execution_order(
     # Kahn's algorithm
     queue = deque([f["id"] for f in features if in_degree[f["id"]] == 0])
     execution_groups = []
+    group_layers = []
     processed = set()
 
     # Build lookup for quick access
@@ -813,6 +833,7 @@ def _resolve_execution_order(
     # about the relative order of independent features at the same depth.
     original_index = {f["id"]: i for i, f in enumerate(features)}
 
+    layer_index = 0
     while queue:
         # Collect current layer
         current_layer = []
@@ -833,7 +854,11 @@ def _resolve_execution_order(
         # design's own ordering (observed live: a sequential feature that
         # several other features depend on got pushed to run after two
         # unrelated parallel features listed after it, purely because of
-        # the parallel/sequential split, not any real dependency).
+        # the parallel/sequential split, not any real dependency). Every
+        # group produced in this pass shares layer_index (see docstring):
+        # none of them depend on each other, so a caller MAY run them
+        # concurrently -- this split only controls how each one runs
+        # (alone vs. batched), not when relative to its same-layer peers.
         current_layer.sort(key=lambda fid: original_index[fid])
         parallel_batch = []
         for feat_id in current_layer:
@@ -843,10 +868,14 @@ def _resolve_execution_order(
                 continue
             if parallel_batch:
                 execution_groups.append(parallel_batch)
+                group_layers.append(layer_index)
                 parallel_batch = []
             execution_groups.append([feat])
+            group_layers.append(layer_index)
         if parallel_batch:
             execution_groups.append(parallel_batch)
+            group_layers.append(layer_index)
+        layer_index += 1
 
         # Reduce in-degrees of dependents
         for feat_id in current_layer:
@@ -861,9 +890,15 @@ def _resolve_execution_order(
         logger.warning(f"Cycle detected in dependencies among {unprocessed}; appending cyclic features sequentially after already-resolved groups")
         # Preserve groups already resolved by Kahn's algorithm; append the cyclic
         # remainder one-by-one so we don't silently drop any processed features.
+        # Each gets its OWN fresh layer index (unlike a real Kahn layer, an
+        # unresolved cycle carries no dependency-safety guarantee for
+        # concurrent execution) -- deliberately conservative, fully
+        # sequential, matching this fallback's pre-existing behavior.
         for fid in feat_map:
             if fid not in processed:
                 execution_groups.append([feat_map[fid]])
+                group_layers.append(layer_index)
+                layer_index += 1
 
     # Log execution plan
     logger.info("Execution plan:")
@@ -873,5 +908,7 @@ def _resolve_execution_order(
             logger.info(f"  Group {i + 1}: PARALLEL - {', '.join(feat_names)}")
         else:
             logger.info(f"  Group {i + 1}: SEQUENTIAL - {feat_names[0]}")
+
+    return execution_groups, group_layers
 
     return execution_groups
