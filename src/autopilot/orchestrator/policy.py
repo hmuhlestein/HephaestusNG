@@ -255,7 +255,20 @@ def _resolve_recovery_project_path(workflow_id: str) -> Optional[str]:
                     repo_id = feature.repo_id if feature else None
                 try:
                     return str(resolve_repo_path(_db, _wf.project_id, repo_id))
-                except (RepoNotFoundError, ValueError) as e:
+                except RepoNotFoundError as e:
+                    # repo_id was SET but dangling (stale/deleted ProjectRepo
+                    # row) -- unlike the repo_id=None case, this is not "no
+                    # scoping info available," it's a positive signal that the
+                    # workflow's own recorded repo no longer resolves. Falling
+                    # back to $PROJECT_PATH here would silently run recovery's
+                    # destructive git commands against a repo the workflow may
+                    # not even belong to -- the exact failure REQ-01 exists to
+                    # prevent. Degrade to genuine no-op (NFR-03) instead: the
+                    # caller (_clean_stale_repo_state) treats a falsy path as
+                    # nothing to do.
+                    logger.warning(f"[RECOVERY] repo_id={repo_id!r} for workflow {workflow_id[:8]} does not resolve: {e} -- skipping repo recovery rather than guessing a path")
+                    return None
+                except ValueError as e:
                     logger.warning(f"[RECOVERY] could not resolve repo path for workflow {workflow_id[:8]}: {e}")
     except Exception:
         logger.exception(f"[RECOVERY] failed to resolve recovery project path for workflow {workflow_id[:8]}")

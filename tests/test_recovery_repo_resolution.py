@@ -145,10 +145,11 @@ class TestResolveRecoveryProjectPath:
 
         assert result == "/env/fallback"
 
-    def test_dangling_repo_id_falls_back_to_env(self, tmp_path, test_db, monkeypatch):
+    def test_dangling_repo_id_degrades_to_no_op_not_project_path_env(self, tmp_path, test_db, monkeypatch):
         """Feature.repo_id points at a ProjectRepo that no longer belongs to
-        (or exists for) the project -- resolve_repo_path raises RepoNotFoundError
-        rather than silently substituting a different repo's path."""
+        (or exists for) the project -- resolve_repo_path raises RepoNotFoundError.
+        Must degrade to a genuine no-op (None), per NFR-03, rather than
+        silently substituting $PROJECT_PATH (a possibly-wrong repo)."""
         from src.autopilot.orchestrator.policy import _resolve_recovery_project_path
 
         session = test_db.get_session()
@@ -180,7 +181,7 @@ class TestResolveRecoveryProjectPath:
 
         result = _resolve_recovery_project_path("wf-5")
 
-        assert result == "/env/fallback"
+        assert result is None
 
     def test_db_failure_falls_back_to_env(self, test_db, monkeypatch):
         """get_db() itself raising (e.g. DB unreachable) must not propagate --
