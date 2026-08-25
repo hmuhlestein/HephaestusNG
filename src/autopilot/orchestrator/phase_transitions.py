@@ -875,20 +875,40 @@ def _advance_phases(workflow_id: str, logger: "OrchestratorLogger") -> bool:
             # If you add a fifth case, re-derive the guard analysis above
             # rather than assuming position in this list protects you.
 
-            # Case 0: No in-progress phase and first phase is pending — start it
-            result = _case_start_first_phase(db, workflow_id, pending, in_progress, completed, logger)
-            if result is not None:
-                return result
+            # Case 0 and Case 1 dispatch NEW downstream work (starting the
+            # first phase, or advancing to a successor phase) rather than
+            # healing an already-dispatched one -- unlike Case 0b/Case 2
+            # below, which only ever act on a phase already `in_progress`.
+            # The paused_by="review" carve-out above exists specifically for
+            # that narrower self-heal case (an unrelated in-progress phase
+            # orphaned while paused), not for resuming forward progress.
+            # Skipping these two here closes the gap _start_next_phase's own
+            # paused_by check (phase_manager.py) can't reach on its own:
+            # reset_stale_executions_on_goto resets downstream
+            # PhaseExecutions to "pending" whenever a goto/retry action
+            # fires, with no paused_by check of its own -- so a review-paused
+            # workflow's last phase (e.g. deploy) recording a stale goto
+            # still produces a `pending` successor, and Case 1 would
+            # otherwise dispatch a fresh task for it every sweep tick.
+            # Observed live: workflow e6437c3f kept re-running its entire
+            # qa_validation -> ... -> deploy tail every ~6 minutes for hours
+            # after being paused for human review, via exactly this path.
+            if wf.paused_by != "review":
+                # Case 0: No in-progress phase and first phase is pending — start it
+                result = _case_start_first_phase(db, workflow_id, pending, in_progress, completed, logger)
+                if result is not None:
+                    return result
 
             # Case 0b: In-progress phase with no tasks at all
             result = _case_in_progress_no_tasks(db, workflow_id, in_progress, logger)
             if result is not None:
                 return result
 
-            # Case 1: Completed phase with pending successor
-            result = _case_completed_with_successor(db, workflow_id, completed, pending, in_progress, logger)
-            if result is not None:
-                return result
+            if wf.paused_by != "review":
+                # Case 1: Completed phase with pending successor
+                result = _case_completed_with_successor(db, workflow_id, completed, pending, in_progress, logger)
+                if result is not None:
+                    return result
 
             # Case 2: In-progress phase that is now complete
             result = _case_in_progress_complete(db, workflow_id, in_progress, logger)

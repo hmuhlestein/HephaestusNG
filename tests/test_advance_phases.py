@@ -2560,6 +2560,47 @@ class TestCaseCompletedWithSuccessor:
         assert result is True
         assert mock_create.call_args[0][:4] == ("wf-1", "phase-2", "implementation", "continue")
 
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    def test_advance_phases_skips_this_case_when_workflow_paused_for_review(
+        self, mock_create, db_manager, sample_workflow
+    ):
+        """Regression, observed live: workflow e6437c3f kept re-running its
+        entire qa_validation -> ... -> deploy tail every ~6 minutes for
+        hours after being paused_by="review" (every phase already
+        "completed", nothing left but a human's approval). The narrow
+        review-mode carve-out in _advance_phases (see
+        TestAdvancePhases.test_review_paused_workflow_still_retries_an_
+        unrelated_phase) exists to keep self-healing an unrelated ORPHANED
+        in-progress task, but this case dispatches brand-new downstream
+        work -- reset_stale_executions_on_goto resets a downstream
+        PhaseExecution to "pending" whenever a goto/retry action fires,
+        with no paused_by check of its own, so a review-paused workflow's
+        last phase recording a stale goto still produces a pending
+        "successor" that this case would otherwise happily dispatch a
+        fresh task for on every sweep tick. Exercised through the full
+        _advance_phases entry point (not the case function directly) since
+        the paused_by guard lives at that call site."""
+        from src.autopilot.orchestrator.phase_transitions import _advance_phases
+
+        self._seed_completed_with_pending_successor(db_manager)
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.status = "paused"
+            wf.paused_by = "review"
+            wf.status_reason = "All phases complete -- awaiting human review and merge approval"
+
+        logger = MagicMock()
+        result = _advance_phases("wf-1", logger)
+
+        assert result is False
+        mock_create.assert_not_called()
+
+        with db_manager.session_scope() as session:
+            exec2 = session.query(PhaseExecution).filter_by(phase_id="phase-2").first()
+            assert exec2.status == "pending"
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.paused_by == "review"
+
 
 class TestGetPhaseStatuses:
     """Tests for _get_phase_statuses helper."""
