@@ -117,7 +117,7 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, pending
           </div>
 
           {/* Right: Metrics */}
-          <div className="flex items-center gap-6">
+          <div className="flex items-start gap-6">
             {[
               { label: 'Agents', value: status?.active_agents || 0, icon: Users, key: 'agents' },
               { label: 'Pending', value: pendingAgents || 0, icon: Clock, key: 'pending_agents' },

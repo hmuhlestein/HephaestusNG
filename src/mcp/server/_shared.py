@@ -289,6 +289,12 @@ class ServerState:
         self._broadcaster = ConnectionBroadcaster()
         self.background_queue_processor_task: Optional[asyncio.Task] = None
         self.phase_advancement_sweep_task: Optional[asyncio.Task] = None
+        # One-shot startup recovery (interrupted-workflow resume + orphaned-
+        # worktree sweep) -- backgrounded rather than awaited in
+        # startup_event so the server starts accepting connections
+        # immediately instead of blocking on however many agents were
+        # orphaned by the last restart. See startup_event's own comment.
+        self.startup_recovery_task: Optional[asyncio.Task] = None
         self.shutdown_event: asyncio.Event = asyncio.Event()
 
     @property

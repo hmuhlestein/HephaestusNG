@@ -404,3 +404,51 @@ class TestResumeInterruptedWorkflowsGitCommitPushRecovery:
         session = test_db.get_session()
         task = session.query(Task).filter_by(id="task-git").first()
         assert task.status == "in_progress"
+
+
+class TestStartupRecoveryIsBackgrounded:
+    """Regression, found live: startup_event used to `await
+    _resume_interrupted_workflows()` and the completed-worktree sweep
+    directly, so the whole server -- including a zero-I/O /health check --
+    stayed unreachable until both finished. With several orphaned agents
+    queued after a long outage (each restart involves a real tmux/CLI
+    launch, up to ~25s), this made every backend restart take minutes.
+    _run_startup_recovery is the extracted body startup_event now fires via
+    asyncio.create_task instead of awaiting inline -- these tests cover
+    that extracted function's own behavior (calls both steps, one failing
+    doesn't skip the other), not the full startup_event (which has too many
+    unrelated side effects -- workflow registration, background task
+    creation, autopilot auto-resume -- to practically invoke in a unit test)."""
+
+    @pytest.mark.asyncio
+    async def test_runs_resume_then_sweep(self):
+        import src.mcp.server.lifecycle as server_module
+
+        with patch.object(
+            server_module, "_resume_interrupted_workflows", new_callable=AsyncMock
+        ) as mock_resume, patch(
+            "src.autopilot.orchestrator.worktree_integration.sweep_completed_workflow_worktrees",
+            return_value=2,
+        ) as mock_sweep:
+            await server_module._run_startup_recovery()
+
+        mock_resume.assert_called_once()
+        mock_sweep.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_resume_does_not_skip_the_sweep(self):
+        """The two steps are independent recovery concerns (interrupted-
+        workflow resume vs. orphaned-worktree cleanup) -- each has its own
+        try/except so one failing doesn't silently skip the other."""
+        import src.mcp.server.lifecycle as server_module
+
+        with patch.object(
+            server_module, "_resume_interrupted_workflows",
+            new_callable=AsyncMock, side_effect=RuntimeError("boom"),
+        ), patch(
+            "src.autopilot.orchestrator.worktree_integration.sweep_completed_workflow_worktrees",
+            return_value=0,
+        ) as mock_sweep:
+            await server_module._run_startup_recovery()
+
+        mock_sweep.assert_called_once()
