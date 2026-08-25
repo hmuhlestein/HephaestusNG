@@ -1381,6 +1381,59 @@ def _case_start_first_phase(db, workflow_id: str, pending: list, in_progress: li
     return None
 
 
+def _correct_skewed_cycle_start(db, phase, execution, cycle_start, logger: "OrchestratorLogger"):
+    """Guard against cycle_start drifting slightly LATER than the phase's
+    own earliest real task, and return the (possibly corrected) cycle_start
+    plus a matching cycle_filter tuple.
+
+    started_at and a task's created_at are stamped by independent
+    utc_now() calls (_start_phase, _release_phase_task_creation_claim,
+    reopen_phase_execution, the task's own row insert) that can land a
+    few milliseconds -- occasionally a couple of seconds, per
+    _release_phase_task_creation_claim's own docstring -- apart in either
+    order. When cycle_start lands after that task's stamp, every
+    cycle-scoped query built from it (Task.created_at >= cycle_start)
+    silently excludes that task forever: the caller's own "genuinely
+    empty cycle" fresh-dispatch fallback correctly refuses to fire (an
+    unscoped existence check still sees the task), but nothing else ever
+    looks at it again either -- a live, real, retry-eligible task sits
+    invisible while the phase stalls, or a fresh SECOND task gets created
+    right next to it. Observed live twice, in two different callers:
+    workflow 81b399c7's product_requirements phase (via
+    _case_in_progress_complete) and workflow 2ee7f496's product_
+    requirements phase (via _case_in_progress_no_tasks, which duplicated
+    a UI-launched task 15s after it was created, because this correction
+    hadn't been applied here yet).
+
+    Deliberately bounded to a small grace window, NOT an unconditional
+    re-anchor to the phase's overall earliest task: a goto/retry can
+    leave started_at genuinely newer than a stale task from a much
+    earlier cycle (minutes to hours prior) by design -- that case must
+    keep treating the cycle as empty, not silently adopt the old task as
+    if it belonged to the new cycle.
+    """
+    if not cycle_start:
+        return cycle_start, ()
+    skew_floor = cycle_start - timedelta(seconds=10)
+    earliest_recent_task = (
+        db.query(Task)
+        .filter(Task.phase_id == phase.id, Task.created_at >= skew_floor)
+        .order_by(Task.created_at.asc())
+        .first()
+    )
+    if earliest_recent_task and earliest_recent_task.created_at < cycle_start:
+        logger.warning(
+            f"[PHASE-ADVANCE] {phase.name}'s cycle start ({cycle_start}) is "
+            f"later than its own earliest task {earliest_recent_task.id[:8]} "
+            f"({earliest_recent_task.created_at}), within clock-skew range -- "
+            "correcting so cycle-scoped checks stop treating that task as invisible"
+        )
+        cycle_start = earliest_recent_task.created_at
+        execution.started_at = cycle_start
+        db.commit()
+    return cycle_start, (Task.created_at >= cycle_start,)
+
+
 def _case_in_progress_no_tasks(db, workflow_id: str, in_progress: list, logger: "OrchestratorLogger") -> Optional[bool]:
     """Case 0b: In-progress phase with no tasks at all.
 
@@ -1417,11 +1470,8 @@ def _case_in_progress_no_tasks(db, workflow_id: str, in_progress: list, logger: 
         # live: workflow 81b399c7's git_expert phase stuck exactly this
         # way, cycle_filter notwithstanding.
         execution = ps.get("execution")
-        cycle_filter = (
-            (Task.created_at >= execution.started_at,)
-            if execution and execution.started_at
-            else ()
-        )
+        cycle_start = execution.started_at if execution else None
+        cycle_start, cycle_filter = _correct_skewed_cycle_start(db, phase, execution, cycle_start, logger)
         task_count = (
             db.query(Task)
             .filter(Task.phase_id == phase.id, Task.status != "duplicated", *cycle_filter)
@@ -1696,51 +1746,7 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
         # real completion still counted toward done_count. Falls back to
         # unscoped (the prior behavior) if started_at was never set.
         cycle_start = execution.started_at if execution else None
-        cycle_filter = (Task.created_at >= cycle_start,) if cycle_start else ()
-
-        # Guard against cycle_start drifting slightly LATER than the
-        # phase's own earliest real task. started_at and a task's
-        # created_at are stamped by independent utc_now() calls
-        # (_start_phase, _release_phase_task_creation_claim,
-        # reopen_phase_execution, the task's own row insert) that can land
-        # a few milliseconds -- occasionally a couple of seconds, per
-        # _release_phase_task_creation_claim's own docstring -- apart in
-        # either order. When cycle_start lands after that task's stamp,
-        # every cycle-scoped query below (Task.created_at >= cycle_start)
-        # silently excludes it forever: the "genuinely empty cycle"
-        # fresh-dispatch fallback further down correctly refuses to fire
-        # (its own unscoped total_cycle_tasks check still sees the task),
-        # but nothing else ever looks at it again either -- a live, real,
-        # retry-eligible task sits invisible while the phase stalls
-        # forever. Observed live: workflow 81b399c7's product_requirements
-        # phase stuck 18+ minutes this way.
-        #
-        # Deliberately bounded to a small grace window, NOT an unconditional
-        # re-anchor to the phase's overall earliest task: a goto/retry can
-        # leave started_at genuinely newer than a stale task from a much
-        # earlier cycle (minutes to hours prior) by design -- that case
-        # must keep treating the cycle as empty and dispatch a fresh task
-        # (see the "genuinely empty cycle" comment below), not silently
-        # adopt the old task as if it belonged to the new cycle.
-        if cycle_start:
-            skew_floor = cycle_start - timedelta(seconds=10)
-            earliest_recent_task = (
-                db.query(Task)
-                .filter(Task.phase_id == phase.id, Task.created_at >= skew_floor)
-                .order_by(Task.created_at.asc())
-                .first()
-            )
-            if earliest_recent_task and earliest_recent_task.created_at < cycle_start:
-                logger.warning(
-                    f"[PHASE-ADVANCE] {phase.name}'s cycle start ({cycle_start}) is "
-                    f"later than its own earliest task {earliest_recent_task.id[:8]} "
-                    f"({earliest_recent_task.created_at}), within clock-skew range -- "
-                    "correcting so cycle-scoped checks stop treating that task as invisible"
-                )
-                cycle_start = earliest_recent_task.created_at
-                execution.started_at = cycle_start
-                db.commit()
-                cycle_filter = (Task.created_at >= cycle_start,)
+        cycle_start, cycle_filter = _correct_skewed_cycle_start(db, phase, execution, cycle_start, logger)
 
         # Stale-task cleanup (orphaned pending, terminated-agent pending,
         # retry-cap-exceeded pending) -- the orphan/cycle-scope comments above
