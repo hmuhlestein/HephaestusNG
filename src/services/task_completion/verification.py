@@ -572,7 +572,15 @@ def verify_output_survived_commit(session, task, phase=None) -> Optional[Dict[st
                 if found:
                     break
         if not found:
-            missing.append(declared_output)
+            # Same clarity fix as verify_output_artifact's own "missing"
+            # message (see its comment) -- name the exact suffixed
+            # filename this task was expected to produce, not the bare
+            # declared name, so a mismatch (vs. a genuine absence) is
+            # legible here too.
+            if "/" not in declared_output and "<" not in declared_output:
+                missing.append(f"{suffixed_output_name(declared_output, task.id)} (bare name: {declared_output})")
+            else:
+                missing.append(declared_output)
 
     if not missing and not wrong_name:
         return None
