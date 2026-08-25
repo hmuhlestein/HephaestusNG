@@ -265,3 +265,78 @@ class TestSweepMultiProjectScoping:
         await server.background_phase_advancement_sweep()
 
         assert advanced_ids == ["wf-in-scope"]
+
+
+class TestWorktreeSweepThrottle:
+    """Regression: sweep_completed_workflow_worktrees previously only ran
+    once, at backend startup (_run_startup_recovery in lifecycle.py) -- a
+    worktree orphaned by a skipped _cleanup_worktree() call (e.g. the
+    process killed between wf_status flipping to COMPLETED and that call
+    actually running, for a reason other than a backend restart) had zero
+    recurring safety-net coverage until the next restart. Wiring it into
+    this per-tick sweep, throttled like heal_orphaned_agent_branches right
+    above it, closes that gap."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_throttle(self):
+        from src.mcp.server import background_loops as server
+
+        server._LAST_WORKTREE_SWEEP_TIME = None
+        yield
+        server._LAST_WORKTREE_SWEEP_TIME = None
+
+    @pytest.mark.asyncio
+    async def test_calls_sweep_completed_workflow_worktrees(self, db_manager, monkeypatch):
+        # No workflow rows are created -- the per-workflow loop
+        # (_advance_phases) is irrelevant here, and the sweep step under
+        # test runs unconditionally every tick regardless of workflow
+        # count, so the mock itself stops the sweep after one pass.
+        from src.mcp.server import background_loops as server
+
+        monkeypatch.setattr(server.server_state, "db_manager", db_manager)
+        server.server_state.shutdown_event = asyncio.Event()
+
+        swept_loggers = []
+
+        def fake_sweep(logger):
+            swept_loggers.append(logger)
+            server.server_state.shutdown_event.set()
+            return 2
+
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator.worktree_integration.sweep_completed_workflow_worktrees",
+            fake_sweep,
+        )
+
+        await server.background_phase_advancement_sweep()
+
+        assert len(swept_loggers) == 1
+
+    def test_throttled_within_interval(self, db_manager, monkeypatch):
+        # Direct, synchronous calls to the tick body -- the throttle itself
+        # doesn't need the async wrapper's while-loop, and the second
+        # (throttled) tick never calls the mock at all, so nothing here
+        # would set an event to end that loop iteration.
+        from unittest.mock import MagicMock
+
+        from src.mcp.server import background_loops as server
+
+        monkeypatch.setattr(server.server_state, "db_manager", db_manager)
+
+        call_count = []
+
+        def fake_sweep(logger):
+            call_count.append(1)
+            return 0
+
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator.worktree_integration.sweep_completed_workflow_worktrees",
+            fake_sweep,
+        )
+
+        # Two ticks in quick succession must only sweep once -- the second
+        # tick falls inside the throttle interval.
+        server._run_phase_advancement_sweep_once(MagicMock())
+        server._run_phase_advancement_sweep_once(MagicMock())
+
+        assert len(call_count) == 1
