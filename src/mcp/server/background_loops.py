@@ -457,6 +457,10 @@ _LAST_BRANCH_HEAL_TIME: Optional[datetime] = None
 
 _BRANCH_HEAL_INTERVAL_SECONDS = 900  # 15 minutes
 
+_LAST_WORKTREE_SWEEP_TIME: Optional[datetime] = None
+
+_WORKTREE_SWEEP_INTERVAL_SECONDS = 900  # 15 minutes
+
 
 def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
     """Synchronous body of one background_phase_advancement_sweep tick --
@@ -487,6 +491,7 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
         _recover_abandoned_workflows_missing_worktree,
         _recover_abandoned_workflows_with_completed_phase,
         heal_orphaned_agent_branches,
+        sweep_completed_workflow_worktrees,
     )
 
     # Feature-table-wide, not scoped to any one workflow -- see its own
@@ -523,6 +528,26 @@ def _run_phase_advancement_sweep_once(sweep_logger, loop=None) -> None:
             heal_orphaned_agent_branches(sweep_logger)
         except Exception as e:
             logger.error(f"[PHASE-SWEEP] Branch-healing sweep error: {e}")
+
+    # Same throttle reasoning as the branch-healing sweep above -- shells
+    # out to git per orphaned worktree. Previously sweep_completed_workflow_
+    # worktrees only ran once, at backend startup (_run_startup_recovery in
+    # lifecycle.py): a workflow whose normal completion-time
+    # _cleanup_worktree() call was skipped for any reason other than a
+    # backend restart (e.g. the process killed between wf_status flipping
+    # to COMPLETED and that call actually running) had its worktree
+    # orphaned with zero recurring safety-net coverage until the next
+    # restart. The startup call stays in place for immediate coverage right
+    # after a restart; this adds the missing recurring pass.
+    global _LAST_WORKTREE_SWEEP_TIME
+    if _LAST_WORKTREE_SWEEP_TIME is None or (now - _LAST_WORKTREE_SWEEP_TIME).total_seconds() >= _WORKTREE_SWEEP_INTERVAL_SECONDS:
+        _LAST_WORKTREE_SWEEP_TIME = now
+        try:
+            swept = sweep_completed_workflow_worktrees(sweep_logger)
+            if swept:
+                logger.info(f"[PHASE-SWEEP] Cleaned up {swept} orphaned completed-workflow worktree(s)")
+        except Exception as e:
+            logger.error(f"[PHASE-SWEEP] Completed-workflow worktree sweep error: {e}")
 
     # Runs before the active/paused workflow snapshot below, so a workflow
     # this just resumed is included in this same tick's per-workflow loop
