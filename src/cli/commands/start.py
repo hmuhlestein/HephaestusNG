@@ -268,6 +268,18 @@ class ProcessWatchdog:
         at 15s even though the backend was genuinely still alive and
         working, not hung -- killing a busy-but-healthy backend on live
         traffic rather than an actual deadlock.
+
+        Raised again from 30s to 60s: confirmed live that even 30s isn't
+        always enough -- not from anything in this codebase, but from
+        genuinely extreme HOST-level load (uptime load averages in the
+        hundreds) caused by unrelated processes on the same machine (a
+        runaway `rg` search pegged at ~300% CPU for 8+ hours, a
+        transcription app at ~150% CPU for days) starving every process on
+        the box, including a perfectly healthy backend, of CPU scheduling
+        time. No amount of application-level tuning fixes host contention
+        that severe; this just keeps the watchdog from adding a false
+        "unresponsive, restart it" verdict on top of an already-struggling
+        host.
         """
         pid = read_pid("backend")
         if not pid or not is_process_running(pid):
@@ -288,7 +300,7 @@ class ProcessWatchdog:
         try:
             import httpx
 
-            resp = httpx.get(f"http://127.0.0.1:{port}/health", timeout=30)
+            resp = httpx.get(f"http://127.0.0.1:{port}/health", timeout=60)
             healthy = resp.status_code == 200 and resp.json().get("status") == "healthy"
         except Exception:
             healthy = False
