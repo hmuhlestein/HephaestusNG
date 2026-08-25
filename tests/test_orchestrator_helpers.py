@@ -4513,6 +4513,102 @@ class TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn:
             )
 
 
+class TestRunOneFeatureSkipsReRunForReviewPausedWorkflow:
+    """Regression, found live: a review pause is only set AFTER every phase
+    already reached "completed" (_pause_feature_for_review, called from the
+    FeatureRunStatus.COMPLETED branch), so Workflow.status stays "paused"
+    -- it never becomes "completed". _wait_for_review_clearance normally
+    blocks right there for the human's approve/reject, but that wait dies
+    with the process on a backend restart. The existing_workflow_id fast
+    path only checked wf.status == "completed", so re-entering this
+    function for the same already-fully-completed feature on every
+    subsequent restart (while a real PR review was still pending) fell
+    through and re-ran run_single_workflow from scratch on a workflow with
+    nothing left to do. Confirmed live: feature feat-e1d649cf re-ran this
+    way 4-7 times across one debugging session's restarts, still sitting
+    unreviewed the whole time -- real, wasted LLM cost each time."""
+
+    def test_does_not_rerun_a_workflow_paused_for_review(
+        self, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _run_one_feature,
+        )
+        from src.autopilot.orchestrator.state import DesignEntry, FeatureRunStatus
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+
+        design_id = "design-1"
+        feature_key = "feat-a"
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Workflow(
+                    id="wf-review-paused",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="review",
+                    status_reason="All phases complete -- awaiting human review and merge approval",
+                    definition_id="feature_pipeline",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1",
+                    design_id=design_id,
+                    feature_key=feature_key,
+                    name="Feature A",
+                    scope="s",
+                    status="paused",
+                    workflow_id="wf-review-paused",
+                )
+            )
+
+        design_path = tmp_path / "design.md"
+        design_path.write_text("# Design\n")
+        design_entry = DesignEntry(
+            path=design_path, name="Test Design", content_hash="hash", db_id=design_id
+        )
+        feature = {"id": feature_key, "name": "Feature A"}
+        designs_folder = tmp_path / "designs"
+        (designs_folder / "features" / feature_key).mkdir(parents=True)
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+
+        with patch(
+            "src.autopilot.orchestrator.pipeline.run_single_workflow"
+        ) as mock_run, patch(
+            "src.autopilot.orchestrator.pipeline._cleanup_worktree"
+        ) as mock_cleanup, patch(
+            "src.autopilot.orchestrator.pipeline._create_integration_worktree",
+            return_value=None,
+        ) as mock_create_wt:
+            status = _run_one_feature(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                feature=feature,
+                designs_folder=designs_folder,
+                project_path=project_path,
+                logger=OrchestratorLogger(tmp_path),
+                state=None,
+            )
+
+        assert status == FeatureRunStatus.PAUSED
+        mock_run.assert_not_called()  # must not re-run the already-finished pipeline
+        # No worktree touched at all -- the branch/PR must survive
+        # untouched until the human actually reviews and merges it.
+        mock_create_wt.assert_not_called()
+        mock_cleanup.assert_not_called()
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-review-paused").first()
+            assert wf.paused_by == "review", "must not silently clear the pending review"
+
+
 class TestSyncStaleFeatureStatuses:
     """_sync_stale_feature_statuses: the Feature-table-wide self-heal for
     the same underlying bug TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn
