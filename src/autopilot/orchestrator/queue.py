@@ -564,12 +564,28 @@ def pick_next_design(
 
 
 def _assess_run_health(
-    project_path: Path,
-    _exec_id: str,
-    orchestrator_log_path: Path,
+    project_path: Optional[Path],
+    workflow_id: str,
+    orchestrator_log_path: Optional[Path],
     logger: "OrchestratorLogger",
 ) -> dict:
-    """Assess run health by checking orchestrator log and tmux logs for problems."""
+    """Assess run health from the workflow's own task history (DB, always
+    available), plus -- when the worktree still exists -- the orchestrator
+    and tmux logs.
+
+    project_path/orchestrator_log_path are best-effort: by the time a late
+    phase like forensics_analysis runs, the shared worktree is frequently
+    already gone (Workflow.working_directory cleared by _cleanup_worktree,
+    or the directory itself removed), and tmux logs live inside it -- once
+    it's gone there is structurally no way to grep them. Making the whole
+    assessment depend on the worktree surviving meant the caller's own
+    guard skipped calling this function entirely in that case. Confirmed
+    live: 64 of the 65 forensics_analysis tasks ever created had an empty
+    Workflow.working_directory, so this function was never even invoked
+    for them and forensics ran unconditionally every time, regardless of
+    whether anything actually went wrong. The DB-based checks below don't
+    depend on the worktree at all, so they always run.
+    """
     health: dict = {
         "clean": True,
         "goto_count": 0,
@@ -577,7 +593,44 @@ def _assess_run_health(
         "goto_events": [],
         "tmux_errors": [],
         "warnings": [],
+        "db_problems": [],
     }
+
+    # A task that ever failed or needed a retry, or an arbitration
+    # escalation, is real evidence something went wrong -- unlike GOTOs
+    # (normal, expected iteration between review phases), these only
+    # happen when an attempt didn't work the first time.
+    try:
+        from sqlalchemy import or_
+
+        from src.autopilot.orchestrator.arbitration import ARBITRATION_CREATED_BY
+        from src.core.database import Task
+
+        with get_db() as db:
+            failed_or_retried = (
+                db.query(Task)
+                .filter(
+                    Task.workflow_id == workflow_id,
+                    or_(Task.status == "failed", Task.retry_count > 0),
+                )
+                .count()
+            )
+            arbitration_tasks = (
+                db.query(Task)
+                .filter(
+                    Task.workflow_id == workflow_id,
+                    Task.created_by_agent_id == ARBITRATION_CREATED_BY,
+                )
+                .count()
+            )
+        if failed_or_retried:
+            health["db_problems"].append(f"{failed_or_retried} task(s) failed or needed a retry")
+        if arbitration_tasks:
+            health["db_problems"].append(f"{arbitration_tasks} arbitration escalation(s)")
+        if health["db_problems"]:
+            health["clean"] = False
+    except Exception as e:
+        health["warnings"].append(f"Could not check task history: {e}")
 
     # Count GOTOs from orchestrator log — informational only, not an error signal
     if orchestrator_log_path and orchestrator_log_path.exists():
@@ -592,43 +645,44 @@ def _assess_run_health(
         except Exception as e:
             health["warnings"].append(f"Could not read orchestrator log: {e}")
 
-    # Grep tmux logs for error patterns
-    error_patterns = [
-        "ERROR",
-        "Traceback",
-        "FAILED",
-        "ModuleNotFoundError",
-        "ImportError",
-        "AssertionError",
-        "pytest.*FAILED",
-        "exit code 1",
-    ]
-    tmux_dir = project_path / CONTEXT_DIR_NAME / "tmux"
-    total_errors = 0
-    if tmux_dir.is_dir():
-        for log_file in sorted(tmux_dir.glob("*.log")):
-            try:
-                text = log_file.read_text(errors="replace")
-                hits = [ln.strip() for ln in text.splitlines() if any(p in ln for p in error_patterns)]
-                if hits:
-                    total_errors += len(hits)
-                    health["tmux_errors"].append(
-                        {
-                            "file": log_file.name,
-                            "count": len(hits),
-                            "samples": hits[:3],
-                        }
-                    )
-            except Exception:
-                pass
-    health["error_count"] = total_errors
-    if total_errors > 0:
-        health["clean"] = False
+    # Grep tmux logs for error patterns -- best-effort, only possible while
+    # the worktree they live in still exists.
+    if project_path and project_path.exists():
+        error_patterns = [
+            "ERROR",
+            "Traceback",
+            "FAILED",
+            "ModuleNotFoundError",
+            "ImportError",
+            "AssertionError",
+            "exit code 1",
+        ]
+        tmux_dir = project_path / CONTEXT_DIR_NAME / "tmux"
+        total_errors = 0
+        if tmux_dir.is_dir():
+            for log_file in sorted(tmux_dir.glob("*.log")):
+                try:
+                    text = log_file.read_text(errors="replace")
+                    hits = [ln.strip() for ln in text.splitlines() if any(p in ln for p in error_patterns)]
+                    if hits:
+                        total_errors += len(hits)
+                        health["tmux_errors"].append(
+                            {
+                                "file": log_file.name,
+                                "count": len(hits),
+                                "samples": hits[:3],
+                            }
+                        )
+                except Exception:
+                    pass
+        health["error_count"] = total_errors
+        if total_errors > 0:
+            health["clean"] = False
 
     if health["clean"]:
-        logger.info("Run health: CLEAN (no GOTOs, no tmux errors)")
+        logger.info("Run health: CLEAN (no task failures/retries, no arbitration, no tmux errors)")
     else:
-        logger.info(f"Run health: PROBLEMS DETECTED — gotos={health['goto_count']} tmux_errors={health['error_count']}")
+        logger.info(f"Run health: PROBLEMS DETECTED — db={health['db_problems']} gotos={health['goto_count']} tmux_errors={health['error_count']}")
 
     return health
 

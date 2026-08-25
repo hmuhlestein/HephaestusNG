@@ -2590,30 +2590,42 @@ def _create_phase_task(
             # would trigger via update_task_status.
             if phase_name == "forensics_analysis":
                 wf = db.query(Workflow).filter_by(id=workflow_id).first()
-                if wf and wf.working_directory and Path(wf.working_directory).exists():
-                    health = _assess_run_health(
-                        Path(wf.working_directory),
-                        workflow_id,
-                        None,
-                        logger,
-                    )
-                    if health["clean"]:
-                        logger.info("[PHASE-TASK] forensics_analysis skipped — run was clean (no tmux error patterns detected)")
-                        # _fire_phase_transition marks this phase complete via
-                        # PhaseManager itself and advances to the next phase —
-                        # the same completion path a real agent would trigger
-                        # via update_task_status, just fired synthetically.
-                        return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
-                    # Not clean, so the agent IS about to run. Materialise the
-                    # two inputs its prompt requires: run_health.json (the
-                    # health dict just computed above — otherwise thrown away
-                    # after this branch) and phase_prompts/ (the phase YAMLs
-                    # it compares outcomes against). Both were read by
-                    # forensics_analysis.yaml and written by nothing, anywhere
-                    # in the codebase; STEP 1 even made listing phase_prompts/
-                    # a "MANDATORY FIRST ACTION", so the agent's first act was
-                    # a guaranteed failure on a directory that never existed.
-                    _stage_forensics_inputs(Path(wf.working_directory), wf, health, logger)
+                # Worktree may already be gone by now (working_directory
+                # cleared by _cleanup_worktree, or the directory itself
+                # removed) -- _assess_run_health's own DB-based checks
+                # don't need it, so call it regardless instead of only
+                # when the worktree happens to still exist. Previously
+                # gating the whole call on that meant this ran unassessed
+                # in the vast majority of cases (confirmed live: 64 of 65
+                # forensics_analysis tasks ever created had no working
+                # worktree at this point) and forensics spawned every time.
+                worktree_path = (
+                    Path(wf.working_directory)
+                    if wf and wf.working_directory and Path(wf.working_directory).exists()
+                    else None
+                )
+                health = _assess_run_health(worktree_path, workflow_id, None, logger)
+                if health["clean"]:
+                    logger.info("[PHASE-TASK] forensics_analysis skipped — run was clean (no task failures/retries/arbitration/tmux errors detected)")
+                    # _fire_phase_transition marks this phase complete via
+                    # PhaseManager itself and advances to the next phase —
+                    # the same completion path a real agent would trigger
+                    # via update_task_status, just fired synthetically.
+                    return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
+                # Not clean, so the agent IS about to run. Materialise the
+                # two inputs its prompt requires: run_health.json (the
+                # health dict just computed above — otherwise thrown away
+                # after this branch) and phase_prompts/ (the phase YAMLs
+                # it compares outcomes against). Both were read by
+                # forensics_analysis.yaml and written by nothing, anywhere
+                # in the codebase; STEP 1 even made listing phase_prompts/
+                # a "MANDATORY FIRST ACTION", so the agent's first act was
+                # a guaranteed failure on a directory that never existed.
+                # Only possible when the worktree is actually still there
+                # to write into -- if it's gone, the agent runs without
+                # these (same as it always has in that case).
+                if worktree_path:
+                    _stage_forensics_inputs(worktree_path, wf, health, logger)
 
             # deploy phase: skip entirely if DEPLOY.md doesn't exist
             if phase_name == "deploy":
