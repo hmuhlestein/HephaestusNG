@@ -859,8 +859,18 @@ def _run_ash_scan(worktree: Path, logger: "OrchestratorLogger") -> None:
             return
 
         results_path.parent.mkdir(parents=True, exist_ok=True)
+        # --changed-files-only limits the scan to files changed vs. --base-ref
+        # instead of the whole worktree on every run -- ash itself falls back
+        # to a full scan when git is unavailable, so this is safe even
+        # outside a normal feature branch. --base-ref is set explicitly to
+        # the project's configured base branch (bare, e.g. "main") rather
+        # than trusting ash's own "origin/main" default: a worktree always
+        # has its local base branch available (it's what it was created
+        # from), but not necessarily a fetched, up-to-date origin/main --
+        # plenty of projects this tool runs against have no remote at all.
+        base_branch = get_config().git.base_branch
         result = subprocess.run(
-            [str(ash_script), "--source-dir", "."],
+            [str(ash_script), "--source-dir", ".", "--changed-files-only", "--base-ref", base_branch],
             cwd=str(worktree),
             capture_output=True,
             timeout=300,
