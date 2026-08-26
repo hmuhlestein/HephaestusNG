@@ -7815,6 +7815,120 @@ class TestCreatePhaseTaskOrphanedPendingAge:
             assert original.failure_reason is None
 
 
+class TestCreatePhaseTaskQueuedStaleness:
+    """Regression, ticket-25436cfd (des-c7b9 tech-debt pass): _create_phase_task's
+    "phase already has an active task" guard included "queued" with no
+    staleness escape hatch, unlike "pending" -- if a queued sibling never
+    got dequeued (queue processing missed it, or a project stays at
+    capacity indefinitely), this guard blocked fresh task creation for the
+    phase forever, the same b7bd02cc-class livelock documented in
+    engine_client.py:620's own incident writeup. Fix: a "queued" task past
+    the stranded-task grace window is treated the same as an orphaned
+    "pending" one -- safe because "queued" by definition has no live agent
+    and no work done yet."""
+
+    def _seed(self, db, status, queued_at):
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-queued-stale",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    working_directory="/tmp/wf-queued-stale",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-queued-stale",
+                    workflow_id="wf-queued-stale",
+                    name="security_review",
+                    order=7,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-queued-stale",
+                    phase_id="phase-queued-stale",
+                    workflow_execution_id="wf-queued-stale",
+                    status="pending",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-maybe-stale-queued",
+                    workflow_id="wf-queued-stale",
+                    phase_id="phase-queued-stale",
+                    raw_description="r",
+                    done_definition="d",
+                    status=status,
+                    assigned_agent_id=None,
+                    created_at=datetime.utcnow() - timedelta(minutes=20),
+                    queued_at=queued_at,
+                )
+            )
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_recently_queued_task_is_not_treated_as_stale(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.core.database import Task
+
+        self._seed(orch_db_env, status="queued", queued_at=datetime.utcnow())
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        result = _create_phase_task(
+            "wf-queued-stale", "phase-queued-stale", "security_review", "continue",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is False
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            original = session.query(Task).filter_by(id="task-maybe-stale-queued").first()
+            assert original.status == "queued"
+            assert original.failure_reason is None
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_genuinely_stale_queued_task_is_replaced(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.core.database import Task
+
+        self._seed(
+            orch_db_env,
+            status="queued",
+            queued_at=datetime.utcnow() - timedelta(seconds=901),
+        )
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        result = _create_phase_task(
+            "wf-queued-stale", "phase-queued-stale", "security_review", "continue",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            original = session.query(Task).filter_by(id="task-maybe-stale-queued").first()
+            assert original.status == "failed"
+            assert "queued" in original.failure_reason.lower()
+            fresh = (
+                session.query(Task)
+                .filter(Task.phase_id == "phase-queued-stale", Task.status == "in_progress")
+                .first()
+            )
+            assert fresh is not None
+            assert fresh.id != "task-maybe-stale-queued"
+
+
 class TestCreatePhaseTaskStaleClaimFallback:
     """Characterization test for _create_phase_task's own inline
     stale-claim-clear-and-retry fallback (target_already_claimed=False
