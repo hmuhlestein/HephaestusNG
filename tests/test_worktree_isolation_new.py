@@ -210,6 +210,55 @@ def test_final_design_merge_stashes_and_restores_uncommitted_main_repo_work(
     assert "some uncommitted edit" in readme.read_text(), "uncommitted tracked-file edit was destroyed by final design merge"
 
 
+def test_final_design_merge_takes_the_shared_merge_lock(test_db, temp_repo, monkeypatch):
+    """Regression: _merge_design_branch_into_main previously took no lock at
+    all, unlike WorktreeManager.merge_to_main's identical merge sequence
+    against the same main_repo -- confirming the fix actually engages the
+    shared per-repo lock (<repo>/.git/.hephaestus_merge_lock), not just
+    that the merge happens to succeed single-threaded."""
+    import src.core.simple_config
+    from src.autopilot.orchestrator.pipeline import _merge_design_branch_into_main
+    from src.core.worktree_merge_lock import MergeLockManager
+
+    config = src.core.simple_config.Config()
+    config.git.main_repo_path = Path(temp_repo.working_dir)
+    config.paths.project_root = Path(temp_repo.working_dir)
+    config.git.base_branch = "main"
+    monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
+    monkeypatch.setattr("src.core.worktree_manager.get_config", lambda: config)
+
+    temp_repo.git.checkout("-b", "design-branch")
+    design_file = Path(temp_repo.working_dir) / "design_feature.py"
+    design_file.write_text("print('design work')\n")
+    temp_repo.index.add([str(design_file)])
+    temp_repo.index.commit("Design branch work")
+    temp_repo.git.checkout("main")
+
+    acquire_calls = []
+    release_calls = []
+    real_acquire = MergeLockManager.acquire
+    real_release = MergeLockManager.release
+
+    def _tracking_acquire(self, agent_id, timeout=300):
+        acquire_calls.append(agent_id)
+        return real_acquire(self, agent_id, timeout)
+
+    def _tracking_release(self, lock_file, agent_id):
+        release_calls.append(agent_id)
+        return real_release(self, lock_file, agent_id)
+
+    monkeypatch.setattr(MergeLockManager, "acquire", _tracking_acquire)
+    monkeypatch.setattr(MergeLockManager, "release", _tracking_release)
+
+    logger = MagicMock()
+    _merge_design_branch_into_main(
+        "design-branch", temp_repo.working_dir, logger, db_manager=test_db
+    )
+
+    assert len(acquire_calls) == 1, f"expected exactly one merge-lock acquire, got {acquire_calls}"
+    assert len(release_calls) == 1, f"expected exactly one merge-lock release, got {release_calls}"
+
+
 def test_discard_on_failure_leaves_main_clean(manager, test_db, temp_repo):
     agent_id = str(uuid.uuid4())
     _make_agent(test_db, agent_id)
