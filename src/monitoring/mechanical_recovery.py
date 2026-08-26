@@ -1353,10 +1353,22 @@ class MechanicalRecoveryDetector:
         nothing looked wrong. The generic frozen-output detector eventually
         catches the resulting idle agent too, but only after 5+ minutes and
         with a generic "you appear stuck" nudge -- this fires immediately
-        with a nudge that names the exact task_id and asks for a retry,
-        the same way _detect_mcp_disconnected does for a visibly-dropped
-        connection. This covers the case where nothing about the MCP
-        connection looked broken to the agent at all.
+        with a nudge that names the exact task_id, the same way
+        _detect_mcp_disconnected does for a visibly-dropped connection.
+        This covers the case where nothing about the MCP connection
+        looked broken to the agent at all.
+
+        The nudge itself is deliberately non-diagnostic ("if you've
+        finished, call complete_my_task; if not, keep working") rather
+        than asserting a specific cause ("your call didn't land, probably
+        a dropped connection") -- the trigger (an apparent completion
+        report the server never received) is a precise, meaningful
+        signal worth acting on immediately, but the CAUSE isn't something
+        this detector can actually verify, and a wrong specific claim
+        reads as confident advice with no way for the agent (or a human
+        watching) to tell it apart from Guardian's own real analysis.
+        A generic reminder is correct either way: harmless if the agent
+        genuinely isn't done yet, useful if it is.
 
         Escalates to a full agent restart after
         UNCONFIRMED_COMPLETION_ESCALATE_AFTER consecutive nudges for the
@@ -1424,9 +1436,7 @@ class MechanicalRecoveryDetector:
                     # status as "in_progress" and sends the agent a
                     # checklist, expecting a second "done" call). That
                     # message already tells the agent what to do; a nudge
-                    # here would be redundant and, worse, actively
-                    # misleading -- it'd claim a connection problem that
-                    # never happened.
+                    # here would just be redundant noise on top of it.
                     return False
                 task_id = task.id
 
