@@ -98,3 +98,52 @@ diff <(yq '.additional_notes' config/workflows/bugfix/product_requirements.yaml 
 ```
 
 **Expected**: Both workflows' `product_requirements.yaml` document the same bounded (max 3, scope > security > UX > technical) `NEEDS CLARIFICATION` convention and the same P1/P2/P3 independently-testable story framing — verifiable as a static content check, no running instance required (same pattern as `tests/test_qa_coverage_gate_is_diff_scoped.py`'s existing prompt-content assertions).
+
+## Scenario 7 — `feature_architect` actually reads the full bundle (User Story 5, SC-009)
+
+Scenario 6 only checks that the prompts *say* the right things — this scenario checks `feature_architect` behavior, closing the gap `/speckit-analyze` flagged (finding E1): User Story 5's own Independent Test has a second half that quickstart previously never covered.
+
+```bash
+cd <test-project>  # a Spec Kit feature with spec.md, plan.md, AND tasks.md, describing >1 discrete piece of work
+heph autopilot start --project-path . --feature <NNN-name>
+# let the feature_architect phase run to completion
+cat .hephaestus/features.json  # or the equivalent path in the worktree
+```
+
+**Expected**: The decomposition's feature boundaries and `depends_on` relationships are traceable to specifics in `plan.md`'s technical breakdown and `tasks.md`'s existing dependency ordering — not a decomposition that reads as if only `spec.md` existed (e.g. it references components/phases `plan.md` named, or dependency ordering that matches `tasks.md`'s).
+
+## Scenario 8 — Multi-repo project: repo-scoped detection and selection (FR-020, FR-021, FR-022, FR-023)
+
+```bash
+cd <multi-repo-test-project>  # AutopilotProject with child repos labeled "backend" and "frontend"
+mkdir -p <backend-repo-path>/specs/001-shared-number
+mkdir -p <frontend-repo-path>/specs/001-shared-number
+cp .specify/templates/spec-template.md <backend-repo-path>/specs/001-shared-number/spec.md
+cp .specify/templates/spec-template.md <frontend-repo-path>/specs/001-shared-number/spec.md
+
+heph autopilot start --project-path . --feature 001-shared-number
+```
+
+**Expected**: Errors — lists both matches (`backend` and `frontend`) and requires `--repo` (FR-023).
+
+```bash
+heph autopilot start --project-path . --feature 001-shared-number --repo backend
+```
+
+**Expected**: Builds the `backend` repo's feature specifically (FR-022), never the `frontend` one.
+
+```bash
+# Bare-number shorthand, single-repo case:
+heph autopilot start --project-path <single-repo-project> --feature 001
+```
+
+**Expected**: Resolves the same as passing the full `001-<name>` directory name would (FR-021) — no `--repo` needed, since there's only one repo to search.
+
+```bash
+# Auto-scan's plan.md gate (FR-020):
+mkdir -p <project>/specs/005-spec-only && cp .specify/templates/spec-template.md <project>/specs/005-spec-only/spec.md
+# spec_kit_auto_scan already enabled for <project> from Scenario 5
+# wait one scan interval
+```
+
+**Expected**: `005-spec-only` is not built — it has no `plan.md` yet. It becomes visible via the dashboard/CLI (Awareness Model) but stays unqueued until `plan.md` is added and a later scan runs.

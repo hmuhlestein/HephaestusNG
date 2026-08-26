@@ -65,3 +65,43 @@ No unresolved `NEEDS CLARIFICATION` markers remain in the Technical Context — 
 **Rationale**: These are prompt templates read fresh at dispatch time (not baked into already-created `Phase` DB rows for in-flight workflows, confirmed earlier this session) — an in-place edit is the established, low-risk way to change agent-facing instructions in this codebase, and keeps this change consistent with how the rest of the phase YAML content is already written and tested (`tests/test_qa_coverage_gate_is_diff_scoped.py`'s existing pattern of asserting on prompt content is the direct precedent for testing this).
 
 **Alternatives considered**: A new shared prompt-fragment file included by reference — rejected as more machinery than four files need, and inconsistent with how the rest of this codebase's phase YAMLs are already self-contained rather than composed from fragments.
+
+## Decision: Multi-repo scoping reuses `repo_id_for_path`, not a new mechanism
+
+**Decision**: In a multi-repo project (`ProjectRepo` siblings beyond the primary), Spec Kit detection scans `specs/` in every known repo, and a detected feature's owning repo is resolved via `repo_id_for_path` (`src/core/repo_resolution.py:72` — longest-path-prefix match against each `ProjectRepo.path`), the exact function `_create_feature_records` (`src/autopilot/orchestrator/features.py`) already uses to scope design.md-derived features to a repo. Selection accepts a `--repo <label>` (matching `ProjectRepo.label`) to disambiguate when a bare `--feature` value would otherwise match more than one repo.
+
+**Rationale**: This is precisely the same problem Hephaestus already solved once — REQ-19's `repo_label`-first, path-inferred-fallback pattern (see `features.py`'s own comments) explicitly favors an explicit label over guessing, and explicitly leaves things unresolved rather than silently picking a repo when genuinely ambiguous. Building a second, Spec-Kit-specific repo-resolution mechanism would duplicate working logic and risk disagreeing with it (a feature scoped one way by the design-queue path and a different way by Spec Kit selection would be a confusing, hard-to-debug split).
+
+**Alternatives considered**: Only support Spec Kit input in single-repo projects, erroring in multi-repo ones — rejected as an artificial limitation Hephaestus's own architecture doesn't otherwise impose; multi-repo is a first-class, already-supported project shape.
+
+## Decision: Automatic scanning requires `plan.md`, manual `start` doesn't
+
+**Decision**: `scan_design_queue`'s Spec Kit extension (FR-014) excludes any feature with `has_plan == False` from what it queues (FR-020). Manual `heph autopilot start` is unaffected — FR-002 still only requires `spec.md`.
+
+**Rationale**: A human running `start` against a `spec.md`-only feature made an explicit, informed choice to proceed; an unattended background scan making the same call on their behalf is a materially different risk — building on an admittedly-incomplete spec without anyone in the loop. Raised directly by `/speckit-analyze`'s C1 finding (an edge case the spec had flagged but left unresolved); resolving it toward the more conservative default keeps the automation surface (User Story 6) trustworthy without weakening the manual path User Story 1 already validated.
+
+**Alternatives considered**: Build from `spec.md` alone in both cases, matching manual `start`'s bar exactly — rejected as the strictly riskier default for something that runs with no one watching; symmetry with the manual path isn't worth more here than the safety margin costs.
+
+## Decision: `--feature` accepts a bare number, not just the full directory name
+
+**Decision**: `--feature <NNN>` (e.g. `001`) resolves the same as `--feature <NNN-name>` (e.g. `001-checkout-flow`) whenever the number is unambiguous within the repo(s) being searched (FR-021).
+
+**Rationale**: Spec Kit's own sequential numbering guarantees at most one directory per number within a single repo, so the bare form costs nothing to support and matches how users actually remember their own features (by number, from having typed `/speckit.specify` once) more often than by full slug. Directly requested during review.
+
+**Alternatives considered**: Require the full name always — rejected as pure friction with no correctness benefit; the bare form is unambiguous exactly where it's offered (single repo, or explicit `--repo` in a multi-repo one).
+
+## Decision: Cross-repo read visibility is pre-existing — verified, not designed here
+
+**Decision**: No new mechanism for a feature's agent to read a sibling repo's code. `AgentManager._build_repo_context()` (`src/agents/manager.py:760`) already injects a `## PROJECT REPOSITORIES` / `## REPO ACCESS` section (own repo WRITABLE, siblings READ-ONLY with real canonical paths) into every phase prompt via `{project_context}`, for any multi-repo project — confirmed by reading the implementation directly, not assumed. This composes automatically for Spec Kit-sourced features the moment `feature_architect` correctly assigns `repo_id` per feature (FR-018), exactly as it already does for `design.md`-sourced ones.
+
+**Rationale**: An earlier pass of this plan (before `design_docs/multi_repo_project_design.md` was recovered — it had been unintentionally deleted by an unrelated commit) incorrectly concluded this capability didn't exist, having checked only `WorktreeManager` (which correctly confirmed no *worktree-level* mounting exists) without checking the *prompt-injection* layer where it actually lives. Restoring and reading that design doc, then verifying its REQ-09/17/18 against the current `manager.py`, corrected this. Recorded here so the mistake — and the correction — has a paper trail, and so nobody re-derives or re-builds this mechanism believing it's new.
+
+**Alternatives considered**: N/A — this is a verification of existing behavior, not a new design decision.
+
+## Decision: `feature_architect`'s Spec Kit awareness (FR-018) explicitly composes with the existing REQ-19/20 repo-binding rules, not a parallel rule set
+
+**Decision**: FR-018's prompt update instructs `feature_architect` to *read* Spec Kit's structure differently, but its *decomposition* output still obeys `design_docs/multi_repo_project_design.md`'s REQ-19 (one repo per `Feature`, never spanning two) and REQ-20 (cross-repo ordering via `Feature.depends_on`/`execution`) unchanged. A single `spec.md`+`plan.md` in the primary repo describing cross-repo work decomposes into repo-bound features exactly as the equivalent `design.md` already would.
+
+**Rationale**: `feature_architect`'s repo-binding logic (`_create_feature_records` in `features.py`) operates on `features.json`'s `files`/`repo_label` fields — a schema-level output, not an input-format-specific one. Nothing about that logic needs to know or care whether the agent that produced `features.json` was reading `design.md` or `spec.md`+`plan.md`; it already works today by inferring repo from file paths or an explicit `repo_label`. The only genuinely new work is teaching the *agent* (the prompt) to correctly parse Spec Kit's structure well enough to still produce that same `files`/`repo_label` shape — the downstream machinery needs no changes.
+
+**Alternatives considered**: A Spec-Kit-specific decomposition/repo-assignment path — rejected; would duplicate REQ-19/20's already-working, already-tested logic for no benefit, and risks the two paths disagreeing about how a feature gets bound to a repo.

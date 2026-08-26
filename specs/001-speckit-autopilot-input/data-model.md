@@ -9,6 +9,8 @@ Represents one `specs/<NNN>-<name>/` directory discovered on disk. Not a databas
 | `number` | string (3-digit) | The `NNN` prefix; Spec Kit's own sequential-numbering convention |
 | `name` | string (slug) | The `<name>` suffix |
 | `directory` | path | `specs/<NNN>-<name>/` |
+| `repo_id` | string \| null | The owning `ProjectRepo.id` in a multi-repo project, resolved via `repo_id_for_path` (FR-022); `null` in a single-repo project (nothing to disambiguate) |
+| `repo_label` | string \| null | Denormalized `ProjectRepo.label` for display (dashboard picker, CLI error listings) and for matching an explicit `--repo <label>` (FR-023) |
 | `has_spec` | bool | `spec.md` present — **required** for the directory to be recognized at all (FR-001) |
 | `has_plan` | bool | `plan.md` present |
 | `has_tasks` | bool | `tasks.md` present |
@@ -22,7 +24,8 @@ Note: `SpecKitFeature` no longer carries extracted file *content* as typed field
 - `number` and `name` are derived from the directory name, not re-validated against `spec.md`'s own `**Feature Branch**` field — the directory name is the source of truth for selection (matches how `--feature <NNN-name>` and the dashboard picker both address it).
 
 **Selection (not a stored field — resolved per invocation)**:
-- Exactly one SpecKitFeature is "selected" for a given `heph autopilot start` invocation: the one named by `--feature`, or the sole one found when exactly one exists, or none when zero exist (falls through to requiring `design.md`, FR-005) or more than one exists without `--feature` (errors, FR-006).
+- Exactly one SpecKitFeature is "selected" for a given `heph autopilot start` invocation: the one named by `--feature` (optionally narrowed by `--repo` in a multi-repo project, FR-023), or the sole one found when exactly one exists across all searched repos, or none when zero exist (falls through to requiring `design.md`, FR-005), or more than one exists without `--feature` (errors, FR-006), or `--feature` alone matches more than one repo (errors, requires `--repo`, FR-023).
+- `--feature` accepts either the full `<NNN>-<name>` directory name or the bare `<NNN>` number (FR-021); both resolve to the same selection logic above.
 
 ## AutopilotProject (existing table, one new column)
 
@@ -40,6 +43,7 @@ Not a new table — `scan_design_queue` (`src/autopilot/orchestrator/queue.py:16
 
 **Validation rules**:
 - A SpecKitFeature already built (has a completed or in-progress `Feature`/`Workflow` row traceable to it) MUST NOT produce a new `DesignEntry` on a later scan — reuses the existing content-hash/self-heal logic, keyed on the feature directory's content rather than a single file's hash (extension needed, tracked as a task).
+- A SpecKitFeature with `has_plan == False` MUST NOT produce a `DesignEntry` at all (FR-020) — it stays visible via detection (FR-012) but is excluded from what the scan queues, regardless of `spec_kit_auto_scan`. A later scan, once `plan.md` appears, picks it up normally.
 
 ## ReadinessCheckResult (ephemeral, CLI output only — never persisted)
 
