@@ -1770,19 +1770,33 @@ def _wait_for_pending_reviews(
     Called before starting new features to ensure review mode gates
     the entire pipeline, not just individual features.
     """
-    from src.core.database import Feature, Workflow, get_db
+    from sqlalchemy import or_
+
+    from src.core.database import AutopilotDesign, Feature, Workflow, get_db
 
     while True:
         try:
             with get_db() as db:
+                # Excludes a review-paused workflow whose design has since
+                # been archived -- archiving means "stop waiting on this,"
+                # and without this an archived design's abandoned review
+                # (e.g. one paused for a merge approval that's never
+                # coming) would block every OTHER design's pipeline
+                # forever. Outer join + null-safe filter: a Feature/
+                # Workflow whose design row can't be found (or, for
+                # Workflow, has no design_id at all -- an orphaned Phase 0
+                # run) still counts as pending -- nothing to archive means
+                # nothing tells us it's safe to ignore.
                 pending_feature_reviews = (
                     db.query(Feature)
                     .join(Workflow, Feature.workflow_id == Workflow.id)
+                    .outerjoin(AutopilotDesign, Feature.design_id == AutopilotDesign.id)
                     .filter(
                         Workflow.project_id == project_id,
                         Workflow.paused_by == "review",
                         Workflow.status == "paused",
                     )
+                    .filter(or_(AutopilotDesign.id.is_(None), AutopilotDesign.archived_at.is_(None)))
                     .count()
                 )
                 # Phase 0 workflows have no Feature row to join through --
@@ -1795,12 +1809,14 @@ def _wait_for_pending_reviews(
                 # pipeline" guarantee this function exists to provide.
                 pending_phase0_reviews = (
                     db.query(Workflow)
+                    .outerjoin(AutopilotDesign, Workflow.design_id == AutopilotDesign.id)
                     .filter(
                         Workflow.project_id == project_id,
                         Workflow.definition_id.in_(PHASE0_DEFINITION_IDS),
                         Workflow.paused_by == "review",
                         Workflow.status == "paused",
                     )
+                    .filter(or_(AutopilotDesign.id.is_(None), AutopilotDesign.archived_at.is_(None)))
                     .count()
                 )
                 pending_reviews = pending_feature_reviews + pending_phase0_reviews

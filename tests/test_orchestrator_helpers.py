@@ -8659,6 +8659,83 @@ class TestWaitForPendingReviews:
 
         mock_sleep.assert_not_called()
 
+    def test_does_not_block_on_an_archived_designs_phase0_pause(self, orch_db_env):
+        """Regression (live incident): a design archived while its Phase 0
+        decomposition sat paused for review (e.g. awaiting a merge
+        approval that's never coming) blocked every OTHER design in the
+        project from starting its own next feature-execution-group
+        forever -- Phase 0 for a brand new design completed, features were
+        created, but _wait_for_pending_reviews never returned because it
+        counted the archived design's abandoned review as still pending."""
+        from src.autopilot.orchestrator import _wait_for_pending_reviews
+        from src.core.database import AutopilotDesign, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                AutopilotDesign(
+                    id="des-archived-phase0", project_id="proj-archived-review",
+                    filename="d.md", name="D", archived_at=datetime.utcnow(),
+                )
+            )
+            session.add(
+                Workflow(
+                    id="wf-archived-phase0-paused",
+                    name="Phase 0",
+                    phases_folder_path="/tmp",
+                    definition_id="feature_architect",
+                    status="paused",
+                    paused_by="review",
+                    project_id="proj-archived-review",
+                    design_id="des-archived-phase0",
+                )
+            )
+
+        with patch("src.autopilot.orchestrator.time.sleep") as mock_sleep:
+            _wait_for_pending_reviews("proj-archived-review", MagicMock())
+
+        mock_sleep.assert_not_called()
+
+    def test_does_not_block_on_an_archived_designs_feature_review(self, orch_db_env):
+        """Same regression as above, for a paused feature review rather
+        than a Phase 0 decomposition."""
+        from src.autopilot.orchestrator import _wait_for_pending_reviews
+        from src.core.database import AutopilotDesign, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                AutopilotDesign(
+                    id="des-archived-feat", project_id="proj-archived-feat-review",
+                    filename="d.md", name="D", archived_at=datetime.utcnow(),
+                )
+            )
+            session.add(
+                Workflow(
+                    id="wf-archived-feat-paused",
+                    name="autopilot",
+                    phases_folder_path="/tmp",
+                    definition_id="autopilot",
+                    status="paused",
+                    paused_by="review",
+                    project_id="proj-archived-feat-review",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feat-archived-paused",
+                    design_id="des-archived-feat",
+                    feature_key="core",
+                    name="Core",
+                    scope="s",
+                    status="paused",
+                    workflow_id="wf-archived-feat-paused",
+                )
+            )
+
+        with patch("src.autopilot.orchestrator.time.sleep") as mock_sleep:
+            _wait_for_pending_reviews("proj-archived-feat-review", MagicMock())
+
+        mock_sleep.assert_not_called()
+
 
 class TestTerminateAgentDirectResetsTask:
     """terminate_agent_direct is a separate termination primitive (direct
