@@ -28,6 +28,11 @@ Getting there also meant rebuilding most of the system underneath: a FastAPI/SQL
 
 **Ready to run software development end-to-end, unattended?** Point Autopilot at a design spec and it runs a 14-phase pipeline — each phase a fresh, focused agent, each phase's claim of "done" checked before the next one starts, and can go back to any previous step:
 
+<div align="center">
+<img src="docs/Autopilot.png" alt="Autopilot Dashboard" width="100%">
+<p><em>Autopilot's live dashboard: design queue, feature gallery, and per-phase status for every running project</em></p>
+</div>
+
 | # | Phase | What it does |
 |---|-------|---------------|
 | 1 | `product_requirements` | Extracts structured requirements from the design spec, with full project context. |
