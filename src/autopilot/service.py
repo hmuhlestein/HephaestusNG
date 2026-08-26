@@ -447,7 +447,7 @@ class AutopilotService:
 
 class AutopilotServiceRegistry:
     """Per-project AutopilotService instances, replacing the old single
-    global singleton -- see docs/MULTI_PROJECT_CONCURRENCY_DESIGN.md.
+    global singleton -- see docs/designs/MULTI_PROJECT_CONCURRENCY_DESIGN.md.
 
     threading.Lock, not asyncio.Lock: run_continuous_pipeline executes
     inside loop.run_in_executor(None, ...) -- a real OS thread, not a
