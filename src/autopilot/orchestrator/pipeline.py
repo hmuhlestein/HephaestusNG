@@ -61,7 +61,7 @@ from src.autopilot.orchestrator.policy import (
     detect_hard_error,
     detect_impasse,
 )
-from src.autopilot.orchestrator.queue import _get_phase0_completion, _has_resumable_active_design, _set_workflow_type, _update_design_status, is_design_fully_complete, pick_next_design
+from src.autopilot.orchestrator.queue import _archived_design_for_workflow, _get_phase0_completion, _has_resumable_active_design, _set_workflow_type, _update_design_status, is_design_fully_complete, pick_next_design
 from src.autopilot.orchestrator.reporting import _empty_report, _generate_design_report_html
 from src.autopilot.orchestrator.runtime_registries import (
     _get_orchestrator_agent_id,
@@ -2883,6 +2883,18 @@ def run_continuous_pipeline(args) -> None:
                 try:
                     active_workflows = get_active_workflows(str(project_path), project_id=current_project_id)
                     still_blocking = _escalate_stale_active_workflows(active_workflows, active_workflow_abandoned_streak, logger)
+                    # Archiving a design never touches its workflow (see
+                    # _archived_design_for_workflow's docstring) -- a
+                    # workflow with genuine ongoing agent activity never
+                    # trips the abandonment escalation above, so without
+                    # this an archived design's still-busy workflow would
+                    # block the whole project's queue forever even though
+                    # the user explicitly told the system to stop caring
+                    # about it.
+                    try:
+                        still_blocking = [wf_id for wf_id in still_blocking if not _archived_design_for_workflow(wf_id)]
+                    except Exception:
+                        pass  # can't determine archived status -- fail safe, keep waiting
                     if still_blocking and not _has_resumable_active_design(current_project_id):
                         wf_ids = [i[:8] for i in still_blocking]
                         logger.info(f"Workflow still active ({', '.join(wf_ids)}) - waiting before picking next design")
@@ -2973,6 +2985,27 @@ def run_continuous_pipeline(args) -> None:
                             logger.info(f"Previous workflow {state.current_workflow_id[:8]} could not be checked, clearing stale state")
                             state.current_workflow_id = None
                             continue
+
+                        # If the design behind this workflow has since been
+                        # archived, the user has explicitly said "stop
+                        # waiting on this one" -- don't let its incomplete
+                        # state (e.g. unmerged agent branches awaiting a
+                        # review/merge approval that isn't coming) pin the
+                        # whole project's queue behind it forever. Same
+                        # "clear stale state and move on" shape as the
+                        # missing-workflow/wrong-project branches above.
+                        try:
+                            archived_design = _archived_design_for_workflow(state.current_workflow_id)
+                            if archived_design:
+                                logger.info(
+                                    f"Previous workflow {state.current_workflow_id[:8]}'s design "
+                                    f"'{archived_design.name}' was archived — clearing stale state instead "
+                                    "of waiting on it indefinitely"
+                                )
+                                state.current_workflow_id = None
+                                continue
+                        except Exception:
+                            pass
 
                         is_complete, reason = is_design_fully_complete(state.current_workflow_id, logger)
 
