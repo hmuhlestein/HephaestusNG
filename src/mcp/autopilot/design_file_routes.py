@@ -152,8 +152,13 @@ async def reload_project_designs(
         if not proj:
             raise HTTPException(404, "Project not found")
         _sync_project_designs(project_id, proj.base_dir, db)
-    # Now fetch fresh
-    return await list_project_designs(project_id)
+    # Now fetch fresh. Must pass archived explicitly: called directly as a
+    # plain function (not via route dispatch), list_project_designs'
+    # archived: bool = Query(False) default stays the literal Query(...)
+    # sentinel object here -- which is truthy -- instead of being resolved
+    # to False the way an actual HTTP request would. Without this, reload
+    # returned only archived designs (and dropped every real one).
+    return await list_project_designs(project_id, archived=False)
 
 
 @router.get("/projects/{project_id}/designs", response_model=List[DesignItem])

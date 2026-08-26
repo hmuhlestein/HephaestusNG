@@ -3008,6 +3008,26 @@ class TestArchiveProjectDesign:
         archived_list = client.get(f"/api/autopilot/projects/{pid}/designs", params={"archived": True}).json()
         assert archived_list == []
 
+    def test_reload_excludes_archived_designs(self, project_client):
+        """Regression (live incident): reload_project_designs calls
+        list_project_designs(project_id) directly as a plain function
+        rather than through route dispatch, so its archived: bool =
+        Query(False) default stayed the literal Query(...) sentinel object
+        -- which is truthy -- instead of resolving to False. Reload
+        returned ONLY archived designs (dropping every real one), and the
+        frontend's Reload button wrote that straight into the visible
+        list, flashing archived designs back in."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        client.post(f"/api/autopilot/projects/{pid}/designs/01-auth.md/archive")
+
+        resp = client.post(f"/api/autopilot/projects/{pid}/designs/reload")
+        assert resp.status_code == 200, resp.text
+        filenames = [d["filename"] for d in resp.json()]
+        assert "01-auth.md" not in filenames
+        assert "02-payments.md" in filenames
+
     def test_archive_unknown_design_404s(self, project_client):
         client, dirs = project_client
         pid = self._create_project(client, dirs)
