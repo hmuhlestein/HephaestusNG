@@ -495,7 +495,23 @@ def _relink_features_to_workflows(design_id: str, logger: "OrchestratorLogger") 
         # feature) could link a feature to the WRONG design's workflow.
         # Matters more now that this runs after every single feature
         # completes, not just once per design reprocessing.
-        workflows = db.query(Workflow).filter(Workflow.definition_id == "autopilot", Workflow.design_id == design_id).order_by(Workflow.created_at.desc()).all()
+        #
+        # definition_id must include "bugfix", not just "autopilot" --
+        # DESIGN_WORKFLOW_DEFINITION_IDS exists specifically so scoping
+        # checks like this one also recognize a bugfix-typed feature's
+        # workflow (see its own comment in constants.py). Without it, a
+        # bugfix-typed feature's workflow_id here was NEVER set: this
+        # function is the ONLY code path that links it (see docstring),
+        # and its query structurally could never match a "bugfix"-
+        # definition workflow. _run_one_feature's resume check
+        # (`if feat_record.workflow_id`) then always saw None and started
+        # a brand-new workflow from scratch on every restart -- observed
+        # live: three separate workflows (95a5097f, 8f8fb835, 3546fd2a)
+        # for the same bugfix feature, one per backend restart, each
+        # discarding the previous run's phase progress.
+        from src.core.constants import DESIGN_WORKFLOW_DEFINITION_IDS
+
+        workflows = db.query(Workflow).filter(Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS), Workflow.design_id == design_id).order_by(Workflow.created_at.desc()).all()
 
         for feat in unlinked:
             for wf in workflows:
