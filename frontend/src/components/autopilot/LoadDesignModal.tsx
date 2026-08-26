@@ -193,39 +193,64 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
   };
 
   // Clicking a spec folder itself pulls spec.md, the top-level document,
-  // straight into the viewer instead of just navigating in.
+  // straight into the viewer instead of just navigating in. A folder mid-
+  // workflow (e.g. speckit-plan already ran and spec.md was consumed/
+  // replaced by plan.md, research.md, etc.) has no spec.md yet -- fall
+  // back to just navigating in instead of erroring, so the user can still
+  // reach whatever IS there.
   const isSpecFolder = (entry: RemoteEntry) =>
     entry.type === 'dir' && SPEC_FOLDER_PATH_RE.test(entry.path);
 
-  const handleSelectSpecFolder = (entry: RemoteEntry) =>
-    handleSelectRemoteFile({ name: 'spec.md', path: `${entry.path}/spec.md`, type: 'file' });
+  const handleSelectSpecFolder = async (entry: RemoteEntry) => {
+    if (!projectId) return;
+    const specEntry: RemoteEntry = { name: 'spec.md', path: `${entry.path}/spec.md`, type: 'file' };
+    setAddingRemotePath(specEntry.path);
+    try {
+      const file = await apiService.getAutopilotProjectFileContent(projectId, specEntry.path);
+      _applyLoadedFile(specEntry.path, file, entry.name);
+    } catch {
+      loadRemoteDir(entry.path);
+    } finally {
+      setAddingRemotePath(null);
+    }
+  };
+
+  // Applies a fetched remote file to the loader's state -- shared by the
+  // plain file-click path and the spec-folder fallback above. displayName
+  // overrides the fetched file's own name for display/labeling purposes
+  // (e.g. a Spec Kit folder's name instead of "spec.md") -- path still
+  // drives where it's tracked as loaded from.
+  const _applyLoadedFile = (path: string, file: { name: string; content: string; size_bytes: number }, displayName?: string) => {
+    const name = displayName ?? file.name;
+    // Selecting a file implies where it already lives -- update the
+    // Destination Folder textbox above to match, instead of leaving it
+    // at whatever it was (typically the workflow's default), so the
+    // file doesn't silently get re-saved somewhere else on submit.
+    if (workflowType) {
+      const lastSlash = path.lastIndexOf('/');
+      setDestinationFolder(lastSlash === -1 ? '' : path.slice(0, lastSlash));
+    }
+    // Bug Spec: same single filename/textarea preview "Select Local
+    // File" already fills (see handleFileSelect) -- replace its content
+    // instead of appending to loadedFiles, which rendered as an inert
+    // "1 file(s) selected" row with no visible content, inconsistent
+    // with the local-file path.
+    if (workflowType === 'bugfix') {
+      setTextFilename(name);
+      setTextContent(file.content);
+      setTextSourceRemotePath(path);
+    } else {
+      setLoadedFiles(prev => [...prev, { name, content: file.content, size: file.size_bytes, remotePath: path }]);
+      setAddedRemotePaths(prev => new Set(prev).add(path));
+    }
+  };
 
   const handleSelectRemoteFile = async (entry: RemoteEntry) => {
     if (!projectId || addedRemotePaths.has(entry.path)) return;
     setAddingRemotePath(entry.path);
     try {
       const file = await apiService.getAutopilotProjectFileContent(projectId, entry.path);
-      // Selecting a file implies where it already lives -- update the
-      // Destination Folder textbox above to match, instead of leaving it
-      // at whatever it was (typically the workflow's default), so the
-      // file doesn't silently get re-saved somewhere else on submit.
-      if (workflowType) {
-        const lastSlash = entry.path.lastIndexOf('/');
-        setDestinationFolder(lastSlash === -1 ? '' : entry.path.slice(0, lastSlash));
-      }
-      // Bug Spec: same single filename/textarea preview "Select Local
-      // File" already fills (see handleFileSelect) -- replace its content
-      // instead of appending to loadedFiles, which rendered as an inert
-      // "1 file(s) selected" row with no visible content, inconsistent
-      // with the local-file path.
-      if (workflowType === 'bugfix') {
-        setTextFilename(file.name);
-        setTextContent(file.content);
-        setTextSourceRemotePath(entry.path);
-      } else {
-        setLoadedFiles(prev => [...prev, { name: file.name, content: file.content, size: file.size_bytes, remotePath: entry.path }]);
-        setAddedRemotePaths(prev => new Set(prev).add(entry.path));
-      }
+      _applyLoadedFile(entry.path, file);
     } catch (error: any) {
       toast.error(error?.response?.data?.detail || 'Failed to load file');
     } finally {
