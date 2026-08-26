@@ -263,11 +263,36 @@ async def get_design_status(
             with get_db() as _db:
                 for feat in _db.query(Feature).filter(Feature.workflow_id.in_(_wf_ids_for_feature_check)).all():
                     _feature_status_by_wf[feat.workflow_id] = feat.status
+        # A workflow with NO Feature row pointing to it at all is orphaned
+        # -- but only once some OTHER workflow for this same design DOES
+        # have one: a design's very first workflow (budget-blocked before
+        # _create_feature_records ever ran, e.g.) legitimately has no
+        # Feature yet and must still count. _any_feature_linked is what
+        # distinguishes "superseded by a newer, linked workflow" (a
+        # bootstrap-race duplicate -- see _relink_features_to_workflows's
+        # own fix for the bugfix-typed-feature version of this) from
+        # "hasn't gotten far enough to create one yet". Without this
+        # distinction, _feature_status_by_wf.get(wf.id) returns None for
+        # BOTH cases, and `None not in ("completed", "skipped")` is True --
+        # the opposite of this filter's intent, silently RE-INCLUDING every
+        # orphaned duplicate instead of excluding it alongside genuinely-
+        # completed ones. Observed live: a feature's canonical workflow
+        # completed while two superseded duplicate workflows (created
+        # before the bootstrap-race fix, no Feature linking to either)
+        # still sat "paused" -- the design's top-level status reported
+        # "paused" indefinitely even though the one workflow anything
+        # actually routes through was done.
+        _any_feature_linked = bool(_feature_status_by_wf)
+
+        def _is_superseded_orphan(wf) -> bool:
+            return wf.id not in _feature_status_by_wf and _any_feature_linked
+
         _wf_statuses = [
             wf.status
             for wf in matching_workflows
-            if _feature_status_by_wf.get(wf.id) not in ("completed", "skipped")
+            if not _is_superseded_orphan(wf) and _feature_status_by_wf.get(wf.id) not in ("completed", "skipped")
         ]
+        _non_orphaned_workflows = [wf for wf in matching_workflows if not _is_superseded_orphan(wf)]
         if any(s == "active" for s in _wf_statuses):
             overall_status = "active"
         elif _wf_statuses and any(s == "paused" for s in _wf_statuses):
@@ -297,7 +322,12 @@ async def get_design_status(
         design_paused_by = None
         design_status_reason = None
         if overall_status == "paused":
-            paused_wf = next((wf for wf in matching_workflows if wf.status == "paused" and wf.paused_by), None)
+            # Same orphan exclusion as _wf_statuses above -- otherwise this
+            # can surface a superseded duplicate workflow's stale
+            # paused_by/status_reason even when the actual, currently-
+            # linked workflow is the one legitimately paused (or not
+            # paused at all).
+            paused_wf = next((wf for wf in _non_orphaned_workflows if wf.status == "paused" and wf.paused_by), None)
             if paused_wf:
                 design_paused_by = paused_wf.paused_by
                 design_status_reason = paused_wf.status_reason
