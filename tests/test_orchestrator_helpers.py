@@ -3866,6 +3866,59 @@ class TestRunOneFeatureStateIsolation:
             feat = session.query(Feature).filter_by(id="feature-row-1").first()
             assert feat.workflow_id == "wf-correct"
 
+    def test_relinks_a_bugfix_typed_feature_not_just_autopilot(self, orch_db_env):
+        """Regression: _relink_features_to_workflows queried
+        Workflow.definition_id == "autopilot" only, so a bugfix-typed
+        feature's workflow_id was NEVER linked -- this function is its
+        ONLY linking path (see its own docstring), and the query
+        structurally could never match a "bugfix"-definition workflow.
+        _run_one_feature's resume check (`if feat_record.workflow_id`)
+        then always saw None and started a brand-new workflow from
+        scratch on every restart. Observed live: three separate
+        workflows (95a5097f, 8f8fb835, 3546fd2a) for the same bugfix
+        feature, one per backend restart, each discarding the previous
+        run's phase progress."""
+        from src.autopilot.orchestrator.features import _relink_features_to_workflows
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+
+        design_id = "design-bugfix-1"
+        feature_key = "feat-bug-a"
+        with orch_db_env.session_scope() as session:
+            session.add(
+                AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1")
+            )
+            session.add(
+                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Feature(
+                    id="feature-row-bug-1",
+                    design_id=design_id,
+                    feature_key=feature_key,
+                    name="Bug A",
+                    scope="s",
+                    status="active",
+                    workflow_type="bugfix",
+                )
+            )
+            session.add(
+                Workflow(
+                    id="wf-bugfix-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    design_id=design_id,
+                    definition_id="bugfix",
+                    launch_params={"feature_id": feature_key},
+                )
+            )
+
+        _relink_features_to_workflows(design_id, MagicMock())
+
+        with orch_db_env.session_scope() as session:
+            feat = session.query(Feature).filter_by(id="feature-row-bug-1").first()
+            assert feat.workflow_id == "wf-bugfix-1"
+
 
 class TestRunOneFeatureDoesNotOverrideGotoBudget:
     """Regression: _run_one_feature used to pass its own max_iterations
