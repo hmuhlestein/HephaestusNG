@@ -50,8 +50,8 @@ def test_autopilot_qa_validation_measures_diff_scoped_coverage():
 # gate's "required, not optional" field -- exactly the whole-repo number
 # this file's other tests exist to keep out of that field. Fixed by a
 # coverage_not_applicable escape hatch. The prompt's own worked example
-# (checked via `git diff --name-only origin/main -- '*.py'`) is for Python
-# specifically -- other stacks use their own equivalent check.
+# (checked via `git diff --name-only origin/main...HEAD -- '*.py'`) is for
+# Python specifically -- other stacks use their own equivalent check.
 def test_bugfix_qa_validation_documents_coverage_not_applicable():
     prompt = _qa_validation_prompt("bugfix")
     assert "coverage_not_applicable" in prompt
@@ -62,3 +62,30 @@ def test_autopilot_qa_validation_documents_coverage_not_applicable():
     prompt = _qa_validation_prompt("autopilot")
     assert "coverage_not_applicable" in prompt
     assert "'*.py'" in prompt
+
+
+# Follow-up regression: the coverage_not_applicable check itself used a
+# two-dot `git diff origin/main` (working tree vs. main's current tip),
+# which on a long-lived branch/worktree pulls in every commit that landed
+# on origin/main after this branch forked -- not just this branch's own
+# changes. Observed live: a purely frontend diff on a branch several hours
+# behind a fast-moving main falsely showed dozens of unrelated Python files
+# as "changed" (including, absurdly, the very commit that added this
+# check), so coverage_not_applicable never fired and the gate held a
+# frontend-only feature to the Python coverage floor anyway. Three dots
+# (git diff origin/main...HEAD, a merge-base diff) isolates only the
+# branch's own changes -- verified against a real long-lived worktree in
+# this repo, where the two-dot form returned 14 unrelated Python files and
+# the three-dot form correctly returned none. diff-cover's own
+# --compare-branch is unaffected -- its --diff-range-notation already
+# defaults to '...'.
+def test_bugfix_qa_validation_coverage_check_uses_merge_base_diff():
+    prompt = _qa_validation_prompt("bugfix")
+    assert "origin/main...HEAD -- '*.py'" in prompt
+    assert "origin/main -- '*.py'" not in prompt.replace("origin/main...HEAD -- '*.py'", "")
+
+
+def test_autopilot_qa_validation_coverage_check_uses_merge_base_diff():
+    prompt = _qa_validation_prompt("autopilot")
+    assert "origin/main...HEAD -- '*.py'" in prompt
+    assert "origin/main -- '*.py'" not in prompt.replace("origin/main...HEAD -- '*.py'", "")
