@@ -199,12 +199,27 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       if (!projectId) throw new Error('No project selected');
       return apiService.archiveAutopilotProjectDesign(projectId, filename);
     },
+    onMutate: async (filename: string) => {
+      // Cancel in-flight refetches first -- otherwise the active list's
+      // 5s poll can have a fetch already in flight when the archive call
+      // resolves, and TanStack Query's request dedup lets that stale
+      // (pre-archive) response win over invalidateQueries below, flashing
+      // the archived design back into the list for one poll cycle before
+      // the next tick corrects it. Same fix as ReviewModeToggle's mutation.
+      await queryClient.cancelQueries({ queryKey: ['autopilot-project-designs', projectId] });
+      const prev = queryClient.getQueryData<any[]>(['autopilot-project-designs', projectId]);
+      queryClient.setQueryData(['autopilot-project-designs', projectId], (old: any[] | undefined) =>
+        old?.filter((d) => d.filename !== filename)
+      );
+      return { prev };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs-archived', projectId] });
       toast.success('Design archived');
     },
-    onError: (error: any) => {
+    onError: (error: any, _filename, ctx: any) => {
+      if (ctx?.prev) queryClient.setQueryData(['autopilot-project-designs', projectId], ctx.prev);
       toast.error(error?.response?.data?.detail || 'Failed to archive design');
     },
   });
