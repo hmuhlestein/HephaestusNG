@@ -2582,6 +2582,90 @@ class TestProjectDesigns:
         body = resp.json()
         assert body["status"] != "active"
 
+    def test_design_status_ignores_an_orphaned_paused_workflow_with_no_linked_feature(
+        self, project_client
+    ):
+        """Regression: matching_workflows' exclusion filter only handled a
+        workflow whose LINKED feature was already completed/skipped
+        (_feature_status_by_wf.get(wf.id) not in (...)) -- a workflow with
+        NO Feature row pointing to it at ALL (an orphaned duplicate from a
+        prior bootstrap race, e.g. before _relink_features_to_workflows'
+        own bugfix-typed-feature fix) got `None not in (...)`, which is
+        True -- the OPPOSITE of this filter's intent, so an orphaned
+        "paused" workflow got counted right alongside genuinely live ones.
+        Observed live: a feature's canonical workflow completed while two
+        superseded duplicate workflows (no Feature linking to either)
+        still sat "paused" -- the design's top-level status reported
+        "paused" indefinitely."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, Feature, Workflow, get_db
+
+        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        (design_dir / "orphan-design.md").write_text("# Design")
+
+        launch_params = {
+            "design_document": str(design_dir / "orphan-design.md"),
+            "project_path": str(dirs["project_dir"]),
+        }
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-test-orphan",
+                    project_id=pid,
+                    filename="orphan-design.md",
+                    name="Orphan Design",
+                    ordinal=15,
+                    size_bytes=10,
+                    extension=".md",
+                    status="completed",
+                )
+            )
+            # The orphaned duplicate: paused, and nothing links to it.
+            db.add(
+                Workflow(
+                    id="wf-orphan-paused",
+                    name="bugfix",
+                    definition_id="bugfix",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by="system",
+                    launch_params=launch_params,
+                )
+            )
+            # The canonical, currently-linked workflow: genuinely done.
+            db.add(
+                Workflow(
+                    id="wf-canonical-completed",
+                    name="bugfix",
+                    definition_id="bugfix",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    launch_params=launch_params,
+                )
+            )
+
+        with get_db() as db:
+            db.add(
+                Feature(
+                    id="feat-orphan-1",
+                    design_id="des-test-orphan",
+                    feature_key="the-fix",
+                    name="The Fix",
+                    scope="s",
+                    status="completed",
+                    workflow_id="wf-canonical-completed",
+                )
+            )
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/orphan-design.md/status")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] != "paused"
+
     def test_design_status_finds_report_after_worktree_cleanup(self, project_client):
         """Regression, observed live: has_report only ever checked
         Workflow.working_directory for feature_report.html. _cleanup_worktree
