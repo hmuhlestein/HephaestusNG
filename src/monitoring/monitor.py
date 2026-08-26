@@ -35,6 +35,8 @@ MAX_STUCK_TASK_NUDGES = 3
 class MonitoringLoop:
     """Main monitoring loop for the system with trajectory monitoring."""
 
+    UNCONFIRMED_COMPLETION_ESCALATE_AFTER = 3
+
     # SOLID review finding 3.5: the mechanical-recovery sweep in
     # _monitoring_cycle used to hardcode a 12-call sequential if-chain
     # instead of iterating a list -- adding a new check meant editing that
@@ -72,6 +74,7 @@ class MonitoringLoop:
         "_detect_dangerous_command_confirmation",
         "_detect_resume_session_prompt",
         "_detect_max_token_limit_error",
+        "_detect_unconfirmed_task_completion",
         "_detect_mcp_disconnected",
         "_detect_connection_errors",
         "_detect_bad_model_error",
@@ -208,6 +211,14 @@ class MonitoringLoop:
         self._mechanical_recovery._nudged_token_limit = value
 
     @property
+    def _nudged_unconfirmed_completion(self):
+        return self._mechanical_recovery._nudged_unconfirmed_completion
+
+    @_nudged_unconfirmed_completion.setter
+    def _nudged_unconfirmed_completion(self, value):
+        self._mechanical_recovery._nudged_unconfirmed_completion = value
+
+    @property
     def _nudged_mcp_disconnected(self):
         return self._mechanical_recovery._nudged_mcp_disconnected
 
@@ -296,6 +307,11 @@ class MonitoringLoop:
     async def _detect_max_token_limit_error(self, *args, **kwargs):
         """Delegator to _mechanical_recovery.detect_max_token_limit_error()."""
         return await self._mechanical_recovery.detect_max_token_limit_error(*args, **kwargs)
+
+
+    async def _detect_unconfirmed_task_completion(self, *args, **kwargs):
+        """Delegator to _mechanical_recovery.detect_unconfirmed_task_completion()."""
+        return await self._mechanical_recovery.detect_unconfirmed_task_completion(*args, **kwargs)
 
 
     async def _detect_mcp_disconnected(self, *args, **kwargs):

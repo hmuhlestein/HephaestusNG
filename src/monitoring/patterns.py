@@ -157,6 +157,26 @@ _RESUME_SESSION_PROMPT_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Matches a complete_my_task/update_task_status tool-call rendering with a
+# terminal status (done/failed), e.g. Claude Code's
+# "complete_my_task (MCP)(status: "done", ...)". Deliberately requires
+# BOTH the tool name and a quoted done/failed status close together (not
+# just the tool name alone, which would also match a self-review's
+# in_progress re-check) -- see _detect_unconfirmed_task_completion, which
+# uses this to catch a completion call that rendered as sent in the
+# agent's own transcript but never actually reached the server (dropped
+# connection, backend restart mid-call).
+#
+# DOTALL, not [^\n]-bounded: different CLIs (pi, Codex, ...) pretty-print
+# a tool call's arguments across multiple lines rather than Claude Code's
+# single-line rendering -- anchoring to one exact layout would silently
+# miss every other CLI. This project defaults to Claude Code today, but
+# the phase config can select any CLIAgentInterface subclass per-phase.
+_COMPLETION_ATTEMPT_RE = re.compile(
+    r"(?:complete_my_task|update_task_status).{0,300}?status[\"']?\s*[:=]\s*[\"']?(done|failed)[\"']?",
+    re.IGNORECASE | re.DOTALL,
+)
+
 def _strip_sgr(text: str) -> str:
     """Strip SGR color escape codes (\\x1b[...m).
 

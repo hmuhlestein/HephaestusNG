@@ -644,6 +644,272 @@ class TestDetectMaxTokenLimitError:
         mock_agent_manager.send_message_to_agent.assert_not_called()
 
 
+# ── _detect_unconfirmed_task_completion ────────────────────────────
+
+
+class TestDetectUnconfirmedTaskCompletion:
+    COMPLETION_OUTPUT = (
+        " ⎿ Wrote 17 lines to .hephaestus/scope_review/scope.md\n\n"
+        '● hephaestus - complete_my_task (MCP)(status: "done", summary: "..."\n\n'
+        " ❯\n"
+    )
+
+    def _mock_session_with_task(
+        self, mock_db, task_status, self_review_started_at=None, task_id="t1", started_at=None
+    ):
+        from contextlib import contextmanager
+
+        session = Mock()
+        task = Mock(
+            id=task_id,
+            status=task_status,
+            self_review_started_at=self_review_started_at,
+            started_at=started_at or (datetime.utcnow() - timedelta(minutes=10)),
+        )
+        session.query.return_value.filter_by.return_value.first.return_value = task
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+        return task
+
+    @pytest.mark.asyncio
+    async def test_no_output(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = ""
+        await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_normal_output_ignored(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "Reading design.md..."
+        await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_matches_multiline_pretty_printed_json_rendering(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Not every CLI renders a tool call on one line the way Claude
+        Code does -- a pretty-printed JSON-style rendering (tool name and
+        the status field on separate lines) must still match."""
+        agent = Agent(id="a1", cli_type="pi", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = (
+            "> Tool call:\n"
+            "  {\n"
+            '    "tool": "complete_my_task",\n'
+            '    "status": "done",\n'
+            '    "summary": "finished the thing"\n'
+            "  }\n"
+        )
+        self._mock_session_with_task(mock_db, "in_progress")
+
+        result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+
+        assert result is True
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_not_working_status_ignored(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Only a still-'working' agent can have a stranded completion call
+        -- an idle/terminated agent is a different failure mode, already
+        covered by _detect_orphaned_idle_agent."""
+        agent = Agent(id="a1", cli_type="claude", status="idle", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
+        await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_nudges_when_task_still_in_progress(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """The reported live incident: complete_my_task rendered as sent in
+        the transcript, but the task never actually reached a terminal
+        status server-side."""
+        agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
+        self._mock_session_with_task(mock_db, "in_progress")
+
+        result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+
+        assert result is True
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+        nudge = mock_agent_manager.send_message_to_agent.call_args[0][1]
+        assert "t1" in nudge
+        assert "complete_my_task" in nudge
+
+    @pytest.mark.asyncio
+    async def test_ignores_match_buried_under_newer_output(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """A phase that resumes another phase's CLI session (shared
+        session_roles entry, e.g. product_validation/product_requirements)
+        can briefly replay the prior task's own completion call into the
+        tmux pane on startup. If the agent has visibly moved on since --
+        substantial new output after the match -- that must not be treated
+        as THIS task confirming completion (sliding-window / content-based
+        check, not a fixed time window: see _within_resume_replay_grace)."""
+        agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = (
+            self.COMPLETION_OUTPUT + "\n" + ("newer unrelated output " * 20)
+        )
+        self._mock_session_with_task(mock_db, "in_progress")
+
+        result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_does_not_nudge_when_task_already_done(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """The call actually landed -- nothing to nudge about."""
+        agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
+        self._mock_session_with_task(mock_db, "done")
+
+        result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_does_not_nudge_during_pending_self_review(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """update_task_status's self-review gate deliberately leaves a
+        self_review-enabled phase's task 'in_progress' after its first
+        'done' call, while it sends the agent a checklist and waits for a
+        second 'done' -- the call landed correctly. A nudge here would be
+        redundant and actively misleading (falsely implying a dropped
+        connection)."""
+        agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
+        self._mock_session_with_task(
+            mock_db, "in_progress", self_review_started_at=datetime.utcnow()
+        )
+
+        result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_does_not_nudge_when_task_under_review(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """A 'done' call that spawned validation moves the task to
+        under_review, not a plain terminal state -- also not stranded."""
+        agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
+        self._mock_session_with_task(mock_db, "under_review")
+
+        result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cooldown_prevents_immediate_resend(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
+        self._mock_session_with_task(mock_db, "in_progress")
+
+        await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+        await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_retries_after_cooldown_expires(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
+        self._mock_session_with_task(mock_db, "in_progress")
+
+        await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+        make_monitoring_loop._nudged_unconfirmed_completion["a1"] = time.time() - 61
+
+        await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+        assert mock_agent_manager.send_message_to_agent.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_escalates_to_restart_after_repeated_nudges_for_same_task(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """If nudging never resolves it (a persistently broken transport,
+        not a one-off blip), keep re-nudging the same broken connection
+        forever helps nobody -- past the threshold, restart the agent
+        instead."""
+        from unittest.mock import AsyncMock
+
+        agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
+        self._mock_session_with_task(mock_db, "in_progress")
+        make_monitoring_loop._auto_restart.requeue_and_terminate = AsyncMock()
+
+        threshold = make_monitoring_loop.UNCONFIRMED_COMPLETION_ESCALATE_AFTER
+        for i in range(threshold):
+            await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+            # Bypass the cooldown between iterations -- only the escalation
+            # count matters for this test, not real elapsed time.
+            make_monitoring_loop._nudged_unconfirmed_completion["a1"] = time.time() - 61
+
+        # Exactly `threshold` nudges sent, no restart yet.
+        assert mock_agent_manager.send_message_to_agent.call_count == threshold
+        make_monitoring_loop._auto_restart.requeue_and_terminate.assert_not_called()
+
+        # One more crosses the threshold -- restart, not another nudge.
+        result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+
+        assert result is True
+        assert mock_agent_manager.send_message_to_agent.call_count == threshold
+        make_monitoring_loop._auto_restart.requeue_and_terminate.assert_called_once_with(agent)
+
+    @pytest.mark.asyncio
+    async def test_escalation_count_resets_for_a_different_task(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """A fresh task for the same agent must not inherit an earlier
+        task's nudge count -- otherwise a single unrelated occurrence on
+        one task could trip an immediate restart on the next, unrelated
+        one."""
+        from unittest.mock import AsyncMock
+
+        agent = Agent(id="a1", cli_type="claude", status="working", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.COMPLETION_OUTPUT
+        mock_agent_manager.send_message_to_agent.reset_mock()
+        make_monitoring_loop._auto_restart.requeue_and_terminate = AsyncMock()
+
+        threshold = make_monitoring_loop.UNCONFIRMED_COMPLETION_ESCALATE_AFTER
+        self._mock_session_with_task(mock_db, "in_progress", task_id="t1")
+        for i in range(threshold):
+            await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+            make_monitoring_loop._nudged_unconfirmed_completion["a1"] = time.time() - 61
+
+        # A new task_id for the same agent -- count must start over, not
+        # immediately escalate.
+        agent.current_task_id = "t2"
+        self._mock_session_with_task(mock_db, "in_progress", task_id="t2")
+
+        result = await make_monitoring_loop._detect_unconfirmed_task_completion(agent)
+
+        assert result is True
+        make_monitoring_loop._auto_restart.requeue_and_terminate.assert_not_called()
+        assert mock_agent_manager.send_message_to_agent.call_count == threshold + 1
+
+
 # ── _detect_mcp_disconnected ──────────────────────────────────────
 
 
