@@ -4,10 +4,12 @@ name: architectural_review
 # score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
 spec_gate: true
 thinking_level: high
-cli_tool: claude
-cli_model: sonnet
-fallback_cli_tool: pi
-fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
+# Uses the workflow-level default_cli_tool/default_model (claude/sonnet) --
+# uncomment to override for this phase specifically:
+# cli_tool: claude
+# cli_model: sonnet
+# fallback_cli_tool: pi
+# fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
 description: |
   Review the developer's implementation against the architecture.
 
