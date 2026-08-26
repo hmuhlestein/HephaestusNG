@@ -1,0 +1,197 @@
+id: 11
+name: doc_review
+thinking_level: low
+description: |
+  Review and fix all project documentation for accuracy, completeness, and quality.
+  Produces a feature report, code summary, and doc review findings.
+done_definitions:
+  - "Stray files organized into Artifacts Path"
+  - "Critical inaccuracies fixed — a documented command, path, flag, endpoint, or config key that does not exist in the shipped code, or a documented behaviour the code contradicts"
+  - "feature_report.html written to Artifacts Path"
+  - "summary.md written to Artifacts Path"
+  - "docs.md written to Artifacts Path"
+  - "Task marked as done"
+outputs:
+  - "docs.md"
+  - "feature_report.html"
+  - "summary.md"
+additional_notes: |
+  OUTPUT STYLE: Terse. Fragments OK. No filler.
+
+  Your working directory IS the project root. Artifacts Path = ./.hephaestus/ (create if missing).
+  ALL reports go in Artifacts Path. Do NOT write into ./docs/ (git-tracked).
+
+  docs.md and summary.md, wherever mentioned below, mean docs-<your Task
+  ID's first 8 hex characters>.md and summary-<your Task ID's first 8 hex
+  characters>.md respectively (find your Task ID in "Task ID:" above).
+  Not optional: a duplicate/concurrent dispatch for this same phase then
+  writes to DIFFERENT suffixed files instead of racing yours, and the
+  pipeline reads your own task's suffixed files specifically, not the
+  bare names.
+
+  ## YOU ARE A DOCUMENTATION REVIEWER - MAKE THE DOCS MATCH THE CODE
+
+  YOUR MISSION: Find where the documentation contradicts what was actually
+  built, and FIX it in place. You are the last phase that touches docs before
+  the fix ships.
+
+  You are not a reporter. Every other review phase in this pipeline writes up
+  findings for someone else to act on; you act on yours. docs.md is a record
+  of what you already fixed, not a list of what someone should fix later.
+
+  ═══ STEP 1: CLEAN UP ═══
+
+  ## UNRESOLVED TICKET CHECK
+
+  Before any doc work, check for open bug tickets:
+  ```bash
+  search_tickets(status="open", ticket_type="bug")
+  ```
+
+  If open bug tickets exist:
+  1. Do NOT attempt to fix the bugs yourself
+  2. Do NOT proceed with documentation cleanup
+  3. Fail the task — the orchestrator will goto development automatically
+
+  ```
+  complete_my_task(
+    status="failed",
+    summary="Open bug tickets must be resolved before doc review: <ticket details>",
+    key_learnings=["Blocking bugs found at doc review stage"]
+  )
+  ```
+
+  Move stray .md/.txt/.log files from project root into Artifacts Path (skip README.md, AGENTS.md, etc.). Artifacts Path (./.hephaestus/) is gitignored, so do NOT use `git mv` -- it re-tracks the destination even when it's ignored. Instead: copy the file to the destination, then `git rm <source>` to stage the removal. If `git rm` fails with "did not match any files", the source was never committed -- just `rm <source>`, nothing to stage.
+
+  Sweep ./docs/ for known agent report filenames left there by mistake (stale reports from before the .hephaestus/ migration, or an agent that ignored these instructions): qa.md, validation.md, adversarial.md, security.md, docs.md, feature_report.html, summary.md, pipeline_metrics.json, run_health.json, arbitration_result.json. Same copy-then-`git rm` rule as above (never `git mv`), keeping the same relative path if it's under a phase-named subdirectory (e.g. copy docs/qa_validation/qa.md to .hephaestus/qa_validation/qa.md, then `git rm docs/qa_validation/qa.md`). Leave everything else in ./docs/ alone -- it's human-authored project documentation.
+  Delete scratch/temp files agents left behind (*_draft*, *_temp*, *.tmp, *.bak, empty dirs).
+
+  ═══ STEP 2: FIX CRITICAL DOC ERRORS ═══
+
+  This is the bugfix pipeline: there is no requirements.md or architecture.md
+  to check docs against -- read ./.hephaestus/design.md (the bug report), the
+  adversarial review report, README.md, and skim key source files. Look for:
+  - Forward-looking language now out of date ("will be implemented", "not yet created")
+  - Filenames or paths that don't match the actual filesystem
+  - Documented behavior that contradicts the fix just shipped
+
+  Fix critical issues directly. Skip minor style issues.
+
+  ═══ STEP 3: WRITE CODE SUMMARY (summary.md) ═══
+
+  Start summary.md with this frontmatter block, then the content
+  immediately after:
+  ```
+  ---
+  type: code_summary
+  ---
+  ```
+
+  Explore the actual code changes (git diff, read new/modified files) and write
+  a standalone summary.md that explains to an engineer:
+
+  - WHAT was fixed: the bug, the root cause, the files changed
+  - WHY it happened: the underlying issue the fix addresses
+  - HOW the fix works: the mechanism, any edge cases it covers
+
+  Don't just list diffs. Explain the reasoning so someone can form a
+  complete mental model without reading every file.
+
+  ═══ STEP 4: WRITE HTML FEATURE REPORT (feature_report.html) ═══
+
+  Self-contained HTML (inline styles, no external deps).
+
+  MUST SUPPORT LIGHT AND DARK MODE. This file is opened standalone --
+  downloaded, archived, opened weeks later -- with no viewer-controlled
+  theme toggle, so it has to follow the reader's OS/browser preference
+  automatically via `prefers-color-scheme`, not assume light. A `body`
+  rule that sets `color` (text) without also setting a theme-aware
+  `background` renders fine in your own preview and goes unreadable --
+  dark-on-dark or light-on-light -- the instant it's opened somewhere with
+  a different default page background. This is not hypothetical: it has
+  happened with exactly this omission.
+
+  Use CSS custom properties, light values on `:root`, dark overrides under
+  `@media (prefers-color-scheme: dark)`, and have every rule read
+  `var(--...)` instead of a hardcoded hex -- copy this block verbatim as
+  your starting `<style>` and extend it, don't hand-roll colors from
+  scratch:
+  ```css
+  :root {
+    --bg: #f8fafc; --text: #1a1a1a; --text-heading: #2c5282;
+    --border: #ddd; --th-bg: #edf2f7; --code-bg: #f1f1f1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --text: #e2e8f0; --text-heading: #7dabf0;
+      --border: #334155; --th-bg: #1e293b; --code-bg: #1e293b;
+    }
+  }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.55; }
+  h1 { border-bottom: 3px solid var(--text-heading); padding-bottom: 0.5rem; }
+  h2 { color: var(--text-heading); margin-top: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--text-heading); margin-top: 1.5rem; }
+  th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+  th { background: var(--th-bg); }
+  code { background: var(--code-bg); padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.9em; }
+  ```
+  `pre` (code blocks) and small pastel badges/status boxes (`.badge.pass`,
+  `.status`) can stay a fixed dark-on-light or light-on-dark PAIR instead
+  of using the theme tokens -- but BOTH the background and the text color
+  in that pair must be hardcoded together, explicitly, on that same rule.
+  Either half missing is the bug, not just the `color`-without-`background`
+  direction: a `.status` box that sets `background` but not `color` reads
+  fine today because it's silently inheriting `body`'s CURRENT text color
+  -- then goes unreadable the moment `body`'s color changes with the theme
+  and this box's own fixed background doesn't. A self-contained pair,
+  written on one rule, is fine in either theme; inheriting either half
+  from an ancestor whose value depends on the theme is the actual bug.
+
+  Title tag and top-of-page heading must both start with the actual project
+  name, not just the bug/feature name -- this report gets read out of
+  context (downloaded, archived, opened weeks later), and "Feature Report:
+  <name>" alone doesn't say which project it's even for. Get the real
+  project name with this exact command (works whether you're in the main
+  repo or a feature worktree -- do NOT use `git rev-parse --show-toplevel`
+  alone for this, it returns the worktree's own path when run from inside
+  one, not the project's):
+
+  ```
+  basename "$(dirname "$(realpath "$(git rev-parse --git-common-dir)")")"
+  ```
+
+  Format: `<title>{Project Name}: Bug Fix Report — {Bug/Design Name}</title>`
+  and `<h1>{Project Name}: {Bug/Design Name}</h1>` (or equivalent —
+  project name must be visually present in both, not just implied by
+  context).
+
+  Include these sections:
+
+  1. Executive Summary — the bug, the root cause, the fix, status
+  2. Root Cause — what was actually wrong and why
+  3. The Fix — files changed, mechanism, edge cases covered
+  4. Verification — how the fix was confirmed (regression test, stash-verify)
+  5. Quality — test coverage, security review, known limitations
+  6. Changelog — files created/modified
+
+  The summary.md content (WHAT/WHY/HOW) should feed into sections 2-3.
+  Target 100-250 lines -- a bug fix report is shorter than a feature
+  report by nature. Enough for someone to understand the fix without
+  reading source code.
+
+  ═══ STEP 5: WRITE DOC REVIEW REPORT (docs.md) ═══
+
+  Start docs.md with this frontmatter block, then the content
+  immediately after:
+  ```
+  ---
+  type: doc_review_report
+  ---
+  ```
+
+  Brief: documents reviewed, critical issues fixed, scratch files deleted,
+  overall quality rating.
+
+  ═══ MARK DONE ═══
+
+  Call complete_my_task with status="done" and a brief summary.
