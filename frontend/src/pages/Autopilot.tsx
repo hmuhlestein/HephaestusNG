@@ -21,6 +21,7 @@ import ProjectSettingsModal from '@/components/ProjectSettingsModal';
 import { useProject } from '@/context/ProjectContext';
 import toast from 'react-hot-toast';
 import BaseStatusBadge from '@/components/StatusBadge';
+import { isCompletedFeatureStatus } from '@/utils/featureStatus';
 
 type Tab = 'queue' | 'features' | 'improvements' | 'messages' | 'logs';
 const VALID_TABS: Tab[] = ['queue', 'features', 'improvements', 'messages', 'logs'];
@@ -83,10 +84,10 @@ const Autopilot: React.FC = () => {
     queryFn: () => apiService.getAutopilotFeatures(),
     refetchInterval: 30000,
   });
-  // Same "pending"/"active" exclusion as FeatureGallery's own filter --
-  // otherwise the badge counts features the list below never shows.
+  // Same exclusion as FeatureGallery's own filter -- otherwise the badge
+  // counts features the list below never shows.
   const completedFeaturesCount = (featuresList || []).filter(
-    (f: any) => f.status !== 'pending' && f.status !== 'active'
+    (f: any) => isCompletedFeatureStatus(f.status)
   ).length;
 
   const togglePipeline = useMutation({
