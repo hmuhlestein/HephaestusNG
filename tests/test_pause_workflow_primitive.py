@@ -1328,3 +1328,101 @@ class TestReviewFeatureApproveLocalMergeFallback:
         assert result["success"] is True
         assert result["merged"] is False
         assert "FAILED" in result["message"]
+
+
+class TestReviewFeatureApproveSyncsLocalMainAfterMerge:
+    """gh pr merge is a remote-only GitHub operation -- it never touches
+    the local main checkout, which is what WorktreeManager and every other
+    agent's worktree actually read. Approving used to report success while
+    local main silently stayed behind origin/main indefinitely. Confirmed
+    live: approved a feature, gh pr merge succeeded, local main stayed 4+
+    commits behind origin/main with no indication anything was wrong."""
+
+    @pytest.fixture
+    def git_project_with_remote(self, tmp_path):
+        """Like TestReviewFeatureApproveLocalMergeFallback's
+        git_project_with_feature_branch, but project_dir has a real git
+        remote (a bare repo) -- lets a test simulate "a commit landed on
+        the remote's main that the local checkout doesn't have yet",
+        which is exactly what gh pr merge does: a GitHub-side, remote-only
+        operation local git never sees on its own."""
+        import subprocess
+
+        remote_dir = tmp_path / "remote.git"
+        subprocess.run(["git", "init", "--bare", "-b", "main", str(remote_dir)], check=True, capture_output=True)
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        def _git(*args, cwd):
+            subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+        _git("init", "-b", "main", cwd=project_dir)
+        _git("config", "user.email", "t@t.com", cwd=project_dir)
+        _git("config", "user.name", "t", cwd=project_dir)
+        _git("remote", "add", "origin", str(remote_dir), cwd=project_dir)
+        (project_dir / "README.md").write_text("hello\n")
+        _git("add", "-A", cwd=project_dir)
+        _git("commit", "-m", "init", cwd=project_dir)
+        _git("push", "-u", "origin", "main", cwd=project_dir)
+
+        worktree_dir = tmp_path / "worktree"
+        _git("worktree", "add", "-b", "feature/test-branch", str(worktree_dir), cwd=project_dir)
+        (worktree_dir / "new_file.txt").write_text("feature work\n")
+        _git("add", "-A", cwd=worktree_dir)
+        _git("commit", "-m", "feature work", cwd=worktree_dir)
+        _git("push", "-u", "origin", "feature/test-branch", cwd=worktree_dir)
+
+        # Simulate gh pr merge happening remotely on GitHub: merge the
+        # feature branch into the REMOTE's main directly, through a
+        # separate clone -- project_dir's own local checkout never
+        # participates, exactly like a real gh pr merge.
+        remote_clone_dir = tmp_path / "remote_clone"
+        _git("clone", str(remote_dir), str(remote_clone_dir), cwd=tmp_path)
+        _git("config", "user.email", "t@t.com", cwd=remote_clone_dir)
+        _git("config", "user.name", "t", cwd=remote_clone_dir)
+        _git("fetch", "origin", cwd=remote_clone_dir)
+        _git("checkout", "-b", "feature/test-branch", "origin/feature/test-branch", cwd=remote_clone_dir)
+        _git("checkout", "main", cwd=remote_clone_dir)
+        _git("merge", "--no-ff", "feature/test-branch", "-m", "merge PR", cwd=remote_clone_dir)
+        _git("push", "origin", "main", cwd=remote_clone_dir)
+
+        return project_dir, worktree_dir
+
+    @pytest.mark.asyncio
+    async def test_syncs_local_main_after_gh_pr_merge(self, orch_db_env, git_project_with_remote):
+        project_dir, worktree_dir = git_project_with_remote
+        from src.core.database import AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(project_dir)))
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", project_id="proj-1",
+                working_directory=str(worktree_dir),
+            ))
+            session.add(Feature(
+                id="feat-1", design_id="des-1", feature_key="k", name="n",
+                scope="s", workflow_id="wf-1", status="paused",
+                pr_url="https://github.com/org/repo/pull/1",
+            ))
+
+        from unittest.mock import MagicMock, patch
+
+        # project_dir's local main does NOT have new_file.txt yet -- the
+        # merge only happened on the simulated "remote", exactly like a
+        # real gh pr merge.
+        assert not (project_dir / "new_file.txt").exists()
+
+        with patch(
+            "subprocess.run",
+            return_value=MagicMock(returncode=0, stdout="", stderr=""),
+        ):
+            from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
+            result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
+
+        assert result["success"] is True
+        assert result["merged"] is True
+        assert (project_dir / "new_file.txt").exists(), (
+            "local main must be pulled up to date after gh pr merge succeeds remotely"
+        )
