@@ -2119,6 +2119,43 @@ class TestCompleteWorkflowPausesForReviewMode:
 
         mock_populate.assert_called_once()
 
+    def test_does_not_re_pause_an_already_approved_feature(self, review_mode_env):
+        """Regression: unlike _pause_feature_for_review (pipeline.py, fixed
+        at ce0c4a7), this pause site had no "already approved" guard --
+        checked only whether the PROJECT has review_mode on, never whether
+        THIS feature was already reviewed. Once a workflow is resumed after
+        approval (workflow.status back to "active", the very condition that
+        gates this whole block) and a later cycle reaches a fresh
+        completion here -- a retry/goto firing after approval, or a phase
+        simply re-dispatching -- the human got a second, redundant review
+        prompt with the PR never actually merged. Observed live: approve ->
+        git_expert re-ran -> workflow paused_by="review" again,
+        review_status still "approved" the whole time."""
+        from src.core.database import Feature, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with review_mode_env.session_scope() as session:
+            session.add(
+                Feature(
+                    id="feat-1", design_id="des-1", feature_key="k", name="n",
+                    scope="s", workflow_id="wf-1", status="active",
+                    review_status="approved",
+                )
+            )
+
+        pm = PhaseManager(db_manager=review_mode_env)
+        pm.workflow_id = "wf-1"
+        session = review_mode_env.get_session()
+        try:
+            pm._complete_workflow(session, current_phase_id="phase-doc")
+        finally:
+            session.close()
+
+        with review_mode_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status != "paused"
+            assert wf.paused_by is None
+
     def test_still_completes_normally_when_review_mode_is_off(self, real_db):
         """No AutopilotProject/review_mode involved at all -- must behave
         exactly as before this fix (matches the sibling
