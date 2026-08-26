@@ -214,6 +214,14 @@ pytest --cov=src --cov-report=html
 pytest tests/integration/
 ```
 
+### SWE-bench Benchmarking
+
+`scripts/generate_instances.py` builds a `scripts/instances.yaml` batch of unsolved [SWE-bench Verified](https://www.swebench.com/) instances for end-to-end Autopilot benchmark runs (requires `pip install datasets`):
+
+```bash
+python scripts/generate_instances.py --count 10
+```
+
 ## 📚 Documentation
 
 ### Adding Documentation

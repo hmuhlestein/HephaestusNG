@@ -27,6 +27,14 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: '⚙️ Configuration',
+      collapsed: false,
+      items: [
+        'configuration/reference',
+      ],
+    },
+    {
+      type: 'category',
       label: '🔧 Troubleshooting',
       collapsed: false,
       items: [

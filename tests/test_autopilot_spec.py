@@ -161,6 +161,86 @@ def test_qa_missing_result_is_neutral_development():
     assert meta["result_missing"] is True
 
 
+# ── coverage floor is unified with hephaestus_config.yaml's testing:
+# section (new_code_coverage_floor), not a second hardcoded default ────
+
+
+def test_qa_coverage_floor_comes_from_config_not_hardcoded(strict_spec):
+    """strict_spec no longer carries min_coverage_percent (removed from
+    DEFAULT_SPEC) -- _min_coverage_percent must fall through to
+    hephaestus_config.yaml's testing.new_code_coverage_floor (80 in this
+    repo's config) rather than silently exempting every run."""
+    score, meta = S.score_qa(
+        {
+            "failed_tests": 0,
+            "passed_tests": 10,
+            "total_tests": 10,
+            "critical_issues": 0,
+            "agent_score": 1.0,
+            "coverage_percent": 79,  # one point under the configured 80% floor
+        },
+        strict_spec,
+    )
+    assert meta["band"] == "development"
+    assert any("coverage_percent=79%" in v for v in meta["violations"])
+
+
+def test_qa_explicit_spec_override_still_wins_over_config(strict_spec):
+    """A qa_spec.json's own min_coverage_percent (backward-compat escape
+    hatch) must still override the config-derived floor."""
+    lenient_spec = dict(strict_spec, min_coverage_percent=50)
+    score, meta = S.score_qa(
+        {
+            "failed_tests": 0,
+            "passed_tests": 10,
+            "total_tests": 10,
+            "critical_issues": 0,
+            "agent_score": 1.0,
+            "coverage_percent": 60,  # fails the 80% config floor, passes 50%
+        },
+        lenient_spec,
+    )
+    assert meta["band"] == "pass"
+
+
+def test_qa_coverage_not_applicable_exempts_frontend_only_diff(strict_spec):
+    """A diff with no Python file has nothing for diff-cover to measure --
+    coverage_not_applicable: true must exempt the run instead of forcing a
+    whole-repo or fabricated number through the 80% floor."""
+    score, meta = S.score_qa(
+        {
+            "failed_tests": 0,
+            "passed_tests": 4,
+            "total_tests": 4,
+            "critical_issues": 0,
+            "agent_score": 1.0,
+            "coverage_not_applicable": True,
+        },
+        strict_spec,
+    )
+    assert meta["band"] == "pass"
+    assert meta["violations"] == []
+    assert meta["coverage_not_applicable"] is True
+
+
+def test_qa_coverage_not_applicable_false_still_enforces_floor(strict_spec):
+    """coverage_not_applicable defaults to/explicitly False must not become
+    a second way to skip the floor -- only True exempts."""
+    score, meta = S.score_qa(
+        {
+            "failed_tests": 0,
+            "passed_tests": 10,
+            "total_tests": 10,
+            "critical_issues": 0,
+            "agent_score": 1.0,
+            "coverage_not_applicable": False,
+        },
+        strict_spec,
+    )
+    assert meta["band"] == "development"
+    assert any("coverage_percent not reported" in v for v in meta["violations"])
+
+
 # ── spec relaxation changes the verdict ───────────────────────────────
 
 

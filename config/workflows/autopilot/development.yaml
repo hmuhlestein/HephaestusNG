@@ -181,10 +181,17 @@ additional_notes: |
      - Edge case tests
      - Aim for meaningful coverage, not just line count
      - COVERAGE FLOOR (MANDATORY): the qa_validation gate requires >= 80%
-       unit test coverage (`pytest --cov=src`) and rejects the run
-       otherwise, sending it back here. Check your coverage before marking
-       done — don't wait for QA to bounce it: `pytest --cov=src --cov-report=term-missing`
-       and add tests for any of your own uncovered lines it reports.
+       coverage of the lines YOU changed (not the whole repo) and rejects
+       the run otherwise, sending it back here — unless this diff has no
+       code in a language this project has coverage tooling for (docs-only,
+       config-only, an unconfigured stack), in which case qa_validation
+       reports coverage_not_applicable and this floor doesn't apply. Check
+       your coverage before marking done — don't wait for QA to bounce it.
+       Python example: `pytest --cov=src --cov-report=xml && diff-cover
+       coverage.xml --compare-branch=origin/main` — use your stack's
+       equivalent (`vitest --coverage`, `go test -cover`, `cargo llvm-cov`,
+       etc.) and add tests for any of your own uncovered changed lines it
+       reports.
 
      STASH-VERIFY EVERY TEST YOU WRITE. A test that passes whether or not
      your code is there proves nothing — it is not a test, it is decoration.

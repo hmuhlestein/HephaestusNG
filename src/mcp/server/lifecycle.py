@@ -515,7 +515,7 @@ async def startup_event():
 
         # Enumerate every project with a persisted "was running" marker, not
         # just one -- multiple projects can each have their own pipeline to
-        # resume now (see docs/MULTI_PROJECT_CONCURRENCY_DESIGN.md). This is
+        # resume now (see docs/designs/MULTI_PROJECT_CONCURRENCY_DESIGN.md). This is
         # also the one and only call site of enumerate_persisted_states'
         # legacy-key migration, so a pipeline that was running before this
         # change deployed self-heals onto the namespaced key right here.

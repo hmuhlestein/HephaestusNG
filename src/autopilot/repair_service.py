@@ -82,7 +82,7 @@ class RepairService:
         # separate `python -m src.autopilot.orchestrator` subprocess -- that older
         # subprocess path could run concurrently with the in-process service (both
         # calling run_phase0 independently), and was the root cause of design docs
-        # ending up copied twice. See docs/MULTI_PROJECT_CONCURRENCY_DESIGN.md and
+        # ending up copied twice. See docs/designs/MULTI_PROJECT_CONCURRENCY_DESIGN.md and
         # src/autopilot/service.py's module docstring for why the in-process
         # service replaced the subprocess approach in the first place.
         try:

@@ -283,8 +283,11 @@ launch_template:
     ### STEP 5: Save to Memory
     Save key decisions and context about the fix.
 
-    ### STEP 6: Create Adversarial Review Task
-    Create the next task for adversarial_review with full context.
+    ### STEP 6: Mark Done
+    Do NOT call create_task for adversarial_review. The orchestrator
+    automatically creates the next phase's task once you mark this task
+    done — creating it yourself here files real review work under the
+    development phase instead (create_task only creates SUBTASKS within
+    YOUR OWN current phase).
 
-    ### STEP 7: Mark Done
     Mark your task as done.
