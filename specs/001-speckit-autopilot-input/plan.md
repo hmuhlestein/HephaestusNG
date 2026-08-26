@@ -12,8 +12,8 @@
 - [data-model.md](./data-model.md) — entities: `SpecKitFeature`, the new `AutopilotProject` column, `DesignQueueEntry`, `ReadinessCheckResult`
 - [contracts/cli.md](./contracts/cli.md) — `heph autopilot start`/`check` flag and resolution-order contract
 - [contracts/api.md](./contracts/api.md) — `PUT /projects/{project_id}` field addition, new `GET .../spec-kit-features`
-- [quickstart.md](./quickstart.md) — 8 runnable validation scenarios (one per user story, plus a `feature_architect` live-behavior check and a multi-repo scenario added after `/speckit-analyze`)
-- [tasks.md](./tasks.md) — the 53-task breakdown, once `/speckit-tasks` has run
+- [quickstart.md](./quickstart.md) — 9 runnable validation scenarios (one per user story, plus a `feature_architect` live-behavior check and two multi-repo scenarios — detection disambiguation and single-spec cross-repo decomposition)
+- [tasks.md](./tasks.md) — the 54-task breakdown, once `/speckit-tasks` has run
 - [../../design_docs/multi_repo_project_design.md](../../design_docs/multi_repo_project_design.md) — the origin design for `ProjectRepo`/multi-repo support (REQ-01–27) this plan's FR-018/022/023 build on rather than duplicate; not part of this feature, but load-bearing context for it
 
 ## Summary

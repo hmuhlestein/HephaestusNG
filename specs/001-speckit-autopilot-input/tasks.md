@@ -131,7 +131,7 @@ description: "Task list for Spec Kit-Aware Autopilot Input"
 
 **Goal**: `product_requirements`/`architecture_design`/`feature_architect` prompts adopt Spec Kit's conventions and read its full structure, regardless of input source.
 
-**Independent Test**: quickstart.md Scenario 6 (static prompt-content convention check) and Scenario 7 (`feature_architect`'s live decomposition is traceable to `plan.md`/`tasks.md`, not just `spec.md` — SC-009).
+**Independent Test**: quickstart.md Scenario 6 (static prompt-content convention check), Scenario 7 (`feature_architect`'s live decomposition is traceable to `plan.md`/`tasks.md`, not just `spec.md` — SC-009), and Scenario 9 (a single spec in a multi-repo project's primary repo decomposes into repo-bound features with cross-repo read visibility — SC-012).
 
 ### Tests for User Story 5
 
@@ -183,7 +183,7 @@ description: "Task list for Spec Kit-Aware Autopilot Input"
 
 ## Phase 9: Polish & Cross-Cutting Concerns
 
-- [ ] T051 [P] Run all eight quickstart.md scenarios manually against a real dev instance (including the multi-repo Scenario 8, which needs an actual multi-repo test project)
+- [ ] T051 [P] Run all nine quickstart.md scenarios manually against a real dev instance (including multi-repo Scenarios 8 and 9, which need an actual multi-repo test project)
 - [ ] T052 [P] Add a "Spec Kit input" note to `website/docs/configuration/reference.md` (the Configuration Reference page) and to the README's Configuration section; also update the README's `## 🤖 Autopilot` section to state Spec Kit input support as a real, shipped capability (`specs/<NNN>-<name>/` accepted alongside `design.md`) — only once T001–T050 actually land, never claimed ahead of the implementation
 - [ ] T053 Run the targeted new/touched test files with `pytest` and `npx vitest run` — not the full suite, per this repo's own targeted-testing convention
 - [ ] T054 Final `validate_single_workflow` pass on all three workflows after all edits land
