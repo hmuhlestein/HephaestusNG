@@ -1517,15 +1517,17 @@ class TestDetectCliModelFallback:
         mock_agent_manager.send_message_to_agent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_claude_as_secondary_cli_gets_its_own_fallback(
+    async def test_claude_never_gets_an_automatic_model_switch_as_secondary(
         self, make_monitoring_loop, mock_agent_manager
     ):
-        """Regression: the secondary/fallback CLI (claude, dispatched when
-        pi hits a session limit) must also support this mechanism, using
-        its OWN config value and model vocabulary (claude_model_fallback,
-        e.g. "opus") -- not pi's cli_model_fallback (an OpenRouter path
-        meaningless to Claude Code's /model), and not blocked by a gate
-        that only recognizes pi's global default model."""
+        """Claude Code deliberately does NOT opt into this mechanism (see
+        ClaudeCodeAgent -- model_fallback_keystrokes falls through to the
+        base class's empty default), even when configured as the
+        secondary/fallback CLI with a fallback model set. Observed live: a
+        Claude agent falsely flagged as "frozen" (a resumed-session replay
+        artifact, not a real stall) got an unrequested `/model opus` typed
+        into its pane -- an in-session model switch should never happen to
+        Claude without a human choosing it."""
         agent = Agent(id="a1", cli_type="claude", cli_model="sonnet", current_task_id="t1")
         make_monitoring_loop.config.agents.default_cli_tool = "pi"
         make_monitoring_loop.config.agents.cli_model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
@@ -1537,22 +1539,15 @@ class TestDetectCliModelFallback:
 
         result = await make_monitoring_loop._detect_cli_model_fallback(agent)
 
-        assert result is True
-        mock_agent_manager.send_message_to_agent.assert_called_once_with("a1", "/model opus")
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_role_based_resolution_when_claude_is_primary(
+    async def test_claude_never_gets_an_automatic_model_switch_as_primary(
         self, make_monitoring_loop, mock_agent_manager
     ):
-        """Regression: fallback_model must resolve by ROLE (is this agent's
-        cli_type the current default_cli_tool?), not by hardcoding "pi
-        reads cli_model_fallback, claude reads secondary_cli_model_fallback"
-        regardless of which CLI is actually configured as primary. With
-        Claude set as default_cli_tool (e.g. running Claude against a local
-        model), a Claude agent must read cli_model_fallback -- the primary
-        tier's config -- and pi (now the secondary tier) must read
-        secondary_cli_model_fallback, the mirror image of the default
-        pi-primary test above."""
+        """Mirror of the above with Claude as the primary CLI -- still no
+        automatic switch, regardless of role."""
         agent = Agent(id="a1", cli_type="claude", cli_model="local-claude-model", current_task_id="t1")
         make_monitoring_loop.config.agents.default_cli_tool = "claude"
         make_monitoring_loop.config.agents.cli_model = "local-claude-model"
@@ -1564,8 +1559,8 @@ class TestDetectCliModelFallback:
 
         result = await make_monitoring_loop._detect_cli_model_fallback(agent)
 
-        assert result is True
-        mock_agent_manager.send_message_to_agent.assert_called_once_with("a1", "/model opus")
+        assert result is False
+        mock_agent_manager.send_message_to_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_same_model_fallback_is_a_noop(self, make_monitoring_loop, mock_agent_manager):
