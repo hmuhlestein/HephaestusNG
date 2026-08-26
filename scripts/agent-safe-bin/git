@@ -39,20 +39,21 @@ fi
 protected_branches="main master"
 
 # This wrapper only polices Hephaestus-managed project repos (identified by
-# a .hephaestus/ directory somewhere up from $PWD) -- not arbitrary git repos
-# an agent's own code creates and merges into, e.g. a disposable fixture repo
-# a test spins up under a pytest tmp dir to exercise merge logic. Those have
-# no .hephaestus/ ancestor at all, so they were never "this feature's repo"
-# and are out of scope for review-mode gating.
+# a .hephaestus/ directory at the current git repo's OWN toplevel) -- not
+# arbitrary git repos an agent's own code creates and merges into, e.g. a
+# disposable fixture repo a test spins up under a pytest tmp dir to
+# exercise merge logic. Deliberately bounded to the repo's toplevel rather
+# than an unbounded walk up $PWD's ancestors: an unbounded walk can find an
+# unrelated .hephaestus/ dir several levels above a fixture repo (e.g. a
+# shared pytest-of-<user> tmp root that some other, unrelated fixture wrote
+# a .hephaestus/ scratch dir into) and wrongly treat that fixture repo as
+# "this feature's repo". A Hephaestus-managed worktree always has
+# .hephaestus/ directly at its own root, never several directories up.
 hephaestus_root=""
-check_dir="$PWD"
-while [[ "$check_dir" != "/" ]]; do
-    if [[ -d "$check_dir/.hephaestus" ]]; then
-        hephaestus_root="$check_dir"
-        break
-    fi
-    check_dir="$(dirname "$check_dir")"
-done
+repo_toplevel="$("$real_git" rev-parse --show-toplevel 2>/dev/null || echo "")"
+if [[ -n "$repo_toplevel" && -d "$repo_toplevel/.hephaestus" ]]; then
+    hephaestus_root="$repo_toplevel"
+fi
 
 # First non-flag argument is the subcommand.
 subcommand=""

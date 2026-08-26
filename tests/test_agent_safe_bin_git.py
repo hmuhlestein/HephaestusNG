@@ -124,6 +124,35 @@ class TestAgentSafeBinGitUnmanagedRepo:
         assert result.returncode == 0, result.stderr
         assert (unmanaged_repo / "feature.txt").exists()
 
+    def test_stray_hephaestus_dir_several_levels_up_does_not_leak_in(self, tmp_path):
+        """A genuine incident, not hypothetical: a stray .hephaestus/ dir
+        sitting several levels above a disposable fixture repo (e.g. a
+        shared pytest-of-<user> tmp root some OTHER, unrelated fixture
+        left a .hephaestus/ scratch dir in) must not make the wrapper
+        treat that fixture repo as Hephaestus-managed. The check is
+        bounded to the git repo's own toplevel (`git rev-parse
+        --show-toplevel`), not an unbounded walk up $PWD's ancestors."""
+        (tmp_path / ".hephaestus").mkdir()  # stray, several levels up
+        repo_dir = tmp_path / "nested" / "deeper" / "fixture_repo"
+        repo_dir.mkdir(parents=True)
+
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo_dir, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo_dir, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=repo_dir, check=True)
+        (repo_dir / "main.txt").write_text("main\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo_dir, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "main commit"], cwd=repo_dir, check=True)
+        subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=repo_dir, check=True)
+        (repo_dir / "feature.txt").write_text("feature\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo_dir, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "feature commit"], cwd=repo_dir, check=True)
+        subprocess.run(["git", "checkout", "-q", "main"], cwd=repo_dir, check=True)
+
+        result = _run_git(["merge", "feature"], cwd=repo_dir)
+
+        assert result.returncode == 0, result.stderr
+        assert (repo_dir / "feature.txt").exists()
+
     def test_allows_push_targeting_main_with_no_hephaestus_ancestor(
         self, unmanaged_repo, tmp_path_factory
     ):
