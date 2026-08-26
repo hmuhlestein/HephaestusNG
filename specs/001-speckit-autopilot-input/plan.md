@@ -6,18 +6,19 @@
 
 **Note**: This template is filled in by the `/speckit-plan` command; its definition describes the execution workflow.
 
-**Related documents** (this feature only reaches one of them per phase today, per FR-002/003/004 — see the Constitution Check and Complexity Tracking notes below for why that's a gap this plan intentionally does not paper over):
+**Related documents** (every file below is copied into the worktree as a whole per FR-002a; which files a given phase's own prompt is instructed to read is a per-phase decision, FR-002/003/004/017 — see research.md's whole-folder-copy decision for why):
 
 - [research.md](./research.md) — Phase 0 technical decisions and rationale
 - [data-model.md](./data-model.md) — entities: `SpecKitFeature`, the new `AutopilotProject` column, `DesignQueueEntry`, `ReadinessCheckResult`
 - [contracts/cli.md](./contracts/cli.md) — `heph autopilot start`/`check` flag and resolution-order contract
 - [contracts/api.md](./contracts/api.md) — `PUT /projects/{project_id}` field addition, new `GET .../spec-kit-features`
-- [quickstart.md](./quickstart.md) — 6 runnable validation scenarios, one per user story
-- [tasks.md](./tasks.md) — the 50-task breakdown, once `/speckit-tasks` has run
+- [quickstart.md](./quickstart.md) — 8 runnable validation scenarios (one per user story, plus a `feature_architect` live-behavior check and a multi-repo scenario added after `/speckit-analyze`)
+- [tasks.md](./tasks.md) — the 53-task breakdown, once `/speckit-tasks` has run
+- [../../design_docs/multi_repo_project_design.md](../../design_docs/multi_repo_project_design.md) — the origin design for `ProjectRepo`/multi-repo support (REQ-01–27) this plan's FR-018/022/023 build on rather than duplicate; not part of this feature, but load-bearing context for it
 
 ## Summary
 
-Let `heph autopilot start` accept an already-Spec-Kit-initialized project (`specs/<NNN>-<name>/`) as an alternative to a hand-written `design.md`. Mechanism: the selected feature's *entire directory* is copied into the worktree once (FR-002a) — not one file extracted per phase — and each phase's own prompt reads whichever files it needs: `product_requirements` reads `spec.md`, `architecture_design` reads `plan.md` plus its Phase 1 siblings (`data-model.md`, `contracts/`, `research.md`) when present, `development` reads `tasks.md`, and `feature_architect` (Phase 0 decomposition, when it runs) reads `spec.md`+`plan.md`+`tasks.md` together since it needs the full picture before any per-feature phase exists. Detection is always-on and read-only (dashboard picker, CLI error-and-list); *acting* on it — starting a build — stays explicit by default and only becomes automatic on a new per-project opt-in setting that extends Hephaestus's existing design-queue background scanner. Separately, audit `product_requirements.yaml`/`architecture_design.yaml`/`feature_architect.yaml` (both `bugfix` and `autopilot` workflows, plus the standalone `feature_architect` workflow) to adopt Spec Kit's own quality conventions and structural awareness regardless of which input path was used.
+Let `heph autopilot start` accept an already-Spec-Kit-initialized project (`specs/<NNN>-<name>/`) as an alternative to a hand-written `design.md`. Mechanism: the selected feature's *entire directory* is copied into the worktree once (FR-002a) — not one file extracted per phase — and each phase's own prompt reads whichever files it needs: `product_requirements` reads `spec.md`, `architecture_design` reads `plan.md` plus its Phase 1 siblings (`data-model.md`, `contracts/`, `research.md`) when present, `development` reads `tasks.md`, and `feature_architect` (Phase 0 decomposition, when it runs) reads `spec.md`+`plan.md`+`tasks.md` together since it needs the full picture before any per-feature phase exists. Selection accepts a Spec Kit feature's full directory name or bare number (`--feature 001` or `--feature 001-checkout-flow`, FR-021), and in a multi-repo project (`ProjectRepo` siblings, not just the primary), detection/selection scope to a specific repo the same way `Feature.repo_id` already does for `design.md`-derived features, disambiguated with `--repo <label>` when a bare identifier is ambiguous across repos (FR-022/FR-023). Detection is always-on and read-only (dashboard picker, CLI error-and-list); *acting* on it — starting a build — stays explicit by default and only becomes automatic on a new per-project opt-in setting that extends Hephaestus's existing design-queue background scanner, and even then only once `plan.md` exists, not from `spec.md` alone (FR-020). Separately, audit `product_requirements.yaml`/`architecture_design.yaml`/`feature_architect.yaml` (both `bugfix` and `autopilot` workflows, plus the standalone `feature_architect` workflow) to adopt Spec Kit's own quality conventions and structural awareness regardless of which input path was used.
 
 ## Technical Context
 
@@ -37,7 +38,7 @@ Let `heph autopilot start` accept an already-Spec-Kit-initialized project (`spec
 
 **Constraints**: Zero behavior change for projects with only a `design.md` and no `specs/` directory (SC-002); new detection/build logic must compose with the existing phase input-injection pattern (`phase_inputs`/`build_input_manifest` in `src/autopilot/spec.py`) rather than bypass it; automatic scanning must reuse the existing design-queue self-heal/already-processed tracking (`scan_design_queue`, `src/autopilot/orchestrator/queue.py:164`) so a Spec Kit feature is never double-built
 
-**Scale/Scope**: One new detection/parsing module, one new DB column + migration, one new CLI flag + one new CLI subcommand (readiness check), one extension to the existing design-queue scanner, one new dashboard settings toggle + one new dashboard picker component, and a prompt-content audit across 4 phase YAML files (2 phases × 2 workflows)
+**Scale/Scope**: One new detection/parsing/selection module (repo-aware), one new DB column + migration, two new CLI flags (`--feature`, `--repo`) + one new CLI subcommand (readiness check), one extension to the existing design-queue scanner (with a `plan.md`-presence gate), one new dashboard settings toggle + one new dashboard picker component, and a prompt-content audit across 5 phase YAML files (`product_requirements`/`architecture_design` × `bugfix`/`autopilot`, plus the standalone `feature_architect` workflow)
 
 ## Constitution Check
 
@@ -46,7 +47,7 @@ Let `heph autopilot start` accept an already-Spec-Kit-initialized project (`spec
 `.specify/memory/constitution.md` is still the unfilled placeholder Spec Kit ships by default (`/speckit-constitution` has not been run for this project) — there are no ratified project-specific principles to gate against yet. In its place, this repo's `CLAUDE.md` already functions as the de facto governing constraints and is treated as authoritative here:
 
 - **Minimal touch / surgical changes**: every file this plan proposes touching maps directly to a requirement in spec.md; no drive-by refactors.
-- **No fabrication**: every path and pattern cited in this plan (`AutopilotProject.review_mode`, `scan_design_queue`, `DESIGN_QUEUE_SCAN_INTERVAL`, `src/cli/commands/autopilot.py`) was read from the actual codebase during planning, not assumed.
+- **No fabrication**: every path and pattern cited in this plan (`AutopilotProject.review_mode`, `scan_design_queue`, `DESIGN_QUEUE_SCAN_INTERVAL`, `src/cli/commands/autopilot.py`, `feature_architect/01_feature_architect.yaml`, `pipeline.py`'s copy sites, and — added after an initial verification miss corrected during review — `AgentManager._build_repo_context` and `design_docs/multi_repo_project_design.md`'s REQ-19/20) was read from the actual codebase or its recovered design doc during planning, not assumed.
 - **Match existing patterns**: the new setting follows `AutopilotProject.review_mode`'s exact shape; the new scan behavior extends `scan_design_queue` rather than replacing it; new phase-prompt wording follows the same "worked example, not the only path" convention already established for language-agnostic coverage instructions in `qa_validation.yaml`.
 - **No speculative generality**: the `/heph` Claude Code skill idea raised during clarification is explicitly out of scope (see spec.md) and not designed here.
 
@@ -75,14 +76,14 @@ This feature extends Hephaestus's existing structure — no new top-level direct
 ```text
 src/
 ├── autopilot/
-│   ├── spec_kit.py                       # NEW — detect/select a Spec Kit feature dir, enumerate what it contains (FR-002a)
+│   ├── spec_kit.py                       # NEW — detect (across all repos in a multi-repo project, FR-022) / select (full name or bare number, FR-021, with --repo disambiguation, FR-023) a Spec Kit feature dir, enumerate what it contains (FR-002a); uses src/core/repo_resolution.py's repo_id_for_path — consumed, not modified
 │   ├── service.py                        # MODIFY — resolve Spec Kit vs. design.md input at start()
 │   ├── spec.py                           # MODIFY — build_input_manifest reports which Spec Kit files are present in the worktree, the same way it already reports requirements.md/architecture.md/etc.
 │   └── orchestrator/
-│       ├── queue.py                      # MODIFY — scan_design_queue recognizes specs/<NNN>-<name>/ when auto-scan is enabled (extends its existing extra_dirs hook)
+│       ├── queue.py                      # MODIFY — scan_design_queue recognizes specs/<NNN>-<name>/ when auto-scan is enabled (extends its existing extra_dirs hook), excluding any feature that has no plan.md yet (FR-020)
 │       └── pipeline.py                   # MODIFY — the 3 sites that copy design.md into `<worktree>/.hephaestus/design.md` (lines ~552-561, 1173, 2036) instead copy the whole selected specs/<NNN>-<name>/ directory when the source is a Spec Kit feature (FR-002a) — every file present reaches the worktree, not a per-phase subset
 ├── cli/commands/
-│   └── autopilot.py                      # MODIFY — `--feature <NNN-name>` flag on `start`; NEW `check` subcommand (readiness check, FR-011)
+│   └── autopilot.py                      # MODIFY — `--feature <NNN-name>|<NNN>` and `--repo <label>` flags on `start` (FR-021/FR-023); NEW `check` subcommand (readiness check, FR-011), also accepting `--repo`
 ├── core/
 │   └── database.py                       # MODIFY — AutopilotProject.spec_kit_auto_scan: Boolean, default False (mirrors review_mode)
 ├── mcp/autopilot/
@@ -92,13 +93,13 @@ scripts/
 config/workflows/
 ├── bugfix/{product_requirements,architecture_design}.yaml    # MODIFY — Spec Kit-aware input + quality-convention audit
 ├── autopilot/{product_requirements,architecture_design}.yaml # MODIFY — same
-└── feature_architect/01_feature_architect.yaml               # MODIFY — receive spec.md+plan.md+tasks.md as one combined input (today reads only ./.hephaestus/design.md), and read them as Spec Kit's actual structure rather than undifferentiated prose (FR-017/FR-018)
+└── feature_architect/01_feature_architect.yaml               # MODIFY — receive spec.md+plan.md+tasks.md as one combined input (today reads only ./.hephaestus/design.md), and read them as Spec Kit's actual structure rather than undifferentiated prose (FR-017/FR-018); existing REQ-19/20 repo-binding instructions already in this prompt are unchanged, just now also apply to Spec Kit input
 
 frontend/src/
 ├── components/
 │   ├── ProjectSettingsModal.tsx          # MODIFY — automatic-scanning toggle
 │   └── autopilot/
-│       └── SpecKitFeaturePicker.tsx      # NEW — multi-feature picker (FR-006)
+│       └── SpecKitFeaturePicker.tsx      # NEW — multi-feature picker (FR-006), shows repo label per feature in a multi-repo project (FR-022)
 └── services/api.ts                       # MODIFY — list-detected-Spec-Kit-features call
 
 tests/
