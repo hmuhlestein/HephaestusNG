@@ -19,6 +19,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _write_review_approved_marker(directory: str) -> None:
+    """Write .hephaestus/review_approved under `directory`, so the
+    agent-safe-bin/git wrapper (which walks up from a git subprocess's own
+    cwd looking for this file) allows a `git merge` whose cwd is
+    `directory` or a descendant of it."""
+    from pathlib import Path
+
+    marker_dir = Path(directory) / ".hephaestus"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    marker = marker_dir / "review_approved"
+    marker.write_text(f"Approved at {utc_now().isoformat()}\n")
+    logger.info(f"[REVIEW] Created review_approved marker at {marker}")
+
+
 class ReviewModeUpdate(BaseModel):
     review_mode: bool
 
@@ -280,16 +294,16 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
             feature.status = "active"
             db.commit()
 
-            # Create review_approved marker so the safe git wrapper
-            # allows git merge. Without this, the agent-safe-bin/git
-            # script blocks all merge commands.
+            # Create review_approved marker so the safe git wrapper allows
+            # git merge. The wrapper walks up from the merge subprocess's
+            # OWN cwd looking for .hephaestus/review_approved -- write it
+            # under the worktree here for any consumer that checks relative
+            # to wf.working_directory; the local-merge fallback below
+            # writes a second copy under project.base_dir immediately
+            # before it runs `git merge` there, since that call's cwd is
+            # the project's main checkout, not this worktree.
             if wf.working_directory:
-                from pathlib import Path
-                marker_dir = Path(wf.working_directory) / ".hephaestus"
-                marker_dir.mkdir(parents=True, exist_ok=True)
-                marker = marker_dir / "review_approved"
-                marker.write_text(f"Approved at {utc_now().isoformat()}\n")
-                logger.info(f"[REVIEW] Created review_approved marker at {marker}")
+                _write_review_approved_marker(wf.working_directory)
 
             # In review mode, git_expert created a PR but didn't merge.
             # Merge it now that the feature is approved.
@@ -349,6 +363,16 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                     project_id, _ = resolve_project_for_workflow(wf.id)
                     project = db.query(AutopilotProject).get(project_id) if project_id else None
                     if project and project.base_dir:
+                        # The marker written above lives under
+                        # wf.working_directory (the worktree) -- but
+                        # main_repo.git.merge() below runs with its cwd at
+                        # project.base_dir, a different directory the
+                        # wrapper's own upward-walk from that cwd will
+                        # never reach. Without this second copy, the
+                        # merge below is blocked identically to an
+                        # unapproved one, even though this feature was
+                        # just approved.
+                        _write_review_approved_marker(project.base_dir)
                         wt_repo = Repo(wf.working_directory)
                         branch_name = wt_repo.active_branch.name
                         merge_message = f"Merge {branch_name} into main after human review approval"
