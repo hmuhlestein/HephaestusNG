@@ -147,3 +147,22 @@ mkdir -p <project>/specs/005-spec-only && cp .specify/templates/spec-template.md
 ```
 
 **Expected**: `005-spec-only` is not built — it has no `plan.md` yet. It becomes visible via the dashboard/CLI (Awareness Model) but stays unqueued until `plan.md` is added and a later scan runs.
+
+## Scenario 9 — One spec in the primary repo decomposes across sibling repos (User Story 5, SC-012)
+
+Scenario 8 covers repo-scoped *detection*: two separate specs, same number, different repos. This scenario is the different case SC-012 actually describes — a *single* spec in the primary repo whose `plan.md` names work in more than one sibling repo.
+
+```bash
+cd <multi-repo-test-project>  # primary repo + a "backend" child repo + a "frontend" child repo
+# specs/ lives only in the primary repo:
+mkdir -p specs/002-shared-feature
+cp .specify/templates/spec-template.md specs/002-shared-feature/spec.md
+# plan.md's Technical Context / Project Structure explicitly describes work in both
+# the backend and frontend sibling repos (see plan-template.md's Project Structure section)
+
+heph autopilot start --project-path . --feature 002-shared-feature
+# let the feature_architect phase run to completion
+cat .hephaestus/features.json  # or the equivalent path in the worktree
+```
+
+**Expected**: `feature_architect` creates two `Feature` rows from this one spec — one bound to the `backend` repo, one bound to `frontend` (never a single `Feature` spanning both, FR-018/SC-012). When each feature's own `development` phase runs, its agent's injected `{project_context}` (`AgentManager._build_repo_context`, unchanged by this feature) marks its own repo WRITABLE and the sibling READ-ONLY with a real path — confirm the backend-scoped agent's context actually names the frontend repo's path (and vice versa for the frontend-scoped agent).
