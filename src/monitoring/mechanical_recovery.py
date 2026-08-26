@@ -59,7 +59,12 @@ class MechanicalRecoveryDetector:
 
     UNCONFIRMED_COMPLETION_ESCALATE_AFTER = 3
     NEVER_STARTED_GRACE_SECONDS = 240
-    RESUME_REPLAY_GRACE_SECONDS = 90
+    # Sliding-window / content-based, not time-based -- see
+    # _within_resume_replay_grace's docstring. A match with more than this
+    # many characters of newer output after it is buried in older,
+    # already-scrolled-past content (the agent has visibly moved on since),
+    # regardless of how much wall-clock time has passed.
+    RESUME_REPLAY_TRAILING_CHARS = 300
 
     def __init__(self, db_manager, agent_manager, config, auto_restart):
         self.db_manager = db_manager
@@ -1260,9 +1265,11 @@ class MechanicalRecoveryDetector:
             out = self.agent_manager.get_agent_output(agent.id, lines=40)
             if not out:
                 return
-            if not _MAX_TOKEN_LIMIT_RE.search(_strip_sgr(out)):
+            stripped = _strip_sgr(out)
+            match = _MAX_TOKEN_LIMIT_RE.search(stripped)
+            if not match:
                 return
-            if self._within_resume_replay_grace(self._current_task_started_at(agent)):
+            if self._within_resume_replay_grace(stripped, match):
                 # See _within_resume_replay_grace's docstring -- this could
                 # be a resumed session replaying a prior task's own
                 # token-limit error, not a current one.
@@ -1291,21 +1298,12 @@ class MechanicalRecoveryDetector:
         return False
 
 
-    def _current_task_started_at(self, agent):
-        """Task.started_at for agent.current_task_id, or None.
-
-        Convenience for detectors below that don't otherwise need a DB
-        session before their regex match -- see _within_resume_replay_grace.
-        """
-        if not agent.current_task_id:
-            return None
-        with self.db_manager.session_scope() as session:
-            task = session.query(Task).filter_by(id=agent.current_task_id).first()
-            return task.started_at if task else None
-
-    def _within_resume_replay_grace(self, started_at) -> bool:
-        """True if `started_at` (a Task.started_at) is too recent to trust
-        a single regex match against the agent's tmux pane.
+    def _within_resume_replay_grace(self, stripped_out: str, match) -> bool:
+        """True if `match` (a regex match against `stripped_out`, the
+        agent's SGR-stripped tmux pane output) is too far from the pane's
+        current tail to trust -- i.e., there's a meaningful amount of
+        NEWER output after it, meaning the agent has visibly moved on
+        since whatever this match represents.
 
         Phases that share a session role (workflow.yaml's session_roles,
         e.g. product_validation resuming product_requirements' session,
@@ -1323,16 +1321,23 @@ class MechanicalRecoveryDetector:
         Observed live: detect_unconfirmed_task_completion nudged/restarted
         an agent over exactly this kind of replay (task 67e58db5), costing
         ~6 minutes before a second agent actually started the work.
-        task.started_at is stamped once the initial prompt has fully
-        finished sending (_create_phase_task), so skipping until this
-        grace period elapses lets the replay scroll out before any of
-        these detectors starts trusting the pane.
+
+        Previously time-based (Task.started_at + a fixed 90s window), on
+        the theory that a resumed session's replay dump finishes scrolling
+        off within that window. That assumption breaks down for a session
+        reused across MANY dispatches -- each reuse adds more history to
+        replay, so a large-enough dump can still be sitting in the pane's
+        tail well past 90s, and the old guard would have already expired
+        by then, trusting a match that was still stale. Observed live:
+        task 76bd1bbe's session was on its 3rd+ reuse when this fired.
+        Checking how much newer content exists after the match, instead of
+        how much wall-clock time has passed, scales with the replay's own
+        size instead of assuming a fixed duration covers it.
         """
-        if not started_at:
+        if not stripped_out or not match:
             return False
-        return (
-            utc_now() - started_at
-        ).total_seconds() < self.RESUME_REPLAY_GRACE_SECONDS
+        trailing = len(stripped_out) - match.end()
+        return trailing > self.RESUME_REPLAY_TRAILING_CHARS
 
     async def detect_unconfirmed_task_completion(self, agent) -> bool:
         """Detect an agent whose own transcript shows a complete_my_task/
@@ -1393,8 +1398,9 @@ class MechanicalRecoveryDetector:
             # Only the LAST attempt in the visible window matters -- an
             # earlier one followed by more work (e.g. a self-review
             # round) means the agent has already moved on.
+            stripped = _strip_sgr(out)
             match = None
-            for m in _COMPLETION_ATTEMPT_RE.finditer(_strip_sgr(out)):
+            for m in _COMPLETION_ATTEMPT_RE.finditer(stripped):
                 match = m
             if not match:
                 return False
@@ -1406,10 +1412,10 @@ class MechanicalRecoveryDetector:
                     # etc. -- the call landed, or the task moved on for an
                     # unrelated reason. Nothing to do.
                     return False
-                if self._within_resume_replay_grace(task.started_at):
-                    # Still inside the resumed-session replay window --
-                    # see _within_resume_replay_grace's docstring. Too
-                    # early to trust a completion match.
+                if self._within_resume_replay_grace(stripped, match):
+                    # Match is buried under newer output, not near the
+                    # pane's tail -- see _within_resume_replay_grace's
+                    # docstring. Too stale to trust a completion match.
                     return False
                 if task.self_review_started_at is not None:
                     # The call DID land -- it correctly triggered the
@@ -1600,9 +1606,10 @@ class MechanicalRecoveryDetector:
             if not out:
                 return False
             stripped = _strip_sgr(out)
-            if not _CONNECTION_ERROR_RE.search(stripped):
+            match = _CONNECTION_ERROR_RE.search(stripped)
+            if not match:
                 return False
-            if self._within_resume_replay_grace(self._current_task_started_at(agent)):
+            if self._within_resume_replay_grace(stripped, match):
                 # See _within_resume_replay_grace's docstring -- this could
                 # be a resumed session replaying a prior, already-resolved
                 # task's connection errors, not current ones.
@@ -1811,9 +1818,11 @@ class MechanicalRecoveryDetector:
             out = self.agent_manager.get_agent_output(agent.id, lines=40)
             if not out:
                 return False
-            if not _BAD_MODEL_ERROR_RE.search(_strip_sgr(out)):
+            stripped = _strip_sgr(out)
+            match = _BAD_MODEL_ERROR_RE.search(stripped)
+            if not match:
                 return False
-            if self._within_resume_replay_grace(self._current_task_started_at(agent)):
+            if self._within_resume_replay_grace(stripped, match):
                 # See _within_resume_replay_grace's docstring -- this could
                 # be a resumed session replaying a prior task's model
                 # rejection, not a current one.
@@ -1969,9 +1978,11 @@ class MechanicalRecoveryDetector:
             out = self.agent_manager.get_agent_output(agent.id, lines=40)
             if not out:
                 return False
-            if not _CREDIT_EXHAUSTED_RE.search(_strip_sgr(out)):
+            stripped = _strip_sgr(out)
+            match = _CREDIT_EXHAUSTED_RE.search(stripped)
+            if not match:
                 return False
-            if self._within_resume_replay_grace(self._current_task_started_at(agent)):
+            if self._within_resume_replay_grace(stripped, match):
                 # See _within_resume_replay_grace's docstring -- this could
                 # be a resumed session replaying a prior task's own
                 # credit-exhaustion error. The highest-blast-radius case
