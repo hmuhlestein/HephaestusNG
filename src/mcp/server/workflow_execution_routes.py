@@ -252,28 +252,15 @@ async def start_workflow_execution(request: StartWorkflowRequest):
 
         logger.info(f"Successfully started workflow execution: {workflow_id}")
 
-        # If there's an initial task to create, create it through the proper flow
+        # If there's an initial task to create, create it through the proper flow.
+        # Phase 1's task-creation claim is already held at this point --
+        # PhaseManager.start_execution takes it atomically, in the same
+        # transaction that creates phase 1's PhaseExecution row, so there is
+        # no window between that row becoming visible and the claim being
+        # held for a concurrent orchestrator sweep tick to win instead (see
+        # start_execution's own comment for the incident this closes).
         if initial_task_info:
-            # Claim the right to create this phase's first task before doing
-            # any of the slower work below. The orchestrator's background
-            # self-heal (_case_start_first_phase / _case_in_progress_no_tasks
-            # in orchestrator.py) independently creates a task for any
-            # in-progress phase it finds with zero tasks -- without this
-            # claim, both paths can decide to create phase 1's task and a
-            # duplicate agent gets spawned (observed live: burned a full
-            # agent run duplicating work the first task had already done).
             phase_uuid = initial_task_info.get("phase_uuid")
-            if phase_uuid:
-                from src.autopilot.orchestrator.phase_transitions import _claim_phase_task_creation
-                from src.core.database import get_db as _get_db_for_claim
-
-                with _get_db_for_claim() as _claim_db:
-                    won_claim = _claim_phase_task_creation(_claim_db, phase_uuid)
-                if not won_claim:
-                    logger.info(f"Phase 1 task for workflow {workflow_id} is already being created by another path -- skipping")
-                    initial_task_info = None
-
-        if initial_task_info:
             logger.info(f"Creating initial Phase 1 task for workflow {workflow_id}")
             try:
                 # Create the task using internal task creation

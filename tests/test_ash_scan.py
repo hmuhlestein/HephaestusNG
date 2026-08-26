@@ -27,6 +27,57 @@ class TestRunAshScan:
         assert results_path.exists()
         assert "scan output here" in results_path.read_text()
 
+    def test_scan_is_scoped_to_changed_files(self, tmp_path):
+        """Regression: every security_review run scanned the whole worktree
+        from scratch, even when only a handful of files changed vs. main --
+        the same whole-repo-vs-diff mismatch the qa_validation coverage gate
+        had. ash has a built-in --changed-files-only flag (falls back to a
+        full scan when git is unavailable, so this is safe even outside a
+        normal feature branch) -- use it instead of scanning everything."""
+        from src.autopilot.orchestrator.worktree_integration import _run_ash_scan
+
+        logger = MagicMock()
+        fake_result = MagicMock(stdout="scan output here", stderr="", returncode=0)
+        with patch(
+            "src.autopilot.orchestrator.worktree_integration.subprocess.run",
+            return_value=fake_result,
+        ) as mock_run:
+            with patch("pathlib.Path.exists", return_value=True):
+                _run_ash_scan(tmp_path, logger)
+
+        called_args = mock_run.call_args[0][0]
+        assert "--changed-files-only" in called_args
+
+    def test_base_ref_is_the_projects_configured_base_branch(self, tmp_path):
+        """Regression: --changed-files-only alone trusts ash's own
+        "origin/main" default for --base-ref, which requires a fetched,
+        up-to-date origin remote -- not guaranteed for every project this
+        tool runs against. A worktree always has its local base branch
+        available (it's what it was created from) via
+        config.git.base_branch, the same value WorktreeManager uses
+        everywhere else for "what's the base branch" -- pass it explicitly
+        instead of relying on a remote-tracking ref that may not exist."""
+        from src.autopilot.orchestrator.worktree_integration import _run_ash_scan
+
+        logger = MagicMock()
+        fake_result = MagicMock(stdout="scan output here", stderr="", returncode=0)
+        fake_config = MagicMock()
+        fake_config.git.base_branch = "trunk"
+        with patch(
+            "src.autopilot.orchestrator.worktree_integration.subprocess.run",
+            return_value=fake_result,
+        ) as mock_run:
+            with patch("pathlib.Path.exists", return_value=True):
+                with patch(
+                    "src.autopilot.orchestrator.worktree_integration.get_config",
+                    return_value=fake_config,
+                ):
+                    _run_ash_scan(tmp_path, logger)
+
+        called_args = mock_run.call_args[0][0]
+        assert "--base-ref" in called_args
+        assert called_args[called_args.index("--base-ref") + 1] == "trunk"
+
     def test_writes_failure_marker_on_timeout(self, tmp_path):
         from src.autopilot.orchestrator.worktree_integration import _run_ash_scan
 

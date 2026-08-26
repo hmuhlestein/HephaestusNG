@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { FileText, ExternalLink, Clock, User, DollarSign } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { TaskFullDetails } from '@/types';
+import { useTaskRuntime } from '@/hooks/useTaskRuntime';
 import StatusBadge from './StatusBadge';
 import { PhaseBadge } from './PhaseBadge';
 
@@ -53,6 +54,18 @@ const ClickableTaskCard: React.FC<ClickableTaskCardProps> = ({
       mounted = false;
     };
   }, [taskId]);
+
+  // task is fetched once on mount and never refetched -- task.runtime_seconds
+  // is a snapshot from that moment, so it goes stale (frozen) for any card
+  // that stays mounted while the task keeps running, unlike TaskDetailModal
+  // which ticks live via this same hook. Called unconditionally (before the
+  // loading/no-task early returns) per the Rules of Hooks; null-safe against
+  // task not being loaded yet.
+  const runtime = useTaskRuntime(
+    task?.started_at ?? null,
+    task?.completed_at ?? null,
+    task?.runtime_seconds
+  );
 
   if (loading) {
     return (
@@ -160,9 +173,9 @@ const ClickableTaskCard: React.FC<ClickableTaskCardProps> = ({
                 Agent {task.agent_info.id.substring(0, 8)}
               </span>
             )}
-            {task.runtime_seconds > 0 && (
+            {runtime.runtimeSeconds > 0 && (
               <span className="font-semibold">
-                {Math.floor(task.runtime_seconds / 60)}m runtime
+                {runtime.runtimeDisplay} runtime
               </span>
             )}
           </div>

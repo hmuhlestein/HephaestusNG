@@ -160,11 +160,13 @@ additional_notes: |
   # After starting, verify it's running:
   curl -s http://127.0.0.1:8300/health || echo "Backend not running"  # 127.0.0.1, not localhost (localhost→IPv6 ::1 fails; server binds IPv4)
   
-  # Check test dependencies
+  # Check test tooling for this project's stack -- pytest is a Python
+  # example; use whatever this project actually uses (npm/vitest/jest for
+  # Node, cargo test for Rust, go test for Go, etc.)
   python -m pytest --version || echo "pytest not installed"
-  
+
   # Check test files exist
-  find . -name "test_*.py" -o -name "*_test.py" | head -20
+  find . -name "test_*.py" -o -name "*_test.py" -o -name "*.test.*" -o -name "*.spec.*" | head -20
   ```
   
   Document:
@@ -214,15 +216,41 @@ additional_notes: |
   find . -type d -name "tests" -o -name "test" -o -name "__tests__" | head -10
   ```
   
-  Then run whatever tests you find:
-  ```bash
-  # If pytest tests exist
-  python -m pytest -v --tb=short -p no:libtmux --cov=src --cov-report=term-missing 2>&1 | tee all_results.txt
-  # Note: -p no:libtmux avoids plugin conflict if libtmux is installed globally
-  # --cov=src reports unit test coverage -- REQUIRED, the gate enforces an 80% floor (see STEP 11)
+  Then run whatever tests you find, WITH COVERAGE INSTRUMENTATION for this
+  project's actual stack. The pytest/diff-cover commands below are a worked
+  EXAMPLE for a Python project -- use the equivalent for whatever language
+  this project is actually written in (e.g. `vitest --coverage`/`jest
+  --coverage` for JS/TS, `go test -cover` for Go, `cargo llvm-cov` for
+  Rust, `dotnet test --collect "Code Coverage"` for .NET, etc.). The
+  requirement itself is language-agnostic: coverage of the NEW/MODIFIED
+  lines in this diff vs. origin/main, not whole-repo coverage.
 
-  # If npm/node tests exist
-  npm test 2>&1 | tee all_results.txt
+  ```bash
+  # PYTHON EXAMPLE -- if pytest tests exist
+  python -m pytest -v --tb=short -p no:libtmux --cov=src --cov-report=xml --cov-report=term-missing 2>&1 | tee all_results.txt
+  # Note: -p no:libtmux avoids plugin conflict if libtmux is installed globally
+
+  # Coverage of NEW/MODIFIED code only, not the whole repo -- the gate compares
+  # this branch against origin/main, not overall src/ coverage (most of the
+  # repo sits well below 80%; only your own changed lines are held to that
+  # floor). REQUIRED when the diff touches code in a language this project
+  # has coverage tooling for (see STEP 11).
+  # Three dots (merge-base diff), NOT two -- on a long-lived branch/worktree,
+  # `git diff origin/main` (two dots) includes every commit that has landed
+  # on origin/main since this branch forked, not just this branch's own
+  # changes, and falsely looks Python-heavy on a purely frontend/docs diff.
+  git diff --name-only origin/main...HEAD -- '*.py'    # empty output = no Python changed
+  diff-cover coverage.xml --compare-branch=origin/main   # Python-specific diff-scoping tool; diff-cover's own --diff-range-notation already defaults to '...' (merge-base), so this one is safe as-is
+
+  # NODE/JS EXAMPLE -- if npm/node tests exist
+  npm test -- --coverage 2>&1 | tee all_results.txt
+  # No diff-scoping tool set up for this stack? Cross-reference `git diff
+  # --name-only origin/main...HEAD` (three dots -- see the coverage note
+  # above) against the coverage report by hand.
+
+  # OTHER STACKS: use this project's own test runner with its coverage flag
+  # (go test -cover, cargo test + cargo llvm-cov, etc.), scoped to changed
+  # files the same way.
 
   # If no tests exist, note this and create basic smoke tests
   ```
@@ -233,9 +261,19 @@ additional_notes: |
   - Pass/fail counts
   - Failed test names and errors
   - Execution time
-  - Coverage percent from the `TOTAL` line of the `--cov` report -- REQUIRED, not optional.
-    Omitting it does not exempt this run from the coverage floor; it fails the gate
-    the same as reporting a number under 80%.
+  - Coverage percent of the lines you changed vs. origin/main (diff-cover's
+    "Total" line in the Python example above, or your stack's equivalent) --
+    NOT whole-repo coverage. REQUIRED, not optional, whenever this diff
+    changed code in a language this project has coverage tooling for.
+    Omitting it does not exempt this run from the coverage floor; it fails
+    the gate the same as reporting a number under 80%.
+  - If this diff changed NO code in any language this project has coverage
+    tooling for (e.g. a docs-only or config-only fix, or a stack with no
+    coverage tool set up here) -- there's nothing to measure. Do NOT run
+    whole-repo coverage and report that instead: a whole-repo number
+    describes the entire codebase, not this change, and the gate would
+    misread it as this feature's own coverage. Set coverage_not_applicable:
+    true instead (see frontmatter, STEP 11) and leave coverage_percent at 0.
   
   
   ## STEP 6: REQUIREMENTS COMPLIANCE CHECK
@@ -435,6 +473,7 @@ additional_notes: |
   requirements_total: 0
   requirements_met: 0
   coverage_percent: 0
+  coverage_not_applicable: false
   agent_score: 0.0
   verdict: PASS
   summary: "one-line summary"
@@ -446,17 +485,31 @@ additional_notes: |
 
   Field rules:
   - Counts must be integers reflecting actual test/issue counts.
-  - failed_test_names: identifier (e.g. "test_file.py::test_name") for EVERY
-    failing test, even ones pre-existing/unrelated to this feature. This is
+  - failed_test_names: identifier for EVERY failing test, in whatever format
+    your test runner uses (e.g. "test_file.py::test_name" for pytest,
+    "file.test.js > suite > test" for Jest/Vitest, "TestSuite/TestName" for
+    Go), even ones pre-existing/unrelated to this feature. This is
     what reaches you again if the gate sends this back -- an empty list on a
     nonzero failed_tests count means the next attempt has to rediscover which
     test failed from scratch.
   - pass_rate is a percent (0–100): passed_tests / total_tests * 100.
   - critical_issues = security/data-loss/complete-failure issues (these send the
     pipeline back to architecture). major issues go in major_issues.
-  - coverage_percent is the unit test coverage percent (0–100) from `pytest --cov=src`'s
-    `TOTAL` line (STEP 5). The gate requires >= 80%; omitting this field fails the
+  - coverage_percent is the NEW/MODIFIED code coverage percent (0–100) for
+    this diff vs. origin/main (STEP 5) -- diff-cover's report is the Python
+    example; use your stack's equivalent. NOT whole-repo coverage (e.g. not
+    the whole-repo `pytest --cov` TOTAL line). The gate requires >= 80%
+    unless coverage_not_applicable is true; omitting this field fails the
     gate the same as reporting a number below the floor.
+  - coverage_not_applicable: true ONLY when this diff changed no code in any
+    language this project has coverage tooling for (STEP 5) -- e.g. a
+    docs-only/config-only fix, or a stack with no coverage tool set up here
+    -- so there is genuinely nothing to measure. When true, coverage_percent
+    is ignored by the gate; leave it at 0 rather than substituting a
+    whole-repo or otherwise unrelated number. False (the default) whenever
+    the diff touches code this project measures coverage for -- the 80%
+    floor still applies to those changed lines even in a mostly-docs or
+    mostly-frontend diff.
   - agent_score (0.0–1.0) is YOUR subjective quality judgement for things the
     numbers don't capture (only used when all hard floors pass).
   - verdict is "PASS", "NEEDS_WORK", or "FAIL".
