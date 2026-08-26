@@ -8,7 +8,6 @@ Verifies:
 - NFR-03: _build_repo_context is unit-testable without a real agent
 """
 
-import asyncio
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -195,51 +194,51 @@ class TestBuildRepoContext:
 class TestGetProjectContextRepoAwareness:
     """Integration tests for get_project_context with workflow_id/repo_id."""
 
-    def test_no_args_returns_baseline(self, agent_manager, db_manager):
+    async def test_no_args_returns_baseline(self, agent_manager, db_manager):
         """No args -> same output as before (REQ-21/NFR-01)."""
-        result = asyncio.get_event_loop().run_until_complete(agent_manager.get_project_context())
+        result = await agent_manager.get_project_context()
         assert "## PROJECT STATUS" in result
         assert "PROJECT REPOSITORIES" not in result
 
-    def test_workflow_id_no_multi_repo(self, agent_manager, db_manager):
+    async def test_workflow_id_no_multi_repo(self, agent_manager, db_manager):
         """workflow_id with single-repo project -> no repo section (REQ-21)."""
         with db_manager.session_scope() as session:
             project, repos = _create_project_with_repos(session, 1)
             wf = _create_workflow(session, project)
 
-        result = asyncio.get_event_loop().run_until_complete(agent_manager.get_project_context(workflow_id=wf.id))
+        result = await agent_manager.get_project_context(workflow_id=wf.id)
         assert "## PROJECT STATUS" in result
         assert "PROJECT REPOSITORIES" not in result
 
-    def test_workflow_id_multi_repo_no_repo_id(self, agent_manager, db_manager):
+    async def test_workflow_id_multi_repo_no_repo_id(self, agent_manager, db_manager):
         """workflow_id with multi-repo project, no repo_id -> repo list only (REQ-17)."""
         with db_manager.session_scope() as session:
             project, repos = _create_project_with_repos(session, 2)
             wf = _create_workflow(session, project)
 
-        result = asyncio.get_event_loop().run_until_complete(agent_manager.get_project_context(workflow_id=wf.id))
+        result = await agent_manager.get_project_context(workflow_id=wf.id)
         assert "## PROJECT REPOSITORIES" in result
         assert "REPO ACCESS" not in result
 
-    def test_workflow_id_and_repo_id(self, agent_manager, db_manager):
+    async def test_workflow_id_and_repo_id(self, agent_manager, db_manager):
         """workflow_id + repo_id on multi-repo -> writable/read-only (REQ-18)."""
         with db_manager.session_scope() as session:
             project, repos = _create_project_with_repos(session, 2)
             wf = _create_workflow(session, project)
 
-        result = asyncio.get_event_loop().run_until_complete(agent_manager.get_project_context(workflow_id=wf.id, repo_id=repos[0].id))
+        result = await agent_manager.get_project_context(workflow_id=wf.id, repo_id=repos[0].id)
         assert "## PROJECT REPOSITORIES" in result
         assert "## REPO ACCESS" in result
         assert "WRITABLE" in result
         assert "READ-ONLY" in result
 
-    def test_invalid_workflow_id_degrades_gracefully(self, agent_manager, db_manager):
+    async def test_invalid_workflow_id_degrades_gracefully(self, agent_manager, db_manager):
         """Invalid workflow_id -> no repo section, no crash."""
-        result = asyncio.get_event_loop().run_until_complete(agent_manager.get_project_context(workflow_id="nonexistent-wf"))
+        result = await agent_manager.get_project_context(workflow_id="nonexistent-wf")
         assert "## PROJECT STATUS" in result
         assert "PROJECT REPOSITORIES" not in result
 
-    def test_null_project_id_in_workflow(self, agent_manager, db_manager):
+    async def test_null_project_id_in_workflow(self, agent_manager, db_manager):
         """Workflow with null project_id -> no repo section (Gotcha #2)."""
         with db_manager.session_scope() as session:
             wf = Workflow(
@@ -253,54 +252,48 @@ class TestGetProjectContextRepoAwareness:
             session.add(wf)
             session.flush()
 
-        result = asyncio.get_event_loop().run_until_complete(agent_manager.get_project_context(workflow_id=wf.id))
+        result = await agent_manager.get_project_context(workflow_id=wf.id)
         assert "## PROJECT STATUS" in result
         assert "PROJECT REPOSITORIES" not in result
 
-    def test_repo_context_failure_isolated(self, agent_manager, db_manager):
+    async def test_repo_context_failure_isolated(self, agent_manager, db_manager):
         """_build_repo_context failure doesn't kill entire project context (WARNING 1)."""
         with db_manager.session_scope() as session:
             project, repos = _create_project_with_repos(session, 2)
             wf = _create_workflow(session, project)
 
         with patch.object(AgentManager, "_build_repo_context", side_effect=Exception("DB error")):
-            result = asyncio.get_event_loop().run_until_complete(agent_manager.get_project_context(workflow_id=wf.id))
+            result = await agent_manager.get_project_context(workflow_id=wf.id)
 
         # Active tasks/agents/completions still present
         assert "## PROJECT STATUS" in result
         # Repo section absent due to failure
         assert "PROJECT REPOSITORIES" not in result
 
-    def test_workflow_id_exceeding_max_length_ignored(self, agent_manager, db_manager):
+    async def test_workflow_id_exceeding_max_length_ignored(self, agent_manager, db_manager):
         """workflow_id > 200 chars is sanitized to None."""
         long_id = "x" * 201
-        result = asyncio.get_event_loop().run_until_complete(
-            agent_manager.get_project_context(workflow_id=long_id)
-        )
+        result = await agent_manager.get_project_context(workflow_id=long_id)
         assert "## PROJECT STATUS" in result
         assert "PROJECT REPOSITORIES" not in result
 
-    def test_repo_id_exceeding_max_length_ignored(self, agent_manager, db_manager):
+    async def test_repo_id_exceeding_max_length_ignored(self, agent_manager, db_manager):
         """repo_id > 200 chars is sanitized to None."""
         with db_manager.session_scope() as session:
             project, repos = _create_project_with_repos(session, 2)
             wf = _create_workflow(session, project)
 
         long_id = "x" * 201
-        result = asyncio.get_event_loop().run_until_complete(
-            agent_manager.get_project_context(workflow_id=wf.id, repo_id=long_id)
-        )
+        result = await agent_manager.get_project_context(workflow_id=wf.id, repo_id=long_id)
         # Repo list present but no REPO ACCESS (repo_id was sanitized out)
         assert "## PROJECT REPOSITORIES" in result
         assert "REPO ACCESS" not in result
 
-    def test_db_failure_returns_fallback(self, agent_manager, db_manager):
+    async def test_db_failure_returns_fallback(self, agent_manager, db_manager):
         """DB failure in get_project_context returns fallback string."""
         with patch.object(agent_manager.db_manager, "get_session") as mock_session:
             mock_session.return_value.query.side_effect = Exception("DB down")
-            result = asyncio.get_event_loop().run_until_complete(
-                agent_manager.get_project_context()
-            )
+            result = await agent_manager.get_project_context()
         assert result == "Project context unavailable"
 
 

@@ -76,7 +76,20 @@ def _observable_state(config_dict) -> dict:
         yaml.safe_dump(config_dict, handle)
         path = handle.name
 
-    previous = os.environ.get("HEPHAESTUS_CONFIG")
+    # simple_config.py/llm_config.py both read a wide set of env-var
+    # overrides (MCP_PORT, DATABASE_PATH, OPENAI_API_KEY, ...) that take
+    # precedence over the YAML value for the same setting. Left ambient,
+    # whichever of those happens to be set in the calling shell/CI
+    # environment (e.g. this repo's own .env exporting MCP_PORT) silently
+    # shadows this test's perturbation of the matching YAML key -- the
+    # mutated document changes, but the observed state doesn't, which is
+    # exactly the false "inert key" signal this test exists to prevent.
+    # Snapshot and clear the whole environment for the duration of the
+    # reload+observe so only the YAML document under test can drive the
+    # result, restoring it byte-for-byte afterward.
+    previous_env = dict(os.environ)
+    os.environ.clear()
+    os.environ["PATH"] = previous_env.get("PATH", "")
     os.environ["HEPHAESTUS_CONFIG"] = path
     try:
         import src.core.llm_config as llm_config
@@ -95,10 +108,8 @@ def _observable_state(config_dict) -> dict:
         return state
     finally:
         os.unlink(path)
-        if previous is None:
-            os.environ.pop("HEPHAESTUS_CONFIG", None)
-        else:
-            os.environ["HEPHAESTUS_CONFIG"] = previous
+        os.environ.clear()
+        os.environ.update(previous_env)
 
 
 def _perturb(value):
