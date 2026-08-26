@@ -161,7 +161,13 @@ python run_hephaestus_dev.py --path /path/to/project
 
 ---
 
-**Want to learn more?** See [CONTRIBUTING.md](CONTRIBUTING.md) for a full development setup, [CLAUDE.md](CLAUDE.md) for this project's architecture and conventions in depth, and the [Configuration Reference](website/docs/configuration/reference.md) for how the global, workflow, and phase-level YAML configs fit together. The original [Hephaestus documentation](https://ido-levi.github.io/Hephaestus/) covers the shared framework's architecture in more depth still.
+## ⚙️ Configuration
+
+Hephaestus is configured through three layers of YAML — the global `hephaestus_config.yaml`, each workflow's `workflow.yaml`, and a YAML per phase defining that phase's agent. See the **[Configuration Reference](website/docs/configuration/reference.md)** for what's in each and how they fit together.
+
+---
+
+**Want to learn more?** See [CONTRIBUTING.md](CONTRIBUTING.md) for a full development setup, and [CLAUDE.md](CLAUDE.md) for this project's architecture and conventions in depth. The original [Hephaestus documentation](https://ido-levi.github.io/Hephaestus/) covers the shared framework's architecture in more depth still.
 
 ---
 
