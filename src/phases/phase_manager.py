@@ -2378,6 +2378,7 @@ class PhaseManager:
             # Create phases from definition with parameter substitution
             phases_config = db_definition.phases_config or []
             first_phase_id = None
+            first_phase_execution = None
 
             for idx, phase_config in enumerate(phases_config):
                 phase_id = str(uuid.uuid4())
@@ -2479,6 +2480,8 @@ class PhaseManager:
                     status="pending",
                 )
                 session.add(execution)
+                if idx == 0:
+                    first_phase_execution = execution
 
             # Create BoardConfig if ticket tracking is enabled
             workflow_config_data = db_definition.workflow_config or {}
@@ -2543,6 +2546,25 @@ class PhaseManager:
                         "priority": "high",
                         "workflow_id": workflow_id,
                     }
+
+                    # Claim phase 1's task-creation right in the SAME
+                    # transaction that creates its PhaseExecution row, not
+                    # in a later, separate call. The API endpoint used to
+                    # claim it itself a few lines after this method
+                    # returned -- but this whole method runs in one
+                    # transaction that only commits on return, so between
+                    # that commit and the endpoint's own claim attempt,
+                    # phase 1 was visible to any reader as pending/
+                    # unclaimed. The orchestrator's periodic sweep
+                    # (_case_start_first_phase / _case_in_progress_no_tasks)
+                    # polls independently and could win that claim first in
+                    # the exact same window, creating a duplicate first
+                    # task. Claiming here closes the window to zero: by the
+                    # time this row is visible to anyone, it's already
+                    # claimed. Observed live: tasks de0c5972/8ac50aa3, both
+                    # for the same brand-new phase 1, ~15s apart.
+                    if first_phase_execution is not None:
+                        first_phase_execution.task_creation_claimed_at = utc_now()
                     logger.info(
                         f"Prepared Phase 1 task info for workflow {workflow_id}"
                     )
