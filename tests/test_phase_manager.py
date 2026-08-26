@@ -2154,3 +2154,85 @@ class TestCompleteWorkflowPausesForReviewMode:
         with real_db.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "completed"
+
+
+# ── _record_review_pass_if_applicable ──────────────────────────────
+
+
+class TestRecordReviewPassIfApplicable:
+    """A diff-stable review phase (adversarial_review/architectural_review/
+    security_review) cleanly passing should snapshot the worktree's HEAD
+    SHA so _create_phase_task's skip check can later tell whether anything
+    changed. Any other phase must not write anything.
+
+    Uses the global `db_manager` fixture (conftest.py), not the module-
+    local `real_db` one: record_review_pass/get_review_pass_sha go through
+    get_db(), which resolves via the HEPHAESTUS_TEST_DB env var -- only
+    `db_manager` points that at the same file this test's own PhaseManager
+    uses, so a Phase/Workflow row seeded here is visible there.
+    """
+
+    def _seed(self, db_manager, phase_name, working_directory):
+        from src.core.database import Phase, Workflow
+
+        with db_manager.session_scope() as session:
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp", status="active",
+                working_directory=working_directory,
+            ))
+            session.add(Phase(
+                id="phase-1", workflow_id="wf-1", order=6,
+                name=phase_name, description="d", done_definitions=["x"],
+            ))
+
+    def test_records_commit_sha_for_diff_stable_phase(self, db_manager, tmp_path):
+        from unittest.mock import MagicMock
+
+        from src.autopilot.spec import get_review_pass_sha
+        from src.core.database import Phase
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(db_manager, "architectural_review", str(tmp_path))
+        pm = PhaseManager(db_manager=db_manager)
+
+        mock_repo = MagicMock()
+        mock_repo.head.commit.hexsha = "abc123"
+
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            with patch("git.Repo", return_value=mock_repo):
+                pm._record_review_pass_if_applicable(session, phase)
+
+        assert get_review_pass_sha("wf-1", "architectural_review") == "abc123"
+
+    def test_does_not_record_for_non_diff_stable_phase(self, db_manager, tmp_path):
+        from unittest.mock import MagicMock
+
+        from src.autopilot.spec import get_review_pass_sha
+        from src.core.database import Phase
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(db_manager, "development", str(tmp_path))
+        pm = PhaseManager(db_manager=db_manager)
+
+        mock_repo = MagicMock()
+        mock_repo.head.commit.hexsha = "abc123"
+
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            with patch("git.Repo", return_value=mock_repo):
+                pm._record_review_pass_if_applicable(session, phase)
+
+        assert get_review_pass_sha("wf-1", "development") is None
+
+    def test_no_working_directory_is_safe(self, db_manager):
+        """No working_directory to read HEAD from -- must not raise."""
+        from src.core.database import Phase
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(db_manager, "adversarial_review", working_directory=None)
+        pm = PhaseManager(db_manager=db_manager)
+
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            pm._record_review_pass_if_applicable(session, phase)  # no raise
