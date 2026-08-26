@@ -184,12 +184,24 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       if (!projectId) throw new Error('No project selected');
       return apiService.removeAutopilotProjectDesign(projectId, filename);
     },
+    onMutate: async (filename: string) => {
+      // Same dedup race as archiveMutation above -- cancel the in-flight
+      // 5s poll first so invalidateQueries below can't be satisfied by a
+      // stale, pre-removal response.
+      await queryClient.cancelQueries({ queryKey: ['autopilot-project-designs', projectId] });
+      const prev = queryClient.getQueryData<any[]>(['autopilot-project-designs', projectId]);
+      queryClient.setQueryData(['autopilot-project-designs', projectId], (old: any[] | undefined) =>
+        old?.filter((d) => d.filename !== filename)
+      );
+      return { prev };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       toast.success('Design removed');
     },
-    onError: (error: any) => {
+    onError: (error: any, _filename, ctx: any) => {
+      if (ctx?.prev) queryClient.setQueryData(['autopilot-project-designs', projectId], ctx.prev);
       toast.error(error?.response?.data?.detail || 'Failed to remove design');
     },
   });
@@ -255,6 +267,18 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       }
       return results;
     },
+    onMutate: async () => {
+      // Same dedup race as archiveMutation/removeMutation above -- cancel
+      // in-flight polls on the queries this invalidates below so a stale,
+      // pre-action response can't win and flash the design's old status
+      // back in for one poll cycle. No optimistic patch here (the actual
+      // resulting status isn't known ahead of the real request), just
+      // stopping the stale response from being reused is enough.
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: ['autopilot-project-designs', projectId] }),
+        queryClient.cancelQueries({ queryKey: ['autopilot-design-statuses', projectId] }),
+      ]);
+    },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['workflows'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
@@ -295,6 +319,13 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
         filename,
         project_path: project.base_dir,
       });
+    },
+    onMutate: async () => {
+      // Same dedup-race fix as workflowActionMutation above.
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: ['autopilot-project-designs', projectId] }),
+        queryClient.cancelQueries({ queryKey: ['autopilot-design-statuses', projectId] }),
+      ]);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
