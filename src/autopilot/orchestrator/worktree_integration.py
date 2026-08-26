@@ -559,7 +559,7 @@ def _create_designs_folder(
     """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     safe_name = design_entry.name.lower().replace(" ", "_")[:40]
-    designs_folder = project_path / CONTEXT_DIR_NAME / "designs" / f"{timestamp}_{safe_name}_{design_entry.db_id or 'unknown'}"
+    designs_folder = project_path / CONTEXT_DIR_NAME / "specs" / f"{timestamp}_{safe_name}_{design_entry.db_id or 'unknown'}"
     designs_folder.mkdir(parents=True, exist_ok=True)
     (designs_folder / "features").mkdir(exist_ok=True)
 
