@@ -88,7 +88,6 @@ agents:
   # which resolves bare aliases like "sonnet" via amazon-bedrock, unconfigured
   # here) fails immediately with no usable credentials. Confirmed live: task
   # a4863f19 lost ~10 minutes to exactly this mismatch before this fix.
-  cli_model_fallback: opus
   secondary_cli_model_fallback: Qwen3.8-27B-UD-Q4_K_XL.gguf
   # The local Qwen model has only a single inference slot -- a second agent
   # dispatched onto it just sits frozen waiting its turn instead of doing

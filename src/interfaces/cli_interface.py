@@ -672,12 +672,6 @@ class ClaudeCodeAgent(CLIAgentInterface):
         base generic launch-rejection patterns (see base class docstring)."""
         return super().get_launch_rejection_patterns() + [r"Bypass Permissions mode"]
 
-    def model_fallback_keystrokes(self, model: str) -> List[Tuple[str, float]]:
-        # Same one-line `/model <name>` syntax already confirmed working
-        # for Claude Code in _detect_bad_model_error (monitor.py) -- unlike
-        # pi, no picker/search step.
-        return [(f"/model {model}", 0.0)]
-
     def parse_output(self, output: str) -> Dict[str, Any]:
         lines = output.strip().split("\n")
         last_message = ""

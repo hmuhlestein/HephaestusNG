@@ -362,15 +362,24 @@ either check pinned to the old role — verified directly (not just for the
 current pi-primary deployment) by tests that set `default_cli_tool: claude`
 and confirm pi reads `secondary_cli_model_fallback` and vice versa.
 
-`ClaudeCodeAgent.model_fallback_keystrokes` reuses the one-line `/model
-<name>` syntax already confirmed working in `_detect_bad_model_error` (no
-picker step, unlike pi) — see that method's own related fix below.
-`ClaudeCodeAgent.model_fallback_confirmed` is deliberately left
-unimplemented (inherits the base class `None`): there's no confirmed
-evidence of what Claude Code echoes after a successful `/model` switch, so
-guessing a regex risks a false verdict either way — `_verify_cli_model_fallback`
-correctly treats `None` as "can't verify, skip silently" rather than
-fabricating a check.
+**REVERTED (2026-08-26):** `ClaudeCodeAgent.model_fallback_keystrokes` used
+to reuse the one-line `/model <name>` syntax already confirmed working in
+`_detect_bad_model_error`, opting Claude into this same in-session switch.
+Removed after a live incident: a Claude agent got falsely flagged as
+"frozen" by a resumed-session replay artifact (the agent wasn't actually
+stuck — its pane was replaying stale history from a `--resume`'d prior
+session, same root cause as several other incidents that day), and the
+monitor typed an unrequested `/model opus` into its pane as a result.
+Unlike pi's single-inference-slot queueing (the motivating case this whole
+mechanism exists for), Claude sessions get `--resume`'d across dispatches,
+which makes the frozen-signature check materially less reliable for
+Claude specifically — a false positive there means an unrequested model
+switch, not just a wasted nudge. `ClaudeCodeAgent.model_fallback_keystrokes`
+now inherits the base class's empty default again, so
+`detect_cli_model_fallback` is a no-op for Claude regardless of role
+(primary or secondary tier) — see `TestDetectCliModelFallback`'s
+`test_claude_never_gets_an_automatic_model_switch_as_*` tests
+(`tests/test_monitor.py`). pi retains the mechanism unchanged.
 
 **Related fix in `_detect_bad_model_error` (Claude-only, pre-existing,
 unrelated code path but the identical bug):** it computed its own recovery
