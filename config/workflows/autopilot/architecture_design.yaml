@@ -3,10 +3,12 @@ name: architecture_design
 thinking_level: high
 self_review:
   enabled: true
-cli_tool: claude
-cli_model: sonnet
-fallback_cli_tool: pi
-fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
+# Uses the workflow-level default_cli_tool/default_model (claude/sonnet) --
+# uncomment to override for this phase specifically:
+# cli_tool: claude
+# cli_model: sonnet
+# fallback_cli_tool: pi
+# fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
 description: |
   Create detailed technical architecture and task breakdown.
 

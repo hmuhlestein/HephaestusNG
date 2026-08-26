@@ -1,8 +1,8 @@
 default_cli_tool: claude
 default_model: sonnet
 default_thinking_level: high
-fallback_cli_tool: pi
-fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
+# fallback_cli_tool: pi
+# fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
 
 # Execution order by phase id. Ids match pipeline position (1-14).
 execution_order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
