@@ -514,8 +514,10 @@ class TestingConfig(_ConfigSection):
 
     - new_code_coverage_floor: the minimum coverage percentage for lines
       changed in the current diff (vs. origin/main).  Enforced by
-      diff-cover in scripts/check_coverage.py.  80 % is the real bar --
-      every NEW line should be tested.
+      diff-cover in scripts/check_coverage.py AND by the qa_validation
+      gate itself (src/autopilot/spec.py's score_qa, via
+      _min_coverage_percent) -- one setting, two enforcement points.
+      80 % is the real bar -- every NEW line should be tested.
     """
 
     def __init__(self, config: Dict[str, Any]):
