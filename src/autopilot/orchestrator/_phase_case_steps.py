@@ -306,11 +306,38 @@ def _build_phase_task(db, workflow_id, phase, phase_id, action, source_phase_nam
     from src.core.database import get_project_info_for_workflow
 
     _own_project_id, _ = get_project_info_for_workflow(db, workflow_id)
+    done_definition = " AND ".join(phase.done_definitions) if phase.done_definitions else "Complete phase objectives"
+    if feedback:
+        # The generic phase checklist alone is what /goal gets built from
+        # (_send_goal_command reads task.done_definition, not
+        # raw_description) -- without the concrete reason this task exists
+        # folded in here too, Claude Code's own self-checked-completion
+        # hook only ever re-verifies "did you do the generic phase things,"
+        # never "did you fix the SPECIFIC issue you were sent back for."
+        # The one-time initial prompt (which DOES have this detail, via
+        # GOTO_REASON_PREFIX above) can get buried under an agent's own
+        # exploration long before the turn ends -- /goal is what stays
+        # persistently checked regardless. Observed live: a development
+        # agent given a list of 4 specific failing test files drifted into
+        # debugging an unrelated timeout in a 5th file for 10+ minutes
+        # with nothing pulling it back to the actual assigned list.
+        #
+        # Feedback inlined directly (not just referenced) so the condition
+        # is self-contained -- but also points at the instructions file
+        # (see launch_pipeline.py's _write_task_instructions -- same
+        # ".hephaestus/tasks/{task_id}.md" path it writes this task's full
+        # raw_description to) as a fallback in case feedback alone is
+        # ambiguous out of context.
+        done_definition = (
+            f"{done_definition} AND this specific issue has been resolved: "
+            f"{feedback} (full detail in .hephaestus/tasks/{task_id}.md if "
+            "unsure)"
+        )
     task = Task(
         id=task_id,
         raw_description=description,
         enriched_description=description,
-        done_definition=(" AND ".join(phase.done_definitions) if phase.done_definitions else "Complete phase objectives"),
+        done_definition=done_definition,
         status="pending",
         priority="high",
         phase_id=phase.id,

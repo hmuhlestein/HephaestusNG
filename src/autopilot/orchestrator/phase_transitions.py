@@ -3088,6 +3088,22 @@ def _create_corrective_task_body(
 
         phase = db.query(Phase).filter_by(id=phase_id).first()
         done_def = " AND ".join(phase.done_definitions) if phase and phase.done_definitions else "Complete phase objectives"
+        # See _build_phase_task's identical fix (_phase_case_steps.py) for
+        # why: task.done_definition, not raw_description, is what feeds
+        # /goal's persistent self-check -- without the concrete validation
+        # failure folded in here, the goal condition only re-verifies the
+        # generic phase checklist, never "did you fix THIS specific thing,"
+        # letting an agent drift off-task for a long stretch with nothing
+        # pulling it back. Points at the instructions file (same
+        # ".hephaestus/tasks/{task_id}.md" launch_pipeline.py's
+        # _write_task_instructions writes this task's raw_description to)
+        # rather than inlining feedback, for the same reason: keeps /goal
+        # short and sends the agent back to the full, authoritative detail.
+        goal_def = (
+            f"{done_def} AND this specific validation failure has been "
+            f"resolved: {feedback} (full detail in "
+            f".hephaestus/tasks/{task_id}.md if unsure)"
+        )
 
         task = Task(
             id=task_id,
@@ -3100,7 +3116,7 @@ def _create_corrective_task_body(
                 f"specific problem above, and re-check it against: {done_def}\n\n"
                 "When fixed, call update_task_status(done) again."
             ),
-            done_definition=done_def,
+            done_definition=goal_def,
             status="pending",
             priority="high",
             phase_id=phase_id,

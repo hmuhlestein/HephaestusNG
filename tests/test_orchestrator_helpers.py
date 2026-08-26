@@ -7774,6 +7774,129 @@ class TestCreatePhaseTaskReviewPassSkip:
         mock_create_agent.assert_called_once()
 
 
+class TestGotoTaskGoalIncludesFeedback:
+    """A goto/retry task's /goal condition (Task.done_definition -- see
+    launch_pipeline.py's _send_goal_command, which reads that field, not
+    raw_description) must fold in the concrete reason this task exists,
+    not just the phase's generic checklist. Otherwise Claude Code's own
+    self-checked-completion hook only ever re-verifies "did you do the
+    generic phase things," never "did you fix the SPECIFIC issue you were
+    sent back for" -- observed live: a development agent given a list of
+    4 specific failing test files drifted into debugging an unrelated
+    file for 10+ minutes with nothing pulling it back on track."""
+
+    def _seed(self, db):
+        from src.core.database import Phase, PhaseExecution, Workflow
+
+        with db.session_scope() as session:
+            session.add(Workflow(
+                id="wf-goal", name="t", phases_folder_path="/tmp", status="active",
+                working_directory="/tmp/wf-goal",
+            ))
+            session.add(Phase(
+                id="phase-goal", workflow_id="wf-goal", order=5,
+                name="development", description="d", done_definitions=["Implement it"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-goal", phase_id="phase-goal",
+                workflow_execution_id="wf-goal", status="pending",
+            ))
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_goto_task_goal_includes_feedback_and_instructions_path(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.core.database import Task
+
+        self._seed(orch_db_env)
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        feedback = "QA violations: ['failed_tests=10 > 0']. Failing tests: [...]."
+        result = _create_phase_task(
+            "wf-goal", "phase-goal", "development", "goto",
+            OrchestratorLogger(tmp_path),
+            feedback=feedback, source_phase_name="qa_validation",
+        )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(phase_id="phase-goal").first()
+            assert "Implement it" in task.done_definition
+            assert feedback in task.done_definition
+            assert f".hephaestus/tasks/{task.id}.md" in task.done_definition
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_fresh_task_goal_has_no_feedback_clause(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """A normal (non-goto) dispatch has no feedback -- the goal stays
+        just the plain phase checklist, no dangling "resolved: None"."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.core.database import Task
+
+        self._seed(orch_db_env)
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        result = _create_phase_task(
+            "wf-goal", "phase-goal", "development", "continue",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(phase_id="phase-goal").first()
+            assert task.done_definition == "Implement it"
+
+
+class TestCreativeCorrectiveTaskGoalIncludesFeedback:
+    """Same fix as TestGotoTaskGoalIncludesFeedback, for
+    _create_corrective_task's separate (validation-retry) code path."""
+
+    def _seed(self, db):
+        from src.core.database import Phase, PhaseExecution, Workflow
+
+        with db.session_scope() as session:
+            session.add(Workflow(
+                id="wf-corr-goal", name="t", phases_folder_path="/tmp", status="active",
+                working_directory="/tmp/wf-corr-goal",
+            ))
+            session.add(Phase(
+                id="phase-corr-goal", workflow_id="wf-corr-goal", order=5,
+                name="development", description="d", done_definitions=["Implement it"],
+            ))
+            session.add(PhaseExecution(
+                id="exec-corr-goal", phase_id="phase-corr-goal",
+                workflow_execution_id="wf-corr-goal", status="completed",
+            ))
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_corrective_task_goal_includes_feedback_and_instructions_path(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_corrective_task
+        from src.core.database import Task
+
+        self._seed(orch_db_env)
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        feedback = "output_lost: qa.md vanished after commit"
+        task_id = _create_corrective_task(
+            "wf-corr-goal", "phase-corr-goal", "development", feedback,
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert task_id is not None
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id=task_id).first()
+            assert "Implement it" in task.done_definition
+            assert feedback in task.done_definition
+            assert f".hephaestus/tasks/{task.id}.md" in task.done_definition
+
+
 class TestCreatePhaseTaskOrphanedPendingAge:
     """_create_phase_task's "existing pending task with no agent yet ->
     treat as orphaned, replace it" check must require the task to actually
