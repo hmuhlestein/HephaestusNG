@@ -58,6 +58,7 @@ logs/
 htmlcov/
 .tox/
 .coverage.*
+coverage.xml
 .ruffcache/
 .mypy_cache/
 
