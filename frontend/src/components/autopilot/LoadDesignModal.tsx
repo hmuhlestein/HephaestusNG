@@ -100,6 +100,11 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
   // of a name collision -- without also swallowing a genuine collision
   // from a freshly typed/uploaded name.
   const [textSourceRemotePath, setTextSourceRemotePath] = useState<string | null>(null);
+  // Design Spec flow only: read-only preview of the most recently clicked
+  // spec folder's spec.md -- Design Spec keeps its multi-file card list
+  // (unlike Bug Spec's single textarea), so this is purely a "see what
+  // you're about to add" preview, not the thing actually submitted.
+  const [specPreview, setSpecPreview] = useState<{ path: string; content: string } | null>(null);
   const remoteRequestId = useRef(0);
 
   const copy = workflowType ? TYPE_COPY[workflowType] : null;
@@ -119,6 +124,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
       setTextContent('');
       setTextFilename('bug-report.md');
       setTextSourceRemotePath(null);
+      setSpecPreview(null);
     } else {
       const defaultFolder = copy?.defaultFolder ?? '';
       setDestinationFolder(defaultFolder);
@@ -208,6 +214,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
     try {
       const file = await apiService.getAutopilotProjectFileContent(projectId, specEntry.path);
       _applyLoadedFile(specEntry.path, file, entry.name);
+      if (workflowType === 'feature') setSpecPreview({ path: specEntry.path, content: file.content });
     } catch {
       loadRemoteDir(entry.path);
     } finally {
@@ -621,6 +628,33 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                       })
                     )}
                   </div>
+                </div>
+              )}
+
+              {/* Spec Folder Preview (Design Spec flow only) -- read-only,
+                  just lets you see what a clicked spec folder's spec.md
+                  actually says before adding it; the file itself is still
+                  tracked via the Loaded Files list below. */}
+              {workflowType === 'feature' && specPreview && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Preview: <code className="font-mono text-xs">{specPreview.path}</code>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setSpecPreview(null)}
+                      className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <textarea
+                    readOnly
+                    value={specPreview.content}
+                    rows={10}
+                    className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl text-xs font-mono bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300"
+                  />
                 </div>
               )}
 
