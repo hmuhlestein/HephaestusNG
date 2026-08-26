@@ -38,6 +38,22 @@ fi
 
 protected_branches="main master"
 
+# This wrapper only polices Hephaestus-managed project repos (identified by
+# a .hephaestus/ directory somewhere up from $PWD) -- not arbitrary git repos
+# an agent's own code creates and merges into, e.g. a disposable fixture repo
+# a test spins up under a pytest tmp dir to exercise merge logic. Those have
+# no .hephaestus/ ancestor at all, so they were never "this feature's repo"
+# and are out of scope for review-mode gating.
+hephaestus_root=""
+check_dir="$PWD"
+while [[ "$check_dir" != "/" ]]; do
+    if [[ -d "$check_dir/.hephaestus" ]]; then
+        hephaestus_root="$check_dir"
+        break
+    fi
+    check_dir="$(dirname "$check_dir")"
+done
+
 # First non-flag argument is the subcommand.
 subcommand=""
 for arg in "$@"; do
@@ -49,8 +65,18 @@ done
 
 blocked_reason=""
 
-if [[ "$subcommand" == "merge" ]]; then
-    blocked_reason="git merge"
+if [[ -z "$hephaestus_root" ]]; then
+    : # not a Hephaestus-managed repo -- nothing to gate.
+elif [[ "$subcommand" == "merge" ]]; then
+    # Merging lands on whatever branch is currently checked out -- block
+    # only when that target is protected, mirroring the push check below
+    # rather than blocking every merge regardless of target.
+    current_branch="$("$real_git" symbolic-ref --short HEAD 2>/dev/null || echo "")"
+    for b in $protected_branches; do
+        if [[ "$current_branch" == "$b" ]]; then
+            blocked_reason="git merge into $b"
+        fi
+    done
 elif [[ "$subcommand" == "push" ]]; then
     # --all/--mirror can push a local main/master along with everything
     # else even with no refspec naming it explicitly -- block outright.
@@ -106,18 +132,9 @@ elif [[ "$subcommand" == "push" ]]; then
 fi
 
 if [[ -n "$blocked_reason" ]]; then
-    # Walk up to find the worktree root (contains .hephaestus/)
-    marker=""
-    check_dir="$PWD"
-    while [[ "$check_dir" != "/" ]]; do
-        if [[ -f "$check_dir/.hephaestus/review_approved" ]]; then
-            marker="$check_dir/.hephaestus/review_approved"
-            break
-        fi
-        check_dir="$(dirname "$check_dir")"
-    done
+    marker="$hephaestus_root/.hephaestus/review_approved"
 
-    if [[ -z "$marker" ]]; then
+    if [[ ! -f "$marker" ]]; then
         echo "BLOCKED: $blocked_reason is not allowed until the feature has been reviewed and approved." >&2
         echo "In review mode, create a PR instead. The merge/push will happen after" >&2
         echo "human approval creates the .hephaestus/review_approved marker." >&2
