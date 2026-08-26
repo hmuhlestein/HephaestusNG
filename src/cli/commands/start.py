@@ -400,7 +400,8 @@ def run(args):
             frontend_proc = _start_frontend()
             results["frontend"] = "started" if frontend_proc else "skipped"
 
-    # Qdrant
+    # Qdrant (only reported when actually in use — turbovec is the default
+    # and needs no service, so it prints nothing here)
     vector_backend = os.environ.get("VECTOR_STORE_BACKEND", "turbovec")
     if vector_backend == "qdrant":
         if _check_qdrant():
@@ -408,8 +409,6 @@ def run(args):
         else:
             qdrant_ok = _ensure_qdrant()
             results["qdrant"] = "running" if qdrant_ok else "failed"
-    else:
-        results["qdrant"] = "skipped (turbovec)"
 
     # Backend
     backend_start_time = None
