@@ -1868,11 +1868,30 @@ class PhaseManager:
             # active" guard above skips this entire block on any later
             # call while still paused, the same idempotency pattern every
             # other pause site in this codebase relies on.
+            #
+            # That idempotency assumption breaks once the workflow is
+            # RESUMED (workflow.status flips back to "active", the guard's
+            # own trigger condition) and a later cycle -- a retry/goto that
+            # fires after approval, or a phase that simply re-dispatches --
+            # reaches a fresh completion here. Nothing above checks whether
+            # THIS feature was already reviewed, only whether the PROJECT
+            # has review_mode on, so an already-approved feature got
+            # paused for a second, redundant review every time. Observed
+            # live: approve -> git_expert re-ran -> workflow paused_by=
+            # "review" again, un-merged, review_status still "approved"
+            # the whole time. _pause_feature_for_review (pipeline.py) has
+            # the matching guard already; this site never had it.
             from src.autopilot.orchestrator import _should_pause_for_review
-            from src.core.database import resolve_project_for_workflow
+            from src.core.database import Feature, resolve_project_for_workflow
 
+            already_approved = (
+                session.query(Feature)
+                .filter_by(workflow_id=self.workflow_id, review_status="approved")
+                .first()
+                is not None
+            )
             project_id, _ = resolve_project_for_workflow(self.workflow_id)
-            if project_id and _should_pause_for_review(project_id):
+            if project_id and _should_pause_for_review(project_id) and not already_approved:
                 from src.autopilot.orchestrator.engine_client import pause_workflow
 
                 pause_workflow(
