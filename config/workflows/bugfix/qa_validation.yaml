@@ -233,13 +233,18 @@ additional_notes: |
   # repo sits well below 80%; only your own changed lines are held to that
   # floor). REQUIRED when the diff touches code in a language this project
   # has coverage tooling for (see STEP 11).
-  git diff --name-only origin/main -- '*.py'    # empty output = no Python changed
-  diff-cover coverage.xml --compare-branch=origin/main   # Python-specific diff-scoping tool
+  # Three dots (merge-base diff), NOT two -- on a long-lived branch/worktree,
+  # `git diff origin/main` (two dots) includes every commit that has landed
+  # on origin/main since this branch forked, not just this branch's own
+  # changes, and falsely looks Python-heavy on a purely frontend/docs diff.
+  git diff --name-only origin/main...HEAD -- '*.py'    # empty output = no Python changed
+  diff-cover coverage.xml --compare-branch=origin/main   # Python-specific diff-scoping tool; diff-cover's own --diff-range-notation already defaults to '...' (merge-base), so this one is safe as-is
 
   # NODE/JS EXAMPLE -- if npm/node tests exist
   npm test -- --coverage 2>&1 | tee all_results.txt
   # No diff-scoping tool set up for this stack? Cross-reference `git diff
-  # --name-only origin/main` against the coverage report by hand.
+  # --name-only origin/main...HEAD` (three dots -- see the coverage note
+  # above) against the coverage report by hand.
 
   # OTHER STACKS: use this project's own test runner with its coverage flag
   # (go test -cover, cargo test + cargo llvm-cov, etc.), scoped to changed
