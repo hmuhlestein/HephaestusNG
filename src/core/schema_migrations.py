@@ -403,6 +403,23 @@ def migrate_autopilot_designs_error_column(engine):
         logger.warning(f"autopilot_designs.error migration failed (not just 'already exists' -- check this): {e}")
 
 
+def migrate_autopilot_designs_archived_at_column(engine):
+    """Add autopilot_designs.archived_at for existing databases.
+
+    Idempotent - safe to call on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN archived_at DATETIME"))
+            except Exception:
+                pass  # Column already exists
+            conn.commit()
+            logger.info("Migrated autopilot_designs.archived_at column")
+    except Exception as e:
+        logger.warning(f"autopilot_designs.archived_at migration failed (not just 'already exists' -- check this): {e}")
+
+
 def migrate_workflow_paused_by_column(engine):
     """Add workflows.paused_by for existing databases.
 
@@ -905,4 +922,5 @@ SCHEMA_MIGRATIONS = [
     ("_migrate_workflow_type_columns", migrate_workflow_type_columns),
     ("_migrate_autopilot_pipeline_events_table", migrate_autopilot_pipeline_events_table),
     ("_migrate_project_repos_table", migrate_project_repos_table),
+    ("_migrate_autopilot_designs_archived_at_column", migrate_autopilot_designs_archived_at_column),
 ]

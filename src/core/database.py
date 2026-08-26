@@ -1345,6 +1345,12 @@ class AutopilotDesign(Base):
     # detect_workflow_type()'s heuristic. See docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md.
     workflow_type = Column(String(20), nullable=False, default="feature")
 
+    # Set when the user archives this design from the queue panel -- hides
+    # it from the default design list without touching its file, tasks,
+    # workflows, or features (unlike remove_project_design's destructive
+    # delete). NULL means active/visible.
+    archived_at = Column(DateTime, nullable=True)
+
     # Relationships
     project = relationship("AutopilotProject", back_populates="designs")
     features = relationship("Feature", back_populates="design", cascade="all, delete-orphan")

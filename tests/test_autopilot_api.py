@@ -2966,6 +2966,56 @@ class TestProjectDesigns:
         assert task["action_target_phase"] == "development"
 
 
+class TestArchiveProjectDesign:
+    """Archive hides a design from the default queue list (and its own
+    file/tasks/workflows/features untouched) without the destructive
+    cascade remove_project_design does -- see design_file_routes.py's
+    _set_design_archived."""
+
+    def _create_project(self, client, dirs):
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={"name": "Test", "base_dir": str(dirs["project_dir"])},
+        )
+        return resp.json()["id"]
+
+    def test_archive_hides_from_default_list_but_not_archived_list(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.post(f"/api/autopilot/projects/{pid}/designs/01-auth.md/archive")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["archived_at"] is not None
+
+        default_list = client.get(f"/api/autopilot/projects/{pid}/designs").json()
+        assert "01-auth.md" not in [d["filename"] for d in default_list]
+        assert len(default_list) == 2
+
+        archived_list = client.get(f"/api/autopilot/projects/{pid}/designs", params={"archived": True}).json()
+        assert [d["filename"] for d in archived_list] == ["01-auth.md"]
+
+    def test_unarchive_restores_to_default_list(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+        client.post(f"/api/autopilot/projects/{pid}/designs/01-auth.md/archive")
+
+        resp = client.post(f"/api/autopilot/projects/{pid}/designs/01-auth.md/unarchive")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["archived_at"] is None
+
+        default_list = client.get(f"/api/autopilot/projects/{pid}/designs").json()
+        assert "01-auth.md" in [d["filename"] for d in default_list]
+        archived_list = client.get(f"/api/autopilot/projects/{pid}/designs", params={"archived": True}).json()
+        assert archived_list == []
+
+    def test_archive_unknown_design_404s(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.post(f"/api/autopilot/projects/{pid}/designs/nonexistent.md/archive")
+        assert resp.status_code == 404
+
+
 class TestWorkflowFeatureReport:
     """GET /workflows/{workflow_id}/feature_report -- serves the same
     report get_project_design_status's has_report flag advertises."""
