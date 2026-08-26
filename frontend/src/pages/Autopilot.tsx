@@ -83,6 +83,11 @@ const Autopilot: React.FC = () => {
     queryFn: () => apiService.getAutopilotFeatures(),
     refetchInterval: 30000,
   });
+  // Same "pending"/"active" exclusion as FeatureGallery's own filter --
+  // otherwise the badge counts features the list below never shows.
+  const completedFeaturesCount = (featuresList || []).filter(
+    (f: any) => f.status !== 'pending' && f.status !== 'active'
+  ).length;
 
   const togglePipeline = useMutation({
     mutationFn: async () => {
@@ -287,7 +292,7 @@ const Autopilot: React.FC = () => {
 
   const tabs: { id: Tab; label: string; icon: React.ElementType; badge?: number; reviewBadge?: boolean; urgent?: boolean }[] = [
     { id: 'queue', label: 'Spec Queue', icon: ListOrdered, badge: status?.queue_depth, reviewBadge: (status?.features_awaiting_review ?? 0) > 0 },
-    { id: 'features', label: 'Completed', icon: History, badge: featuresList?.length },
+    { id: 'features', label: 'Completed', icon: History, badge: completedFeaturesCount },
     { id: 'improvements', label: 'Improvements', icon: Lightbulb, badge: promptProposals?.pending_count },
     // urgent: the pipeline is blocked waiting on a human decision. Replaces
     // the old full-width yellow HumanInputBanner (illegible, and duplicated

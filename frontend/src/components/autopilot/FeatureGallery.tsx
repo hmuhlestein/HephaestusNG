@@ -33,6 +33,13 @@ const FeatureGallery: React.FC<FeatureGalleryProps> = ({ onSelectFeature, projec
   });
 
   const filtered = (features || []).filter((f: any) => {
+    // This component is only ever mounted for the "Completed" tab -- a
+    // feature that hasn't finished (pending: not started, active: still
+    // running) must never show here regardless of statusFilter, or the
+    // tab's own label is a lie. The Queue tab is the correct place for
+    // those; getAutopilotFeatures() itself still returns everything
+    // unfiltered since other consumers legitimately need the full list.
+    if (f.status === 'pending' || f.status === 'active') return false;
     if (statusFilter !== 'all' && f.status !== statusFilter) return false;
     if (search && !f.name.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
