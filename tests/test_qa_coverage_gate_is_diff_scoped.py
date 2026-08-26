@@ -40,3 +40,25 @@ def test_autopilot_qa_validation_measures_diff_scoped_coverage():
     assert "diff-cover" in prompt
     assert "compare-branch=origin/main" in prompt
     assert "whole-repo" in prompt.lower()
+
+
+# Follow-up regression: Hephaestus targets any language, and a diff with no
+# code in a language this project has coverage tooling for (frontend-only
+# on a Python-gated repo, docs-only, an unconfigured stack) has no real
+# new/modified-code number to report. Agents were observed substituting the
+# whole-repo pytest TOTAL line into coverage_percent just to satisfy the
+# gate's "required, not optional" field -- exactly the whole-repo number
+# this file's other tests exist to keep out of that field. Fixed by a
+# coverage_not_applicable escape hatch. The prompt's own worked example
+# (checked via `git diff --name-only origin/main -- '*.py'`) is for Python
+# specifically -- other stacks use their own equivalent check.
+def test_bugfix_qa_validation_documents_coverage_not_applicable():
+    prompt = _qa_validation_prompt("bugfix")
+    assert "coverage_not_applicable" in prompt
+    assert "'*.py'" in prompt
+
+
+def test_autopilot_qa_validation_documents_coverage_not_applicable():
+    prompt = _qa_validation_prompt("autopilot")
+    assert "coverage_not_applicable" in prompt
+    assert "'*.py'" in prompt
