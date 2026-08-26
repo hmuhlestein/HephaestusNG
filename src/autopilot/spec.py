@@ -597,6 +597,60 @@ def get_max_task_retries(workflow_id: Optional[str]) -> int:
         return DEFAULT_MAX_TASK_RETRIES
 
 
+# Review-gated phases whose verdict is a pure function of the code diff --
+# no test-run flakiness, no full-suite variance -- so it's safe to skip
+# re-running one when the worktree's HEAD hasn't moved since its last
+# clean pass in this workflow. qa_validation/product_validation/doc_review
+# are deliberately excluded: qa_validation's full-suite pass/fail can vary
+# run-to-run from environmental/test-order flakiness even at a fixed
+# commit (observed live in this codebase's own dogfood run --
+# test_agent_manager_project_context.py passed 20/20 alone but 10/20 under
+# the full suite), and product_validation/doc_review verdicts lean on
+# document-level judgment rather than a pure diff comparison.
+DIFF_STABLE_REVIEW_PHASES = frozenset({
+    "adversarial_review",
+    "architectural_review",
+    "security_review",
+})
+
+
+def record_review_pass(workflow_id: str, phase_name: str, commit_sha: str) -> None:
+    """Record the commit SHA at which `phase_name` last cleanly passed (a
+    "continue" decision, not goto) within this workflow.
+
+    Read by _create_phase_task's re-entry skip check: if the worktree's
+    HEAD still matches this SHA the next time this phase is re-entered
+    (e.g. a downstream phase's goto sends the pipeline back through
+    development and forward again), nothing could have changed the
+    verdict, so the re-run can be skipped instead of spending a full
+    agent turn just to rediscover "no new commits" on its own.
+    """
+    from src.core.database import ProjectContext, get_db
+
+    with get_db() as session:
+        key = f"review_pass:{workflow_id}:{phase_name}"
+        row = session.query(ProjectContext).filter_by(key=key).first()
+        value = {"commit_sha": commit_sha, "timestamp": utc_now().isoformat()}
+        if row:
+            row.value = value
+        else:
+            session.add(ProjectContext(key=key, value=value))
+
+
+def get_review_pass_sha(workflow_id: str, phase_name: str) -> Optional[str]:
+    """The commit SHA at which `phase_name` last cleanly passed in this
+    workflow, or None if it never has (see record_review_pass)."""
+    from src.core.database import ProjectContext, get_db
+
+    with get_db() as session:
+        row = (
+            session.query(ProjectContext)
+            .filter_by(key=f"review_pass:{workflow_id}:{phase_name}")
+            .first()
+        )
+        return (row.value or {}).get("commit_sha") if row and row.value else None
+
+
 def get_review_findings_history(workflow_id: str, phase_name: str) -> list:
     """Findings recorded from prior runs of `phase_name` within this
     workflow (see record_review_finding), oldest first. Empty list if none

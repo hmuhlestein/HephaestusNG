@@ -912,8 +912,32 @@ class PhaseManager:
         self, session, phase, execution, summary, evaluation
     ) -> Dict[str, Any]:
         # FIX #19: Delegate to _advance_or_complete_with_phase_info.
+        self._record_review_pass_if_applicable(session, phase)
         self._close_execution(session, execution, "completed", summary)
         return self._advance_or_complete_with_phase_info(session, phase.id)
+
+    def _record_review_pass_if_applicable(self, session, phase) -> None:
+        """Snapshot the worktree's current commit SHA when a diff-stable
+        review phase (see spec.DIFF_STABLE_REVIEW_PHASES) cleanly passes,
+        so a later re-entry into this same phase (e.g. after a downstream
+        goto sends the pipeline back through development and forward
+        again) can tell whether anything actually changed -- see
+        _create_phase_task's skip check, which reads this via
+        get_review_pass_sha."""
+        from src.autopilot.spec import DIFF_STABLE_REVIEW_PHASES, record_review_pass
+
+        if phase.name not in DIFF_STABLE_REVIEW_PHASES:
+            return
+        try:
+            workflow = session.query(Workflow).filter_by(id=phase.workflow_id).first()
+            if not workflow or not workflow.working_directory:
+                return
+            from git import Repo
+
+            commit_sha = Repo(workflow.working_directory).head.commit.hexsha
+            record_review_pass(phase.workflow_id, phase.name, commit_sha)
+        except Exception as e:
+            logger.warning(f"Could not record review pass for {phase.name}: {e}")
 
     def _handle_evaluation_skip(
         self, session, phase, execution, summary, evaluation

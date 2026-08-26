@@ -63,7 +63,7 @@ from src.autopilot.orchestrator.engine_client import (
 from src.autopilot.orchestrator.queue import (
     _assess_run_health,
 )
-from src.autopilot.spec import build_phase_output, get_gated_phases
+from src.autopilot.spec import DIFF_STABLE_REVIEW_PHASES, build_phase_output, get_gated_phases
 from src.core.constants import (
     CONTEXT_DIR_NAME,
     DIAGNOSTIC_TASK_PREFIX,
@@ -2677,6 +2677,57 @@ def _create_phase_task(
                     if not deploy_md.exists():
                         logger.info(f"[PHASE-TASK] deploy skipped — DEPLOY.md not found in {wf.working_directory}")
                         return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
+
+            # Diff-stable review phase (adversarial_review/architectural_review/
+            # security_review) re-entered with zero commits since its last
+            # clean pass -- see spec.DIFF_STABLE_REVIEW_PHASES's docstring for
+            # why only these three. The verdict can't have changed, so skip
+            # spending a full agent turn just to have it rediscover "no new
+            # commits" on its own -- observed live: adversarial_review and
+            # architectural_review each burned ~5 minutes doing exactly that
+            # after a downstream goto sent the pipeline back through
+            # development with no actual changes in their scope.
+            if phase_name in DIFF_STABLE_REVIEW_PHASES:
+                from src.autopilot.okf_markdown import write_okf
+                from src.autopilot.spec import (
+                    GATE_RESULT_ARTIFACTS,
+                    get_review_pass_sha,
+                    synthetic_clean_result,
+                )
+
+                pass_sha = get_review_pass_sha(workflow_id, phase_name)
+                if pass_sha:
+                    wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                    if wf and wf.working_directory and Path(wf.working_directory).is_dir():
+                        try:
+                            from git import Repo
+
+                            current_sha = Repo(wf.working_directory).head.commit.hexsha
+                        except Exception as e:
+                            logger.warning(f"[PHASE-TASK] Could not read HEAD for {phase_name} skip-check: {e}")
+                            current_sha = None
+                        if current_sha and current_sha == pass_sha:
+                            logger.info(
+                                f"[PHASE-TASK] {phase_name} skipped -- no commits since "
+                                f"last clean pass ({pass_sha[:8]})"
+                            )
+                            docs_dir = Path(wf.working_directory) / ".hephaestus" / phase_name
+                            docs_dir.mkdir(parents=True, exist_ok=True)
+                            artifacts = GATE_RESULT_ARTIFACTS.get(phase_name, ())
+                            if artifacts:
+                                write_okf(
+                                    docs_dir / artifacts[0],
+                                    synthetic_clean_result(phase_name, 0),
+                                    f"# {phase_name} -- skipped, no commits since last "
+                                    f"clean pass ({pass_sha[:8]})\n",
+                                )
+                            return _fire_phase_transition(
+                                workflow_id, phase_id, phase_name, logger, force_continue=True,
+                                completion_summary=(
+                                    f"No commits since last clean pass ({pass_sha[:8]}) "
+                                    "-- carried forward, not re-reviewed"
+                                ),
+                            )
 
             # Check if phase already has an active task
             existing = (

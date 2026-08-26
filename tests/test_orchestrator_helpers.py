@@ -7589,6 +7589,191 @@ class TestCreatePhaseTaskReviewCap:
         assert "B-2 still open" in text
 
 
+class TestCreatePhaseTaskReviewPassSkip:
+    """_create_phase_task's diff-stable-review skip: a diff-stable review
+    phase (adversarial_review/architectural_review/security_review) that
+    already passed once shouldn't spend a full agent turn re-confirming a
+    verdict that can't have changed when zero commits landed since that
+    pass. See spec.DIFF_STABLE_REVIEW_PHASES / record_review_pass /
+    get_review_pass_sha."""
+
+    def _seed(self, db, phase_name="architectural_review"):
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-skip",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    working_directory="/tmp/wf-skip",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-skip",
+                    workflow_id="wf-skip",
+                    name=phase_name,
+                    order=6,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-skip",
+                    phase_id="phase-skip",
+                    workflow_execution_id="wf-skip",
+                    status="pending",
+                )
+            )
+            # One prior task -- this phase has run (and passed) before.
+            session.add(
+                Task(
+                    id="prior-task",
+                    workflow_id="wf-skip",
+                    phase_id="phase-skip",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                )
+            )
+
+    @patch("src.autopilot.orchestrator.phase_transitions._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_skips_when_head_matches_last_pass_sha(
+        self, mock_create_agent, mock_fire_transition, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.core.database import Task, Workflow
+
+        self._seed(orch_db_env)
+        mock_fire_transition.return_value = True
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-skip").first()
+            wf.working_directory = str(tmp_path)
+
+        mock_repo = MagicMock()
+        mock_repo.head.commit.hexsha = "abc123"
+
+        with patch("src.autopilot.spec.get_review_pass_sha", return_value="abc123"), \
+             patch("git.Repo", return_value=mock_repo):
+            result = _create_phase_task(
+                "wf-skip", "phase-skip", "architectural_review", "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        mock_fire_transition.assert_called_once_with(
+            "wf-skip", "phase-skip", "architectural_review", ANY, force_continue=True,
+            completion_summary=(
+                "No commits since last clean pass (abc123) -- carried "
+                "forward, not re-reviewed"
+            ),
+        )
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            # No new task created -- still just the one seeded task.
+            count = session.query(Task).filter(Task.phase_id == "phase-skip").count()
+            assert count == 1
+
+        result_md = tmp_path / ".hephaestus" / "architectural_review" / "review.md"
+        assert result_md.exists()
+        from src.autopilot.okf_markdown import read_okf
+
+        frontmatter, _ = read_okf(result_md)
+        assert frontmatter["blocker_count"] == 0
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_runs_normally_when_head_differs_from_last_pass_sha(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.core.database import Task, Workflow
+
+        self._seed(orch_db_env)
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-skip").first()
+            wf.working_directory = str(tmp_path)
+
+        mock_repo = MagicMock()
+        mock_repo.head.commit.hexsha = "def456"  # new commits since the pass
+
+        with patch("src.autopilot.spec.get_review_pass_sha", return_value="abc123"), \
+             patch("git.Repo", return_value=mock_repo):
+            result = _create_phase_task(
+                "wf-skip", "phase-skip", "architectural_review", "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        mock_create_agent.assert_called_once()
+        with orch_db_env.session_scope() as session:
+            count = session.query(Task).filter(Task.phase_id == "phase-skip").count()
+            assert count == 2  # the seeded prior task + a genuine new one
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_runs_normally_on_first_ever_pass(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """No recorded pass SHA at all (this phase has never cleanly
+        passed in this workflow) -- must not skip."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.core.database import Task, Workflow
+
+        self._seed(orch_db_env)
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-skip").first()
+            wf.working_directory = str(tmp_path)
+
+        with patch("src.autopilot.spec.get_review_pass_sha", return_value=None):
+            result = _create_phase_task(
+                "wf-skip", "phase-skip", "architectural_review", "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        mock_create_agent.assert_called_once()
+
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_not_applied_to_qa_validation(self, mock_create_agent, orch_db_env, tmp_path):
+        """qa_validation is deliberately excluded from DIFF_STABLE_REVIEW_
+        PHASES (full-suite flakiness) -- a recorded pass SHA there must
+        never be consulted."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.core.database import Task, Workflow
+
+        self._seed(orch_db_env, phase_name="qa_validation")
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-skip").first()
+            wf.working_directory = str(tmp_path)
+
+        mock_repo = MagicMock()
+        mock_repo.head.commit.hexsha = "abc123"
+
+        with patch("src.autopilot.spec.get_review_pass_sha", return_value="abc123"), \
+             patch("git.Repo", return_value=mock_repo):
+            result = _create_phase_task(
+                "wf-skip", "phase-skip", "qa_validation", "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        mock_create_agent.assert_called_once()
+
+
 class TestCreatePhaseTaskOrphanedPendingAge:
     """_create_phase_task's "existing pending task with no agent yet ->
     treat as orphaned, replace it" check must require the task to actually
