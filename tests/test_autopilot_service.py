@@ -57,7 +57,7 @@ class TestAutopilotService:
         project = tmp_path / "project"
         project.mkdir()
         (project / ".git").mkdir()
-        (project / ".hephaestus" / "designs").mkdir(parents=True)
+        (project / ".hephaestus" / "specs").mkdir(parents=True)
 
         with patch.object(service, "_run_pipeline", new_callable=AsyncMock):
             await service.start(str(project))
@@ -79,7 +79,7 @@ class TestAutopilotService:
         project = tmp_path / "project"
         project.mkdir()
         (project / ".git").mkdir()
-        (project / ".hephaestus" / "designs").mkdir(parents=True)
+        (project / ".hephaestus" / "specs").mkdir(parents=True)
 
         with patch.object(service, "_run_pipeline", new_callable=AsyncMock):
             await service.start(str(project), max_iterations=5)
@@ -96,7 +96,7 @@ class TestAutopilotService:
         project = tmp_path / "project"
         project.mkdir()
         (project / ".git").mkdir()
-        (project / ".hephaestus" / "designs").mkdir(parents=True)
+        (project / ".hephaestus" / "specs").mkdir(parents=True)
 
         with patch.object(service, "_run_pipeline", new_callable=AsyncMock):
             await service.start(str(project))
@@ -154,7 +154,7 @@ class TestAutopilotService:
 
         with patch.object(service, "_run_pipeline", new_callable=AsyncMock):
             await service.start(str(project))
-            assert (project / ".hephaestus" / "designs").exists()
+            assert (project / ".hephaestus" / "specs").exists()
             await service.stop()
 
     @pytest.mark.asyncio
@@ -175,7 +175,7 @@ class TestAutopilotService:
         project = tmp_path / "project"
         project.mkdir()
         (project / ".git").mkdir()
-        (project / ".hephaestus" / "designs").mkdir(parents=True)
+        (project / ".hephaestus" / "specs").mkdir(parents=True)
 
         # Create a slow-running pipeline task
         async def slow_pipeline():
@@ -194,7 +194,7 @@ class TestAutopilotService:
         project = tmp_path / "project"
         project.mkdir()
         (project / ".git").mkdir()
-        (project / ".hephaestus" / "designs").mkdir(parents=True)
+        (project / ".hephaestus" / "specs").mkdir(parents=True)
 
         # Make the pipeline raise an exception
         async def failing_pipeline():
@@ -212,7 +212,7 @@ class TestAutopilotService:
         project = tmp_path / "project"
         project.mkdir()
         (project / ".git").mkdir()
-        (project / ".hephaestus" / "designs").mkdir(parents=True)
+        (project / ".hephaestus" / "specs").mkdir(parents=True)
 
         # Set the stop event before starting
         service._stop_event.set()
@@ -263,7 +263,7 @@ class TestAutopilotService:
         project = tmp_path / "myproject"
         project.mkdir()
         (project / ".git").mkdir()
-        (project / ".hephaestus" / "designs").mkdir(parents=True)
+        (project / ".hephaestus" / "specs").mkdir(parents=True)
 
         with patch.object(service, "_run_pipeline", new_callable=AsyncMock):
             await service.start(str(project))
@@ -288,7 +288,7 @@ class TestAutopilotService:
         project = tmp_path / "myproject"
         project.mkdir()
         (project / ".git").mkdir()
-        (project / ".hephaestus" / "designs").mkdir(parents=True)
+        (project / ".hephaestus" / "specs").mkdir(parents=True)
 
         with get_db() as db:
             db.add(

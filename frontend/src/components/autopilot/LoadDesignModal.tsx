@@ -258,7 +258,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
         // introduced into the project (persisted as real, git-tracked
         // files in docs/), while files picked via "Load from Remote"
         // already live somewhere in the project and keep going to the
-        // existing .hephaestus/designs/ staging dir.
+        // existing .hephaestus/specs/ staging dir.
         const destination = workflowType
           ? destinationFolder
           : (file.remotePath ? 'queue' : 'docs');

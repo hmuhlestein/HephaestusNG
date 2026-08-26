@@ -591,7 +591,7 @@ class TestPickNextDesignResume:
     def _seed_project_and_design(self, db, tmp_path, design_status, feature_statuses):
         from src.core.database import AutopilotDesign, AutopilotProject, Feature
 
-        design_dir = tmp_path / ".hephaestus" / "designs"
+        design_dir = tmp_path / ".hephaestus" / "specs"
         design_dir.mkdir(parents=True)
         (design_dir / "design.md").write_text("# Design")
 
@@ -666,7 +666,7 @@ class TestPickNextDesignResume:
         self._seed_project_and_design(
             db_env, tmp_path, "active", ["active"]
         )
-        (tmp_path / ".hephaestus" / "designs" / "design2.md").write_text("# Design 2")
+        (tmp_path / ".hephaestus" / "specs" / "design2.md").write_text("# Design 2")
         with db_env.session_scope() as session:
             session.add(
                 AutopilotDesign(
@@ -697,7 +697,7 @@ class TestPickNextDesignResume:
         self._seed_project_and_design(
             db_env, tmp_path, "active", ["completed", "skipped"]
         )
-        (tmp_path / ".hephaestus" / "designs" / "design2.md").write_text("# Design 2")
+        (tmp_path / ".hephaestus" / "specs" / "design2.md").write_text("# Design 2")
         with db_env.session_scope() as session:
             session.add(
                 AutopilotDesign(

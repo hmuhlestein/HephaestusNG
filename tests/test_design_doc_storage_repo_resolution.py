@@ -55,7 +55,7 @@ class TestAddProjectDesignRepoResolution:
 
         result = await add_project_design("proj-1", _make_request(destination="queue"), agent_id="test-agent")
 
-        assert (workspace / ".hephaestus" / "designs").exists() or True  # dir created lazily by DESIGN_CONTEXT_SUBDIR
+        assert (workspace / ".hephaestus" / "specs").exists() or True  # dir created lazily by DESIGN_CONTEXT_SUBDIR
         assert result.name == "My Design"
 
     @pytest.mark.asyncio
@@ -185,7 +185,7 @@ class TestSyncProjectDesigns:
     @pytest.mark.asyncio
     async def test_non_queue_design_survives_a_sync(self, db_manager, tmp_path):
         """Regression: sync's filesystem scan only ever looks at
-        DESIGN_CONTEXT_SUBDIR (.hephaestus/designs/), but add_project_design
+        DESIGN_CONTEXT_SUBDIR (.hephaestus/specs/), but add_project_design
         writes a "docs"/"docs/bugfix"/custom-destination design somewhere
         else entirely and marks it with file_path. Before this fix, sync's
         deletion sweep compared ALL of a project's design rows against that

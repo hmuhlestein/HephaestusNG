@@ -35,7 +35,7 @@ def status_env(tmp_path, monkeypatch):
     manager = DatabaseManager(str(db_path))
     manager.create_tables()
 
-    design_dir = tmp_path / ".hephaestus" / "designs"
+    design_dir = tmp_path / ".hephaestus" / "specs"
     design_dir.mkdir(parents=True)
     filename = "sample_design.md"
     (design_dir / filename).write_text("# Sample Design\n")

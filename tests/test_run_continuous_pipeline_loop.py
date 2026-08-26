@@ -27,7 +27,7 @@ from src.autopilot.orchestrator.state import DesignStatus, PipelineState
 def args(tmp_path):
     return argparse.Namespace(
         project_path=str(tmp_path / "proj"),
-        design_queue=str(tmp_path / "proj" / ".hephaestus" / "designs"),
+        design_queue=str(tmp_path / "proj" / ".hephaestus" / "specs"),
         max_iterations=3,
         in_process=True,
         project_id="proj-1",

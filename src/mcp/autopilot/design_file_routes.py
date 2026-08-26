@@ -65,7 +65,7 @@ class DesignAddRequest(BaseModel):
     name: str
     content: str
     extension: str = ".md"
-    # "queue" (default): .hephaestus/designs/, not git-tracked -- used by
+    # "queue" (default): .hephaestus/specs/, not git-tracked -- used by
     # "Load from Remote" (the file already lives somewhere in the project,
     # nothing new is being introduced). Any other value is a real,
     # git-tracked folder path relative to the project root -- "docs"
@@ -90,7 +90,7 @@ class DesignAddRequest(BaseModel):
 
 
 def _get_design_queue_dir(project_base: str) -> Path:
-    """Return the design queue directory (.hephaestus/designs/).
+    """Return the design queue directory (.hephaestus/specs/).
 
     Designs are stored outside the git repo so commits don't delete them.
     """
@@ -100,7 +100,7 @@ def _get_design_queue_dir(project_base: str) -> Path:
 def _resolve_design_filepath(file_path: Optional[str], fallback: Path) -> Path:
     """Prefer AutopilotDesign.file_path when set over a queue-dir-relative
     fallback. destination="docs" designs (add_project_design) live under
-    docs/, not .hephaestus/designs/ -- without this, content/status/delete
+    docs/, not .hephaestus/specs/ -- without this, content/status/delete
     404 against the wrong directory for every locally-uploaded design
     (LoadDesignModal's default destination), even though the file exists.
     """
@@ -213,7 +213,7 @@ async def add_project_design(
         base_dir = proj.base_dir
 
     if req.destination == "queue":
-        # Store in .hephaestus/designs/ (not git-tracked) so git commits
+        # Store in .hephaestus/specs/ (not git-tracked) so git commits
         # don't delete design files. Stays at the workspace-root (base_dir)
         # level, unaffected by repo count (REQ-13) -- it has no
         # git-tracking requirement to satisfy.

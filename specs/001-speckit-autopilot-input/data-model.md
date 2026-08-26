@@ -39,7 +39,7 @@ Note: `SpecKitFeature` no longer carries extracted file *content* as typed field
 
 ## DesignQueueEntry (existing concept in `scan_design_queue`, one new source)
 
-Not a new table — `scan_design_queue` (`src/autopilot/orchestrator/queue.py:164`) already produces `DesignEntry` objects from flat files under `.hephaestus/designs/`/`docs/spec-queue`. This feature adds a second source feeding the same list: when `spec_kit_auto_scan` is enabled for the project being scanned, each SpecKitFeature not yet processed (by the same content-hash/already-processed tracking `scan_design_queue` already uses) becomes an additional `DesignEntry`.
+Not a new table — `scan_design_queue` (`src/autopilot/orchestrator/queue.py:164`) already produces `DesignEntry` objects from flat files under `.hephaestus/specs/`/`docs/spec-queue`. This feature adds a second source feeding the same list: when `spec_kit_auto_scan` is enabled for the project being scanned, each SpecKitFeature not yet processed (by the same content-hash/already-processed tracking `scan_design_queue` already uses) becomes an additional `DesignEntry`.
 
 **Validation rules**:
 - A SpecKitFeature already built (has a completed or in-progress `Feature`/`Workflow` row traceable to it) MUST NOT produce a new `DesignEntry` on a later scan — reuses the existing content-hash/self-heal logic, keyed on the feature directory's content rather than a single file's hash (extension needed, tracked as a task).

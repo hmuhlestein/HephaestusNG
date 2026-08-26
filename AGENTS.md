@@ -294,7 +294,7 @@
                 If project_path contains .worktrees/, use it directly.
             </invariant>
             <invariant id="design-storage">
-                .hephaestus/designs/ (not git-tracked).
+                .hephaestus/specs/ (not git-tracked).
             </invariant>
             <invariant id="no-hardcoded-timeouts">
                 Use hephaestus_config.yaml.

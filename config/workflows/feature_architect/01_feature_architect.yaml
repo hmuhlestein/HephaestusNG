@@ -30,7 +30,7 @@ additional_notes: |
 
   CRITICAL PATH RULE: Your current working directory IS the project root (an
   isolated git worktree). All file paths are relative to your cwd. Do NOT read
-  from the parent repo's .hephaestus/designs/ directory — the design document
+  from the parent repo's .hephaestus/specs/ directory — the design document
   is already at ./.hephaestus/design.md in your worktree.
 
   ## Your Task

@@ -3197,7 +3197,7 @@ def main():
     parser.add_argument(
         "--design-queue",
         default=None,
-        help="Directory to watch for design documents (default: <project-path>/.hephaestus/designs)",
+        help="Directory to watch for design documents (default: <project-path>/.hephaestus/specs)",
     )
     parser.add_argument(
         "--project-path",
@@ -3229,7 +3229,7 @@ def main():
             # Process not alive or invalid PID, clean up
             pid_file.unlink(missing_ok=True)
 
-    # Default design queue to <project-path>/.hephaestus/designs
+    # Default design queue to <project-path>/.hephaestus/specs
     if not args.design_queue:
         args.design_queue = str(Path(args.project_path) / DESIGN_CONTEXT_SUBDIR)
 
