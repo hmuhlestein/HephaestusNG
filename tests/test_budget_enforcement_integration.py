@@ -171,6 +171,18 @@ class TestBudgetPausOnOverage:
         db_session.refresh(sample_project)
         assert sample_project.cost_total_usd < sample_project.cost_limit_usd
 
+        # record_cost's write_back cascade to feature/design/project is
+        # throttled per-entity (_COST_CASCADE_THROTTLE_SECONDS) to avoid
+        # hammering SQLite's single connection under concurrent agents --
+        # see cost_derivation.py's module docstring. Without clearing it
+        # here, the cascade for THIS call can be silently skipped if it
+        # lands within the throttle window of the call above (or of an
+        # earlier test in the same session touching the same entity),
+        # leaving cost_total_usd stale and the pause below never firing.
+        import src.core.cost_derivation as cd
+
+        cd._last_cost_cascade_time.clear()
+
         # Now record cost that pushes over the limit
         record_cost(
             db=db_session,

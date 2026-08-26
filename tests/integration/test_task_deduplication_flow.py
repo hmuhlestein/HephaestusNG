@@ -3,8 +3,8 @@
 import asyncio
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
-from fastapi.testclient import TestClient
 
 from src.mcp.server import app
 from src.mcp.server._shared import server_state
@@ -93,9 +93,26 @@ class TestTaskDeduplicationFlow:
                 ) = _saved
 
     @pytest.fixture
-    def client(self, initialized_server):
-        """Create test client. Depends on initialized_server to ensure mocks are active before startup."""
-        return TestClient(app)
+    async def client(self, initialized_server):
+        """Create test client. Depends on initialized_server to ensure mocks
+        are active before startup.
+
+        Uses httpx.AsyncClient over ASGITransport (in-process, same event
+        loop) rather than starlette's sync TestClient. TestClient drives the
+        ASGI app through a portal running in a separate thread/loop, which
+        stops being pumped once the HTTP response is sent -- any
+        fire-and-forget asyncio.create_task() scheduled inside the route
+        handler (see spawn_background_task/create_task's process_task_async)
+        gets silently orphaned mid-flight instead of completing. Since these
+        tests assert on state written by that background task, they need it
+        genuinely awaitable, not just "given enough wall-clock time" -- an
+        ASGITransport client runs the whole request AND anything the handler
+        schedules on the caller's own loop, so `await asyncio.sleep(...)`
+        after the request actually drives the background task forward."""
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            yield c
 
     @pytest.fixture
     def sample_embedding(self):
@@ -131,7 +148,6 @@ class TestTaskDeduplicationFlow:
         server.agent_manager.get_project_context = AsyncMock(
             return_value="Project context"
         )
-        server.agent_manager.create_agent_for_task = AsyncMock()
 
         # First task - should succeed
         server.task_similarity_service.check_for_duplicates = AsyncMock(
@@ -144,70 +160,85 @@ class TestTaskDeduplicationFlow:
         )
         server.task_similarity_service.store_task_embedding = AsyncMock()
 
-        response1 = client.post(
-            "/create_task",
-            json={
-                "task_description": "Implement user authentication",
-                "done_definition": "Users can log in and out",
-                "ai_agent_id": "agent-123",
-                "priority": "high",
-            },
-            headers={"X-Agent-ID": "agent-123"},
-        )
+        # Dispatch (the code path that actually creates an agent for a task)
+        # moved to AgentDispatchService.dispatch -- agent_manager.
+        # create_agent_for_task is no longer in the create_task flow at all,
+        # only used by the separate /api/create_agent_for_task endpoint.
+        with patch(
+            "src.services.agent_dispatch_service.AgentDispatchService.dispatch",
+            new=AsyncMock(return_value=Mock(id="agent-created")),
+        ) as mock_dispatch:
+            response1 = await client.post(
+                "/create_task",
+                json={
+                    "task_description": "Implement user authentication",
+                    "done_definition": "Users can log in and out",
+                    "ai_agent_id": "agent-123",
+                    "priority": "high",
+                },
+                headers={"X-Agent-ID": "agent-123"},
+            )
 
-        assert response1.status_code == 200
-        task1_data = response1.json()
-        assert "task_id" in task1_data
+            assert response1.status_code == 200
+            task1_data = response1.json()
+            assert "task_id" in task1_data
 
-        # Second task - duplicate, should be rejected
-        server.task_similarity_service.check_for_duplicates = AsyncMock(
-            return_value={
-                "is_duplicate": True,
-                "duplicate_of": task1_data["task_id"],
-                "duplicate_description": "Enriched: Implement user authentication",
-                "related_tasks": [],
-                "max_similarity": 0.95,
-            }
-        )
+            # Let task1's own background processing (including its dispatch
+            # call) finish BEFORE reassigning check_for_duplicates below --
+            # otherwise task1's own background coroutine can still be
+            # mid-flight when the mock is swapped to "is_duplicate: True",
+            # making task1 spuriously detect itself as a duplicate.
+            await asyncio.sleep(0.3)
 
-        response2 = client.post(
-            "/create_task",
-            json={
-                "task_description": "Build user authentication system",
-                "done_definition": "Allow users to authenticate",
-                "ai_agent_id": "agent-456",
-                "priority": "high",
-            },
-            headers={"X-Agent-ID": "agent-456"},
-        )
+            # Second task - duplicate, should be rejected
+            server.task_similarity_service.check_for_duplicates = AsyncMock(
+                return_value={
+                    "is_duplicate": True,
+                    "duplicate_of": task1_data["task_id"],
+                    "duplicate_description": "Enriched: Implement user authentication",
+                    "related_tasks": [],
+                    "max_similarity": 0.95,
+                }
+            )
 
-        # Server deduplicates asynchronously in background processing, so the
-        # HTTP response is always 200 (pending). Verify via database state that
-        # the background task correctly marked the duplicate.
-        assert response2.status_code == 200
-        task2_data = response2.json()
-        task2_id = task2_data["task_id"]
+            response2 = await client.post(
+                "/create_task",
+                json={
+                    "task_description": "Build user authentication system",
+                    "done_definition": "Allow users to authenticate",
+                    "ai_agent_id": "agent-456",
+                    "priority": "high",
+                },
+                headers={"X-Agent-ID": "agent-456"},
+            )
 
-        # Let background processing run and complete
-        import time
-        time.sleep(0.5)
+            # Server deduplicates asynchronously in background processing, so the
+            # HTTP response is always 200 (pending). Verify via database state that
+            # the background task correctly marked the duplicate.
+            assert response2.status_code == 200
+            task2_data = response2.json()
+            task2_id = task2_data["task_id"]
 
-        # Check database: task2 should be marked as duplicated
-        session = server.db_manager.get_session()
-        try:
-            from src.core.database import Task as TaskModel
-            task2 = session.query(TaskModel).filter_by(id=task2_id).first()
-            assert task2 is not None
-            assert task2.status == "duplicated"
-            assert task2.duplicate_of_task_id == task1_data["task_id"]
-            assert task2.similarity_score == 0.95
-        finally:
-            session.close()
+            # Let background processing run and complete -- ASGITransport
+            # runs the request AND anything it schedules on this same loop,
+            # so an awaited sleep actually drives spawn_background_task's
+            # fire-and-forget coroutine forward (unlike TestClient's portal).
+            await asyncio.sleep(0.5)
 
-        # Verify agent was NOT created for duplicate
-        assert (
-            server.agent_manager.create_agent_for_task.call_count == 1
-        )  # Only for first task
+            # Check database: task2 should be marked as duplicated
+            session = server.db_manager.get_session()
+            try:
+                from src.core.database import Task as TaskModel
+                task2 = session.query(TaskModel).filter_by(id=task2_id).first()
+                assert task2 is not None
+                assert task2.status == "duplicated"
+                assert task2.duplicate_of_task_id == task1_data["task_id"]
+                assert task2.similarity_score == 0.95
+            finally:
+                session.close()
+
+            # Verify agent was NOT dispatched for duplicate
+            assert mock_dispatch.call_count == 1  # Only for first task
 
     @pytest.mark.asyncio
     async def test_create_related_task_accepted(
@@ -231,9 +262,6 @@ class TestTaskDeduplicationFlow:
         )
         server.rag_system.retrieve_for_task = AsyncMock(return_value=[])
         server.agent_manager.get_project_context = AsyncMock(return_value="Context")
-        server.agent_manager.create_agent_for_task = AsyncMock(
-            return_value=Mock(id="agent-created")
-        )
 
         # First task
         server.task_similarity_service.check_for_duplicates = AsyncMock(
@@ -246,56 +274,70 @@ class TestTaskDeduplicationFlow:
         )
         server.task_similarity_service.store_task_embedding = AsyncMock()
 
-        response1 = client.post(
-            "/create_task",
-            json={
-                "task_description": "Create user profiles",
-                "done_definition": "User profiles exist",
-                "ai_agent_id": "agent-111",
-            },
-            headers={"X-Agent-ID": "agent-111"},
-        )
-        assert response1.status_code == 200
-        task1_id = response1.json()["task_id"]
+        # Dispatch (the code path that actually creates an agent for a task)
+        # moved to AgentDispatchService.dispatch -- agent_manager.
+        # create_agent_for_task is no longer in the create_task flow.
+        with patch(
+            "src.services.agent_dispatch_service.AgentDispatchService.dispatch",
+            new=AsyncMock(return_value=Mock(id="agent-created")),
+        ) as mock_dispatch:
+            response1 = await client.post(
+                "/create_task",
+                json={
+                    "task_description": "Create user profiles",
+                    "done_definition": "User profiles exist",
+                    "ai_agent_id": "agent-111",
+                },
+                headers={"X-Agent-ID": "agent-111"},
+            )
+            assert response1.status_code == 200
+            task1_id = response1.json()["task_id"]
 
-        # Second task - related but not duplicate
-        server.task_similarity_service.check_for_duplicates = AsyncMock(
-            return_value={
-                "is_duplicate": False,
-                "duplicate_of": None,
-                "related_tasks": [task1_id],
-                "related_tasks_details": [
-                    {
-                        "task_id": task1_id,
-                        "description": "Create user profiles",
-                        "similarity": 0.55,
-                    }
-                ],
-                "max_similarity": 0.55,
-            }
-        )
+            # Let task1's own background processing finish before reassigning
+            # check_for_duplicates below -- see test_create_duplicate_task_
+            # rejected's identical comment for why this matters.
+            await asyncio.sleep(0.3)
 
-        response2 = client.post(
-            "/create_task",
-            json={
-                "task_description": "Build user settings page",
-                "done_definition": "Settings page works",
-                "ai_agent_id": "agent-222",
-            },
-            headers={"X-Agent-ID": "agent-222"},
-        )
+            # Second task - related but not duplicate
+            server.task_similarity_service.check_for_duplicates = AsyncMock(
+                return_value={
+                    "is_duplicate": False,
+                    "duplicate_of": None,
+                    "related_tasks": [task1_id],
+                    "related_tasks_details": [
+                        {
+                            "task_id": task1_id,
+                            "description": "Create user profiles",
+                            "similarity": 0.55,
+                        }
+                    ],
+                    "max_similarity": 0.55,
+                }
+            )
 
-        # Should be accepted
-        assert response2.status_code == 200
-        task2_data = response2.json()
-        assert "task_id" in task2_data
+            response2 = await client.post(
+                "/create_task",
+                json={
+                    "task_description": "Build user settings page",
+                    "done_definition": "Settings page works",
+                    "ai_agent_id": "agent-222",
+                },
+                headers={"X-Agent-ID": "agent-222"},
+            )
 
-        # Check if related tasks are included in response
-        if isinstance(task2_data, dict) and "related_tasks" in task2_data:
-            assert task1_id in task2_data["related_tasks"]
+            # Should be accepted
+            assert response2.status_code == 200
+            task2_data = response2.json()
+            assert "task_id" in task2_data
 
-        # Verify both agents were created
-        assert server.agent_manager.create_agent_for_task.call_count == 2
+            # Check if related tasks are included in response
+            if isinstance(task2_data, dict) and "related_tasks" in task2_data:
+                assert task1_id in task2_data["related_tasks"]
+
+            await asyncio.sleep(0.3)
+
+            # Verify both agents were dispatched
+            assert mock_dispatch.call_count == 2
 
     @pytest.mark.asyncio
     async def test_create_unrelated_task_accepted(
@@ -319,9 +361,6 @@ class TestTaskDeduplicationFlow:
         )
         server.rag_system.retrieve_for_task = AsyncMock(return_value=[])
         server.agent_manager.get_project_context = AsyncMock(return_value="Context")
-        server.agent_manager.create_agent_for_task = AsyncMock(
-            return_value=Mock(id="agent-new")
-        )
 
         # Task with low similarity to all existing tasks
         server.task_similarity_service.check_for_duplicates = AsyncMock(
@@ -334,19 +373,27 @@ class TestTaskDeduplicationFlow:
         )
         server.task_similarity_service.store_task_embedding = AsyncMock()
 
-        response = client.post(
-            "/create_task",
-            json={
-                "task_description": "Configure database backups",
-                "done_definition": "Backups are automated",
-                "ai_agent_id": "agent-333",
-            },
-            headers={"X-Agent-ID": "agent-333"},
-        )
+        with patch(
+            "src.services.agent_dispatch_service.AgentDispatchService.dispatch",
+            new=AsyncMock(return_value=Mock(id="agent-new")),
+        ):
+            response = await client.post(
+                "/create_task",
+                json={
+                    "task_description": "Configure database backups",
+                    "done_definition": "Backups are automated",
+                    "ai_agent_id": "agent-333",
+                },
+                headers={"X-Agent-ID": "agent-333"},
+            )
 
-        assert response.status_code == 200
-        task_data = response.json()
-        assert "task_id" in task_data
+            assert response.status_code == 200
+            task_data = response.json()
+            assert "task_id" in task_data
+
+            # Let background processing (dedup check + store_task_embedding)
+            # finish before asserting on it.
+            await asyncio.sleep(0.3)
 
         # Verify no relationships stored
         server.task_similarity_service.store_task_embedding.assert_called_with(
@@ -404,9 +451,6 @@ class TestTaskDeduplicationFlow:
             server_state.agent_manager.get_project_context = AsyncMock(
                 return_value="Context"
             )
-            server_state.agent_manager.create_agent_for_task = AsyncMock(
-                return_value=Mock(id="agent-id")
-            )
 
             # Mock embedding service (needed by background processing even
             # when dedup is disabled — generate_embedding is called during
@@ -415,24 +459,34 @@ class TestTaskDeduplicationFlow:
                 return_value=[0.1] * 3072
             )
 
-            # Create two identical tasks
-            for i in range(2):
-                response = client.post(
-                    "/create_task",
-                    json={
-                        "task_description": "Identical task description",
-                        "done_definition": "Same completion",
-                        "ai_agent_id": f"agent-{i}",
-                            },
-                    headers={"X-Agent-ID": f"agent-{i}"},
-                )
+            # Dispatch moved to AgentDispatchService.dispatch -- agent_manager.
+            # create_agent_for_task is no longer in the create_task flow.
+            with patch(
+                "src.services.agent_dispatch_service.AgentDispatchService.dispatch",
+                new=AsyncMock(return_value=Mock(id="agent-id")),
+            ) as mock_dispatch:
+                # Create two identical tasks
+                for i in range(2):
+                    response = await client.post(
+                        "/create_task",
+                        json={
+                            "task_description": "Identical task description",
+                            "done_definition": "Same completion",
+                            "ai_agent_id": f"agent-{i}",
+                                },
+                        headers={"X-Agent-ID": f"agent-{i}"},
+                    )
 
-                # Both should succeed
-                assert response.status_code == 200
-                assert "task_id" in response.json()
+                    # Both should succeed
+                    assert response.status_code == 200
+                    assert "task_id" in response.json()
 
-            # Verify both agents were created
-            assert server_state.agent_manager.create_agent_for_task.call_count == 2
+                    # Let this task's background processing finish before the
+                    # next loop iteration creates another one.
+                    await asyncio.sleep(0.3)
+
+            # Verify both agents were dispatched
+            assert mock_dispatch.call_count == 2
 
     @pytest.mark.asyncio
     async def test_deduplication_performance(
@@ -488,17 +542,19 @@ class TestTaskDeduplicationFlow:
         server.rag_system.retrieve_for_task = AsyncMock(return_value=[])
         server.agent_manager.get_project_context = AsyncMock(return_value="Context")
 
-        # Track created agents
+        # Track dispatched agents. Dispatch moved to AgentDispatchService.
+        # dispatch -- agent_manager.create_agent_for_task is no longer in the
+        # create_task flow, and leaving dispatch unmocked here would let
+        # background processing attempt a REAL agent dispatch (tmux session,
+        # etc.) for the configured "claude" CLI tool.
         created_agents = []
 
-        async def create_agent_mock(task, **kwargs):
+        async def dispatch_mock(task, enriched_data, dispatch_context):
             agent = Mock(id=f"agent-{len(created_agents)}")
             created_agents.append(agent)
             # Simulate some processing time
             await asyncio.sleep(0.1)
             return agent
-
-        server.agent_manager.create_agent_for_task = create_agent_mock
 
         # First call finds no duplicates, second call finds the first as duplicate
         call_count = 0
@@ -529,7 +585,7 @@ class TestTaskDeduplicationFlow:
 
         # Create two tasks concurrently
         async def create_task(agent_id):
-            response = client.post(
+            response = await client.post(
                 "/create_task",
                 json={
                     "task_description": "Concurrent task",
@@ -541,9 +597,17 @@ class TestTaskDeduplicationFlow:
             return response
 
         # Run concurrently
-        results = await asyncio.gather(
-            create_task("agent-A"), create_task("agent-B"), return_exceptions=True
-        )
+        with patch(
+            "src.services.agent_dispatch_service.AgentDispatchService.dispatch",
+            new=dispatch_mock,
+        ):
+            results = await asyncio.gather(
+                create_task("agent-A"), create_task("agent-B"), return_exceptions=True
+            )
+            # Let background processing (including dispatch) finish while
+            # the patch is still active -- dispatch is fire-and-forget,
+            # scheduled after the HTTP response returns.
+            await asyncio.sleep(0.3)
 
         # One should succeed, one should be duplicate
         statuses = [r.status_code for r in results if not isinstance(r, Exception)]
@@ -573,25 +637,31 @@ class TestTaskDeduplicationFlow:
         )
         server.rag_system.retrieve_for_task = AsyncMock(return_value=[])
         server.agent_manager.get_project_context = AsyncMock(return_value="Context")
-        server.agent_manager.create_agent_for_task = AsyncMock(
-            return_value=Mock(id="agent-created")
-        )
 
-        response = client.post(
-            "/create_task",
-            json={
-                "task_description": "Task with embedding error",
-                "done_definition": "Complete it",
-                "ai_agent_id": "agent-error",
-            },
-            headers={"X-Agent-ID": "agent-error"},
-        )
+        # Dispatch moved to AgentDispatchService.dispatch -- agent_manager.
+        # create_agent_for_task is no longer in the create_task flow.
+        with patch(
+            "src.services.agent_dispatch_service.AgentDispatchService.dispatch",
+            new=AsyncMock(return_value=Mock(id="agent-created")),
+        ) as mock_dispatch:
+            response = await client.post(
+                "/create_task",
+                json={
+                    "task_description": "Task with embedding error",
+                    "done_definition": "Complete it",
+                    "ai_agent_id": "agent-error",
+                },
+                headers={"X-Agent-ID": "agent-error"},
+            )
 
-        # Should still succeed despite embedding error
-        assert response.status_code == 200
-        task_data = response.json()
-        assert "task_id" in task_data
-        assert "assigned_agent_id" in task_data
+            # Should still succeed despite embedding error
+            assert response.status_code == 200
+            task_data = response.json()
+            assert "task_id" in task_data
+            assert "assigned_agent_id" in task_data
 
-        # Agent should have been created
-        server.agent_manager.create_agent_for_task.assert_called_once()
+            # Let background processing finish before asserting on it.
+            await asyncio.sleep(0.3)
+
+            # Agent should have been dispatched
+            mock_dispatch.assert_called_once()
