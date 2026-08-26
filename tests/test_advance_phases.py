@@ -1931,6 +1931,37 @@ class TestCaseInProgressComplete:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             assert execution.status == "in_progress"
 
+    def test_a_blocked_sibling_task_counts_as_incomplete(self, db_manager, sample_workflow):
+        """Regression, des-c7b9 tech-debt pass: this same "incomplete"
+        check already includes "queued" (see the test directly above, for
+        the 4bf4518f incident) but was still missing "blocked" -- same bug
+        class, same consequence. A phase with only a "blocked" sibling task
+        remaining would be wrongly declared complete by this exact check."""
+        from src.autopilot.orchestrator.phase_transitions import _case_in_progress_complete, _get_phase_statuses
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-blocked-subtask",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="C1+C2: remaining work the primary task delegated",
+                    done_definition="d",
+                    status="blocked",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        assert result is None, "must not fire the completion transition while a sibling task is still blocked"
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+
     def test_empty_cycle_dispatch_releases_its_own_claim_when_a_task_raced_in(
         self, db_manager, sample_workflow
     ):

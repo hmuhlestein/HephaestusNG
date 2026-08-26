@@ -201,7 +201,7 @@ def _fail_tasks_with_terminated_agents(workflow_id: str, logger: "OrchestratorLo
                 _db.query(_Task)
                 .filter(
                     _Task.workflow_id == workflow_id,
-                    _Task.status.in_(["pending", "assigned", "in_progress"]),
+                    _Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"]),
                 )
                 .all()
             )

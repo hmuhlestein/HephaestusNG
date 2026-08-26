@@ -170,7 +170,7 @@ class PhaseManager:
                     session.query(Task)
                     .filter(
                         Task.workflow_id == wf.id,
-                        Task.status.in_(["pending", "assigned", "in_progress"]),
+                        Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"]),
                     )
                     .count()
                 )
@@ -619,7 +619,7 @@ class PhaseManager:
                 .filter_by(
                     phase_id=phase_id,
                 )
-                .filter(Task.status.in_(["pending", "assigned", "in_progress"]))
+                .filter(Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"]))
                 .count()
             )
 
@@ -2173,7 +2173,7 @@ class PhaseManager:
                     .count(),
                     "active": session.query(Task)
                     .filter_by(phase_id=phase.id)
-                    .filter(Task.status.in_(["assigned", "in_progress"]))
+                    .filter(Task.status.in_(["assigned", "in_progress", "queued", "blocked"]))
                     .count(),
                     "failed": session.query(Task)
                     .filter_by(phase_id=phase.id, status="failed")
@@ -2671,7 +2671,7 @@ class PhaseManager:
                 session.query(Task)
                 .filter(
                     Task.workflow_id == workflow_id,
-                    Task.status.in_(["pending", "assigned", "in_progress"]),
+                    Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"]),
                 )
                 .count()
             )

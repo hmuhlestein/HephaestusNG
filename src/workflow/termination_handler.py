@@ -343,7 +343,7 @@ class WorkflowTerminationHandler:
                         # Check if there are still pending/active tasks
                         pending_tasks = session.query(Task).filter(
                             Task.phase_id == execution.phase_id,
-                            Task.status.in_(["pending", "assigned", "in_progress"])
+                            Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"])
                         ).count()
                         
                         if done_tasks > 0 and pending_tasks == 0:
@@ -424,7 +424,7 @@ class WorkflowTerminationHandler:
                 session.query(Task)
                 .filter(
                     Task.workflow_id == workflow_id,
-                    Task.status.in_(["pending", "assigned", "in_progress"]),
+                    Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"]),
                 )
                 .count()
             )
