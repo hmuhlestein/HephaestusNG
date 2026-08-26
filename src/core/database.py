@@ -629,7 +629,7 @@ class PhaseExecution(Base):
 class AgentWorktree(Base):
     """Track git worktree isolation for agents."""
 
-    # TODO: Rename column worktree_path → branch_path (pending migration)
+    # TODO(deferred): rename worktree_path -> branch_path once a migration is scoped; not done here (tech-debt pass 2026-08-25 — no migration in scope, see des-c7b9 requirements.md).
 
     __tablename__ = "agent_worktrees"
 

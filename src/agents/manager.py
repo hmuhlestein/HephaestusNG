@@ -824,7 +824,7 @@ class AgentManager:
             # Get active tasks
             active_tasks = (
                 session.query(Task)
-                .filter(Task.status.in_(["pending", "assigned", "in_progress"]))
+                .filter(Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"]))
                 .all()
             )
 

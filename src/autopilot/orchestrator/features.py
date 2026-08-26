@@ -533,7 +533,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
             db.query(Task)
             .filter(
                 Task.workflow_id == workflow_id,
-                Task.status.in_(["pending", "assigned", "in_progress"]),
+                Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"]),
                 Task.assigned_agent_id.isnot(None),
             )
             .all()
@@ -560,7 +560,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: "OrchestratorLogger") 
                 db.query(Task)
                 .filter(
                     Task.workflow_id == workflow_id,
-                    Task.status.in_(["pending", "assigned"]),
+                    Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"]),
                 )
                 .all()
             )

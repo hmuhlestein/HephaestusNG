@@ -226,7 +226,7 @@ class PhaseService:
             tasks = (
                 session.query(Task)
                 .filter(Task.phase_id == phase.id)
-                .filter(Task.status.in_(["assigned", "in_progress", "pending"]))
+                .filter(Task.status.in_(["assigned", "in_progress", "pending", "queued", "blocked"]))
                 .all()
             )
             for task in tasks:

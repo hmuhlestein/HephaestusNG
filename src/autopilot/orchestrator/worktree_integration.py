@@ -744,7 +744,7 @@ def _recover_abandoned_workflows_with_completed_phase(logger: "OrchestratorLogge
                 db.query(Task)
                 .filter(
                     Task.phase_id.in_(in_progress_phase_ids),
-                    Task.status.in_(["pending", "assigned", "in_progress"]),
+                    Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"]),
                 )
                 .count()
             )
