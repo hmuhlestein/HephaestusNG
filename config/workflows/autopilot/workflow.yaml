@@ -503,8 +503,11 @@ launch_template:
     ### STEP 5: Save to Memory
     Save key decisions and project context.
 
-    ### STEP 6: Create Phase 2 Task
-    Create a Phase 2 task with full requirements and context.
+    ### STEP 6: Mark Done
+    Do NOT call create_task for Phase 2. The orchestrator automatically
+    creates the next phase's task once you mark this task done — creating
+    it yourself here files real Phase 2 work under the product_requirements
+    phase instead (create_task only creates SUBTASKS within YOUR OWN
+    current phase).
 
-    ### STEP 7: Mark Done
     Mark your task as done.
