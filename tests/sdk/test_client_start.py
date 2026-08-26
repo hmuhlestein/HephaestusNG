@@ -184,7 +184,7 @@ class TestRunContinuousPipelinePassesInProcessFlag:
 
         args = argparse.Namespace(
             project_path=str(tmp_path / "proj"),
-            design_queue=str(tmp_path / "proj" / ".hephaestus" / "designs"),
+            design_queue=str(tmp_path / "proj" / ".hephaestus" / "specs"),
             max_iterations=3,
             in_process=True,
         )
@@ -200,7 +200,7 @@ class TestRunContinuousPipelinePassesInProcessFlag:
 
         args = argparse.Namespace(
             project_path=str(tmp_path / "proj"),
-            design_queue=str(tmp_path / "proj" / ".hephaestus" / "designs"),
+            design_queue=str(tmp_path / "proj" / ".hephaestus" / "specs"),
             max_iterations=3,
             # no in_process attribute -- matches main()'s real argparse output
         )

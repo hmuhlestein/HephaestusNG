@@ -164,7 +164,7 @@ description: "Task list for Spec Kit-Aware Autopilot Input"
 
 - [ ] T040 [P] [US6] Test: `AutopilotProject.spec_kit_auto_scan` defaults to `False`; migration adds the column correctly, in `tests/test_spec_kit_input.py`
 - [ ] T041 [P] [US6] Test: with the setting enabled, `scan_design_queue` picks up a new `specs/<NNN>-<name>/` (with `plan.md` present) as a `DesignEntry`, in `tests/test_design_queue_spec_kit_scan.py`
-- [ ] T042 [P] [US6] Test: a feature with an existing build is not re-queued (self-heal parity with `.hephaestus/designs/` entries), in `tests/test_design_queue_spec_kit_scan.py`
+- [ ] T042 [P] [US6] Test: a feature with an existing build is not re-queued (self-heal parity with `.hephaestus/specs/` entries), in `tests/test_design_queue_spec_kit_scan.py`
 - [ ] T043 [P] [US6] Test: with the setting disabled, a new feature is never auto-built no matter how many scans pass, in `tests/test_design_queue_spec_kit_scan.py`
 - [ ] T044 [P] [US6] Test: with the setting enabled, a feature that has `spec.md` but no `plan.md` yet is **not** queued (FR-020), in `tests/test_design_queue_spec_kit_scan.py`
 - [ ] T045 [P] [US6] Component test for the settings toggle in `frontend/src/components/ProjectSettingsModal.test.tsx`

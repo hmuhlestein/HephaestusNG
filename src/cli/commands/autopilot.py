@@ -15,7 +15,7 @@ def register(subparsers):
     s = sub.add_parser("start", help="Start the autopilot pipeline")
     s.add_argument("--project-path", "-p", required=True, help="Project directory")
     s.add_argument(
-        "--design-queue", help="Design queue directory (default: <project>/.hephaestus/designs)"
+        "--design-queue", help="Design queue directory (default: <project>/.hephaestus/specs)"
     )
     s.add_argument(
         "--max-iterations", type=int, default=3, help="Max iterations per design"

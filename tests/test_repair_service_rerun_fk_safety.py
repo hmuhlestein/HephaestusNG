@@ -26,7 +26,7 @@ from src.core.database import (
 @pytest.fixture
 def project_dirs(tmp_path):
     project_dir = tmp_path / "myproject"
-    design_dir = project_dir / ".hephaestus" / "designs"
+    design_dir = project_dir / ".hephaestus" / "specs"
     design_dir.mkdir(parents=True)
     (design_dir / "01-auth.md").write_text("# Auth Design\nImplement OAuth2.")
     return {"project_dir": project_dir, "design_dir": design_dir}

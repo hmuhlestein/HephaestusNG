@@ -31,7 +31,7 @@ implementing the consumer in `frontend/`).
   `_resolve_project_base_dir` returns one `Path`; `WorktreeManager.reload()`
   is called with it. No `task.repo_id` or equivalent.
 - **Design storage** — `AutopilotDesign.file_path`/`_create_designs_folder`
-  build paths as `Path(project.base_dir)/.hephaestus/designs/...`. The
+  build paths as `Path(project.base_dir)/.hephaestus/specs/...`. The
   `docs/` destination feature shipped earlier this session is the same
   pattern: `Path(base_dir)/docs`.
 - **Pipeline concurrency is per-project, not per-repo** — `pick_next_design`
@@ -109,14 +109,14 @@ single-repo code path used to run.
 
 ### Design/doc storage — resolved contradiction
 
-Initial framing ("keep `.hephaestus/designs/` and `docs/` at the project
+Initial framing ("keep `.hephaestus/specs/` and `docs/` at the project
 level, outside any child repo") doesn't hold for `docs/`: it's git-tracked
 by design (that's the whole point of the feature just shipped), and a
 multi-repo project's `base_dir`/workspace root is not necessarily a git repo
 itself — writing there wouldn't be tracked by anything.
 
 Resolution: `docs/` uploads resolve to the **primary** `ProjectRepo`'s path
-(`ProjectRepo.is_primary`), not the workspace root. `.hephaestus/designs/`
+(`ProjectRepo.is_primary`), not the workspace root. `.hephaestus/specs/`
 (never git-tracked, purely a staging area) can stay at the workspace-root
 level (`base_dir`) since it has no git-tracking requirement to satisfy.
 
@@ -339,7 +339,7 @@ order above.
 - **REQ-12**: `docs/`-destination design uploads resolve to the primary
   `ProjectRepo`'s path, not the project's workspace root, so the feature
   stays git-tracked in a multi-repo project.
-- **REQ-13**: `.hephaestus/designs/` staging continues to resolve at the
+- **REQ-13**: `.hephaestus/specs/` staging continues to resolve at the
   workspace-root (`base_dir`) level, unaffected by repo count.
 
 ### Feature: Commit Resolution

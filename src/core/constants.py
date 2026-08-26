@@ -30,7 +30,7 @@ DESIGN_SUBDIR = "docs/spec"
 # add_project_design's destination handling and DESIGN_SUBDIR's identical
 # role for the "New Feature" flow.
 BUGFIX_SUBDIR = "docs/bugfix"
-DESIGN_CONTEXT_SUBDIR = ".hephaestus/designs"
+DESIGN_CONTEXT_SUBDIR = ".hephaestus/specs"
 DESIGN_QUEUE_FALLBACK_DIR = "docs/spec-queue"
 
 # Pipeline metrics filename

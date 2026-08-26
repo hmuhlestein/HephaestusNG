@@ -227,8 +227,8 @@ class TestQueueRerun:
         import subprocess as subprocess_mod
 
         project_dir = tmp_path / "project"
-        (project_dir / ".hephaestus" / "designs").mkdir(parents=True)
-        design_file = project_dir / ".hephaestus" / "designs" / "my_design.md"
+        (project_dir / ".hephaestus" / "specs").mkdir(parents=True)
+        design_file = project_dir / ".hephaestus" / "specs" / "my_design.md"
         design_file.write_text("# Design")
 
         fake_service = Mock()
@@ -265,8 +265,8 @@ class TestQueueRerun:
         self, client, autopilot_dirs, monkeypatch, tmp_path
     ):
         project_dir = tmp_path / "project"
-        (project_dir / ".hephaestus" / "designs").mkdir(parents=True)
-        (project_dir / ".hephaestus" / "designs" / "my_design.md").write_text("# Design")
+        (project_dir / ".hephaestus" / "specs").mkdir(parents=True)
+        (project_dir / ".hephaestus" / "specs" / "my_design.md").write_text("# Design")
 
         fake_service = Mock()
         fake_service.running = True  # already running -- rerun must stop it first
@@ -302,8 +302,8 @@ class TestQueueRerun:
         request races in and starts something else between Step 1's stop()
         and Step 6's start()."""
         project_dir = tmp_path / "project"
-        (project_dir / ".hephaestus" / "designs").mkdir(parents=True)
-        (project_dir / ".hephaestus" / "designs" / "my_design.md").write_text("# Design")
+        (project_dir / ".hephaestus" / "specs").mkdir(parents=True)
+        (project_dir / ".hephaestus" / "specs" / "my_design.md").write_text("# Design")
 
         fake_service = Mock()
         fake_service.running = False
@@ -335,8 +335,8 @@ class TestQueueRerun:
         """service.start() raising ValueError means bad input (e.g. project
         path isn't a git repo) -- matches /start's own convention of 400."""
         project_dir = tmp_path / "project"
-        (project_dir / ".hephaestus" / "designs").mkdir(parents=True)
-        (project_dir / ".hephaestus" / "designs" / "my_design.md").write_text("# Design")
+        (project_dir / ".hephaestus" / "specs").mkdir(parents=True)
+        (project_dir / ".hephaestus" / "specs" / "my_design.md").write_text("# Design")
 
         fake_service = Mock()
         fake_service.running = False
@@ -371,8 +371,8 @@ class TestQueueRerun:
         max_concurrent_projects even while POST /start would reject the
         identical project with a 409."""
         project_dir = tmp_path / "project"
-        (project_dir / ".hephaestus" / "designs").mkdir(parents=True)
-        (project_dir / ".hephaestus" / "designs" / "my_design.md").write_text("# Design")
+        (project_dir / ".hephaestus" / "specs").mkdir(parents=True)
+        (project_dir / ".hephaestus" / "specs" / "my_design.md").write_text("# Design")
 
         monkeypatch.setattr(
             "src.autopilot.orchestrator.state._resolve_project_id", lambda project_path: None
@@ -1430,9 +1430,9 @@ class TestLogs:
 
 @pytest.fixture
 def project_dirs(tmp_path):
-    """Create a project directory with .hephaestus/designs containing test files."""
+    """Create a project directory with .hephaestus/specs containing test files."""
     project_dir = tmp_path / "myproject"
-    design_dir = project_dir / ".hephaestus" / "designs"
+    design_dir = project_dir / ".hephaestus" / "specs"
     design_dir.mkdir(parents=True)
 
     (design_dir / "01-auth.md").write_text("# Auth Design\nImplement OAuth2.")
@@ -1962,7 +1962,7 @@ class TestProjectDesigns:
     def test_add_design_with_docs_destination_writes_to_docs_dir(self, project_client):
         """Locally-uploaded designs (destination="docs") persist as a
         real, git-tracked file under docs/ instead of the hidden
-        .hephaestus/designs/ staging dir."""
+        .hephaestus/specs/ staging dir."""
         client, dirs = project_client
         pid = self._create_project(client, dirs)
 
@@ -2104,7 +2104,7 @@ class TestProjectDesigns:
 
     def test_get_design_content_resolves_docs_destination(self, project_client):
         """content/status/delete all resolved unconditionally against
-        .hephaestus/designs/ (_get_design_queue_dir), ignoring
+        .hephaestus/specs/ (_get_design_queue_dir), ignoring
         AutopilotDesign.file_path -- 404s for every docs/-stored design
         even though the file exists on disk. Only pick_next_design
         (queue.py) checked file_path first."""
@@ -2144,7 +2144,7 @@ class TestProjectDesigns:
         assert resp.status_code == 200
         assert not docs_file.exists()
         # Must not have gone looking in (or deleted anything from) the
-        # unrelated .hephaestus/designs/ staging dir
+        # unrelated .hephaestus/specs/ staging dir
         assert not (dirs["design_dir"] / "Docs_Remove.md").exists()
 
     def test_content_status_and_delete_resolve_an_arbitrary_nested_destination(self, project_client):
@@ -2431,7 +2431,7 @@ class TestProjectDesigns:
 
         from src.core.database import AutopilotDesign, get_db
 
-        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir = dirs["project_dir"] / ".hephaestus" / "specs"
         design_dir.mkdir(parents=True, exist_ok=True)
         (design_dir / "failed-design.md").write_text("# Design")
 
@@ -2468,7 +2468,7 @@ class TestProjectDesigns:
 
         from src.core.database import AutopilotDesign, Feature, Workflow, get_db
 
-        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir = dirs["project_dir"] / ".hephaestus" / "specs"
         design_dir.mkdir(parents=True, exist_ok=True)
         (design_dir / "cost-design.md").write_text("# Design")
 
@@ -2538,7 +2538,7 @@ class TestProjectDesigns:
             get_db,
         )
 
-        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir = dirs["project_dir"] / ".hephaestus" / "specs"
         design_dir.mkdir(parents=True, exist_ok=True)
         (design_dir / "cli-design.md").write_text("# Design")
 
@@ -2590,7 +2590,7 @@ class TestProjectDesigns:
 
         from src.core.database import AutopilotDesign, Feature, Workflow, get_db
 
-        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir = dirs["project_dir"] / ".hephaestus" / "specs"
         design_dir.mkdir(parents=True, exist_ok=True)
         (design_dir / "stale-design.md").write_text("# Design")
 
@@ -2659,7 +2659,7 @@ class TestProjectDesigns:
 
         from src.core.database import AutopilotDesign, Feature, Workflow, get_db
 
-        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir = dirs["project_dir"] / ".hephaestus" / "specs"
         design_dir.mkdir(parents=True, exist_ok=True)
         (design_dir / "orphan-design.md").write_text("# Design")
 
@@ -2740,7 +2740,7 @@ class TestProjectDesigns:
 
         from src.core.database import AutopilotDesign, Feature, Phase, Task, Workflow, get_db
 
-        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir = dirs["project_dir"] / ".hephaestus" / "specs"
         design_dir.mkdir(parents=True, exist_ok=True)
         (design_dir / "report-design.md").write_text("# Design")
 
@@ -2832,7 +2832,7 @@ class TestProjectDesigns:
 
         from src.core.database import AutopilotDesign, Workflow, get_db
 
-        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir = dirs["project_dir"] / ".hephaestus" / "specs"
         design_dir.mkdir(parents=True, exist_ok=True)
         (design_dir / "budget-paused-design.md").write_text("# Design")
 
@@ -2884,7 +2884,7 @@ class TestProjectDesigns:
 
         from src.core.database import AutopilotDesign, get_db
 
-        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir = dirs["project_dir"] / ".hephaestus" / "specs"
         design_dir.mkdir(parents=True, exist_ok=True)
         (design_dir / "ok-design.md").write_text("# Design")
 
@@ -2930,7 +2930,7 @@ class TestProjectDesigns:
             get_db,
         )
 
-        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir = dirs["project_dir"] / ".hephaestus" / "specs"
         design_dir.mkdir(parents=True, exist_ok=True)
         (design_dir / "goto-design.md").write_text("# Design")
 
@@ -3132,7 +3132,7 @@ class TestWorkflowFeatureReport:
 
         from src.core.database import AutopilotDesign, Workflow, get_db
 
-        designs_folder = dirs["project_dir"] / ".hephaestus" / "designs" / "run1"
+        designs_folder = dirs["project_dir"] / ".hephaestus" / "specs" / "run1"
         designs_folder.mkdir(parents=True)
         (designs_folder / "feature_report.html").write_text("<html>phase0 synopsis</html>")
 
@@ -3293,7 +3293,7 @@ class TestPhase0PseudoFeatureReviewFields:
 
         from src.core.database import AutopilotDesign, Task, Workflow, get_db
 
-        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir = dirs["project_dir"] / ".hephaestus" / "specs"
         design_dir.mkdir(parents=True, exist_ok=True)
         (design_dir / "phase0-design.md").write_text("# Design")
 
@@ -3352,7 +3352,7 @@ class TestPhase0PseudoFeatureReviewFields:
 
         from src.core.database import AutopilotDesign, Task, Workflow, get_db
 
-        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir = dirs["project_dir"] / ".hephaestus" / "specs"
         design_dir.mkdir(parents=True, exist_ok=True)
         (design_dir / "phase0-active.md").write_text("# Design")
 

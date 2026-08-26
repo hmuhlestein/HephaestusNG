@@ -165,7 +165,7 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: l
     designs = []
     dirs = [queue_dir]
     # Also scan docs/spec-queue if it exists as a sibling of the primary queue.
-    # queue_dir is typically <project>/.hephaestus/designs, so .parent.parent is
+    # queue_dir is typically <project>/.hephaestus/specs, so .parent.parent is
     # the project root. docs/spec-queue is the conventional fallback location.
     if extra_dirs:
         dirs.extend(extra_dirs)
