@@ -3,10 +3,13 @@ description: |
   Shorter pipeline for design-level workflow_type "bugfix". A bug report
   already states the expected behavior and works within existing structure
   by definition, so this drops product_requirements, architecture_design,
-  architectural_review, doc_review, and product_validation from the full
-  autopilot pipeline (see docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md). qa_validation
-  is the sole verification phase and is responsible for confirming the
-  reported bug is actually gone, not just that requirements are met.
+  architectural_review, and product_validation from the full autopilot
+  pipeline (see docs/BUGFIX_WORKFLOW_TYPE_DESIGN.md). doc_review is kept --
+  it's also the sole producer of feature_report.html, the review modal's
+  HTML report, so dropping it left every bugfix feature without one.
+  qa_validation is the sole verification phase and is responsible for
+  confirming the reported bug is actually gone, not just that requirements
+  are met.
 
 default_cli_tool: claude
 default_model: sonnet
@@ -16,13 +19,14 @@ fallback_cli_model: openrouter/xiaomi/mimo-v2.5-pro
 
 # Execution order by phase id (each phase file's own top-level `id`, unchanged
 # from autopilot's numbering -- ids are opaque keys here, not a count).
-execution_order: [5, 6, 8, 9, 13, 14]
+execution_order: [5, 6, 8, 9, 11, 13, 14]
 
 session_roles:
   development: developer
   adversarial_review: adversarial       # reasons backward from failure modes
   security_review: security-reviewer
   qa_validation: qa
+  doc_review: doc-reviewer
   git_expert: git
   deploy: deployer
 
@@ -146,6 +150,19 @@ orchestrator:
         - if: "score >= 0.7"
           action: continue
           reason: "QA passed — reported bug confirmed fixed"
+
+    - after_phase: doc_review
+      evaluator: heuristic
+      max_retries: 2
+      max_review_runs: 4
+      # Continue-only, deliberately -- see autopilot's identical eval point
+      # for the full rationale (doc_review fixes what it finds rather than
+      # reporting findings, so it declares no spec_gate and always scores
+      # the fixed 0.75 heuristic baseline; no threshold has ever fired).
+      conditions:
+        - if: "score >= 0.0"
+          action: continue
+          reason: "Documentation reviewed and corrected in place"
 
     - after_phase: git_expert
       evaluator: heuristic
