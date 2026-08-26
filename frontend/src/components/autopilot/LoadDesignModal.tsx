@@ -188,6 +188,16 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
     loadRemoteDir(destinationFolder);
   };
 
+  // Spec Kit feature folders (.specify/specs/001-my-feature) hold spec.md,
+  // plan.md, tasks.md, etc. -- clicking the folder itself pulls spec.md,
+  // the top-level document, straight into the viewer instead of just
+  // navigating in.
+  const isSpecFolder = (entry: RemoteEntry) =>
+    entry.type === 'dir' && /^\.specify\/specs\/\d+-/.test(entry.path);
+
+  const handleSelectSpecFolder = (entry: RemoteEntry) =>
+    handleSelectRemoteFile({ name: 'spec.md', path: `${entry.path}/spec.md`, type: 'file' });
+
   const handleSelectRemoteFile = async (entry: RemoteEntry) => {
     if (!projectId || addedRemotePaths.has(entry.path)) return;
     setAddingRemotePath(entry.path);
@@ -554,13 +564,18 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                       remoteEntries
                         .filter((entry) => !browsingForFolder || entry.type === 'dir')
                         .map((entry) => {
-                        const isAdded = entry.type === 'file' && addedRemotePaths.has(entry.path);
+                        const specFolder = !browsingForFolder && isSpecFolder(entry);
+                        const targetPath = specFolder ? `${entry.path}/spec.md` : entry.path;
+                        const isAdded = (entry.type === 'file' || specFolder) && addedRemotePaths.has(targetPath);
                         return (
                           <button
                             key={entry.path}
                             type="button"
-                            onClick={() => (entry.type === 'dir' ? loadRemoteDir(entry.path) : handleSelectRemoteFile(entry))}
-                            disabled={addingRemotePath === entry.path || isAdded}
+                            onClick={() => {
+                              if (specFolder) return handleSelectSpecFolder(entry);
+                              return entry.type === 'dir' ? loadRemoteDir(entry.path) : handleSelectRemoteFile(entry);
+                            }}
+                            disabled={addingRemotePath === targetPath || isAdded}
                             className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
                           >
                             {entry.type === 'dir' ? (
@@ -569,7 +584,7 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
                               <FileText className="w-4 h-4 text-gray-400 dark:text-gray-500 flex-shrink-0" />
                             )}
                             <span className="text-sm text-gray-700 dark:text-gray-300 truncate flex-1">{entry.name}</span>
-                            {addingRemotePath === entry.path ? (
+                            {addingRemotePath === targetPath ? (
                               <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-violet-500 flex-shrink-0" />
                             ) : isAdded ? (
                               <Check className="w-3.5 h-3.5 text-green-500 dark:text-green-400 flex-shrink-0" />
