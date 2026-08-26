@@ -952,7 +952,7 @@ async def get_tickets_endpoint(
             success=True,
             tickets=tickets,
             total_count=len(tickets),
-            has_more=False,  # TODO: Implement pagination in service
+            has_more=False,  # TODO(deferred): has_more is hardcoded False — pagination not implemented in the tickets service. Feature work, not in scope for the des-c7b9 tech-debt pass (2026-08-25).
         )
 
     except Exception as e:

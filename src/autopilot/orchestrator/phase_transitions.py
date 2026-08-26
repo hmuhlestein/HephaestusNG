@@ -194,7 +194,7 @@ def reset_stale_executions_on_goto(
             for row in db.query(Task.phase_id)
             .filter(
                 Task.phase_id.in_([s.phase_id for s in stale]),
-                Task.status.in_(["assigned", "in_progress"]),
+                Task.status.in_(["assigned", "in_progress", "queued", "blocked"]),
             )
             .all()
         }
@@ -808,7 +808,7 @@ def _advance_phases(workflow_id: str, logger: "OrchestratorLogger") -> bool:
                     db.query(Task)
                     .filter(
                         Task.workflow_id == workflow_id,
-                        Task.status.in_(["pending", "in_progress", "assigned"]),
+                        Task.status.in_(["pending", "queued", "blocked", "in_progress", "assigned"]),
                     )
                     .all()
                 )
@@ -1772,7 +1772,7 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
                 # the remainder of its own assigned work; all 5 sat
                 # "queued" while adversarial_review ran and completed
                 # against the incomplete implementation.
-                Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+                Task.status.in_(["pending", "assigned", "in_progress", "queued", "blocked"]),
                 ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
                 *cycle_filter,
             )
@@ -3320,7 +3320,7 @@ async def fire_spec_gate_if_ready(session, task) -> None:
         )
         return
 
-    incomplete = session.query(Task).filter_by(phase_id=phase.id).filter(Task.status.in_(["pending", "assigned", "in_progress", "failed"])).count()
+    incomplete = session.query(Task).filter_by(phase_id=phase.id).filter(Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress", "failed"])).count()
     if incomplete != 0:
         return
 

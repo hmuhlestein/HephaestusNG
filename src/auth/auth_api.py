@@ -168,7 +168,7 @@ async def refresh_token(request: RefreshTokenRequest):
 @router.post("/logout")
 async def logout(token: str = Depends(oauth2_scheme)):
     """Logout and invalidate tokens."""
-    # TODO: Implement token blacklisting or session termination
+    # TODO(deferred): token blacklisting/session termination is unimplemented — logout is client-side-only today. Feature work, not in scope for the des-c7b9 tech-debt pass (2026-08-25).
     return {"message": "Logged out successfully"}
 
 

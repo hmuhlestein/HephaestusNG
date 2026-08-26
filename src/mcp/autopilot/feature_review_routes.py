@@ -84,7 +84,7 @@ async def _review_phase0_decomposition(workflow_id: str, req: FeatureReviewReque
                     .filter(
                         Task.workflow_id == workflow_id,
                         Task.phase_id == arch_phase.id,
-                        Task.status.in_(["pending", "assigned", "in_progress"]),
+                        Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"]),
                     )
                     .first()
                 )

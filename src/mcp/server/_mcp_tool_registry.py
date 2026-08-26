@@ -94,7 +94,7 @@ async def _tool_get_task_status(arguments: Dict[str, Any]):
         if status_filter and status_filter != "all":
             query = query.filter(Task.status == status_filter)
         else:
-            query = query.filter(Task.status.in_(["pending", "assigned", "in_progress", "done", "failed"]))
+            query = query.filter(Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress", "done", "failed"]))
         if workflow_id_filter:
             query = query.filter(Task.workflow_id == workflow_id_filter)
         if agent_id_filter:

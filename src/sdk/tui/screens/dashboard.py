@@ -224,15 +224,15 @@ class DashboardScreen(Screen):
 
     def action_create_task(self):
         """Show create task dialog."""
-        self.app.bell()  # TODO: Implement create task popup
+        self.app.bell()  # TODO(deferred): create-task popup not implemented — action currently just bell()s. TUI feature work, not in scope for the des-c7b9 tech-debt pass (2026-08-25).
 
     def action_view_backend_logs(self):
         """Show backend logs."""
-        self.app.bell()  # TODO: Implement log viewer
+        self.app.bell()  # TODO(deferred): backend log viewer not implemented — action currently just bell()s. TUI feature work, not in scope for the des-c7b9 tech-debt pass (2026-08-25).
 
     def action_view_monitor_logs(self):
         """Show monitor logs."""
-        self.app.bell()  # TODO: Implement log viewer
+        self.app.bell()  # TODO(deferred): monitor log viewer not implemented — action currently just bell()s. TUI feature work, not in scope for the des-c7b9 tech-debt pass (2026-08-25).
 
     def action_quit(self):
         """Quit the application."""
