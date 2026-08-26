@@ -1145,6 +1145,63 @@ class TestReviewFeatureApproveLocalMergeFallback:
         )
 
     @pytest.mark.asyncio
+    async def test_local_merge_takes_the_shared_merge_lock(
+        self, orch_db_env, git_project_with_feature_branch,
+    ):
+        """Regression: this fallback used to build a bare git.Repo directly
+        and merge with no locking at all, unlike every other code path that
+        merges into the same main_repo (WorktreeManager.merge_to_main,
+        _merge_design_branch_into_main, cleanup_all_stale_branches) --
+        all of which serialize via the same <repo>/.git/.hephaestus_merge_
+        lock file. A review approval landing while one of those was
+        mid-merge could race it. Pins that this path now takes that same
+        lock (mirroring MergeLockManager.acquire/release being called)
+        rather than asserting on lock-file bytes, which real concurrent
+        git operations could also touch."""
+        from src.core.worktree_merge_lock import MergeLockManager
+
+        project_dir, worktree_dir = git_project_with_feature_branch
+        from src.core.database import AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(project_dir)))
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", project_id="proj-1",
+                working_directory=str(worktree_dir),
+            ))
+            session.add(Feature(
+                id="feat-1", design_id="des-1", feature_key="k", name="n",
+                scope="s", workflow_id="wf-1", status="paused", pr_url=None,
+            ))
+
+        acquire_calls = []
+        release_calls = []
+        real_acquire = MergeLockManager.acquire
+        real_release = MergeLockManager.release
+
+        def _tracking_acquire(self, agent_id, timeout=300):
+            acquire_calls.append(agent_id)
+            return real_acquire(self, agent_id, timeout)
+
+        def _tracking_release(self, lock_file, agent_id):
+            release_calls.append(agent_id)
+            return real_release(self, lock_file, agent_id)
+
+        from unittest.mock import patch
+
+        with (
+            patch.object(MergeLockManager, "acquire", _tracking_acquire),
+            patch.object(MergeLockManager, "release", _tracking_release),
+        ):
+            from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
+            result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
+
+        assert result["success"] is True
+        assert len(acquire_calls) == 1, f"expected exactly one merge-lock acquire, got {acquire_calls}"
+        assert len(release_calls) == 1, f"expected exactly one merge-lock release, got {release_calls}"
+
+    @pytest.mark.asyncio
     async def test_does_not_attempt_local_merge_when_a_pr_exists(
         self, orch_db_env, git_project_with_feature_branch, monkeypatch,
     ):
