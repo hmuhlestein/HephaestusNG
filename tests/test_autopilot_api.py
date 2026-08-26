@@ -1739,63 +1739,6 @@ class TestProjects:
         assert "cannot be deleted" in resp.json()["detail"].lower()
 
 
-class TestBrowseProjectFiles:
-    """browse_project_files unconditionally skipped every dotdir, hiding
-    Spec Kit's .specify/ (and any numbered .specify/specs/001-xx/ feature
-    folder inside it) from the design/bug spec modals' remote file browser.
-    ALLOWED_DOTDIRS carves out .specify while leaving other dotdirs (e.g.
-    .git) excluded."""
-
-    def _create_project(self, client, dirs):
-        resp = client.post(
-            "/api/autopilot/projects",
-            json={"name": "Test", "base_dir": str(dirs["project_dir"])},
-        )
-        return resp.json()["id"]
-
-    def test_specify_dir_is_listed_at_project_root(self, project_client):
-        client, dirs = project_client
-        specify_dir = dirs["project_dir"] / ".specify"
-        specify_dir.mkdir()
-        project_id = self._create_project(client, dirs)
-
-        resp = client.get(f"/api/autopilot/projects/{project_id}/browse")
-        assert resp.status_code == 200
-        names = [e["name"] for e in resp.json()["entries"]]
-        assert ".specify" in names
-
-    def test_numbered_spec_folder_and_spec_md_are_browsable_and_selectable(self, project_client):
-        client, dirs = project_client
-        spec_dir = dirs["project_dir"] / ".specify" / "specs" / "001-my-feature"
-        spec_dir.mkdir(parents=True)
-        (spec_dir / "spec.md").write_text("# My Feature\nSpec content.")
-        project_id = self._create_project(client, dirs)
-
-        resp = client.get(
-            f"/api/autopilot/projects/{project_id}/browse",
-            params={"path": ".specify/specs/001-my-feature"},
-        )
-        assert resp.status_code == 200
-        entries = resp.json()["entries"]
-        assert any(e["name"] == "spec.md" and e["type"] == "file" for e in entries)
-
-        content = client.get(
-            f"/api/autopilot/projects/{project_id}/browse/content",
-            params={"path": ".specify/specs/001-my-feature/spec.md"},
-        )
-        assert content.status_code == 200
-        assert content.json()["content"] == "# My Feature\nSpec content."
-
-    def test_other_dotdirs_stay_excluded(self, project_client):
-        client, dirs = project_client
-        (dirs["project_dir"] / ".git").mkdir()
-        project_id = self._create_project(client, dirs)
-
-        resp = client.get(f"/api/autopilot/projects/{project_id}/browse")
-        names = [e["name"] for e in resp.json()["entries"]]
-        assert ".git" not in names
-
-
 class TestProjectDesigns:
     def _create_project(self, client, dirs):
         resp = client.post(

@@ -65,6 +65,10 @@ const ACCENT_CLASSES = {
   },
 } as const;
 
+// Spec Kit feature folders (top-level specs/001-my-feature) hold spec.md,
+// plan.md, tasks.md, etc.
+const SPEC_FOLDER_PATH_RE = /^specs\/\d+-/;
+
 const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, workflowType, onClose }) => {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -188,12 +192,10 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, work
     loadRemoteDir(destinationFolder);
   };
 
-  // Spec Kit feature folders (.specify/specs/001-my-feature) hold spec.md,
-  // plan.md, tasks.md, etc. -- clicking the folder itself pulls spec.md,
-  // the top-level document, straight into the viewer instead of just
-  // navigating in.
+  // Clicking a spec folder itself pulls spec.md, the top-level document,
+  // straight into the viewer instead of just navigating in.
   const isSpecFolder = (entry: RemoteEntry) =>
-    entry.type === 'dir' && /^\.specify\/specs\/\d+-/.test(entry.path);
+    entry.type === 'dir' && SPEC_FOLDER_PATH_RE.test(entry.path);
 
   const handleSelectSpecFolder = (entry: RemoteEntry) =>
     handleSelectRemoteFile({ name: 'spec.md', path: `${entry.path}/spec.md`, type: 'file' });

@@ -38,11 +38,6 @@ from src.services.design_status_service import get_design_status
 
 logger = logging.getLogger(__name__)
 
-# Dotdirs that are otherwise-normal project content and should stay browsable
-# despite the leading-dot exclusion below (e.g. Spec Kit's .specify/specs/
-# holds the spec.md/plan.md/tasks.md a design or bugfix modal wants to load).
-ALLOWED_DOTDIRS = {".specify"}
-
 router = APIRouter()
 
 
@@ -414,7 +409,7 @@ async def browse_project_files(project_id: str, path: str = Query("")):
 
     entries = []
     for child in sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
-        if child.name.startswith(".") and child.name not in ALLOWED_DOTDIRS:
+        if child.name.startswith("."):
             continue
         try:
             rel = str(child.resolve().relative_to(base_resolved))
