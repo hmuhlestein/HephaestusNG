@@ -348,7 +348,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <RefreshCw className={`w-4 h-4 mr-1 ${reloadMutation.isPending ? 'animate-spin' : ''}`} />
           Reload
         </Button>
-        <Button onClick={() => onAddDesign('feature')} className="bg-blue-600 hover:bg-blue-700 text-white">
+        <Button onClick={() => onAddDesign('feature')} className="bg-purple-700 hover:bg-purple-800 text-white">
           <Sparkles className="w-4 h-4 mr-1" />
           Design Spec
         </Button>
@@ -433,7 +433,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <p className="text-sm text-gray-400 dark:text-gray-500 mb-4">
             Drop design documents into the queue to start processing
           </p>
-          <Button onClick={() => onAddDesign('feature')} className="bg-blue-600 hover:bg-blue-700 text-white">
+          <Button onClick={() => onAddDesign('feature')} className="bg-purple-700 hover:bg-purple-800 text-white">
             <Sparkles className="w-4 h-4 mr-1" />
             Design Spec
           </Button>
