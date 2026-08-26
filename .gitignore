@@ -70,6 +70,7 @@ site/
 qdrant_data/
 
 # TurboVec
+data/
 data/turbovec/
 
 # Local library clones
