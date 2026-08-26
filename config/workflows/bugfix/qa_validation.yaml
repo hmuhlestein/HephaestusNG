@@ -215,9 +215,14 @@ additional_notes: |
   Then run whatever tests you find:
   ```bash
   # If pytest tests exist
-  python -m pytest -v --tb=short -p no:libtmux --cov=src --cov-report=term-missing 2>&1 | tee all_results.txt
+  python -m pytest -v --tb=short -p no:libtmux --cov=src --cov-report=xml --cov-report=term-missing 2>&1 | tee all_results.txt
   # Note: -p no:libtmux avoids plugin conflict if libtmux is installed globally
-  # --cov=src reports unit test coverage -- REQUIRED, the gate enforces an 80% floor (see STEP 11)
+
+  # Coverage of NEW/MODIFIED code only, not the whole repo -- the gate compares
+  # this branch against origin/main, not overall src/ coverage (most of the
+  # repo sits well below 80%; only your own changed lines are held to that
+  # floor). REQUIRED, the gate enforces an 80% floor (see STEP 11).
+  diff-cover coverage.xml --compare-branch=origin/main
 
   # If npm/node tests exist
   npm test 2>&1 | tee all_results.txt
@@ -231,9 +236,11 @@ additional_notes: |
   - Pass/fail counts
   - Failed test names and errors
   - Execution time
-  - Coverage percent from the `TOTAL` line of the `--cov` report -- REQUIRED, not optional.
-    Omitting it does not exempt this run from the coverage floor; it fails the gate
-    the same as reporting a number under 80%.
+  - Coverage percent from diff-cover's "Total" line above (coverage of the
+    lines you changed vs. origin/main) -- NOT the whole-repo TOTAL line from
+    --cov-report=term-missing. REQUIRED, not optional. Omitting it does not
+    exempt this run from the coverage floor; it fails the gate the same as
+    reporting a number under 80%.
 
 
   ## STEP 6: SCOPE COMPLIANCE CHECK
@@ -481,9 +488,11 @@ additional_notes: |
   - pass_rate is a percent (0–100): passed_tests / total_tests * 100.
   - critical_issues = security/data-loss/complete-failure issues (these send the
     pipeline back to architecture). major issues go in major_issues.
-  - coverage_percent is the unit test coverage percent (0–100) from `pytest --cov=src`'s
-    `TOTAL` line (STEP 5). The gate requires >= 80%; omitting this field fails the
-    gate the same as reporting a number below the floor.
+  - coverage_percent is the NEW/MODIFIED code coverage percent (0–100) from
+    diff-cover's report comparing this branch to origin/main (STEP 5) -- NOT
+    the whole-repo `pytest --cov` TOTAL line. The gate requires >= 80%;
+    omitting this field fails the gate the same as reporting a number below
+    the floor.
   - agent_score (0.0–1.0) is YOUR subjective quality judgement for things the
     numbers don't capture (only used when all hard floors pass).
   - verdict is "PASS", "NEEDS_WORK", or "FAIL".
