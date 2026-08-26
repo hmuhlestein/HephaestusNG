@@ -339,7 +339,12 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 try:
                     from git import GitCommandError, Repo
 
-                    from src.core.database import AutopilotProject, resolve_project_for_workflow
+                    from src.core.database import (
+                        AutopilotProject,
+                        get_default_db_manager,
+                        resolve_project_for_workflow,
+                    )
+                    from src.core.worktree_manager import WorktreeManager
 
                     project_id, _ = resolve_project_for_workflow(wf.id)
                     project = db.query(AutopilotProject).get(project_id) if project_id else None
@@ -354,18 +359,42 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                             # conflict -- never auto-resolve), just against
                             # this workflow's own project path instead of
                             # a shared global instance's fixed one.
-                            main_repo = Repo(project.base_dir)
+                            #
+                            # Built via WorktreeManager (not a bare Repo)
+                            # specifically to reuse its per-repo merge lock
+                            # (<repo>/.git/.hephaestus_merge_lock) --
+                            # previously this ran completely unlocked, so a
+                            # review approval landing while an agent's own
+                            # merge_to_main (or the final design merge) was
+                            # mid-sequence against the same main_repo could
+                            # race it: two `git merge` calls contending for
+                            # the same .git/index.lock, or an abort/reset
+                            # from one interleaving with the other's
+                            # in-flight merge. Confirmed as one of this
+                            # project's own review-approval events landing
+                            # in the same window as an unrelated feature's
+                            # merge during the investigation that found
+                            # this.
+                            wt_mgr = WorktreeManager(
+                                db_manager=get_default_db_manager(),
+                                repo_path=project.base_dir,
+                            )
+                            main_repo = wt_mgr.main_repo
+                            lock_file = wt_mgr._merge_lock.acquire(f"review-approval:{branch_name}")
                             try:
-                                main_repo.git.merge(branch_name, no_ff=True, m=merge_message)
-                                return {"action": "merged", "branch": branch_name}
-                            except GitCommandError as e:
-                                if "CONFLICT" in str(e):
-                                    try:
-                                        main_repo.git.merge("--abort")
-                                    except GitCommandError:
-                                        pass
-                                    return {"action": "preserved", "branch": branch_name}
-                                raise
+                                try:
+                                    main_repo.git.merge(branch_name, no_ff=True, m=merge_message)
+                                    return {"action": "merged", "branch": branch_name}
+                                except GitCommandError as e:
+                                    if "CONFLICT" in str(e):
+                                        try:
+                                            main_repo.git.merge("--abort")
+                                        except GitCommandError:
+                                            pass
+                                        return {"action": "preserved", "branch": branch_name}
+                                    raise
+                            finally:
+                                wt_mgr._merge_lock.release(lock_file, f"review-approval:{branch_name}")
 
                         import functools
                         loop = asyncio.get_event_loop()
