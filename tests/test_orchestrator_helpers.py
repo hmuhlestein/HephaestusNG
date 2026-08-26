@@ -7928,6 +7928,39 @@ class TestCreatePhaseTaskQueuedStaleness:
             assert fresh is not None
             assert fresh.id != "task-maybe-stale-queued"
 
+    @patch("src.autopilot.orchestrator.phase_transitions.create_agent_for_task_direct")
+    def test_queued_task_with_no_queued_at_is_not_treated_as_stale(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """A "queued" task with queued_at=None must never be treated as
+        stale, no matter how old created_at is. Without the `is not None`
+        guard, `None < queued_stale_cutoff` raises TypeError -- caught by
+        this function's own outer `except Exception`, logged as a warning,
+        and returned as `False` (confirmed by removing the guard locally:
+        same externally-observable result as the guarded path, but via an
+        unhandled-exception detour instead of a clean comparison). The
+        guard exists so a row missing this timestamp (e.g. a pre-migration
+        row, or a future write path that forgets to stamp it) is left
+        alone deliberately, not by accident of an unrelated catch-all."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _create_phase_task
+        from src.core.database import Task
+
+        self._seed(orch_db_env, status="queued", queued_at=None)
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        result = _create_phase_task(
+            "wf-queued-stale", "phase-queued-stale", "security_review", "continue",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is False
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            original = session.query(Task).filter_by(id="task-maybe-stale-queued").first()
+            assert original.status == "queued"
+            assert original.failure_reason is None
+
 
 class TestCreatePhaseTaskStaleClaimFallback:
     """Characterization test for _create_phase_task's own inline
