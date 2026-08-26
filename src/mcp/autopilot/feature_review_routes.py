@@ -450,6 +450,59 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                     merge_note = merge_note or str(e)
                     logger.warning(f"[REVIEW] Local merge fallback failed: {e}")
 
+            if merged:
+                # `gh pr merge` above is a remote-only GitHub operation --
+                # it never touches the local main checkout, which is what
+                # every other consumer of this repo (WorktreeManager, other
+                # agents' worktrees, this same process's own git
+                # operations) actually reads. Without this, local main
+                # silently drifts behind origin/main the moment a review
+                # approval merges via gh -- mirrors git_expert.yaml's own
+                # non-review-mode instructions (STEP 5's "Pull --rebase in
+                # local main to sync ... then push"), which only ever
+                # covered git_expert's OWN direct merge, never this
+                # approval-time one. The local-merge fallback above has the
+                # opposite gap: it merges straight into the local checkout
+                # but never pushes, so origin/main never sees it either.
+                # One sync step after either path closes both directions.
+                # Observed live: approved a feature, gh pr merge succeeded,
+                # local main stayed 4+ commits behind origin/main with no
+                # indication anything was wrong until a later git command
+                # in this same checkout surfaced the divergence.
+                try:
+                    from src.core.database import (
+                        AutopilotProject,
+                        get_default_db_manager,
+                        resolve_project_for_workflow,
+                    )
+                    from src.core.worktree_manager import WorktreeManager
+
+                    sync_project_id, _ = resolve_project_for_workflow(wf.id)
+                    sync_project = db.query(AutopilotProject).get(sync_project_id) if sync_project_id else None
+                    if sync_project and sync_project.base_dir:
+                        def _sync_local_main():
+                            wt_mgr = WorktreeManager(
+                                db_manager=get_default_db_manager(),
+                                repo_path=sync_project.base_dir,
+                            )
+                            main_repo = wt_mgr.main_repo
+                            remote_name = main_repo.remotes[0].name if main_repo.remotes else None
+                            if not remote_name:
+                                return
+                            base_branch = wt_mgr.config.git.base_branch
+                            lock_file = wt_mgr._merge_lock.acquire(f"review-approval-sync:{wf.id}")
+                            try:
+                                main_repo.git.pull("--rebase", remote_name, base_branch)
+                                main_repo.git.push(remote_name, base_branch)
+                            finally:
+                                wt_mgr._merge_lock.release(lock_file, f"review-approval-sync:{wf.id}")
+
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(None, _sync_local_main)
+                        logger.info(f"[REVIEW] Synced local main checkout at {sync_project.base_dir} with remote after merge")
+                except Exception as e:
+                    logger.warning(f"[REVIEW] Failed to sync local main after merge: {e}")
+
             # Check if all tasks are done — use derive_workflow_status
             # instead of hand-rolling this check. The "all tasks done ≠
             # all phases done" mistake has recurred independently at
