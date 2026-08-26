@@ -72,6 +72,7 @@ class MonitoringLoop:
         "_verify_cli_model_fallback",
         "_detect_repetition_loop",
         "_detect_dangerous_command_confirmation",
+        "_detect_resume_session_prompt",
         "_detect_max_token_limit_error",
         "_detect_unconfirmed_task_completion",
         "_detect_mcp_disconnected",
@@ -226,6 +227,14 @@ class MonitoringLoop:
         self._mechanical_recovery._nudged_mcp_disconnected = value
 
     @property
+    def _resumed_session_prompt(self):
+        return self._mechanical_recovery._resumed_session_prompt
+
+    @_resumed_session_prompt.setter
+    def _resumed_session_prompt(self, value):
+        self._mechanical_recovery._resumed_session_prompt = value
+
+    @property
     def _health_findings(self):
         return self._health_auditor._health_findings
 
@@ -288,6 +297,11 @@ class MonitoringLoop:
     async def _detect_dangerous_command_confirmation(self, *args, **kwargs):
         """Delegator to _mechanical_recovery.detect_dangerous_command_confirmation()."""
         return await self._mechanical_recovery.detect_dangerous_command_confirmation(*args, **kwargs)
+
+
+    async def _detect_resume_session_prompt(self, *args, **kwargs):
+        """Delegator to _mechanical_recovery.detect_resume_session_prompt()."""
+        return await self._mechanical_recovery.detect_resume_session_prompt(*args, **kwargs)
 
 
     async def _detect_max_token_limit_error(self, *args, **kwargs):

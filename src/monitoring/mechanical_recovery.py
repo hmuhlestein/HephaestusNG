@@ -28,6 +28,7 @@ from src.monitoring.patterns import (
     _MAX_TOKEN_LIMIT_RE,
     _MCP_DISCONNECTED_RE,
     _MONITOR_TIMEOUT_RE,
+    _RESUME_SESSION_PROMPT_RE,
     _SESSION_LIMIT_RE,
     _SPEND_LIMIT_RE,
     _USAGE_LIMIT_RE,
@@ -79,6 +80,7 @@ class MechanicalRecoveryDetector:
         self._nudged_unconfirmed_completion: Dict[str, float] = {}
         self._unconfirmed_completion_state: Dict[str, dict] = {}
         self._nudged_mcp_disconnected: Dict[str, float] = {}
+        self._resumed_session_prompt: Dict[str, float] = {}
         self._mcp_disconnect_nudge_count: Dict[str, int] = {}
         self._connection_error_warned: Dict[str, float] = {}
         self._fixed_bad_model: set = set()
@@ -1190,6 +1192,47 @@ class MechanicalRecoveryDetector:
             logger.warning(f"[DANGEROUS-CMD] check failed for {agent.id[:8]}: {e}")
         return False
 
+
+    async def detect_resume_session_prompt(self, agent) -> bool:
+        """Detect Claude Code's session-resume chooser ("Resume from
+        summary (recommended)" / "Resume full session as-is" / "Don't ask
+        me again") and accept the pre-highlighted default (Enter) instead
+        of relying on the generic frozen-output detector.
+
+        Like detect_dangerous_command_confirmation, this is a static
+        interactive chooser, not a frozen "Thinking..." loop -- it can sit
+        unanswered indefinitely with no recovery until something sends a
+        keystroke. Enter alone (no recovery Escape, no nudge) is correct
+        here: the chooser already defaults its cursor to option 1 (resume
+        from summary), which is also the recommended, cheaper choice.
+        """
+        try:
+            if not hasattr(self, "_resumed_session_prompt"):
+                self._resumed_session_prompt = {}
+            out = self.agent_manager.get_agent_output(agent.id, lines=40)
+            if not out:
+                return
+            if not _RESUME_SESSION_PROMPT_RE.search(_strip_sgr(out)):
+                return
+
+            # Cooldown, not a permanent one-shot flag -- same reasoning as
+            # detect_dangerous_command_confirmation: if the first Enter
+            # doesn't register (e.g. a second chooser appears later for
+            # the same agent), retry after a short window.
+            last_resumed = self._resumed_session_prompt.get(agent.id)
+            if last_resumed is not None and time.time() - last_resumed < 30:
+                return
+            self._resumed_session_prompt[agent.id] = time.time()
+
+            logger.warning(
+                f"[RESUME-SESSION-PROMPT] Agent {agent.id[:8]} ({agent.cli_type}) "
+                f"has a pending session-resume chooser — accepting default (Enter)"
+            )
+            await self.agent_manager.send_raw_key(agent.id, "Enter")
+            return True
+        except Exception as e:
+            logger.warning(f"[RESUME-SESSION-PROMPT] check failed for {agent.id[:8]}: {e}")
+        return False
 
     async def detect_max_token_limit_error(self, agent) -> bool:
         """Detect pi's own "Error: Model stopped because it reached the
