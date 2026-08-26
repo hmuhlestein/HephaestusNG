@@ -38,10 +38,30 @@ DEFAULT_SPEC: Dict[str, Any] = {
     "required_pass_rate": 100,  # percent of tests that must pass
     "min_requirements_met_rate": 100,  # percent of requirements that must be met
     "max_minor_unmet_requirements": 2,  # PASS_WITH_MINOR_GAPS tolerance, see score_product_validation
-    "min_coverage_percent": 80,  # unit test coverage floor, see score_qa
+    # min_coverage_percent intentionally omitted: a qa_spec.json may still
+    # set it to override per-project, but absent that, score_qa resolves it
+    # from hephaestus_config.yaml's testing.new_code_coverage_floor (see
+    # _min_coverage_percent below) instead of a second, independent
+    # hardcoded default -- the two 80%s were previously unwired from each
+    # other, so raising one in config silently left the other, the one this
+    # gate actually enforces, untouched.
 }
 
 _WORKFLOWS_DIR = Path(__file__).parent.parent.parent / "config" / "workflows"
+
+
+def _min_coverage_percent(spec: Dict[str, Any]) -> float:
+    """QA gate's new/modified-code coverage floor. An explicit
+    min_coverage_percent in spec (qa_spec.json) wins; otherwise this reads
+    hephaestus_config.yaml's testing.new_code_coverage_floor, imported
+    locally to avoid a module-load-time circular import (same pattern as
+    score_qa's other local `from src.core.simple_config import get_config`)."""
+    explicit = spec.get("min_coverage_percent")
+    if explicit is not None:
+        return float(explicit)
+    from src.core.simple_config import get_config
+
+    return float(get_config().testing.new_code_coverage_floor)
 
 
 @functools.lru_cache(maxsize=1)
@@ -1409,6 +1429,18 @@ def score_qa(
     # already generous elsewhere in this function) -- omitting
     # coverage_percent would otherwise silently exempt every run from the
     # floor entirely, defeating the point of enforcing it.
+    #
+    # coverage_not_applicable is the one deliberate escape hatch: Hephaestus
+    # targets any language, and a diff that changes no code in a language
+    # this project has coverage tooling for (docs-only, config-only, or a
+    # stack with nothing set up) has no real NEW/MODIFIED-code coverage
+    # number to report. Without this, agents were substituting a whole-repo
+    # coverage TOTAL line just to fill the required field -- a number the
+    # gate then enforced as if it meant something about the feature's own
+    # coverage. qa_validation.yaml instructs agents to set this only when
+    # the diff genuinely has nothing measurable (e.g. `git diff --name-only
+    # origin/main -- '*.py'` empty on a Python project).
+    coverage_not_applicable = bool(result.get("coverage_not_applicable", False))
     coverage_percent = result.get("coverage_percent")
     coverage_reported = coverage_percent is not None
     coverage_percent = float(coverage_percent) if coverage_reported else 0.0
@@ -1479,8 +1511,10 @@ def score_qa(
         violations.append(
             f"requirements_met={req_rate:.0f}% < {spec.get('min_requirements_met_rate', 100)}%"
         )
-    min_coverage = spec.get("min_coverage_percent", DEFAULT_SPEC["min_coverage_percent"])
-    if not coverage_reported:
+    min_coverage = _min_coverage_percent(spec)
+    if coverage_not_applicable:
+        pass  # no Python in the diff -- nothing for diff-cover to measure, see above
+    elif not coverage_reported:
         violations.append(f"coverage_percent not reported (required: >= {min_coverage}%)")
     elif coverage_percent < min_coverage:
         violations.append(f"coverage_percent={coverage_percent:.0f}% < {min_coverage}%")
@@ -1492,6 +1526,7 @@ def score_qa(
         "failed_tests": failed,
         "critical_issues": critical,
         "coverage_percent": round(coverage_percent, 1) if coverage_reported else None,
+        "coverage_not_applicable": coverage_not_applicable,
         "requirements_met_rate": round(req_rate, 1),
     }
 
@@ -2137,7 +2172,7 @@ def synthetic_clean_result(phase_name: str, run_count: int) -> Dict[str, Any]:
             "critical_issues": 0,
             "requirements_met": 1,
             "requirements_total": 1,
-            "coverage_percent": DEFAULT_SPEC["min_coverage_percent"],
+            "coverage_percent": _min_coverage_percent(DEFAULT_SPEC),
         }
     if phase_name == "product_validation":
         return {**base, "verdict": "PASS", "unmet_requirements": []}
