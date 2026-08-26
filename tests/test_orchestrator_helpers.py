@@ -737,6 +737,48 @@ class TestPickNextDesign:
         assert result is not None
         assert result.db_id == "des-a"
 
+    def test_archived_pending_design_is_skipped_for_next_non_archived(
+        self, tmp_path, orch_db_env
+    ):
+        """Regression (live incident): archiving a design only sets
+        archived_at -- it never touches status. pick_next_design's pending
+        query filtered on status alone, so an archived-but-still-"pending"
+        design (lower ordinal) kept winning over a real, non-archived design
+        queued behind it, which never got picked up at all."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.queue import pick_next_design
+        from src.core.database import AutopilotDesign, AutopilotProject
+        from datetime import datetime
+
+        (tmp_path / "archived.md").write_text("# Archived")
+        (tmp_path / "real.md").write_text("# Real")
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotProject(id="proj-arch", name="p", base_dir=str(tmp_path), is_active=True)
+        )
+        session.add(
+            AutopilotDesign(
+                id="des-archived", project_id="proj-arch", filename="archived.md", name="Archived",
+                status="pending", ordinal=1, file_path=str(tmp_path / "archived.md"),
+                archived_at=datetime.utcnow(),
+            )
+        )
+        session.add(
+            AutopilotDesign(
+                id="des-real", project_id="proj-arch", filename="real.md", name="Real",
+                status="pending", ordinal=2, file_path=str(tmp_path / "real.md"),
+            )
+        )
+        session.commit()
+        session.close()
+
+        logger = OrchestratorLogger(tmp_path)
+        result = pick_next_design(tmp_path, set(), logger, project_id="proj-arch")
+
+        assert result is not None
+        assert result.db_id == "des-real"
+
     def test_orphaned_failed_workflow_does_not_block_an_active_design(
         self, tmp_path, orch_db_env
     ):
@@ -937,6 +979,86 @@ class TestHasResumableActiveDesign:
         from src.autopilot.orchestrator.queue import _has_resumable_active_design
 
         assert _has_resumable_active_design(None) is False
+
+
+class TestArchivedDesignForWorkflow:
+    """Regression (live incident): archiving a design only ever sets
+    archived_at (see the archive endpoint) -- it never touches the
+    workflow underneath it. run_continuous_pipeline persists
+    state.current_workflow_id across restarts and refuses to move on to
+    pick_next_design until that workflow is fully complete. A design
+    archived mid-flight (e.g. paused for a review/merge approval that's
+    never coming) pinned the whole project's queue behind it forever,
+    surviving `heph restart` since the pointer is DB-persisted, not
+    in-memory."""
+
+    def test_returns_design_when_archived(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator.queue import _archived_design_for_workflow
+        from src.core.database import AutopilotDesign, AutopilotProject, Workflow
+        from datetime import datetime
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path))
+        )
+        session.add(
+            AutopilotDesign(
+                id="des-archived", project_id="proj-1", filename="d.md", name="Archived",
+                status="decomposing", archived_at=datetime.utcnow(),
+            )
+        )
+        session.add(
+            Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="paused", design_id="des-archived",
+            )
+        )
+        session.commit()
+        session.close()
+
+        result = _archived_design_for_workflow("wf-1")
+        assert result is not None
+        assert result.id == "des-archived"
+
+    def test_none_when_not_archived(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator.queue import _archived_design_for_workflow
+        from src.core.database import AutopilotDesign, AutopilotProject, Workflow
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path))
+        )
+        session.add(
+            AutopilotDesign(
+                id="des-live", project_id="proj-1", filename="d.md", name="Live",
+                status="decomposing",
+            )
+        )
+        session.add(
+            Workflow(
+                id="wf-2", name="t", phases_folder_path="/tmp",
+                status="paused", design_id="des-live",
+            )
+        )
+        session.commit()
+        session.close()
+
+        assert _archived_design_for_workflow("wf-2") is None
+
+    def test_none_when_workflow_missing_or_unlinked(self, tmp_path, orch_db_env):
+        from src.autopilot.orchestrator.queue import _archived_design_for_workflow
+        from src.core.database import Workflow
+
+        assert _archived_design_for_workflow("wf-does-not-exist") is None
+
+        session = orch_db_env.get_session()
+        session.add(
+            Workflow(id="wf-orphan", name="t", phases_folder_path="/tmp", status="active")
+        )
+        session.commit()
+        session.close()
+
+        assert _archived_design_for_workflow("wf-orphan") is None
 
 
 class TestShouldPauseForReview:

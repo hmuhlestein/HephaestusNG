@@ -266,7 +266,7 @@ def _has_resumable_active_design(project_id: Optional[str]) -> bool:
         if not project_id:
             return False
         with get_db() as db:
-            active_designs = db.query(AutopilotDesign).filter_by(project_id=project_id, status="active").all()
+            active_designs = db.query(AutopilotDesign).filter_by(project_id=project_id, status="active", archived_at=None).all()
             for candidate in active_designs:
                 incomplete = (
                     db.query(Feature)
@@ -278,6 +278,30 @@ def _has_resumable_active_design(project_id: Optional[str]) -> bool:
             return False
     except Exception:
         return False
+
+
+def _archived_design_for_workflow(workflow_id: str):
+    """The AutopilotDesign row linked to this workflow, if it has since
+    been archived -- else None.
+
+    Used to stop treating an archived design's own workflow as still
+    "the current workflow the queue is waiting on" (see run_continuous_
+    pipeline's state.current_workflow_id check). Archiving a design only
+    ever sets archived_at (see design_file_routes.py's archive endpoint)
+    -- it never cancels or completes the workflow underneath it -- so
+    without this, a design left with e.g. unmerged agent branches from a
+    paused-for-review run that's since been archived would pin the whole
+    project's queue behind it forever. Sibling fix to pick_next_design's
+    own archived_at filtering above.
+    """
+    from src.core.database import AutopilotDesign, get_db
+
+    with get_db() as db:
+        wf = db.query(Workflow).filter_by(id=workflow_id).first()
+        if not wf or not wf.design_id:
+            return None
+        design = db.query(AutopilotDesign).filter_by(id=wf.design_id).first()
+        return design if design and design.archived_at else None
 
 
 def pick_next_design(
@@ -356,10 +380,10 @@ def pick_next_design(
             # FRESH pick_next_design call to be eligible, not be picked
             # right back up by the pending-fallback query at the bottom of
             # this same call as if it had been queued all along.
-            pending_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
+            pending_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending", archived_at=None).order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
 
             design = None
-            active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
+            active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active", archived_at=None).order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
             if active_designs:
                 logger.info(f"pick_next_design: found {len(active_designs)} active design(s), checking for incomplete work before considering pending designs")
                 for candidate in active_designs:
