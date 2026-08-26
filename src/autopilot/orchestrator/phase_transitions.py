@@ -2716,6 +2716,36 @@ def _create_phase_task(
                     assigned_agent is None
                     or assigned_agent.status not in ("working", "idle", "starting")
                 )
+                # "queued" staleness self-heal (ticket-25436cfd): unlike
+                # "pending", a "queued" task has this same guard's own
+                # dispatch check as its ONLY way out -- QueueService.
+                # get_next_queued_task/process_queue eventually flips it to
+                # "assigned", but if that never happens (queue processing
+                # missed it, or the project genuinely stays at capacity
+                # indefinitely), nothing else ever re-evaluates it, and this
+                # guard blocks fresh task creation for the phase forever
+                # (confirmed live: workflow b7bd02cc, engine_client.py:620's
+                # own incident writeup). Safe to treat the same as an
+                # orphaned "pending" task once stale: a "queued" task by
+                # definition has no live agent and has done zero work yet
+                # (QueueService's own docstring -- "capacity-gated, never
+                # dispatched yet"), so failing it loses nothing a fresh task
+                # doesn't immediately reproduce. Reuses the same grace
+                # window as the stranded-"assigned" sweep
+                # (features.py:_clean_stale_assigned_tasks) rather than the
+                # much shorter 1-minute pending cutoff, since sitting
+                # "queued" under real capacity pressure for a while is
+                # normal and NOT itself a bug -- only genuinely excessive
+                # staleness should trigger this.
+                queued_stale_cutoff = utc_now() - timedelta(
+                    seconds=get_config().monitoring.stranded_task_grace_seconds
+                )
+                is_stale_queued = (
+                    existing.status == "queued"
+                    and existing.queued_at is not None
+                    and existing.queued_at < queued_stale_cutoff
+                )
+
                 if (
                     existing.status == "pending"
                     and (not existing.assigned_agent_id or agent_is_dead)
@@ -2733,6 +2763,15 @@ def _create_phase_task(
                     )
                     existing.status = "failed"
                     existing.failure_reason = f"Orphaned: {reason}"
+                    db.commit()
+                elif is_stale_queued:
+                    logger.info(
+                        f"[PHASE-TASK] {phase_name} has a queued task {existing.id[:8]} "
+                        f"stale since {existing.queued_at} (never dequeued) -- "
+                        "marking failed and creating a fresh one"
+                    )
+                    existing.status = "failed"
+                    existing.failure_reason = "Orphaned: sat queued past the staleness grace window without ever being dequeued"
                     db.commit()
                 else:
                     logger.info(f"[PHASE-TASK] {phase_name} already has active task {existing.id[:8]}, skipping")
