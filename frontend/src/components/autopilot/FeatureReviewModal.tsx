@@ -80,11 +80,21 @@ const FeatureReviewModal: React.FC<FeatureReviewModalProps> = ({ featureId, feat
   const reviewMutation = useMutation({
     mutationFn: ({ action, fb }: { action: 'approve' | 'request_changes'; fb?: string }) =>
       apiService.postFeatureReview(featureId!, action, fb),
-    onSuccess: (_, vars) => {
+    onSuccess: (data, vars) => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-design-statuses', projectId] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-status', projectId] });
       if (vars.action === 'approve') {
-        toast.success('Feature approved — pipeline advancing');
+        // merged: false means the approval itself went through but
+        // landing the work on main did not (gh pr merge and the local
+        // fallback both failed, usually a real conflict) -- surfacing
+        // that here is the whole point: a blind "approved" toast
+        // regardless of outcome is exactly how 4 conflicted PRs sat open
+        // with no one noticing.
+        if (data?.merged === false) {
+          toast.error(data.message || 'Feature approved, but merging into main failed — needs manual merge');
+        } else {
+          toast.success(data?.message || 'Feature approved — pipeline advancing');
+        }
       } else {
         toast.success('Changes requested — feature queued for revision');
       }

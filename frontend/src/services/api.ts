@@ -931,7 +931,7 @@ export const apiService = {
     featureId: string,
     action: 'approve' | 'request_changes',
     feedback?: string,
-  ): Promise<{ success: boolean; message: string }> => {
+  ): Promise<{ success: boolean; message: string; merged?: boolean }> => {
     const { data } = await api.post(`/autopilot/features/${encodeURIComponent(featureId)}/review`, {
       action,
       feedback: feedback ?? null,

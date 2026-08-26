@@ -306,7 +306,22 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 _write_review_approved_marker(wf.working_directory)
 
             # In review mode, git_expert created a PR but didn't merge.
-            # Merge it now that the feature is approved.
+            # Merge it now that the feature is approved -- falling back to
+            # a local merge if gh pr merge fails, not just when there was
+            # never a PR at all. A gh-side failure (auth, branch
+            # protection, a required check not passing, and -- the common
+            # case on a fast-moving main -- a real merge conflict once main
+            # has advanced since the PR was opened) doesn't mean the
+            # branch itself can't merge; previously it was never even
+            # attempted. And previously ANY merge failure here (gh or
+            # local) was silently logged and nothing else: the feature was
+            # still reported "approved" and marked completed with the
+            # reviewed work never landing on main, and the PR left open
+            # forever with no visible sign anything went wrong. Confirmed
+            # live: 4 open PRs, every one conflicted
+            # ("mergeable_state": "dirty"), each swallowed this way.
+            merged = False
+            merge_note = None
             pr_url = feature.pr_url or _extract_pr_url(db, wf.id, {})
             if pr_url:
                 import functools
@@ -327,20 +342,23 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                     )
                     if result.returncode == 0:
                         logger.info(f"[REVIEW] Merged PR {pr_url} after approval")
+                        merged = True
                     else:
-                        logger.warning(f"[REVIEW] gh pr merge failed: {result.stderr}")
+                        merge_note = (result.stderr or "").strip() or f"gh pr merge exited {result.returncode}"
+                        logger.warning(f"[REVIEW] gh pr merge failed: {merge_note}")
                 except Exception as e:
+                    merge_note = str(e)
                     logger.warning(f"[REVIEW] Failed to merge PR: {e}")
-            elif wf.working_directory:
-                # No PR to merge -- git_expert couldn't create one
-                # (gh not installed/authenticated, no remote configured,
-                # etc; see its own "or local merge if gh unavailable"
-                # fallback instruction). The reviewed work already sits
-                # committed on the pushed feature branch with
-                # review_approved now written -- merge it locally into
-                # the project's main branch instead of silently
-                # completing the workflow with real, approved work never
-                # landing on main.
+
+            if not merged and wf.working_directory:
+                # Either there was no PR to merge -- git_expert couldn't
+                # create one (gh not installed/authenticated, no remote
+                # configured, etc; see its own "or local merge if gh
+                # unavailable" fallback instruction) -- or gh pr merge just
+                # failed above. The reviewed work already sits committed
+                # on the pushed feature branch with review_approved now
+                # written -- attempt a local merge into the project's main
+                # branch rather than leaving real, approved work stranded.
                 #
                 # Resolved against THIS workflow's own project root
                 # (AutopilotProject.base_dir), not server_state.
@@ -424,7 +442,12 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                         loop = asyncio.get_event_loop()
                         merge_result = await loop.run_in_executor(None, _local_merge)
                         logger.info(f"[REVIEW] Local merge fallback for {branch_name}: {merge_result}")
+                        if merge_result.get("action") == "merged":
+                            merged = True
+                        else:
+                            merge_note = merge_note or "merge conflict — branch preserved for manual merge"
                 except Exception as e:
+                    merge_note = merge_note or str(e)
                     logger.warning(f"[REVIEW] Local merge fallback failed: {e}")
 
             # Check if all tasks are done — use derive_workflow_status
@@ -439,7 +462,21 @@ async def review_feature(feature_id: str, req: FeatureReviewRequest):
                 db.commit()
 
             _invalidate("status")
-            return {"success": True, "message": f"Feature {feature.name} approved"}
+            # merged/message distinguish "approved and landed on main" from
+            # "approved, but the merge itself failed" -- collapsing both
+            # into one generic success message is exactly what let the 4
+            # conflicted PRs above go unnoticed; the caller (the review
+            # modal) needs this to warn instead of silently celebrating.
+            if pr_url or wf.working_directory:
+                message = (
+                    f"Feature {feature.name} approved and merged into main"
+                    if merged
+                    else f"Feature {feature.name} approved, but merging into main FAILED"
+                    + (f": {merge_note}" if merge_note else "") + " — needs manual merge"
+                )
+            else:
+                message = f"Feature {feature.name} approved"
+            return {"success": True, "message": message, "merged": merged}
 
         # request_changes path
         feature.review_feedback = req.feedback

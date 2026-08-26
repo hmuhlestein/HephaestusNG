@@ -1239,3 +1239,92 @@ class TestReviewFeatureApproveLocalMergeFallback:
         assert not (project_dir / "new_file.txt").exists(), (
             "no local merge should happen when a PR already exists to merge"
         )
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_local_merge_when_gh_pr_merge_fails(
+        self, orch_db_env, git_project_with_feature_branch,
+    ):
+        """Regression: a gh pr merge failure (auth, branch protection, a
+        required check, or -- the common case on a fast-moving main -- a
+        real conflict once main has advanced since the PR was opened) used
+        to be silently logged with no fallback attempt at all: the PR sat
+        open forever, review approval reported bare success, and the
+        reviewed work never landed on main. Confirmed live: 4 open PRs,
+        every one conflicted, each swallowed exactly this way. The local
+        merge must now be attempted, and can succeed here since this
+        fixture's worktree/main aren't actually in conflict."""
+        project_dir, worktree_dir = git_project_with_feature_branch
+        from src.core.database import AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(project_dir)))
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", project_id="proj-1",
+                working_directory=str(worktree_dir),
+            ))
+            session.add(Feature(
+                id="feat-1", design_id="des-1", feature_key="k", name="n",
+                scope="s", workflow_id="wf-1", status="paused",
+                pr_url="https://github.com/org/repo/pull/1",
+            ))
+
+        from unittest.mock import MagicMock, patch
+
+        with patch(
+            "subprocess.run",
+            return_value=MagicMock(returncode=1, stdout="", stderr="Pull Request is not mergeable: the merge commit cannot be cleanly created."),
+        ):
+            from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
+            result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
+
+        assert result["success"] is True
+        assert result["merged"] is True
+        assert "merged into main" in result["message"]
+        assert (project_dir / "new_file.txt").exists(), (
+            "the local merge fallback must run (and succeed) after gh pr merge fails"
+        )
+
+    @pytest.mark.asyncio
+    async def test_reports_failure_when_both_gh_and_local_merge_fail(
+        self, orch_db_env, git_project_with_feature_branch,
+    ):
+        """When neither gh pr merge nor the local fallback can land the
+        work (a genuine conflict either way), the response must say so --
+        not report bare "approved" success while the PR sits unmerged."""
+        project_dir, worktree_dir = git_project_with_feature_branch
+        from src.core.database import AutopilotProject, Feature, Workflow
+
+        # Make the local merge conflict too: commit a colliding change to
+        # new_file.txt directly on main, so main and the feature branch
+        # both touch the same new path.
+        import subprocess as sp
+        (project_dir / "new_file.txt").write_text("main's own conflicting content\n")
+        sp.run(["git", "add", "-A"], cwd=project_dir, check=True, capture_output=True)
+        sp.run(["git", "commit", "-m", "conflicting main change"], cwd=project_dir, check=True, capture_output=True)
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(project_dir)))
+            session.add(Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                status="paused", paused_by="review", project_id="proj-1",
+                working_directory=str(worktree_dir),
+            ))
+            session.add(Feature(
+                id="feat-1", design_id="des-1", feature_key="k", name="n",
+                scope="s", workflow_id="wf-1", status="paused",
+                pr_url="https://github.com/org/repo/pull/1",
+            ))
+
+        from unittest.mock import MagicMock, patch
+
+        with patch(
+            "subprocess.run",
+            return_value=MagicMock(returncode=1, stdout="", stderr="Pull Request is not mergeable."),
+        ):
+            from src.mcp.autopilot.feature_review_routes import FeatureReviewRequest, review_feature
+            result = await review_feature("feat-1", FeatureReviewRequest(action="approve"))
+
+        assert result["success"] is True
+        assert result["merged"] is False
+        assert "FAILED" in result["message"]
