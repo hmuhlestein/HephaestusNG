@@ -86,6 +86,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const [sendStatus, setSendStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [sendErrorMessage, setSendErrorMessage] = useState('');
   const [isSendingEscape, setIsSendingEscape] = useState(false);
+  const [isSendingEnter, setIsSendingEnter] = useState(false);
 
   const outputRef = useRef<HTMLPreElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
@@ -336,6 +337,37 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       }, 3000);
     } finally {
       setIsSendingEscape(false);
+    }
+  };
+
+  // Send a literal Enter keypress -- unlike handleSendMessage, no text is
+  // typed first. For dismissing/accepting a pending interactive prompt
+  // (e.g. Claude Code's session-resume chooser) whose default option
+  // already needs nothing but Enter.
+  const handleSendEnter = async () => {
+    if (!agent || isSendingEnter || currentStatus === 'terminated') return;
+    setIsSendingEnter(true);
+    setSendStatus('idle');
+    try {
+      const response = await apiService.sendAgentKey(agent.id, 'Enter');
+      if (!response.sent) {
+        setSendStatus('error');
+        setSendErrorMessage('Failed to send Enter key');
+        setTimeout(() => {
+          setSendStatus('idle');
+          setSendErrorMessage('');
+        }, 3000);
+      }
+    } catch (error) {
+      console.error('Failed to send Enter key:', error);
+      setSendStatus('error');
+      setSendErrorMessage('Failed to send Enter key');
+      setTimeout(() => {
+        setSendStatus('idle');
+        setSendErrorMessage('');
+      }, 3000);
+    } finally {
+      setIsSendingEnter(false);
     }
   };
 
@@ -694,6 +726,14 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
                   title="Send Escape key"
                 >
                   <span className="text-xs font-medium">Esc</span>
+                </button>
+                <button
+                  onClick={handleSendEnter}
+                  disabled={isSendingEnter}
+                  className="px-2.5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                  title="Send Enter key"
+                >
+                  <span className="text-xs font-medium">Enter</span>
                 </button>
                 <button
                   onClick={handleSendMessage}

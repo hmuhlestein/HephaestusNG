@@ -389,6 +389,119 @@ class TestDetectDangerousCommandConfirmation:
         assert mock_agent_manager.send_recovery_keystrokes.call_count == 2
 
 
+# ── _detect_resume_session_prompt ─────────────────────────────────
+
+
+class TestDetectResumeSessionPrompt:
+    # Real Claude Code TUI text: the session-resume chooser shown when
+    # reattaching to a stale pane whose session grew large enough to
+    # warrant summarizing.
+    RESUME_PROMPT = (
+        " This session is 1h 17m old and 784.3k tokens.\n\n"
+        "   Resuming the full session will consume a substantial portion "
+        "of your usage limits. We recommend resuming from a summary.\n\n"
+        "   ❯ 1. Resume from summary (recommended)\n"
+        "     2. Resume full session as-is\n"
+        "     3. Don't ask me again\n\n"
+        "   Enter to confirm · Esc to cancel\n"
+    )
+
+    # Verbatim (post-_strip_sgr) capture from a live incident --
+    # .hephaestus/tmux/agent_ad469881.transcript.log. The unselected
+    # option lines render dimmed and tmux's pane capture collapses their
+    # inter-word spaces entirely ("Resumefullsessionas-is") while the
+    # bold header/italic footer keep theirs -- the original regex
+    # (anchored on "Resume from summary...Resume full session as-is")
+    # never matched this, so two live agents sat replaying a stale
+    # resumed session for most of their run before self-correcting.
+    REAL_CAPTURE_COLLAPSED_OPTIONS = (
+        "This session is 3h 49m old and 136k tokens.\r"
+        "Resumingthefullsessionwillconsumeasubstantialportionofyourusagelimits."
+        "Werecommendresumingfromasummary.\r"
+        "❯1. Resume from summary (recommended)\r"
+        "2. Resumefullsessionas-is\r"
+        "3. Don'taskmeagain\r"
+        "Enter to confirm · Esc to cancel\r"
+    )
+
+    @pytest.mark.asyncio
+    async def test_no_output(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = ""
+        await make_monitoring_loop._detect_resume_session_prompt(agent)
+        mock_agent_manager.send_raw_key.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_normal_output_ignored(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = "Reading design.md..."
+        await make_monitoring_loop._detect_resume_session_prompt(agent)
+        mock_agent_manager.send_raw_key.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_resume_prompt_accepts_default_with_enter(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = self.RESUME_PROMPT
+        mock_agent_manager.send_raw_key = AsyncMock(return_value=True)
+
+        result = await make_monitoring_loop._detect_resume_session_prompt(agent)
+
+        mock_agent_manager.send_raw_key.assert_called_once_with("a1", "Enter")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_matches_real_capture_with_collapsed_option_spacing(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression for the actual live gap: dimmed option lines lose
+        their inter-word spaces in a real tmux capture, so a regex
+        anchored on "Resume from summary...Resume full session as-is"
+        never matched real output -- only the header/footer anchor does."""
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = (
+            self.REAL_CAPTURE_COLLAPSED_OPTIONS
+        )
+        mock_agent_manager.send_raw_key = AsyncMock(return_value=True)
+
+        result = await make_monitoring_loop._detect_resume_session_prompt(agent)
+
+        mock_agent_manager.send_raw_key.assert_called_once_with("a1", "Enter")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_cooldown_prevents_immediate_resend(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Repeated polls of the SAME still-open chooser within the
+        cooldown window shouldn't spam Enter every cycle."""
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = self.RESUME_PROMPT
+        mock_agent_manager.send_raw_key = AsyncMock(return_value=True)
+
+        await make_monitoring_loop._detect_resume_session_prompt(agent)
+        await make_monitoring_loop._detect_resume_session_prompt(agent)
+
+        mock_agent_manager.send_raw_key.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_retries_after_cooldown_expires(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = self.RESUME_PROMPT
+        mock_agent_manager.send_raw_key = AsyncMock(return_value=True)
+
+        await make_monitoring_loop._detect_resume_session_prompt(agent)
+        make_monitoring_loop._resumed_session_prompt["a1"] = time.time() - 31
+
+        await make_monitoring_loop._detect_resume_session_prompt(agent)
+        assert mock_agent_manager.send_raw_key.call_count == 2
+
+
 # ── _detect_max_token_limit_error ─────────────────────────────────
 
 

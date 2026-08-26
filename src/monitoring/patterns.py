@@ -132,6 +132,31 @@ _BAD_MODEL_ERROR_RE = re.compile(
     r"issue with the selected model", re.IGNORECASE
 )
 
+# Claude Code's session-resume chooser, shown when reattaching to a stale
+# tmux pane whose session grew large enough to warrant summarizing (e.g.
+# "This session is 1h 17m old and 784.3k tokens ... Resume from summary
+# (recommended) / Resume full session as-is / Don't ask me again ... Enter
+# to confirm - Esc to cancel"). A stalled agent sits here indefinitely --
+# it's an interactive chooser, not a frozen process, so neither Enter nor
+# any tool call happens on its own.
+#
+# Anchored to the "This session is ... tokens" header and the "Enter to
+# confirm" footer, NOT the option-list body text in between (confirmed
+# against two live captures in .hephaestus/tmux/*.transcript.log): the
+# unselected option lines ("Resume full session as-is", "Don't ask me
+# again") are rendered dimmed, and tmux's pane capture collapses their
+# inter-word spaces entirely ("Resumefullsessionas-is") while the
+# bold/italic header and footer lines keep theirs -- a literal
+# "Resume full session as-is" match against real captured text never
+# fires. Observed live: this exact gap let two separate agents
+# (adversarial_review, architectural_review) sit replaying a stale
+# resumed session's old task output for most of their run before
+# self-correcting, because the detector never matched to send Enter.
+_RESUME_SESSION_PROMPT_RE = re.compile(
+    r"This session is .*?old and .*?tokens\..*?Enter to confirm",
+    re.IGNORECASE | re.DOTALL,
+)
+
 # Matches a complete_my_task/update_task_status tool-call rendering with a
 # terminal status (done/failed), e.g. Claude Code's
 # "complete_my_task (MCP)(status: "done", ...)". Deliberately requires
