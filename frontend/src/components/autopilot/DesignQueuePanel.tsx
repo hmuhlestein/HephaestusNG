@@ -21,7 +21,7 @@ import { CSS } from '@dnd-kit/utilities';
 import {
   Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
   Loader2, Pause, Play, ChevronRight, ChevronDown, Layers,
-  Square, RotateCcw, FileBarChart2, Eye, Sparkles, Bug
+  Square, RotateCcw, FileBarChart2, Eye, Sparkles, Bug, Archive
 } from 'lucide-react';
 import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -191,6 +191,21 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     },
     onError: (error: any) => {
       toast.error(error?.response?.data?.detail || 'Failed to remove design');
+    },
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: (filename: string) => {
+      if (!projectId) throw new Error('No project selected');
+      return apiService.archiveAutopilotProjectDesign(projectId, filename);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs-archived', projectId] });
+      toast.success('Design archived');
+    },
+    onError: (error: any) => {
+      toast.error(error?.response?.data?.detail || 'Failed to archive design');
     },
   });
 
@@ -420,6 +435,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                       removeMutation.mutate(filename);
                     }
                   }}
+                  onArchive={(filename) => archiveMutation.mutate(filename)}
                   reviewMode={reviewMode}
                 />
               ))}
@@ -560,6 +576,7 @@ interface SortableDesignItemProps {
   index: number;
   isActive?: boolean;
   onRemove: (filename: string) => void;
+  onArchive: (filename: string) => void;
   onDetail: (filename: string) => void;
   onTaskClick: (taskId: string) => void;
   onSelectFeature: (feature: any) => void;
@@ -589,7 +606,7 @@ interface SortableDesignItemProps {
   pendingInputRequest?: any;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, workflowType, statusReason, projectId, reviewMode, features, onRefetchFeatures, pendingInputRequest }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onArchive, onDetail, onTaskClick, onSelectFeature, onReviewFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, workflowType, statusReason, projectId, reviewMode, features, onRefetchFeatures, pendingInputRequest }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -784,6 +801,13 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
               title="View design details"
             >
               <FileText className="w-4 h-4" />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onArchive(item.filename); }}
+              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
+              title="Archive"
+            >
+              <Archive className="w-4 h-4" />
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); onRemove(item.filename); }}

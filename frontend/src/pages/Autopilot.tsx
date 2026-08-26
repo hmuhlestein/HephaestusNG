@@ -5,11 +5,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Rocket, ListOrdered, History, MessageSquare,
   Clock, CheckCircle2, XCircle, AlertTriangle,
-  Terminal, Lightbulb, AlertCircle
+  Terminal, Lightbulb, AlertCircle, Archive
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import PipelineStatusCard from '@/components/autopilot/PipelineStatusCard';
 import DesignQueuePanel from '@/components/autopilot/DesignQueuePanel';
+import ArchivedDesignsPanel from '@/components/autopilot/ArchivedDesignsPanel';
 import FeatureGallery from '@/components/autopilot/FeatureGallery';
 import FeatureDetailModal from '@/components/autopilot/FeatureDetailModal';
 import MessageCenter from '@/components/autopilot/MessageCenter';
@@ -23,8 +24,8 @@ import toast from 'react-hot-toast';
 import BaseStatusBadge from '@/components/StatusBadge';
 import { isCompletedFeatureStatus } from '@/utils/featureStatus';
 
-type Tab = 'queue' | 'features' | 'improvements' | 'messages' | 'logs';
-const VALID_TABS: Tab[] = ['queue', 'features', 'improvements', 'messages', 'logs'];
+type Tab = 'queue' | 'features' | 'improvements' | 'messages' | 'archived' | 'logs';
+const VALID_TABS: Tab[] = ['queue', 'features', 'improvements', 'messages', 'archived', 'logs'];
 
 const Autopilot: React.FC = () => {
   const { tab: urlTab } = useParams<{ tab?: string }>();
@@ -291,6 +292,15 @@ const Autopilot: React.FC = () => {
     refetchInterval: 30000,
   });
 
+  // Same queryKey ArchivedDesignsPanel uses for the identical endpoint --
+  // react-query shares/dedupes the two, so this doesn't double the poll rate.
+  const { data: archivedDesigns } = useQuery({
+    queryKey: ['autopilot-project-designs-archived', projectId],
+    queryFn: () => (projectId ? apiService.getAutopilotProjectDesigns(projectId, true) : Promise.resolve([])),
+    enabled: !!projectId,
+    refetchInterval: 10000,
+  });
+
   const tabs: { id: Tab; label: string; icon: React.ElementType; badge?: number; reviewBadge?: boolean; urgent?: boolean }[] = [
     { id: 'queue', label: 'Spec Queue', icon: ListOrdered, badge: status?.queue_depth, reviewBadge: (status?.features_awaiting_review ?? 0) > 0 },
     { id: 'features', label: 'Completed', icon: History, badge: completedFeaturesCount },
@@ -300,6 +310,7 @@ const Autopilot: React.FC = () => {
     // this same data) with an animated indicator on the tab that already
     // lists it -- see the icon-swap block below.
     { id: 'messages', label: 'Messages', icon: MessageSquare, badge: messages?.length, urgent: !!pendingInput },
+    { id: 'archived', label: 'Archived', icon: Archive, badge: archivedDesigns?.length },
     { id: 'logs', label: 'Logs', icon: Terminal },
   ];
 
@@ -430,6 +441,7 @@ const Autopilot: React.FC = () => {
           {activeTab === 'improvements' && <ImprovementsPanel />}
 
           {activeTab === 'messages' && <MessageCenter projectId={projectId} />}
+          {activeTab === 'archived' && <ArchivedDesignsPanel projectId={projectId} />}
           {activeTab === 'logs' && <LogsPanel projectId={projectId} />}
         </motion.div>
       </AnimatePresence>

@@ -50,6 +50,7 @@ class DesignItem(BaseModel):
     extension: str
     modified_at: Optional[str] = None
     workflow_type: str = "feature"
+    archived_at: Optional[str] = None
 
 
 class DesignReorderRequest(BaseModel):
@@ -156,10 +157,15 @@ async def reload_project_designs(
 
 
 @router.get("/projects/{project_id}/designs", response_model=List[DesignItem])
-async def list_project_designs(project_id: str):
+async def list_project_designs(project_id: str, archived: bool = Query(False)):
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
-    cache_key = f"project_designs:{project_id}"
+    # Distinct cache key only for the archived view -- the plain
+    # f"project_designs:{project_id}" key (unscoped) is what every existing
+    # mutation endpoint already invalidates for the active list; reusing it
+    # here for archived=False keeps all of them correct unchanged, rather
+    # than needing every one of those call sites to invalidate two keys.
+    cache_key = f"project_designs_archived:{project_id}" if archived else f"project_designs:{project_id}"
     cached = _cached(cache_key)
     if cached is not None:
         return cached
@@ -169,7 +175,9 @@ async def list_project_designs(project_id: str):
         if not proj:
             raise HTTPException(404, "Project not found")
 
-        designs = db.query(AutopilotDesign).filter_by(project_id=project_id).order_by(AutopilotDesign.ordinal).all()
+        query = db.query(AutopilotDesign).filter_by(project_id=project_id)
+        query = query.filter(AutopilotDesign.archived_at.isnot(None)) if archived else query.filter(AutopilotDesign.archived_at.is_(None))
+        designs = query.order_by(AutopilotDesign.ordinal).all()
         result = [
             DesignItem(
                 id=d.id,
@@ -180,10 +188,68 @@ async def list_project_designs(project_id: str):
                 extension=d.extension,
                 modified_at=d.modified_at.isoformat() if d.modified_at else None,
                 workflow_type=d.workflow_type,
+                archived_at=d.archived_at.isoformat() if d.archived_at else None,
             )
             for d in designs
         ]
         return _store(cache_key, result)
+
+
+def _set_design_archived(project_id: str, filename: str, archived: bool) -> DesignItem:
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+
+        d = db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
+        if not d:
+            raise HTTPException(404, "Design not found")
+
+        d.archived_at = datetime.utcnow() if archived else None
+        db.flush()
+        item = DesignItem(
+            id=d.id,
+            filename=d.filename,
+            name=d.name,
+            ordinal=d.ordinal,
+            size_bytes=d.size_bytes,
+            extension=d.extension,
+            modified_at=d.modified_at.isoformat() if d.modified_at else None,
+            workflow_type=d.workflow_type,
+            archived_at=d.archived_at.isoformat() if d.archived_at else None,
+        )
+
+    # Moves the design between the active and archived lists -- both caches
+    # need invalidating, not just one.
+    _invalidate(f"project_designs:{project_id}", f"project_designs_archived:{project_id}")
+    return item
+
+
+@router.post("/projects/{project_id}/designs/{filename}/archive", response_model=DesignItem)
+async def archive_project_design(
+    project_id: str,
+    filename: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    """Hide a design from the default queue view without touching its file,
+    tasks, workflows, or features -- unlike remove_project_design's
+    destructive delete, this is purely a visibility flag."""
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(status_code=401, detail="Agent not authenticated. Provide valid X-Agent-ID header.")
+    return _set_design_archived(project_id, filename, True)
+
+
+@router.post("/projects/{project_id}/designs/{filename}/unarchive", response_model=DesignItem)
+async def unarchive_project_design(
+    project_id: str,
+    filename: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(status_code=401, detail="Agent not authenticated. Provide valid X-Agent-ID header.")
+    return _set_design_archived(project_id, filename, False)
 
 
 @router.post("/projects/{project_id}/designs", response_model=DesignItem)

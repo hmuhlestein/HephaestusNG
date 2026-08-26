@@ -860,8 +860,8 @@ export const apiService = {
     return data;
   },
 
-  getAutopilotProjectDesigns: async (projectId: string): Promise<any[]> => {
-    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/designs`);
+  getAutopilotProjectDesigns: async (projectId: string, archived: boolean = false): Promise<any[]> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/designs`, { params: { archived } });
     return data;
   },
   reloadAutopilotProjectDesigns: async (projectId: string): Promise<any[]> => {
@@ -900,6 +900,16 @@ export const apiService = {
 
   removeAutopilotProjectDesign: async (projectId: string, filename: string): Promise<void> => {
     await api.delete(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}`);
+  },
+
+  archiveAutopilotProjectDesign: async (projectId: string, filename: string): Promise<any> => {
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}/archive`);
+    return data;
+  },
+
+  unarchiveAutopilotProjectDesign: async (projectId: string, filename: string): Promise<any> => {
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}/unarchive`);
+    return data;
   },
 
   getAutopilotProjectDesignContent: async (projectId: string, filename: string): Promise<{ filename: string; content: string }> => {
