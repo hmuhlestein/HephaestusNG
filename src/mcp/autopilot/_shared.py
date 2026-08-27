@@ -36,6 +36,7 @@ _features_dir_by_project: Dict[str, str] = {}
 
 ALLOWED_EXTENSIONS = {".md", ".txt"}
 
+
 def _get_active_project_id() -> Optional[str]:
     """Get the current active project ID from the database."""
     from src.core.database import AutopilotProject, get_db
@@ -43,6 +44,7 @@ def _get_active_project_id() -> Optional[str]:
     with get_db() as db:
         proj = db.query(AutopilotProject).filter_by(is_active=True).first()
         return proj.id if proj else None
+
 
 def _invalidate_project_dirs():
     """Invalidate cached project directories so they are recomputed.
@@ -56,6 +58,7 @@ def _invalidate_project_dirs():
     _queue_dir_by_project.clear()
     _features_dir_by_project.clear()
     _invalidate("queue", "features", "status")
+
 
 def _get_effective_queue_dir(project_id: Optional[str] = None) -> str:
     """Get the effective design queue directory.
@@ -124,6 +127,7 @@ def _get_effective_queue_dir(project_id: Optional[str] = None) -> str:
         DESIGN_QUEUE_DIR = str(queue_dir)
         return DESIGN_QUEUE_DIR
 
+
 def _get_effective_features_dir(project_id: Optional[str] = None) -> str:
     """Get the effective features directory.
 
@@ -156,9 +160,7 @@ def _get_effective_features_dir(project_id: Optional[str] = None) -> str:
                 raise RuntimeError(f"Project not found or has no base_dir: {project_id}")
             features_dir = Path(proj.base_dir) / CONTEXT_DIR_NAME / "features"
             if not features_dir.exists():
-                raise FileNotFoundError(
-                    f"Features directory does not exist: {features_dir}. Run the autopilot pipeline first."
-                )
+                raise FileNotFoundError(f"Features directory does not exist: {features_dir}. Run the autopilot pipeline first.")
             _features_dir_by_project[project_id] = str(features_dir)
             return str(features_dir)
 
@@ -184,11 +186,13 @@ def _get_effective_features_dir(project_id: Optional[str] = None) -> str:
         FEATURES_DIR = str(features_dir)
         return FEATURES_DIR
 
+
 T = TypeVar("T")
 
 _cache: Dict[str, Tuple[Any, float]] = {}
 
 CACHE_TTL = 10.0
+
 
 def _cached(key: str, ttl: float = CACHE_TTL) -> Optional[Any]:
     entry = _cache.get(key)
@@ -199,13 +203,16 @@ def _cached(key: str, ttl: float = CACHE_TTL) -> Optional[Any]:
         return None
     return data
 
+
 def _store(key: str, data: Any) -> Any:
     _cache[key] = (data, time.monotonic())
     return data
 
+
 def _invalidate(*keys: str):
     for k in keys:
         _cache.pop(k, None)
+
 
 def _safe_path(base: str, *parts: str) -> Path:
     """Validate that the resulting path is within the base directory.
@@ -222,6 +229,7 @@ def _safe_path(base: str, *parts: str) -> Path:
         raise HTTPException(400, "Invalid path")
     return resolved
 
+
 def _feature_status(metrics: dict) -> str:
     if metrics.get("product_validated"):
         return "validated"
@@ -229,28 +237,25 @@ def _feature_status(metrics: dict) -> str:
         return "failed"
     return "needs_review"
 
+
 def _extract_pr_url(db, workflow_id: str, phase_map: dict) -> Optional[str]:
     """Extract PR URL from the git_expert task's key_learnings."""
     import re
-    from src.core.database import Memory, Task, Phase
+
+    from src.core.database import Memory, Phase, Task
+
     if not workflow_id:
         return None
     # Find the git_expert phase
-    git_phase = db.query(Phase).filter_by(
-        workflow_id=workflow_id, name="git_expert"
-    ).first()
+    git_phase = db.query(Phase).filter_by(workflow_id=workflow_id, name="git_expert").first()
     if not git_phase:
         return None
     # Find the completed task for that phase
-    git_task = db.query(Task).filter_by(
-        phase_id=git_phase.id, status="done"
-    ).first()
+    git_task = db.query(Task).filter_by(phase_id=git_phase.id, status="done").first()
     if not git_task:
         return None
     # Look for PR URL in key_learnings (stored as memories)
-    memories = db.query(Memory).filter_by(
-        related_task_id=git_task.id, memory_type="learning"
-    ).all()
+    memories = db.query(Memory).filter_by(related_task_id=git_task.id, memory_type="learning").all()
     pr_pattern = re.compile(r"https://github\.com/[^\s]+/pull/\d+")
     for mem in memories:
         match = pr_pattern.search(mem.content or "")
@@ -262,6 +267,7 @@ def _extract_pr_url(db, workflow_id: str, phase_map: dict) -> Optional[str]:
         return match.group(0)
     return None
 
+
 def _get_latest_run_dir() -> Optional[Path]:
     base = Path(AUTOPILOT_STATE_DIR)
     if not base.exists():
@@ -269,11 +275,13 @@ def _get_latest_run_dir() -> Optional[Path]:
     runs = sorted(base.glob("run-*"), reverse=True)
     return runs[0] if runs else None
 
+
 def _read_json(path: Path) -> Optional[dict]:
     try:
         return json.loads(path.read_text())
     except Exception:
         return None
+
 
 def _read_jsonl_tail(path: Path, limit: int = 100) -> List[dict]:
     if not path.exists():
@@ -293,6 +301,7 @@ def _read_jsonl_tail(path: Path, limit: int = 100) -> List[dict]:
     except Exception:
         return []
 
+
 class DesignQueueItem(BaseModel):
     filename: str
     name: str
@@ -300,11 +309,13 @@ class DesignQueueItem(BaseModel):
     modified: str
     extension: str
 
+
 class DesignQueueAdd(BaseModel):
     name: str
     content: str
     extension: str = ".md"
     project_id: Optional[str] = None
+
 
 class FeatureSummary(BaseModel):
     id: str
@@ -317,6 +328,7 @@ class FeatureSummary(BaseModel):
     cost_currency: str
     created_at: str
     has_report: bool
+
 
 class FeatureDetail(BaseModel):
     id: str
@@ -345,6 +357,7 @@ class FeatureDetail(BaseModel):
     cost_currency: str
     created_at: str
     docs: List[Dict[str, Any]]
+
 
 class PipelineStatus(BaseModel):
     running: bool
@@ -381,10 +394,12 @@ class PipelineStatus(BaseModel):
     speckit_auto_scan_enabled: bool = False
     features_awaiting_review: int = 0
 
+
 class MessageItem(BaseModel):
     timestamp: str
     type: str
     data: Dict[str, Any]
+
 
 def configure_autopilot_api(
     design_queue_dir: str = "",

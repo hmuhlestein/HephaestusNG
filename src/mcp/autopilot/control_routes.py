@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
 @router.get("/status", response_model=PipelineStatus)
 async def get_pipeline_status(
     project_id: Optional[str] = None,
@@ -99,9 +100,7 @@ async def get_pipeline_status(
                         svc_name = await loop.run_in_executor(None, _lookup_svc_name_sync)
                     except Exception:
                         svc_name = Path(svc_path).name
-                running_projects_list.append(
-                    {"id": getattr(svc, "project_id", None), "name": svc_name, "base_dir": svc_path}
-                )
+                running_projects_list.append({"id": getattr(svc, "project_id", None), "name": svc_name, "base_dir": svc_path})
         else:
             service_status = {}
 
@@ -192,9 +191,7 @@ async def get_pipeline_status(
             # several seconds (once the full 8s curl timeout) even after
             # offloading the two other blocking cost-recording call sites
             # found in the same investigation.
-            state_obj, _processed = await loop.run_in_executor(
-                None, PersistentPipelineState(project_id=effective_project_id).load
-            )
+            state_obj, _processed = await loop.run_in_executor(None, PersistentPipelineState(project_id=effective_project_id).load)
             state = state_obj.to_dict()
         except Exception:
             state = {}
@@ -232,12 +229,7 @@ async def get_pipeline_status(
 
             def _fetch_last_event_sync():
                 with _get_db() as _db:
-                    row = (
-                        _db.query(AutopilotPipelineEvent)
-                        .filter(AutopilotPipelineEvent.project_id == effective_project_id)
-                        .order_by(AutopilotPipelineEvent.created_at.desc())
-                        .first()
-                    )
+                    row = _db.query(AutopilotPipelineEvent).filter(AutopilotPipelineEvent.project_id == effective_project_id).order_by(AutopilotPipelineEvent.created_at.desc()).first()
                     if row:
                         return {
                             "timestamp": row.created_at.isoformat(),
@@ -347,10 +339,7 @@ async def get_pipeline_status(
             project_path is not None
             and (
                 (running_project_path is not None and os.path.realpath(running_project_path) == os.path.realpath(project_path))
-                or any(
-                    p.get("base_dir") and os.path.realpath(p["base_dir"]) == os.path.realpath(project_path)
-                    for p in running_projects_list
-                )
+                or any(p.get("base_dir") and os.path.realpath(p["base_dir"]) == os.path.realpath(project_path) for p in running_projects_list)
             )
         ),
         running_projects=running_projects_list,
@@ -366,13 +355,9 @@ async def get_pipeline_status(
                 with _get_db() as _db:
                     _proj = _db.query(AutopilotProject).get(project_id)
                     review_mode = bool(_proj and getattr(_proj, "review_mode", False))
-                    speckit_auto_scan_enabled = bool(
-                        _proj and getattr(_proj, "speckit_auto_scan_enabled", False)
-                    )
+                    speckit_auto_scan_enabled = bool(_proj and getattr(_proj, "speckit_auto_scan_enabled", False))
                     # Count features whose workflow is paused_by="review"
-                    proj_wf_ids = [
-                        wf.id for wf in _db.query(Workflow).filter_by(project_id=project_id).all()
-                    ]
+                    proj_wf_ids = [wf.id for wf in _db.query(Workflow).filter_by(project_id=project_id).all()]
                     features_awaiting_review = 0
                     if proj_wf_ids:
                         features_awaiting_review = (
@@ -395,6 +380,7 @@ async def get_pipeline_status(
             pass
 
     return _store(cache_key, result)
+
 
 @router.post("/start")
 async def start_pipeline(project_path: str, design_queue: str = "", max_iterations: int = 3):
@@ -422,6 +408,7 @@ async def start_pipeline(project_path: str, design_queue: str = "", max_iteratio
         return await _start_pipeline_reserved(project_id, project_path, design_queue, max_iterations)
     finally:
         get_registry().release_reservation(project_id)
+
 
 async def _start_pipeline_reserved(project_id: str, project_path: str, design_queue: str, max_iterations: int):
     """Body of start_pipeline() that runs after the concurrency-cap slot for
@@ -508,9 +495,7 @@ async def _start_pipeline_reserved(project_id: str, project_path: str, design_qu
             # genuine zombie gets caught on a subsequent attempt once the
             # check succeeds.
             logger.error(f"[START] Zombie check failed, treating pipeline as running: {e}")
-            raise HTTPException(
-                409, "Pipeline is already running (zombie check failed; try again shortly)."
-            )
+            raise HTTPException(409, "Pipeline is already running (zombie check failed; try again shortly).")
 
     try:
         result = await service.start(
@@ -527,6 +512,7 @@ async def _start_pipeline_reserved(project_id: str, project_path: str, design_qu
     except Exception as e:
         logger.error(f"Failed to start pipeline: {e}")
         raise HTTPException(500, str(e))
+
 
 @router.post("/stop")
 async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = None):
@@ -611,6 +597,7 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
         **result,
     }
 
+
 @router.post("/cleanup-branches")
 async def cleanup_branches(project_path: Optional[str] = None):
     """Clean up all stale agent branches.
@@ -638,11 +625,7 @@ async def cleanup_branches(project_path: Optional[str] = None):
         else:
             with get_db() as db:
                 active_id = _get_active_project_id()
-                proj = (
-                    db.query(AutopilotProject).filter_by(id=active_id).first()
-                    if active_id
-                    else None
-                )
+                proj = db.query(AutopilotProject).filter_by(id=active_id).first() if active_id else None
                 if not proj:
                     raise HTTPException(
                         400,
@@ -686,6 +669,7 @@ async def cleanup_branches(project_path: Optional[str] = None):
         logger.error(f"Failed to cleanup branches: {e}")
         raise HTTPException(500, str(e))
 
+
 @router.get("/health")
 async def get_system_health():
     """Get system health audit results."""
@@ -696,6 +680,7 @@ async def get_system_health():
     # background-thread call path (health_audit.py). Offload here, at the
     # async caller, instead of making the shared function itself async.
     return await loop.run_in_executor(None, run_health_audit)
+
 
 def run_health_audit(db_manager=None):
     """Shared health audit logic used by both Monitor and API endpoint.
@@ -766,9 +751,7 @@ def run_health_audit(db_manager=None):
         with get_db() as _db:
             from src.core.database import AutopilotProject
 
-            active_projects = (
-                _db.query(AutopilotProject).filter_by(is_active=True).all()
-            )
+            active_projects = _db.query(AutopilotProject).filter_by(is_active=True).all()
             project_paths = [p.base_dir for p in active_projects if p.base_dir]
         if not project_paths:
             fallback_path = os.getenv("PROJECT_PATH")

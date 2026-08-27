@@ -718,12 +718,7 @@ def migrate_speckit_auto_scan_column(engine):
     try:
         with engine.connect() as conn:
             try:
-                conn.execute(
-                    text(
-                        "ALTER TABLE autopilot_projects ADD COLUMN "
-                        "speckit_auto_scan_enabled BOOLEAN NOT NULL DEFAULT 0"
-                    )
-                )
+                conn.execute(text("ALTER TABLE autopilot_projects ADD COLUMN speckit_auto_scan_enabled BOOLEAN NOT NULL DEFAULT 0"))
             except Exception:
                 pass  # Column already exists
             conn.commit()

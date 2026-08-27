@@ -5,7 +5,6 @@ import os
 import threading
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from sqlalchemy import (
@@ -1290,7 +1289,7 @@ class Feature(Base):
         nullable=True,
         default=None,
     )
-    review_feedback = Column(Text, nullable=True)   # user's change-request text
+    review_feedback = Column(Text, nullable=True)  # user's change-request text
     reviewed_at = Column(DateTime, nullable=True)
     reviewed_by = Column(String(100), nullable=True, default=None)
 
@@ -1665,9 +1664,7 @@ class DatabaseManager:
                 if session.query(SchemaMigration).filter_by(id=migration_id).first():
                     return
         except Exception as e:
-            logger.warning(
-                f"Could not check schema_migrations for {migration_id}, running it anyway: {e}"
-            )
+            logger.warning(f"Could not check schema_migrations for {migration_id}, running it anyway: {e}")
 
         try:
             fn()
@@ -1746,6 +1743,7 @@ def utc_now() -> datetime:
     comparison raises TypeError.
     """
     from datetime import timezone
+
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
