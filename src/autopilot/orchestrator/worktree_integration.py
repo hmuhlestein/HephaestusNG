@@ -28,6 +28,7 @@ from src.core.simple_config import get_config
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
+    from src.autopilot.orchestrator.speckit import SpecKitFeature
     from src.core.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,19 @@ def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Pat
     dest = feature_folder / CONTEXT_DIR_NAME / design_entry.path.name
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(design_entry.path, dest)
+    return dest
+
+
+def copy_speckit_feature(feature: "SpecKitFeature", feature_folder: Path) -> Path:
+    """Copy feature.dir_path -> feature_folder/CONTEXT_DIR_NAME/specs/<NNN-name>/
+    recursively -- ALL files, not just spec.md/plan.md/tasks.md (REQ-03/FR-002a).
+    Raises FileNotFoundError if feature.dir_path no longer exists (race: the
+    source specs/ dir was deleted between detection and worktree creation)."""
+    if not feature.dir_path.is_dir():
+        raise FileNotFoundError(f"Spec Kit feature directory vanished: {feature.dir_path}")
+    dest = feature_folder / CONTEXT_DIR_NAME / "specs" / feature.dir_path.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(feature.dir_path, dest, dirs_exist_ok=True)
     return dest
 
 

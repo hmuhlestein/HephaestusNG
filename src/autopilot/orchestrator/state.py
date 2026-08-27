@@ -83,6 +83,11 @@ class DesignEntry:
     completed_at: Optional[str] = None
     file_path: Optional[str] = None  # absolute path to design file
     designs_folder: Optional[Path] = None  # path to permanent storage
+    # Set when this entry represents a Spec Kit feature (path still points
+    # at spec.md, so every existing "read design_entry.path" call site keeps
+    # working unchanged) -- worktree_integration.copy_speckit_feature copies
+    # this whole directory instead of just design_entry.path when set.
+    speckit_feature_dir: Optional[Path] = None
 
 
 @dataclass
