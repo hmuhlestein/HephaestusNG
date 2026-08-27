@@ -955,9 +955,9 @@ def _resolve_arbitration_outcome(
     logger: "OrchestratorLogger",
 ) -> None:
     """Act on an arbitration decision and always release the phase's
-    task_creation_claimed_at claim afterward -- regardless of outcome, or
-    the phase stays permanently locked out of both normal advancement and
-    future arbitration attempts.
+    task_creation_claimed_at claim once fully done -- regardless of
+    outcome, or the phase stays permanently locked out of both normal
+    advancement and future arbitration attempts.
 
     CRITICAL: mark_phase_complete NEVER creates the next task itself, for
     ANY action -- not force_action, not a normal evaluation. Every code
@@ -972,6 +972,20 @@ def _resolve_arbitration_outcome(
     stranding the pipeline with workflow.status="active" and no agent
     ever running again, while status_reason got cleared as if everything
     were fine. Mirror _fire_phase_transition's pattern exactly.
+
+    The claim is released only AFTER the next task's dispatch below, not
+    right after mark_phase_complete -- releasing it earlier reopens the
+    exact window this claim exists to close: phase.retry_count is never
+    reset once a phase's retry budget is exhausted, so a concurrent
+    caller (the periodic sweep, or a gate re-fire triggered by e.g. a
+    transient "database is locked" retry) that sees this phase as
+    unclaimed can independently re-evaluate it via the NORMAL (non-
+    arbitration) path in the gap before this decision's own next-phase
+    task exists -- which immediately re-hits the still-exhausted budget
+    and re-arbitrates the exact question this call is in the middle of
+    answering. Observed live (workflow b1019f3d): design_review
+    arbitrated 3 times within 4 minutes, each one independently reaching
+    "continue" against the same already-fixed architecture.md.
     """
     from src.autopilot.orchestrator.phase_transitions import _create_phase_task
 
@@ -992,15 +1006,8 @@ def _resolve_arbitration_outcome(
             )
         else:
             result = pm.mark_phase_complete(phase_id, f"Arbiter: unrecoverable -- {reason}", force_action="fail")
-    finally:
-        # mark_phase_complete's _close_execution sets status but never
-        # touches task_creation_claimed_at -- clear it directly rather than
-        # reusing _release_phase_task_creation_claim, which would wrongly
-        # flip a just-set "completed"/"failed" status back to "in_progress".
+
         with get_db() as db:
-            execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
-            if execution:
-                execution.task_creation_claimed_at = None
             wf = db.query(Workflow).filter_by(id=workflow_id).first()
             if wf:
                 # A "goto" whose target_phase didn't resolve to a real phase
@@ -1021,46 +1028,59 @@ def _resolve_arbitration_outcome(
                     wf.status_reason = None
             db.commit()
 
-    # Dispatch the actual next task -- see this function's docstring for
-    # why this can't be skipped. Any action that leaves should_continue
-    # True and names a target phase (continue -> next phase in sequence,
-    # goto -> the arbiter's chosen phase, or _advance_or_complete's own
-    # fallback if the target didn't resolve) needs a real Task+agent.
-    target_phase_id = result.get("target_phase_id")
-    target_phase_name = result.get("target_phase")
-    action = result.get("action")
-    if target_phase_id and action in ("continue", "goto", "retry"):
-        # Mirror _fire_phase_transition's feedback-derivation: prefer
-        # the gate's own specific finding over the static reason, and
-        # substitute completion_notes when the gate reason is
-        # "result_missing" (the file read came up empty at this
-        # evaluation instant -- says nothing about whether the agent
-        # actually did the work).
-        metadata = result.get("metadata") or {}
-        spec_gate = metadata.get("spec_gate", {})
-        feedback = spec_gate.get("reason") or result.get("reason") or None
-        if spec_gate.get("result_missing"):
-            with get_db() as db:
-                completing_task = db.query(Task).filter(
-                    Task.phase_id == phase_id, Task.status == "done"
-                ).order_by(Task.completed_at.desc()).first()
-            if completing_task and completing_task.completion_notes:
-                feedback = completing_task.completion_notes
-        dispatched = _create_phase_task(
-            workflow_id,
-            target_phase_id,
-            target_phase_name,
-            action,
-            logger,
-            feedback=feedback,
-            source_phase_name=phase_name,
-        )
-        if not dispatched:
-            logger.error(f"[ARBITRATE] {phase_name}: resolved to {action} -> {target_phase_name}, but failed to create its task -- pipeline may be stalled")
-        else:
-            # The entry warning above logs the arbiter's DECISION; this
-            # logs that it was actually EXECUTED -- the two previously
-            # diverged silently (a decision logged but whose task creation
-            # failed left no follow-up, and a successful one left no
-            # confirmation that the pipeline moved on).
-            logger.info(f"[ARBITRATE] {phase_name}: decision executed -- {action} -> {target_phase_name} task dispatched")
+        # Dispatch the actual next task -- see this function's docstring
+        # for why this can't be skipped. Any action that leaves
+        # should_continue True and names a target phase (continue -> next
+        # phase in sequence, goto -> the arbiter's chosen phase, or
+        # _advance_or_complete's own fallback if the target didn't
+        # resolve) needs a real Task+agent.
+        target_phase_id = result.get("target_phase_id")
+        target_phase_name = result.get("target_phase")
+        action = result.get("action")
+        if target_phase_id and action in ("continue", "goto", "retry"):
+            # Mirror _fire_phase_transition's feedback-derivation: prefer
+            # the gate's own specific finding over the static reason, and
+            # substitute completion_notes when the gate reason is
+            # "result_missing" (the file read came up empty at this
+            # evaluation instant -- says nothing about whether the agent
+            # actually did the work).
+            metadata = result.get("metadata") or {}
+            spec_gate = metadata.get("spec_gate", {})
+            feedback = spec_gate.get("reason") or result.get("reason") or None
+            if spec_gate.get("result_missing"):
+                with get_db() as db:
+                    completing_task = db.query(Task).filter(
+                        Task.phase_id == phase_id, Task.status == "done"
+                    ).order_by(Task.completed_at.desc()).first()
+                if completing_task and completing_task.completion_notes:
+                    feedback = completing_task.completion_notes
+            dispatched = _create_phase_task(
+                workflow_id,
+                target_phase_id,
+                target_phase_name,
+                action,
+                logger,
+                feedback=feedback,
+                source_phase_name=phase_name,
+            )
+            if not dispatched:
+                logger.error(f"[ARBITRATE] {phase_name}: resolved to {action} -> {target_phase_name}, but failed to create its task -- pipeline may be stalled")
+            else:
+                # The entry warning above logs the arbiter's DECISION; this
+                # logs that it was actually EXECUTED -- the two previously
+                # diverged silently (a decision logged but whose task creation
+                # failed left no follow-up, and a successful one left no
+                # confirmation that the pipeline moved on).
+                logger.info(f"[ARBITRATE] {phase_name}: decision executed -- {action} -> {target_phase_name} task dispatched")
+    finally:
+        # mark_phase_complete's _close_execution sets status but never
+        # touches task_creation_claimed_at -- clear it directly rather than
+        # reusing _release_phase_task_creation_claim, which would wrongly
+        # flip a just-set "completed"/"failed" status back to "in_progress".
+        # Only now, after the next task dispatch above has been attempted
+        # (or we're unwinding from an exception) -- see the docstring.
+        with get_db() as db:
+            execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+            if execution:
+                execution.task_creation_claimed_at = None
+            db.commit()
