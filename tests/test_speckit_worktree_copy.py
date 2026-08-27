@@ -34,7 +34,7 @@ def test_copies_all_files_regardless_of_which_exist(tmp_path):
     feature = _make_feature(tmp_path)
     feature_folder = tmp_path / "feature_folder"
 
-    dest = copy_speckit_feature(feature, feature_folder)
+    dest = copy_speckit_feature(feature.dir_path, feature_folder)
 
     assert dest == feature_folder / CONTEXT_DIR_NAME / "specs" / "001-x"
     assert (dest / "spec.md").read_text() == "# spec"
@@ -50,7 +50,7 @@ def test_raises_file_not_found_if_source_vanished(tmp_path):
     _shutil.rmtree(feature.dir_path)
 
     with pytest.raises(FileNotFoundError):
-        copy_speckit_feature(feature, tmp_path / "feature_folder")
+        copy_speckit_feature(feature.dir_path, tmp_path / "feature_folder")
 
 
 def test_does_not_break_existing_copy_design_document(tmp_path):
