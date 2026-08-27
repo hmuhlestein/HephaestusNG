@@ -67,6 +67,7 @@ from src.autopilot.spec import DIFF_STABLE_REVIEW_PHASES, build_phase_output, ge
 from src.core.constants import (
     CONTEXT_DIR_NAME,
     DIAGNOSTIC_TASK_PREFIX,
+    PHASE0_DEFINITION_IDS,
 )
 from src.core.database import (
     Agent,
@@ -696,6 +697,24 @@ def _retry_exhausted_paused_workflows(logger: "OrchestratorLogger") -> int:
             .all()
         )
         for wf in candidates:
+            # A per-feature workflow (not Phase 0, which creates Feature
+            # rows rather than being linked from one) whose Feature no
+            # longer points back at it has been superseded by a later,
+            # separately-created retry attempt for the same feature --
+            # resuming it resurrects already-dead work instead of the
+            # design's real, current attempt. Observed live: a design
+            # completed successfully hours later via a third workflow: the
+            # first two failed attempts sat paused (missing worktree,
+            # never rebuilt -- this function doesn't rebuild worktrees,
+            # only _recover_abandoned_workflows_missing_worktree does),
+            # and once their cooldown passed, got resumed anyway,
+            # immediately failed again the same way, and looked to the
+            # user like the already-finished design "started processing
+            # again by itself".
+            if wf.definition_id not in PHASE0_DEFINITION_IDS:
+                if not db.query(Feature).filter_by(workflow_id=wf.id).first():
+                    continue
+
             if wf.paused_by == "system" and wf.paused_retry_count >= max_cycles:
                 logger.warning(f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} exhausted {max_cycles} auto-retry cycles -- giving up permanently, needs a manual resume")
                 wf.paused_by = "system-exhausted"

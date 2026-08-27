@@ -27,11 +27,13 @@ from src.autopilot.orchestrator.state import (
     _set_project_context,
 )
 from src.autopilot.orchestrator.engine_client import (
+    directory_content_hash,
     file_hash,
     get_agents,
     get_tasks,
     get_workflow_status,
 )
+from src.core.speckit_detection import find_speckit_features
 
 from typing import TYPE_CHECKING
 
@@ -447,10 +449,18 @@ def pick_next_design(
             # FRESH pick_next_design call to be eligible, not be picked
             # right back up by the pending-fallback query at the bottom of
             # this same call as if it had been queued all along.
-            pending_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending", archived_at=None).order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
+            # AutopilotDesign.name is added as a tertiary sort key: a
+            # directory-sourced row always has filename=NULL (NFR-02), and
+            # SQLite sorts NULL first in ascending order, which would bias
+            # every directory-sourced design ahead of any equal-ordinal
+            # file-sourced design without this. name is populated for both
+            # sources, so this restores a deterministic, source-independent
+            # tie-break without changing ordering for any all-file-sourced
+            # queue.
+            pending_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending", archived_at=None).order_by(AutopilotDesign.ordinal, AutopilotDesign.filename, AutopilotDesign.name).all()
 
             design = None
-            active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active", archived_at=None).order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
+            active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active", archived_at=None).order_by(AutopilotDesign.ordinal, AutopilotDesign.filename, AutopilotDesign.name).all()
             if active_designs:
                 logger.info(f"pick_next_design: found {len(active_designs)} active design(s), checking for incomplete work before considering pending designs")
                 for candidate in active_designs:
@@ -571,6 +581,26 @@ def pick_next_design(
                 db.commit()
 
                 # Construct DesignEntry from DB record
+                if design.source_dir:
+                    # Directory-sourced (REQ-07): reconstruct straight from
+                    # source_dir, never falling through to the file_path/
+                    # filename branches below (those are always NULL for a
+                    # directory-sourced row per NFR-02).
+                    source_path = Path(design.source_dir)
+                    if source_path.is_dir():
+                        entry = DesignEntry(
+                            path=source_path,
+                            name=design.name,
+                            content_hash=design.content_hash or directory_content_hash(source_path),
+                            db_id=design.id,
+                            source_dir=source_path,
+                            repo_id=design.repo_id,
+                        )
+                        logger.info(f"Selected from DB: {design.name} (ordinal={design.ordinal})")
+                        return entry
+                    logger.warning(f"Design directory not found: {source_path}")
+                    return None
+
                 # Try file_path first, fall back to filename-based path
                 design_path = None
                 if design.file_path:
@@ -660,20 +690,42 @@ def pick_next_design(
             else:
                 project = _db.query(AutopilotProject).filter_by(is_active=True).first()
             if project:
-                db_design = _db.query(AutopilotDesign).filter_by(project_id=project.id, filename=next_design.path.name).first()
-                if not db_design:
-                    db_design = AutopilotDesign(
-                        id=f"des-{_uuid.uuid4().hex[:12]}",
-                        project_id=project.id,
-                        filename=next_design.path.name,
-                        name=next_design.name,
-                        content_hash=next_design.content_hash,
-                        file_path=str(next_design.path),
-                        status="pending",
-                    )
-                    _db.add(db_design)
-                    _db.flush()
-                    logger.info(f"Auto-created AutopilotDesign row for {next_design.path.name} (none existed for project {project.id})")
+                if next_design.source_dir is not None:
+                    # Directory-sourced (REQ-01/02/07/NFR-02): dedup by
+                    # source_dir, not filename -- a directory-sourced
+                    # entry's path.name is the feature slug (e.g. "003-x"),
+                    # not a trustworthy dedup key on its own.
+                    db_design = _db.query(AutopilotDesign).filter_by(project_id=project.id, source_dir=str(next_design.source_dir)).first()
+                    if not db_design:
+                        db_design = AutopilotDesign(
+                            id=f"des-{_uuid.uuid4().hex[:12]}",
+                            project_id=project.id,
+                            filename=None,
+                            file_path=None,
+                            source_dir=str(next_design.source_dir),
+                            repo_id=next_design.repo_id,
+                            name=next_design.name,
+                            content_hash=next_design.content_hash,
+                            status="pending",
+                        )
+                        _db.add(db_design)
+                        _db.flush()
+                        logger.info(f"Auto-created AutopilotDesign row for {next_design.source_dir} (none existed for project {project.id})")
+                else:
+                    db_design = _db.query(AutopilotDesign).filter_by(project_id=project.id, filename=next_design.path.name).first()
+                    if not db_design:
+                        db_design = AutopilotDesign(
+                            id=f"des-{_uuid.uuid4().hex[:12]}",
+                            project_id=project.id,
+                            filename=next_design.path.name,
+                            name=next_design.name,
+                            content_hash=next_design.content_hash,
+                            file_path=str(next_design.path),
+                            status="pending",
+                        )
+                        _db.add(db_design)
+                        _db.flush()
+                        logger.info(f"Auto-created AutopilotDesign row for {next_design.path.name} (none existed for project {project.id})")
                 next_design.db_id = db_design.id
     except Exception as e:
         logger.warning(f"Could not link/create DB design row: {e}")

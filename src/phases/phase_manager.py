@@ -2470,16 +2470,16 @@ class PhaseManager:
                     outputs=serialize_for_text(phase_outputs),
                     next_steps=serialize_for_text(phase_next_steps),
                     working_directory=phase_wd,
-                    validation=serialize_for_text(phase_config.get("validation")),
-                    # NOT wrapped in serialize_for_text: self_review is a JSON
-                    # column and SQLAlchemy already serializes dict/list values
-                    # for JSON columns on its own. Passing it through
-                    # serialize_for_text would json.dumps() it into a string
-                    # first, so a later `phase.self_review.get("enabled")` read
-                    # would fail with AttributeError (str has no .get) --
-                    # exactly the latent bug in the `validation` line above,
-                    # which nothing has caught yet because no phase YAML sets
-                    # `validation:` today (see docs/GAP_CHECK_SELF_LOOP_DESIGN.md).
+                    # NOT wrapped in serialize_for_text: validation, like
+                    # self_review below, is a JSON column and SQLAlchemy
+                    # already serializes dict/list values for JSON columns
+                    # on its own. Passing it through serialize_for_text
+                    # would json.dumps() it into a string first, so a later
+                    # `phase.validation.get(...)` read would fail with
+                    # AttributeError (str has no .get) -- dormant only
+                    # because no phase YAML has set `validation:` yet (see
+                    # docs/GAP_CHECK_SELF_LOOP_DESIGN.md).
+                    validation=phase_config.get("validation"),
                     self_review=phase_config.get("self_review"),
                     # Per-phase CLI configuration (optional - falls back to global defaults)
                     cli_tool=phase_config.get("cli_tool"),

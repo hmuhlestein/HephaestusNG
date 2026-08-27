@@ -6196,7 +6196,7 @@ class TestRetryExhaustedPausedWorkflows:
         task_status="failed",
         task_retry_count=2,
     ):
-        from src.core.database import Phase, PhaseExecution, Task, Workflow
+        from src.core.database import Feature, Phase, PhaseExecution, Task, Workflow
 
         with db.session_scope() as session:
             session.add(
@@ -6209,6 +6209,15 @@ class TestRetryExhaustedPausedWorkflows:
                     paused_at=paused_at,
                     paused_retry_count=paused_retry_count,
                     status_reason="development: exhausted retries -- insufficient credits",
+                )
+            )
+            # A currently-relevant paused workflow is still the one its
+            # Feature points to -- see TestRetryDoesNotResurrectSuperseded
+            # Workflows for the case where it no longer is.
+            session.add(
+                Feature(
+                    id="feat-paused", design_id="des-paused", feature_key="f",
+                    name="F", scope="s", status="paused", workflow_id="wf-paused",
                 )
             )
             session.add(
@@ -6428,6 +6437,95 @@ class TestRetryExhaustedPausedWorkflows:
             assert old_task.retry_count == 2  # untouched
             stuck_task = session.query(Task).filter_by(id="task-stuck").first()
             assert stuck_task.retry_count == 0  # reset
+
+    def test_does_not_resurrect_a_superseded_workflow(self, orch_db_env, tmp_path):
+        """Regression (live incident): a per-feature workflow's Feature row
+        is reassigned to a NEW workflow_id the moment a later, separately-
+        created retry attempt for the same feature takes over (e.g. two
+        earlier failed attempts left paused with a missing worktree that
+        never got rebuilt, while a third attempt succeeded and finished
+        the design hours later). Once the old workflows' cooldown passed,
+        this function resumed them anyway -- they immediately failed the
+        same way again and got re-paused, which looked to the user like an
+        already-completed design "started processing again by itself".
+        Phase 0 workflows are exempt from this check: they CREATE Feature
+        rows rather than being linked from one, so they never have a
+        Feature.workflow_id pointing back at them even when current."""
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
+        from src.core.database import Feature, Task, Workflow
+
+        self._seed_paused_workflow(
+            orch_db_env, paused_at=datetime.utcnow() - timedelta(seconds=999999)
+        )
+        with orch_db_env.session_scope() as session:
+            # The Feature has moved on to a different, later workflow --
+            # "wf-paused" is no longer what it points to.
+            session.query(Feature).filter_by(id="feat-paused").update({"workflow_id": "wf-later-success", "status": "completed"})
+
+        recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
+
+        assert recovered == 0
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-paused").first()
+            assert wf.status == "paused"
+            task = session.query(Task).filter_by(id="task-stuck").first()
+            assert task.retry_count == 2  # untouched
+
+    def test_still_resumes_a_paused_phase0_workflow_with_no_feature_link(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger
+        from src.autopilot.orchestrator.phase_transitions import _retry_exhausted_paused_workflows
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-phase0-paused",
+                    name="Phase 0",
+                    phases_folder_path="/tmp",
+                    definition_id="feature_architect",
+                    status="paused",
+                    paused_by="system",
+                    paused_at=datetime.utcnow() - timedelta(seconds=999999),
+                    status_reason="feature_architect: exhausted retries",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-phase0",
+                    workflow_id="wf-phase0-paused",
+                    name="feature_architect",
+                    order=1,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-phase0",
+                    phase_id="phase-phase0",
+                    workflow_execution_id="wf-phase0-paused",
+                    status="in_progress",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-phase0-stuck",
+                    workflow_id="wf-phase0-paused",
+                    phase_id="phase-phase0",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    retry_count=2,
+                )
+            )
+
+        recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
+
+        assert recovered == 1
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-phase0-paused").first()
+            assert wf.status == "active"
 
 
 class TestAutoResumePausedWorkflow:
