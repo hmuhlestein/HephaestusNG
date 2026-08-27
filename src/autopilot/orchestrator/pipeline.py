@@ -85,7 +85,7 @@ from src.autopilot.orchestrator.state import (
     _delete_project_context,
     _workflow_belongs_to_project,
 )
-from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree, _create_designs_folder, _create_integration_worktree
+from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree, _copy_design_content, _create_designs_folder, _create_integration_worktree, copy_design_source
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, HEPHAESTUS_INSTALL_DIR, PHASE0_DEFINITION_IDS
 from src.core.database import DatabaseManager, Workflow, get_db, get_default_db_manager, utc_now
 from src.core.simple_config import get_config
@@ -555,9 +555,7 @@ def run_single_workflow(
         if "design_document" in (launch_params or {}):
             _dd = Path(launch_params["design_document"])
             if _dd.exists():
-                import shutil as _shutil
-
-                _shutil.copy2(_dd, wt_heph / "design.md")
+                _copy_design_content(_dd, wt_heph, "design.md", is_directory=_dd.is_dir())
                 logger.info(f"Copied design doc to worktree: {wt_heph / 'design.md'}")
     except Exception as e:
         logger.warning(f"Failed to create shared worktree, using project path: {e}")
@@ -944,6 +942,8 @@ def run_bugfix_single_feature(
     # isn't safe as a directory name component on every filesystem.
     feature_key = re.sub(r"[^a-z0-9\-_]", "", (design_entry.name or "fix").lower().replace(" ", "-"))[:40] or "fix"
 
+    assert design_entry.source_dir is None, f"bugfix workflow received a directory-sourced design: {design_entry.source_dir}"
+
     design_content = ""
     try:
         design_content = Path(design_entry.path).read_text()
@@ -1134,8 +1134,7 @@ def run_phase0(
     _update_design_status(design_entry.db_id, "decomposing", designs_folder=str(designs_folder), logger=logger)
 
     # Copy design document to permanent storage
-    dest = designs_folder / design_entry.path.name
-    shutil.copy2(design_entry.path, dest)
+    dest = copy_design_source(design_entry, designs_folder, filename=design_entry.path.name)
     logger.info(f"Copied design document to: {dest}")
 
     # Create integration worktree for Phase 0
@@ -1170,7 +1169,7 @@ def run_phase0(
         # Copy design doc into worktree
         wt_heph = worktree / CONTEXT_DIR_NAME
         wt_heph.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(design_entry.path, wt_heph / "design.md")
+        copy_design_source(design_entry, wt_heph)
 
         # Launch Phase 0 workflow
         launch_params = {
@@ -2049,7 +2048,7 @@ def _run_one_feature(
         wt_heph.mkdir(parents=True, exist_ok=True)
 
         # Copy design document
-        shutil.copy2(design_entry.path, wt_heph / "design.md")
+        copy_design_source(design_entry, wt_heph)
 
         # Copy features.json
         features_json_path = designs_folder / "features.json"
