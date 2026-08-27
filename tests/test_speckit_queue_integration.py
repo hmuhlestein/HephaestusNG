@@ -201,6 +201,55 @@ def test_pick_next_design_missing_source_dir_returns_none(queue_db, tmp_path):
     assert entry is None
 
 
+def test_pick_next_design_hash_failure_returns_none_not_generic_fallback(queue_db, tmp_path):
+    """spec.md deleted between an earlier scan and this pick, with no
+    content_hash cached on the row: directory_content_hash raises inside
+    the DB-first path. That must return None directly (adversarial review
+    WARNING fix), not propagate to the outer except and fall through to a
+    file-scan that could pick a completely different design.
+
+    A real design.md sits in the fallback queue_dir specifically so the
+    pre-fix behavior (exception bubbles up, DB-first path abandoned,
+    generic file-scan fallback runs) has something to wrongly pick up --
+    without it, both the buggy and fixed code happen to return None for
+    unrelated reasons and the test wouldn't distinguish them.
+    """
+    from src.autopilot.orchestrator.queue import pick_next_design
+    from src.core.database import AutopilotDesign
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    feature_dir = repo_path / "specs" / "007-gone"
+    feature_dir.mkdir(parents=True)  # exists, but spec.md inside does not
+
+    _make_project(queue_db, "proj-g", repo_path)
+    with queue_db.session_scope() as session:
+        session.add(
+            AutopilotDesign(
+                id="des-3",
+                project_id="proj-g",
+                filename=None,
+                file_path=None,
+                source_dir=str(feature_dir),
+                name="007-gone",
+                content_hash=None,  # never computed -- forces the hash path
+                status="pending",
+            )
+        )
+
+    queue_dir = tmp_path / "fallback_queue"
+    queue_dir.mkdir()
+    (queue_dir / "unrelated-design.md").write_text("a completely different design")
+
+    entry = pick_next_design(queue_dir, set(), _NullLogger(), project_id="proj-g")
+    assert entry is None
+
+    with queue_db.session_scope() as session:
+        # Still exactly one row -- the fallback scan never ran (and so
+        # never auto-created a row for unrelated-design.md in its place).
+        assert session.query(AutopilotDesign).count() == 1
+
+
 def test_auto_create_row_for_directory_sourced_design_and_round_trip(queue_db, tmp_path):
     from src.autopilot.orchestrator.queue import pick_next_design
     from src.core.database import AutopilotDesign

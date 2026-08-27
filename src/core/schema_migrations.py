@@ -926,35 +926,46 @@ def migrate_speckit_design_columns(engine):
     except Exception as e:
         logger.warning(f"speckit design columns migration failed (not just 'already exists' -- check this): {e}")
 
+    # rename+create+copy+drop must be ONE atomic unit: a crash between the
+    # RENAME and the INSERT would otherwise leave every design row stranded
+    # in autopilot_designs_old with no autopilot_designs table pointing back
+    # at it (silent total data loss -- adversarial review BLOCKER). SQLite's
+    # DDL statements DO participate in transactions, but pysqlite's default
+    # driver auto-commits before each DDL statement regardless of any
+    # surrounding `engine.begin()` -- a plain SQLAlchemy transaction does
+    # NOT actually make this atomic. The documented workaround is to put the
+    # raw DBAPI connection in autocommit mode (isolation_level = None) and
+    # drive the transaction with explicit BEGIN/COMMIT/ROLLBACK ourselves.
+    raw_conn = engine.raw_connection()
     try:
-        # engine.begin() runs rename+create+copy+drop as ONE transaction:
-        # committed only if every step succeeds, rolled back in full on any
-        # failure (crash, kill -9, exception) -- SQLite's DDL statements
-        # (CREATE/ALTER/DROP TABLE) participate in transactions same as DML,
-        # so a rollback here genuinely restores the original table intact
-        # rather than leaving autopilot_designs_old orphaned with no
-        # autopilot_designs to replace it. A prior version used two separate
-        # engine.connect()/commit() calls (rename, then create+copy+drop),
-        # which left a window where a crash after the rename committed but
-        # before the copy completed would silently lose every design row.
-        with engine.begin() as conn:
-            info = conn.execute(text("PRAGMA table_info(autopilot_designs)")).fetchall()
+        raw_conn.isolation_level = None
+        cur = raw_conn.cursor()
+        cur.execute("BEGIN IMMEDIATE")
+        try:
+            info = cur.execute("PRAGMA table_info(autopilot_designs)").fetchall()
             filename_col = next((row for row in info if row[1] == "filename"), None)
             if filename_col is None or filename_col[3] == 0:
+                cur.execute("ROLLBACK")
                 return  # table missing (fresh DB, handled by create_all) or already nullable
             col_list = ", ".join(row[1] for row in info)
-            conn.execute(text("ALTER TABLE autopilot_designs RENAME TO autopilot_designs_old"))
+            cur.execute("ALTER TABLE autopilot_designs RENAME TO autopilot_designs_old")
 
             from sqlalchemy.schema import CreateTable
 
             from src.core.database import AutopilotDesign
 
-            conn.execute(CreateTable(AutopilotDesign.__table__))
-            conn.execute(text(f"INSERT INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old"))
-            conn.execute(text("DROP TABLE autopilot_designs_old"))
-        logger.info("Rebuilt autopilot_designs with nullable filename")
+            cur.execute(str(CreateTable(AutopilotDesign.__table__).compile(engine)))
+            cur.execute(f"INSERT INTO autopilot_designs ({col_list}) SELECT {col_list} FROM autopilot_designs_old")
+            cur.execute("DROP TABLE autopilot_designs_old")
+            cur.execute("COMMIT")
+            logger.info("Rebuilt autopilot_designs with nullable filename")
+        except Exception:
+            cur.execute("ROLLBACK")
+            raise
     except Exception as e:
         logger.warning(f"autopilot_designs filename-nullable rebuild failed: {e}")
+    finally:
+        raw_conn.close()
 
 
 # ── Registry ─────────────────────────────────────────────────────────
