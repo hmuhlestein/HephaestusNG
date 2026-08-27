@@ -86,15 +86,8 @@ class TestSchemaAndMigration:
         db_path = tmp_path / "legacy.db"
         engine = create_engine(f"sqlite:///{db_path}")
         with engine.connect() as conn:
-            conn.execute(
-                text(
-                    "CREATE TABLE autopilot_projects (id VARCHAR PRIMARY KEY, "
-                    "name VARCHAR, base_dir VARCHAR)"
-                )
-            )
-            conn.execute(
-                text("INSERT INTO autopilot_projects (id, name, base_dir) VALUES ('p1', 'P', '/tmp')")
-            )
+            conn.execute(text("CREATE TABLE autopilot_projects (id VARCHAR PRIMARY KEY, name VARCHAR, base_dir VARCHAR)"))
+            conn.execute(text("INSERT INTO autopilot_projects (id, name, base_dir) VALUES ('p1', 'P', '/tmp')"))
             conn.commit()
 
         migrate_speckit_auto_scan_column(engine)
@@ -123,9 +116,7 @@ class TestPatchEndpoint:
         cm.__enter__ = Mock(return_value=db_session)
         cm.__exit__ = Mock(return_value=False)
 
-        with patch("src.core.database.get_db", return_value=cm), patch(
-            "src.mcp.autopilot.feature_review_routes._invalidate"
-        ):
+        with patch("src.core.database.get_db", return_value=cm), patch("src.mcp.autopilot.feature_review_routes._invalidate"):
             result = await set_speckit_auto_scan(proj.id, SpeckitAutoScanUpdate(speckit_auto_scan_enabled=True))
 
         assert result == {"speckit_auto_scan_enabled": True}
@@ -156,9 +147,7 @@ class TestPatchEndpoint:
         cm.__enter__ = Mock(return_value=db_session)
         cm.__exit__ = Mock(return_value=False)
 
-        with patch("src.core.database.get_db", return_value=cm), patch(
-            "src.mcp.autopilot.feature_review_routes._invalidate"
-        ):
+        with patch("src.core.database.get_db", return_value=cm), patch("src.mcp.autopilot.feature_review_routes._invalidate"):
             await set_speckit_auto_scan(proj_a.id, SpeckitAutoScanUpdate(speckit_auto_scan_enabled=True))
 
         db_session.refresh(proj_a)
@@ -226,6 +215,7 @@ class TestSyncSpeckitDesigns:
         _sync_speckit_designs(db_session, proj)
         original = db_session.query(AutopilotDesign).one()
         original_hash = original.content_hash
+        original_modified_at = original.modified_at
 
         (feature_dir / "spec.md").write_text("# Spec (edited)\n", encoding="utf-8")
         _sync_speckit_designs(db_session, proj)
@@ -234,6 +224,7 @@ class TestSyncSpeckitDesigns:
         assert len(rows) == 1
         assert rows[0].id == original.id
         assert rows[0].content_hash != original_hash
+        assert rows[0].modified_at > original_modified_at
 
     def test_non_pending_row_never_refreshed_or_duplicated(self, db_session, project_with_repo):
         proj, repo_path = project_with_repo
@@ -261,21 +252,49 @@ class TestSyncSpeckitDesigns:
         _make_feature(repo_path, "001", "bad", plan=True)
         _make_feature(repo_path, "002", "good", plan=True)
 
-        real_file_hash = __import__(
-            "src.autopilot.orchestrator.engine_client", fromlist=["file_hash"]
-        ).file_hash
+        from pathlib import Path as _Path
 
-        def flaky_file_hash(path):
-            if "001-bad" in str(path):
+        real_read_bytes = _Path.read_bytes
+
+        def flaky_read_bytes(self):
+            if "001-bad" in str(self):
                 raise OSError("simulated unreadable file")
-            return real_file_hash(path)
+            return real_read_bytes(self)
 
-        with patch("src.autopilot.orchestrator.engine_client.file_hash", flaky_file_hash):
+        with patch.object(_Path, "read_bytes", flaky_read_bytes):
             _sync_speckit_designs(db_session, proj)
 
         rows = db_session.query(AutopilotDesign).all()
         assert len(rows) == 1
         assert "002-good" in rows[0].file_path
+
+    def test_unexpected_error_propagates_instead_of_being_swallowed(self, db_session, project_with_repo):
+        proj, repo_path = project_with_repo
+        proj.speckit_auto_scan_enabled = True
+        db_session.commit()
+        _make_feature(repo_path, "001", "foo", plan=True)
+
+        def broken_max(*_args, **_kwargs):
+            raise TypeError("simulated programming bug")
+
+        with patch("src.autopilot.orchestrator.queue.func") as mock_func:
+            mock_func.max.side_effect = broken_max
+            with pytest.raises(TypeError):
+                _sync_speckit_designs(db_session, proj)
+
+    def test_detection_failure_logged_and_returns_without_raising(self, db_session, project_with_repo):
+        proj, repo_path = project_with_repo
+        proj.speckit_auto_scan_enabled = True
+        db_session.commit()
+        _make_feature(repo_path, "001", "foo", plan=True)
+
+        with patch(
+            "src.core.speckit_detection.find_speckit_features",
+            side_effect=RuntimeError("simulated detection failure"),
+        ):
+            _sync_speckit_designs(db_session, proj)  # must not raise
+
+        assert db_session.query(AutopilotDesign).count() == 0
 
     def test_toggle_does_not_change_detection_output(self, db_session, project_with_repo):
         proj, repo_path = project_with_repo

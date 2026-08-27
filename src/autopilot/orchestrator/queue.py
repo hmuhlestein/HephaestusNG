@@ -1,11 +1,16 @@
 """Design-queue scanning, picking, and status."""
 
+import hashlib
 import json
 import logging
 import os
 import subprocess
+import uuid as _uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Set, Tuple
+
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.autopilot.orchestrator.engine_client import (
     file_hash,
@@ -310,7 +315,18 @@ def _sync_speckit_designs(db, project) -> None:
 
     Each feature is synced in its own try/except + commit so one feature's
     failure (including a race against a concurrent writer) never discards
-    another feature's already-staged row in the same call (REQ-09).
+    another feature's already-staged row in the same call (REQ-09). Only
+    expected, transient DB/IO errors (IntegrityError, OperationalError,
+    OSError) are caught and rolled back here -- pick_next_design makes no
+    writes of its own before this call runs, so a rollback at this point
+    can only undo THIS feature's own not-yet-committed insert/update,
+    never a sibling feature's already-`db.commit()`-ed row (committed
+    transactions are durable) or a caller write from outside this
+    function. A genuine programming error (anything else) is logged at
+    ERROR with a traceback and re-raised rather than silently swallowed
+    as if it were one more transient sync failure (adversarial review
+    BLOCKER: broad `except Exception` here previously masked bugs as
+    routine WARNING-level noise).
 
     Deliberately does NOT archive/clean up a pending row whose feature
     stops appearing in find_speckit_features's output (e.g. a renamed or
@@ -323,30 +339,33 @@ def _sync_speckit_designs(db, project) -> None:
     """
     if not getattr(project, "speckit_auto_scan_enabled", False):
         return
-    from src.autopilot.orchestrator.engine_client import file_hash
     from src.core.database import AutopilotDesign, utc_now
     from src.core.speckit_detection import find_speckit_features
 
     try:
         features = find_speckit_features(db, project.id)
-    except Exception as e:
-        logger.warning(f"[SPECKIT-AUTOSCAN] detection failed for project {project.id[:8]}: {e}")
+    except Exception:
+        logger.error(f"[SPECKIT-AUTOSCAN] detection failed for project {project.id[:8]}", exc_info=True)
         return
 
     for feat in features:
         if not feat.has_plan:  # REQ-07
             continue
         spec_path = feat.dir_path / "spec.md"
-        if not spec_path.exists():
-            continue
-
-        filename = f"speckit/{feat.repo_label}/{feat.number}-{feat.slug}.md"
 
         try:
-            content_hash = file_hash(spec_path)
+            # Read once and derive both hash and size from the same bytes --
+            # separate stat()/read_bytes() calls could observe two different
+            # versions of a concurrently-edited spec.md (adversarial review
+            # WARNING: stat/hash race).
+            spec_bytes = spec_path.read_bytes()
         except OSError as e:
-            logger.warning(f"[SPECKIT-AUTOSCAN] cannot hash {spec_path}: {e}")
+            logger.warning(f"[SPECKIT-AUTOSCAN] cannot read {spec_path}: {e}")
             continue
+        content_hash = hashlib.sha256(spec_bytes).hexdigest()[:16]  # matches file_hash's truncation
+        size_bytes = len(spec_bytes)
+
+        filename = f"speckit/{feat.repo_label}/{feat.number}-{feat.slug}.md"
 
         try:
             # REQ-08 dedup key: (project_id, filename) -- the real unique
@@ -364,15 +383,11 @@ def _sync_speckit_designs(db, project) -> None:
                     # snapshot in place rather than silently building the
                     # stale version or attempting a duplicate insert.
                     existing.content_hash = content_hash
-                    existing.size_bytes = spec_path.stat().st_size
+                    existing.size_bytes = size_bytes
                     existing.modified_at = utc_now()
                     db.commit()
                     logger.info(f"[SPECKIT-AUTOSCAN] refreshed pending design {existing.id[:8]} for {feat.dir_name!r} (spec.md changed before pickup)")
                 continue
-
-            import uuid as _uuid
-
-            from sqlalchemy import func
 
             max_ordinal = db.query(func.max(AutopilotDesign.ordinal)).filter_by(project_id=project.id).scalar() or 0
             design = AutopilotDesign(
@@ -381,7 +396,7 @@ def _sync_speckit_designs(db, project) -> None:
                 filename=filename,
                 name=f"{feat.number}-{feat.slug}",
                 ordinal=max_ordinal + 1,
-                size_bytes=spec_path.stat().st_size,
+                size_bytes=size_bytes,
                 extension=".md",
                 content_hash=content_hash,
                 file_path=str(spec_path),
@@ -391,7 +406,7 @@ def _sync_speckit_designs(db, project) -> None:
             db.add(design)
             db.commit()
             logger.info(f"[SPECKIT-AUTOSCAN] queued Spec Kit feature {feat.dir_name!r} (repo={feat.repo_label}) as design {design.id[:8]}")
-        except Exception as e:
+        except (IntegrityError, OperationalError) as e:
             # Isolate this feature's failure from every other feature in
             # this same sync pass (REQ-09) -- a failure here must not
             # discard rows already committed for sibling features above,
@@ -399,6 +414,14 @@ def _sync_speckit_designs(db, project) -> None:
             db.rollback()
             logger.warning(f"[SPECKIT-AUTOSCAN] failed to sync {feat.dir_name!r}: {e}")
             continue
+        except Exception:
+            # Not an expected transient DB error -- a programming bug here
+            # must not be swallowed as routine sync noise (it would silently
+            # stop this feature, and every feature after it, from ever
+            # syncing again with no visible signal beyond a WARNING log).
+            db.rollback()
+            logger.error(f"[SPECKIT-AUTOSCAN] unexpected error syncing {feat.dir_name!r}", exc_info=True)
+            raise
 
 
 def pick_next_design(
