@@ -40,6 +40,20 @@ def test_single_feature_with_design_md_raises_both_inputs_present(tmp_path):
     assert labels == {"001-x", "design.md"}
 
 
+def test_feature_arg_resolves_even_with_design_md_present(tmp_path):
+    _make_feature_dir(tmp_path, "001-x", {"spec.md": "# spec"})
+    features = discover_speckit_features_unregistered(str(tmp_path))
+    resolved = resolve_feature_selection(features, feature_arg="001-x", repo_arg=None, design_md_present=True)
+    assert resolved.slug == "x"
+
+
+def test_discover_sorts_numerically_not_lexicographically(tmp_path):
+    _make_feature_dir(tmp_path, "10-bar", {"spec.md": "# spec"})
+    _make_feature_dir(tmp_path, "2-foo", {"spec.md": "# spec"})
+    features = discover_speckit_features_unregistered(str(tmp_path))
+    assert [f.number for f in features] == ["2", "10"]
+
+
 def test_two_features_no_selector_raises_multiple_features(tmp_path):
     _make_feature_dir(tmp_path, "001-x", {"spec.md": "# spec"})
     _make_feature_dir(tmp_path, "002-y", {"spec.md": "# spec"})
