@@ -243,3 +243,68 @@ class TestRunFeaturePipelinesRunsSameLayerGroupsConcurrently:
             "same-layer, dependency-unrelated sibling, not wait for it to "
             "finish first"
         )
+
+
+class TestRunFeaturePipelinesStartsNextLayerAsSoonAsItsOwnDependencyResolves:
+    """Regression, observed live: design speckit-autopilot-input's
+    speckit-cli-integration (depends only on speckit-detection-core, long
+    since completed) sat pending with no workflow ever started, purely
+    because speckit-phase-prompts -- same Kahn layer as detection-core
+    (both have no dependencies), zero dependency relationship to
+    cli-integration -- was still running. The OLD layer-batch loop waited
+    for detection-core's ENTIRE layer (both it and phase-prompts) to
+    fully drain via as_completed before even considering the next layer,
+    even though cli-integration's own, sole dependency had already
+    resolved. Unlike TestRunFeaturePipelinesRunsSameLayerGroupsConcurrently
+    above (a same-layer sibling blocking a same-layer sibling), this is a
+    same-layer sibling blocking a LATER-layer dependent.
+    """
+
+    def test_next_layer_feature_starts_while_an_unrelated_same_layer_sibling_still_runs(
+        self, mock_logger, design_entry, tmp_path
+    ):
+        import threading
+        import time
+
+        features_json = {
+            "features": [
+                {"id": "detection-core", "name": "Detection Core", "depends_on": [], "execution": "parallel"},
+                {"id": "phase-prompts", "name": "Phase Prompts", "depends_on": [], "execution": "parallel"},
+                {"id": "cli-integration", "name": "CLI Integration", "depends_on": ["detection-core"], "execution": "parallel"},
+            ]
+        }
+        phase_prompts_still_running = threading.Event()
+        cli_integration_started_while_phase_prompts_still_running = threading.Event()
+
+        def fake_run_one_feature(sdk, design_entry, feat, designs_folder, project_path, logger, state, max_iterations, project_id):
+            feat_id = feat["id"]
+            if feat_id == "phase-prompts":
+                phase_prompts_still_running.set()
+                time.sleep(0.3)
+                phase_prompts_still_running.clear()
+                return FeatureRunStatus.COMPLETED
+            if feat_id == "cli-integration":
+                # Give phase-prompts a moment to actually start before
+                # checking -- set only while its own sleep is still in
+                # flight, proving true overlap, not merely that both ran
+                # at some point in either order.
+                if phase_prompts_still_running.wait(timeout=0.2):
+                    cli_integration_started_while_phase_prompts_still_running.set()
+                return FeatureRunStatus.COMPLETED
+            return FeatureRunStatus.COMPLETED  # detection-core
+
+        with patch("src.autopilot.orchestrator.pipeline._run_one_feature", side_effect=fake_run_one_feature):
+            run_feature_pipelines(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                features_json=features_json,
+                designs_folder=tmp_path,
+                project_path=tmp_path,
+                logger=mock_logger,
+            )
+
+        assert cli_integration_started_while_phase_prompts_still_running.is_set(), (
+            "cli-integration must start as soon as its own dependency "
+            "(detection-core) resolves, not wait for an unrelated "
+            "same-layer sibling (phase-prompts) to finish too"
+        )
