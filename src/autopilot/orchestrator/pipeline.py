@@ -18,7 +18,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from src.autopilot.orchestrator.agent_registration import _register_orchestrator_agent
 from src.autopilot.orchestrator.config import (
@@ -2274,27 +2274,27 @@ def run_feature_pipelines(
     features = features_json.get("features", [])
     feature_results: Dict[str, FeatureRunStatus] = {}
 
-    # Resolve execution order. group_layers gives each execution_groups
-    # entry's Kahn layer -- see _resolve_execution_order's own docstring.
-    # Groups sharing a layer have NO dependency relationship (that's what
-    # a Kahn layer means), so they're merged into one flat feature list
-    # below and run concurrently, rather than draining execution_groups
-    # strictly one at a time. Observed live: feature frontend-multi-repo
-    # (same layer as, but listed after, the long-running recovery-cleanup-
-    # threading feature) sat untouched for hours despite having zero
-    # dependency relationship with it, purely because the old
-    # `for group in execution_groups` loop blocked on every earlier group
-    # regardless of layer.
-    execution_groups, group_layers = _resolve_execution_order(features, logger)
-    layer_batches: List[List[dict]] = []
-    current_layer_index = None
-    for group, layer_index in zip(execution_groups, group_layers):
-        if layer_index != current_layer_index:
-            layer_batches.append([])
-            current_layer_index = layer_index
-        layer_batches[-1].extend(group)
+    # Resolve execution order purely for its grouping (parallel-batch vs.
+    # sequential-solo, in the architect's original list order) and its
+    # cycle-detection fallback -- see _resolve_execution_order's own
+    # docstring. group_layers (each group's Kahn layer) is NOT used to
+    # gate dispatch below; only each group's actual dependency set is.
+    # Layer-gated dispatch (wait for every group in layer N, THEN consider
+    # layer N+1) previously blocked a later-layer group whose OWN
+    # dependencies were already satisfied behind an unrelated, still-
+    # running same-layer group that simply took longer. Observed live:
+    # design speckit-autopilot-input's speckit-cli-integration (depends
+    # only on speckit-detection-core, long since completed) sat pending
+    # with no workflow ever started, purely because speckit-phase-prompts
+    # -- same layer, zero dependency relationship -- was still running.
+    execution_groups, _group_layers = _resolve_execution_order(features, logger)
+    group_deps: List[set] = [
+        {dep for feat in group for dep in feat.get("depends_on", [])}
+        for group in execution_groups
+    ]
+    pending_group_indices = list(range(len(execution_groups)))
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
     # FeatureRunStatus members _run_one_feature/run_single_workflow can
     # return that do NOT mean the feature actually reached a resolved
@@ -2303,63 +2303,38 @@ def run_feature_pipelines(
     # fresh on every resume -- see run_single_workflow's start_time) both
     # mean "we stopped watching," not "this feature is done." Unlike
     # FAILED/SKIPPED/HARD_ERROR (genuine, if bad, resolutions -- see the
-    # comment below on why those don't block dependents), advancing to a
-    # later dependency layer after one of these is exactly how a
-    # still-in-progress dependency's dependents can start early: observed
-    # live, a feature whose dependency was still genuinely running (its
-    # own workflow status was "active", it simply hadn't finished within
-    # this walk's 2-hour polling window) had its dependent feature
-    # dispatched immediately after the dependency's run_single_workflow
-    # call returned TIMEOUT. See FeatureRunStatus.is_terminal --
-    # previously this checked a raw {"interrupted", "timeout"} string set
-    # against a status _run_one_feature could never actually return (it
-    # collapsed both into "failed" before returning), so this halt never
-    # fired in production; _run_one_feature now preserves them distinctly.
+    # comment below on why those don't block dependents), resolving a
+    # feature id (marking it in feature_results, satisfying dependents'
+    # group_deps checks) after one of these is exactly how a still-in-
+    # progress dependency's dependents can start early: observed live, a
+    # feature whose dependency was still genuinely running (its own
+    # workflow status was "active", it simply hadn't finished within this
+    # walk's 2-hour polling window) had its dependent feature dispatched
+    # immediately after the dependency's run_single_workflow call
+    # returned TIMEOUT. See FeatureRunStatus.is_terminal -- previously
+    # this checked a raw {"interrupted", "timeout"} string set against a
+    # status _run_one_feature could never actually return (it collapsed
+    # both into "failed" before returning), so this halt never fired in
+    # production; _run_one_feature now preserves them distinctly.
     halted_early = False
 
-    for features_to_run in layer_batches:
-        # Every feature in the layer is attempted -- a failed dependency no
-        # longer auto-skips its dependents. Skipping was a one-shot,
-        # permanent decision that nothing ever revisits (observed live: a
-        # dependency that failed transiently, e.g. from an unrelated
-        # workflow-timeout bug, later completed successfully, but its
-        # dependents stayed permanently "skipped" since skip status is
-        # never reconsidered). _resolve_execution_order's grouping still
-        # runs dependents after their dependencies complete; it just no
-        # longer discards them if a dependency didn't succeed.
-        if not features_to_run:
-            continue
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_FEATURES) as executor:
+        future_to_ctx: Dict[Any, Tuple[int, dict]] = {}
 
-        # Review mode: wait for any pending reviews before starting new features
-        if project_id and _should_pause_for_review(project_id):
-            _wait_for_pending_reviews(project_id, logger)
-
-        # Run features in this group
-        if len(features_to_run) == 1:
-            # Single feature - run directly
-            feat = features_to_run[0]
-            feature_key = feat.get("id", "unknown")
-            status = _run_one_feature(
-                sdk,
-                design_entry,
-                feat,
-                designs_folder,
-                project_path,
-                logger,
-                state,
-                max_iterations,
-                project_id,
-            )
-            feature_results[feature_key] = status
-            if not status.is_terminal:
-                halted_early = True
-        else:
-            # Multiple parallel features - use ThreadPoolExecutor
-            logger.info(f"Running {len(features_to_run)} features in parallel")
-
-            with ThreadPoolExecutor(max_workers=MAX_PARALLEL_FEATURES) as executor:
-                future_to_feature = {
-                    executor.submit(
+        def _dispatch_ready_groups() -> None:
+            resolved = set(feature_results.keys())
+            for idx in list(pending_group_indices):
+                if not group_deps[idx] <= resolved:
+                    continue
+                # Review mode: wait for any pending reviews before starting
+                # new features.
+                if project_id and _should_pause_for_review(project_id):
+                    _wait_for_pending_reviews(project_id, logger)
+                group = execution_groups[idx]
+                if len(group) > 1:
+                    logger.info(f"Running {len(group)} features in parallel")
+                for feat in group:
+                    future = executor.submit(
                         _run_one_feature,
                         sdk,
                         design_entry,
@@ -2370,33 +2345,50 @@ def run_feature_pipelines(
                         state,
                         max_iterations,
                         project_id,
-                    ): feat
-                    for feat in features_to_run
-                }
+                    )
+                    future_to_ctx[future] = (idx, feat)
+                pending_group_indices.remove(idx)
 
-                for future in as_completed(future_to_feature):
-                    feat = future_to_feature[future]
-                    feature_key = feat.get("id", "unknown")
-                    try:
-                        status = future.result()
-                        feature_results[feature_key] = status
-                        if not status.is_terminal:
-                            halted_early = True
-                    except Exception as e:
-                        logger.error(f"Feature {feature_key} failed: {e}")
-                        feature_results[feature_key] = FeatureRunStatus.FAILED
+        _dispatch_ready_groups()
 
-        # Stop before starting the next dependency layer -- a non-terminal
-        # result means at least one feature in this layer may still be
-        # genuinely in progress (or a stop was explicitly requested), so its
-        # dependents in later layers must not be dispatched yet. The next
-        # walk of this same design (background_phase_advancement_sweep's
-        # resume, or the continuous pipeline's own re-pick) will re-resolve
-        # execution_groups fresh and correctly re-encounter this layer
-        # before ever reaching the ones after it.
-        if halted_early:
-            logger.info("Halting feature pipeline walk early: a feature in this layer did not reach a resolved status (interrupted/timeout) -- not dispatching later dependency layers this walk.")
-            break
+        while future_to_ctx:
+            done, _pending = wait(list(future_to_ctx.keys()), return_when=FIRST_COMPLETED)
+            for future in done:
+                _idx, feat = future_to_ctx.pop(future)
+                feature_key = feat.get("id", "unknown")
+                try:
+                    status = future.result()
+                except Exception as e:
+                    logger.error(f"Feature {feature_key} failed: {e}")
+                    status = FeatureRunStatus.FAILED
+                feature_results[feature_key] = status
+                if not status.is_terminal:
+                    halted_early = True
+
+            # A non-terminal result means at least one feature may still be
+            # genuinely in progress (or a stop was explicitly requested),
+            # so groups depending on it must not be dispatched yet -- stop
+            # picking up new work, but let whatever's still in-flight above
+            # keep running/draining normally. The next walk of this same
+            # design (background_phase_advancement_sweep's resume, or the
+            # continuous pipeline's own re-pick) will re-resolve
+            # execution_groups fresh and correctly re-encounter whatever's
+            # still pending.
+            if halted_early:
+                if pending_group_indices:
+                    logger.info("Halting feature pipeline walk early: a feature did not reach a resolved status (interrupted/timeout) -- not dispatching remaining dependency groups this walk.")
+                continue
+
+            _dispatch_ready_groups()
+
+    # Every feature is attempted once its dependencies resolve -- a failed
+    # dependency no longer auto-skips its dependents. Skipping was a
+    # one-shot, permanent decision that nothing ever revisits (observed
+    # live: a dependency that failed transiently, e.g. from an unrelated
+    # workflow-timeout bug, later completed successfully, but its
+    # dependents stayed permanently "skipped" since skip status is never
+    # reconsidered). Dependents still only dispatch after their
+    # dependencies resolve; a failure just doesn't discard them.
 
     # Log summary
     logger.info("Feature pipeline results:")

@@ -5187,6 +5187,88 @@ class TestResolveArbitrationOutcome:
             feedback=None, source_phase_name="requirements",
         )
 
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
+    def test_claim_stays_held_until_after_next_task_is_dispatched(
+        self, mock_pm_class, mock_create_task, db_manager, sample_workflow
+    ):
+        """Regression: releasing task_creation_claimed_at right after
+        mark_phase_complete (before dispatching the next task) reopens the
+        exact race this claim exists to close -- phase.retry_count is
+        never reset once a phase's retry budget is exhausted, so a
+        concurrent caller that sees this phase as unclaimed in that gap
+        can re-evaluate it via the normal path and immediately re-hit the
+        still-exhausted budget, re-arbitrating the same question this call
+        is in the middle of answering. Observed live (workflow b1019f3d):
+        design_review arbitrated 3 times in 4 minutes, all reaching
+        "continue" against the same already-fixed architecture.md.
+
+        Asserts ordering directly: the claim must still be held at the
+        moment _create_phase_task runs, and only cleared after."""
+        from src.autopilot.orchestrator.phase_transitions import _resolve_arbitration_outcome
+
+        self._seed_claimed_phase(db_manager)
+        mock_pm = MagicMock()
+        mock_pm_class.return_value = mock_pm
+        mock_pm.mark_phase_complete.return_value = {
+            "action": "continue",
+            "target_phase": "implementation",
+            "target_phase_id": "phase-2",
+            "should_continue": True,
+        }
+
+        claim_state_during_dispatch = {}
+
+        def _check_claim_still_held(*args, **kwargs):
+            with db_manager.session_scope() as session:
+                execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+                claim_state_during_dispatch["held"] = execution.task_creation_claimed_at is not None
+            return True
+
+        mock_create_task.side_effect = _check_claim_still_held
+
+        _resolve_arbitration_outcome(
+            "wf-1", "phase-1", "requirements", "continue", None, "fine, proceed", MagicMock()
+        )
+
+        assert claim_state_during_dispatch["held"] is True, (
+            "claim was released before _create_phase_task ran -- reopens the race"
+        )
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is None, "claim must still be released once done"
+
+    @patch("src.autopilot.orchestrator.phase_transitions._create_phase_task")
+    @patch("src.autopilot.orchestrator.arbitration.PhaseManager")
+    def test_claim_released_even_if_dispatch_raises(
+        self, mock_pm_class, mock_create_task, db_manager, sample_workflow
+    ):
+        """The claim must not be permanently stranded if _create_phase_task
+        itself raises -- moving the release to after the dispatch (the fix
+        for the race above) must not reintroduce the original bug this
+        claim's finally-release was written to prevent."""
+        from src.autopilot.orchestrator.phase_transitions import _resolve_arbitration_outcome
+
+        self._seed_claimed_phase(db_manager)
+        mock_pm = MagicMock()
+        mock_pm_class.return_value = mock_pm
+        mock_pm.mark_phase_complete.return_value = {
+            "action": "continue",
+            "target_phase": "implementation",
+            "target_phase_id": "phase-2",
+            "should_continue": True,
+        }
+        mock_create_task.side_effect = RuntimeError("simulated dispatch failure")
+
+        with pytest.raises(RuntimeError):
+            _resolve_arbitration_outcome(
+                "wf-1", "phase-1", "requirements", "continue", None, "fine, proceed", MagicMock()
+            )
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is None
+
 
 class TestMaybeResolveArbitration:
     """End-to-end-ish: seeds a real arbitration Task + claimed
