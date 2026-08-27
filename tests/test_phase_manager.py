@@ -382,7 +382,6 @@ class TestMarkPhaseCompleteLockRetry:
         pm.workflow_id = "wf-1"
 
         from sqlalchemy import event
-        from sqlalchemy.exc import OperationalError
 
         @event.listens_for(seeded_workflow.engine, "before_cursor_execute")
         def always_locked(conn, cursor, statement, parameters, context, executemany):

@@ -227,10 +227,10 @@ def test_start_execution_does_not_double_serialize_validation():
     YAML has set validation: yet; the moment one does, a later
     phase.validation.get(...) read would hit AttributeError (str has no
     .get)."""
+    import tempfile
+
     from src.core.database import DatabaseManager, Phase
     from src.phases.phase_manager import PhaseManager
-
-    import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         db_manager = DatabaseManager(f"{tmp}/test.db")
         db_manager.create_tables()

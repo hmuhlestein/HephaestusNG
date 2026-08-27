@@ -7,11 +7,12 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
 from unittest.mock import patch
 
+import pytest
+
 from src.core.simple_config import Config
-from src.interfaces.llm_interface import OpenAIProvider, OpenRouterProvider, LLM_PROVIDERS
+from src.interfaces.llm_interface import LLM_PROVIDERS, OpenAIProvider, OpenRouterProvider
 
 
 def test_openrouter_in_providers_registry():

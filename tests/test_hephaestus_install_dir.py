@@ -16,12 +16,11 @@ root regardless of which worktree it's run from.
 """
 
 import subprocess
-from pathlib import Path
 
 import pytest
 
 from src.core.constants import _resolve_install_dir
-from src.core.simple_config import PathsConfig, HEPHAESTUS_INSTALL_DIR
+from src.core.simple_config import HEPHAESTUS_INSTALL_DIR, PathsConfig
 
 
 def _run_git(*args, cwd):

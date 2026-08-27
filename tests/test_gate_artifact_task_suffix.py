@@ -19,8 +19,6 @@ score a phase's CURRENT state without a specific task in mind.
 
 from pathlib import Path
 
-import pytest
-
 from src.autopilot.spec import (
     _newest_glob_match,
     _output_glob_pattern,

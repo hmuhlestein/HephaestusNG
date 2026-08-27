@@ -10,7 +10,6 @@ caller; this endpoint's whole contract is returning cleanup results, so it
 needs an awaited executor call instead of a direct blocking call.
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

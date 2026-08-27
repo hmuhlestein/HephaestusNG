@@ -415,9 +415,11 @@ class TestAuthenticationAPI:
             AuditLog,
             LoginAttempt,
             Role,
-            User as UserModel,
             UserRole,
             UserSession,
+        )
+        from src.core.user_models import (
+            User as UserModel,
         )
 
         user = UserModel(
@@ -486,7 +488,8 @@ class TestAuthenticationAPI:
         from datetime import datetime, timedelta
 
         from src.auth.auth_service import AuthService
-        from src.core.user_models import Role, User as UserModel, UserRole
+        from src.core.user_models import Role, UserRole
+        from src.core.user_models import User as UserModel
 
         user = UserModel(
             id=str(uuid.uuid4()),

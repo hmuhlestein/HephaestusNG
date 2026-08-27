@@ -64,8 +64,8 @@ def _make_workflow(db, wf_id, project_id, design_doc):
 async def test_requeue_does_not_pause_another_projects_same_named_design(
     queue_db, isolate_queue_order
 ):
-    from src.mcp.autopilot.queue_routes import requeue_design
     from src.core.database import Workflow
+    from src.mcp.autopilot.queue_routes import requeue_design
 
     _make_workflow(queue_db, "wf-mine", "proj-a", "/repos/a/designs/design.md")
     _make_workflow(queue_db, "wf-theirs", "proj-b", "/repos/b/designs/design.md")
@@ -83,8 +83,8 @@ async def test_requeue_does_not_match_a_design_merely_containing_the_name(
     queue_db, isolate_queue_order
 ):
     """`filename in design_doc` also matched supersets of the name."""
-    from src.mcp.autopilot.queue_routes import requeue_design
     from src.core.database import Workflow
+    from src.mcp.autopilot.queue_routes import requeue_design
 
     _make_workflow(queue_db, "wf-exact", "proj-a", "/repos/a/designs/api.md")
     _make_workflow(queue_db, "wf-superset", "proj-a", "/repos/a/designs/legacy-api.md")

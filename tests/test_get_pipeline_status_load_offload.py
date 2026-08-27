@@ -24,9 +24,8 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_persistent_state_load_runs_off_the_event_loop_thread(db_manager, monkeypatch):
-    from src.autopilot.orchestrator.state import PipelineState
-
     import src.mcp.autopilot.control_routes as routes
+    from src.autopilot.orchestrator.state import PipelineState
 
     # Force a cache miss so execution reaches the PersistentPipelineState.load()
     # call under test (the only state-read path now -- state.json was retired).

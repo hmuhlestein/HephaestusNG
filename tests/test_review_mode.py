@@ -25,7 +25,6 @@ from src.core.database import (
     Task,
     TaskPromptOverride,
     Workflow,
-    WorkflowDefinition,
 )
 
 
@@ -141,7 +140,7 @@ class TestReviewModeSchema:
 
 class TestPauseForReview:
     def test_pause_sets_workflow_and_feature_status(self, db_session, review_setup):
-        from unittest.mock import patch, Mock, MagicMock
+        from unittest.mock import MagicMock, Mock, patch
 
         feature, workflow, _, _ = review_setup
 
@@ -164,7 +163,7 @@ class TestPauseForReview:
         assert feature.status == "paused"
 
     def test_pause_idempotent(self, db_session, review_setup):
-        from unittest.mock import patch, Mock, MagicMock
+        from unittest.mock import MagicMock, Mock, patch
 
         feature, workflow, _, _ = review_setup
 
@@ -270,8 +269,9 @@ class TestPromptBuilderOverride:
     """Test that TaskPromptOverride is injected into the initial message."""
 
     def test_override_prepended_to_task_description(self, db_session, review_setup):
+        from unittest.mock import MagicMock, Mock, patch
+
         from src.agents.prompt_builder import AgentPromptBuilder
-        from unittest.mock import Mock, patch, MagicMock
 
         feature, workflow, task, agent = review_setup
 
@@ -310,8 +310,9 @@ class TestPromptBuilderOverride:
         assert feedback_pos < desc_pos
 
     def test_no_override_no_extra_text(self, db_session, review_setup):
+        from unittest.mock import MagicMock, Mock, patch
+
         from src.agents.prompt_builder import AgentPromptBuilder
-        from unittest.mock import Mock, patch, MagicMock
 
         feature, workflow, task, agent = review_setup
 

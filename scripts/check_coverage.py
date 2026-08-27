@@ -20,7 +20,6 @@ Exit codes:
 """
 
 import argparse
-import os
 import subprocess
 import sys
 from pathlib import Path

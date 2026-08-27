@@ -1293,12 +1293,12 @@ class TestReviewFeatureApproveLocalMergeFallback:
         work (a genuine conflict either way), the response must say so --
         not report bare "approved" success while the PR sits unmerged."""
         project_dir, worktree_dir = git_project_with_feature_branch
-        from src.core.database import AutopilotProject, Feature, Workflow
-
         # Make the local merge conflict too: commit a colliding change to
         # new_file.txt directly on main, so main and the feature branch
         # both touch the same new path.
         import subprocess as sp
+
+        from src.core.database import AutopilotProject, Feature, Workflow
         (project_dir / "new_file.txt").write_text("main's own conflicting content\n")
         sp.run(["git", "add", "-A"], cwd=project_dir, check=True, capture_output=True)
         sp.run(["git", "commit", "-m", "conflicting main change"], cwd=project_dir, check=True, capture_output=True)

@@ -149,7 +149,8 @@ async def test_validation_passed_shares_session_with_result_service(
     was never actually persisted."""
     import contextlib
 
-    from src.core.database import AgentResult, get_db as real_get_db
+    from src.core.database import AgentResult
+    from src.core.database import get_db as real_get_db
     from src.mcp.memory_api import GiveValidationReviewRequest, give_validation_review
 
     async def noop_process_queue():

@@ -10,9 +10,8 @@ This module tests all MCP endpoint changes for multi-workflow support:
 import uuid
 
 import pytest
-from pydantic import ValidationError
-
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from src.mcp.server import app
 from src.mcp.server._shared import (

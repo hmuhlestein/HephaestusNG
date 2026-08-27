@@ -232,7 +232,8 @@ def _feature_status(metrics: dict) -> str:
 def _extract_pr_url(db, workflow_id: str, phase_map: dict) -> Optional[str]:
     """Extract PR URL from the git_expert task's key_learnings."""
     import re
-    from src.core.database import Memory, Task, Phase
+
+    from src.core.database import Memory, Phase, Task
     if not workflow_id:
         return None
     # Find the git_expert phase

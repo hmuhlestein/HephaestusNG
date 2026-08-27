@@ -101,6 +101,7 @@ class TestBackgroundQueueProcessorProjectScoping:
         import uuid
 
         from src.core.database import Task
+
         # Phase 1c: server.py is now a package. background_loops owns the
         # sweep/queue-processor functions and reads server_state from
         # _shared, so patch where the name is looked up.

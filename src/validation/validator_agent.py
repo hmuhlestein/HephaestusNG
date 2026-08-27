@@ -1,9 +1,7 @@
 """Validator agent spawning and management."""
 
-import asyncio
 import logging
 import uuid
-from typing import Any, Dict
 
 from sqlalchemy.orm import Session
 

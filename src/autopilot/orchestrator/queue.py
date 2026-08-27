@@ -5,9 +5,20 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, List, Optional, Set, Tuple
 
-
+from src.autopilot.orchestrator.engine_client import (
+    directory_content_hash,
+    file_hash,
+    get_agents,
+    get_tasks,
+    get_workflow_status,
+)
+from src.autopilot.orchestrator.state import (
+    DesignEntry,
+    _get_project_context,
+    _set_project_context,
+)
 from src.core.constants import (
     CONTEXT_DIR_NAME,
     DESIGN_CONTEXT_SUBDIR,
@@ -20,22 +31,7 @@ from src.core.database import (
     Workflow,
     get_db,
 )
-
-from src.autopilot.orchestrator.state import (
-    DesignEntry,
-    _get_project_context,
-    _set_project_context,
-)
-from src.autopilot.orchestrator.engine_client import (
-    directory_content_hash,
-    file_hash,
-    get_agents,
-    get_tasks,
-    get_workflow_status,
-)
 from src.core.speckit_detection import find_speckit_features
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -68,8 +64,8 @@ def is_design_fully_complete(workflow_id: str, logger: "OrchestratorLogger") -> 
     # Use derive_workflow_status to check if the workflow is actually done.
     # This replaces a hand-rolled "all tasks done + all phases completed"
     # check that was missing the phase-completeness gate.
-    from src.core.status_derivation import derive_workflow_status
     from src.core.database import get_db
+    from src.core.status_derivation import derive_workflow_status
     with get_db() as db:
         derived = derive_workflow_status(db, workflow_id, write_back=False)
     if derived == "completed":
@@ -192,20 +188,13 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: l
                     # features are all pending (e.g. server crashed between
                     # marking processed and creating features), re-queue it.
                     try:
-                        from src.core.database import (
-                            AutopilotDesign as _AD,
-                        )
-                        from src.core.database import (
-                            Feature as _Feat,
-                        )
-                        from src.core.database import (
-                            get_db as _gdb,
-                        )
+                        from src.core.database import AutopilotDesign, Feature
+                        from src.core.database import get_db as _gdb
 
                         with _gdb() as _db:
-                            _des = _db.query(_AD).filter_by(content_hash=content_hash).first()
+                            _des = _db.query(AutopilotDesign).filter_by(content_hash=content_hash).first()
                             if _des:
-                                _feats = _db.query(_Feat).filter_by(design_id=_des.id).all()
+                                _feats = _db.query(Feature).filter_by(design_id=_des.id).all()
                                 if not _feats or all(f.status == "pending" for f in _feats):
                                     logger.warning(f"[SELF-HEAL] Design {_des.name} is in processed_hashes but has no features or all pending — re-queuing")
                                     processed_hashes.discard(content_hash)
@@ -230,11 +219,11 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: l
     # (REQ-12), read once here rather than per-feature.
     if project_id:
         try:
-            from src.core.database import AutopilotProject as _AP
+            from src.core.database import AutopilotProject
             from src.core.database import get_db as _gdb
 
             with _gdb() as _db:
-                _project = _db.query(_AP).filter_by(id=project_id).first()
+                _project = _db.query(AutopilotProject).filter_by(id=project_id).first()
                 _autoscan_enabled = bool(_project and _project.speckit_autoscan_enabled)
                 for feature in find_speckit_features(_db, project_id):  # unconditional -- REQ-03/06
                     if not _autoscan_enabled:
@@ -249,16 +238,11 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: l
                     if content_hash in processed_hashes:
                         # Same self-heal check as the file-sourced branch above.
                         try:
-                            from src.core.database import (
-                                AutopilotDesign as _AD,
-                            )
-                            from src.core.database import (
-                                Feature as _Feat,
-                            )
+                            from src.core.database import AutopilotDesign, Feature
 
-                            _des = _db.query(_AD).filter_by(content_hash=content_hash).first()
+                            _des = _db.query(AutopilotDesign).filter_by(content_hash=content_hash).first()
                             if _des:
-                                _feats = _db.query(_Feat).filter_by(design_id=_des.id).all()
+                                _feats = _db.query(Feature).filter_by(design_id=_des.id).all()
                                 if not _feats or all(f.status == "pending" for f in _feats):
                                     logger.warning(f"[SELF-HEAL] Design {_des.name} is in processed_hashes but has no features or all pending — re-queuing")
                                     processed_hashes.discard(content_hash)

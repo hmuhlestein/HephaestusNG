@@ -16,7 +16,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.autopilot.orchestrator import run_feature_pipelines
-
 from src.autopilot.orchestrator.state import DesignEntry, FeatureRunStatus
 
 

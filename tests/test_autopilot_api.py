@@ -60,8 +60,7 @@ def client(autopilot_dirs, tmp_path, monkeypatch):
 
     from src.core.database import DatabaseManager
     from src.mcp.autopilot import _shared as autopilot_api
-    from src.mcp.autopilot import control_routes
-    from src.mcp.autopilot import router
+    from src.mcp.autopilot import control_routes, router
 
     # Route handlers that call DatabaseManager(None) (e.g. list_features'
     # _scan_features) read HEPHAESTUS_TEST_DB fresh on every call -- point

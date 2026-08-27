@@ -726,7 +726,7 @@ def _print_backend_error() -> None:
     log_path = Path(HEPHAESTUS_LOGS_DIR) / "backend.log"
     if not log_path.exists():
         print()
-        print(f"  Check the backend log for details:")
+        print("  Check the backend log for details:")
         print(f"    {log_path}")
         return
     try:
@@ -745,5 +745,5 @@ def _print_backend_error() -> None:
         print(f"  Full log: {log_path}")
     else:
         print()
-        print(f"  Check the backend log for details:")
+        print("  Check the backend log for details:")
         print(f"    {log_path}")

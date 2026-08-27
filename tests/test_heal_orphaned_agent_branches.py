@@ -304,6 +304,7 @@ class TestHealOrphanedAgentBranches:
         itself governs how many candidates get subprocess-checked at all,
         which is the actual regression."""
         import git.cmd
+
         import src.autopilot.orchestrator.worktree_integration as _wi
         from src.autopilot.orchestrator.worktree_integration import heal_orphaned_agent_branches
 

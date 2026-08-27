@@ -61,7 +61,15 @@ from src.autopilot.orchestrator.policy import (
     detect_hard_error,
     detect_impasse,
 )
-from src.autopilot.orchestrator.queue import _archived_design_for_workflow, _get_phase0_completion, _has_resumable_active_design, _set_workflow_type, _update_design_status, is_design_fully_complete, pick_next_design
+from src.autopilot.orchestrator.queue import (
+    _archived_design_for_workflow,
+    _get_phase0_completion,
+    _has_resumable_active_design,
+    _set_workflow_type,
+    _update_design_status,
+    is_design_fully_complete,
+    pick_next_design,
+)
 from src.autopilot.orchestrator.reporting import _empty_report, _generate_design_report_html
 from src.autopilot.orchestrator.runtime_registries import (
     _get_orchestrator_agent_id,

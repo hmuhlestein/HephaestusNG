@@ -18,7 +18,7 @@ call satisfies the goal too.
 """
 
 import uuid
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
 import pytest
 

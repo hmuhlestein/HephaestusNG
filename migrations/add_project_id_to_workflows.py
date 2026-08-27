@@ -3,8 +3,8 @@
 Run with: python migrations/add_project_id_to_workflows.py
 """
 
-import sqlite3
 import os
+import sqlite3
 import sys
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "hephaestus.db")

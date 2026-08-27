@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
 
 from src.cli.commands import autopilot as autopilot_cli
 
-
 # cli/main.py builds this as f"http://{args.host}:{args.port}" before
 # dispatching, so every command function can rely on it being present.
 API_BASE = "http://127.0.0.1:9999"

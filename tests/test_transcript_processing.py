@@ -3,7 +3,6 @@
 from unittest.mock import MagicMock, patch
 
 
-
 def _make_agent(tmux_session_name="test_agent", status="working", current_task_id=None):
     """Create a mock agent object."""
     agent = MagicMock()

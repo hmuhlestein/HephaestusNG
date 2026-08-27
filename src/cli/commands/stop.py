@@ -6,7 +6,7 @@ import subprocess
 import time
 
 from src.cli.utils import is_process_running, output, read_pid, remove_pid
-from src.cli.utils.ports import get_port_listeners, kill_port_listeners
+from src.cli.utils.ports import get_port_listeners
 
 
 def register(subparsers):

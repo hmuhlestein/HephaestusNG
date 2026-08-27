@@ -47,8 +47,9 @@ def _ensure_real_mcp_sdk_importable() -> None:
 _ensure_real_mcp_sdk_importable()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mcp"))
 import mcp_client  # noqa: E402
-from mcp import ClientSession, StdioServerParameters  # noqa: E402
 from mcp.client.stdio import stdio_client  # noqa: E402
+
+from mcp import ClientSession, StdioServerParameters  # noqa: E402
 
 
 @pytest.mark.asyncio

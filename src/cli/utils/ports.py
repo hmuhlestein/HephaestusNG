@@ -1,9 +1,9 @@
 """Safe port-kill helper shared by stop, start, and watchdog."""
 
-import subprocess
-import signal
-import os
 import logging
+import os
+import signal
+import subprocess
 
 logger = logging.getLogger(__name__)
 
