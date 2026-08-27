@@ -294,3 +294,50 @@ class TestMigrationRebuildsFilenameNullable:
                 conn.execute(text("INSERT INTO features (id, design_id, feature_key, name, scope, created_at) VALUES ('feat-2','des-1','k2','Feat2','s','2026-01-01')"))
                 conn.commit()
             engine.dispose()
+
+
+def test_add_column_failure_other_than_duplicate_is_not_silently_swallowed(monkeypatch, caplog):
+    """Adversarial review WARNING: the three ALTER TABLE ADD COLUMN steps
+    used to catch bare Exception and always assume "column already
+    exists". A real failure (disk full, locked table, permissions) must
+    log/propagate instead of vanishing with zero signal.
+    """
+    import logging
+
+    import src.core.schema_migrations as sm
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+        engine = create_engine(f"sqlite:///{db_path}")
+        with engine.connect() as conn:
+            conn.execute(text("CREATE TABLE autopilot_designs (id VARCHAR PRIMARY KEY, filename VARCHAR(500) NOT NULL)"))
+            conn.execute(text("CREATE TABLE autopilot_projects (id VARCHAR PRIMARY KEY)"))
+            conn.commit()
+
+        original_execute = engine.__class__.connect
+
+        class _FakeConn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, stmt):
+                sql = str(stmt)
+                if "ADD COLUMN repo_id" in sql:
+                    raise RuntimeError("disk I/O error")  # not a duplicate-column message
+                raise AssertionError(f"unexpected statement reached fake connection: {sql}")
+
+            def commit(self):
+                pass
+
+        def _fake_connect(self):
+            return _FakeConn()
+
+        monkeypatch.setattr(engine.__class__, "connect", _fake_connect)
+        with caplog.at_level(logging.WARNING):
+            sm.migrate_speckit_design_columns(engine)
+        monkeypatch.setattr(engine.__class__, "connect", original_execute)
+
+        assert any("disk I/O error" in r.message and "check this" in r.message for r in caplog.records)

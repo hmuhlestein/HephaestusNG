@@ -302,6 +302,16 @@ def test_pick_next_design_missing_source_dir_returns_none(queue_db, tmp_path):
     entry = pick_next_design(tmp_path / "unused_queue", set(), _NullLogger(), project_id="proj-e")
     assert entry is None
 
+    with queue_db.session_scope() as session:
+        design = session.query(AutopilotDesign).filter_by(id="des-2").first()
+        # Adversarial review BLOCKER: this row was marked "processing" just
+        # before the directory-missing check ran. pending_designs/
+        # active_designs queries only ever select "pending"/"active" rows --
+        # left at "processing" it would never be picked up (or surfaced as
+        # failed) again.
+        assert design.status == "failed"
+        assert design.error is not None
+
 
 def test_pick_next_design_hash_failure_returns_none_not_generic_fallback(queue_db, tmp_path):
     """spec.md deleted between an earlier scan and this pick, with no
@@ -347,6 +357,11 @@ def test_pick_next_design_hash_failure_returns_none_not_generic_fallback(queue_d
     assert entry is None
 
     with queue_db.session_scope() as session:
+        design = session.query(AutopilotDesign).filter_by(id="des-3").first()
+        assert design.status == "failed"  # not left stranded at "processing"
+        assert design.error is not None
+
+    with queue_db.session_scope() as session:
         # Still exactly one row -- the fallback scan never ran (and so
         # never auto-created a row for unrelated-design.md in its place).
         assert session.query(AutopilotDesign).count() == 1
@@ -385,3 +400,44 @@ def test_auto_create_row_for_directory_sourced_design_and_round_trip(queue_db, t
     assert second.source_dir == feature_dir
     with queue_db.session_scope() as session:
         assert session.query(AutopilotDesign).filter_by(project_id="proj-f").count() == 1
+
+
+def test_self_heal_check_failure_is_logged_not_silently_swallowed(queue_db, tmp_path, monkeypatch, caplog):
+    """Adversarial review WARNING: the self-heal re-queue check's
+    except Exception used to `continue` with zero logging. A transient DB
+    error there must be visible (WARNING log), not indistinguishable from
+    "correctly didn't need re-queuing".
+    """
+    import logging
+
+    import src.core.database as core_db
+    from src.autopilot.orchestrator.engine_client import directory_content_hash
+    from src.autopilot.orchestrator.queue import scan_design_queue
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    feature_dir = _make_feature_dir(repo_path, "010-flaky", has_plan=True)
+    _make_project(queue_db, "proj-j", repo_path, speckit_autoscan_enabled=True)
+    _make_repo(queue_db, "repo-j", "proj-j", "primary", repo_path)
+
+    content_hash = directory_content_hash(feature_dir)
+    processed_hashes = {content_hash}  # forces the self-heal branch to run
+
+    original_get_db = core_db.get_db
+    call_count = {"n": 0}
+
+    def _get_db_fails_on_self_heal_call(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 2:  # 1st call = detection session, 2nd = self-heal
+            raise RuntimeError("simulated self-heal DB failure")
+        return original_get_db(*args, **kwargs)
+
+    monkeypatch.setattr(core_db, "get_db", _get_db_fails_on_self_heal_call)
+
+    queue_dir = tmp_path / "empty_queue"
+    queue_dir.mkdir()
+    with caplog.at_level(logging.WARNING):
+        designs = scan_design_queue(queue_dir, processed_hashes, project_id="proj-j")
+
+    assert designs == []  # failure -> treated as "don't re-queue", not a crash
+    assert any("[SELF-HEAL]" in r.message and "simulated self-heal DB failure" in r.message for r in caplog.records)

@@ -263,7 +263,8 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: l
                                     continue
                             else:
                                 continue
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"[SELF-HEAL] re-queue check failed for hash {content_hash}: {e}")
                         continue
                 designs.append(
                     DesignEntry(
@@ -588,6 +589,15 @@ def pick_next_design(
                                 content_hash = directory_content_hash(source_path)
                             except (FileNotFoundError, OSError) as e:
                                 logger.warning(f"Could not hash design directory {source_path}: {e}")
+                                # This design was just marked "processing" above
+                                # (line 566) -- pending/active queries never
+                                # select it again, so without resetting status
+                                # here it is permanently stranded with no
+                                # workflow and no visible failure anywhere the
+                                # UI/API reads design status from.
+                                design.status = "failed"
+                                design.error = f"Could not hash design directory {source_path}: {e}"
+                                db.commit()
                                 return None
                         entry = DesignEntry(
                             path=source_path,
@@ -600,6 +610,12 @@ def pick_next_design(
                         logger.info(f"Selected from DB: {design.name} (ordinal={design.ordinal})")
                         return entry
                     logger.warning(f"Design directory not found: {source_path}")
+                    # Same stranding risk as the hash-failure branch above --
+                    # this row was just marked "processing" and would
+                    # otherwise never be picked up (or retried) again.
+                    design.status = "failed"
+                    design.error = f"Design directory not found: {source_path}"
+                    db.commit()
                     return None
 
                 # Try file_path first, fall back to filename-based path

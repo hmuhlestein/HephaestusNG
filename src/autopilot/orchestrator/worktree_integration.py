@@ -48,10 +48,13 @@ def create_feature_folder(project_path: Path, design_name: str, logger: "Orchest
     return feature_folder
 
 
-def _copy_design_content(source: Path, heph_dir: Path, filename: str, is_directory: bool) -> Path:
+def copy_design_source_path(source: Path, heph_dir: Path, filename: str, is_directory: bool) -> Path:
     """Shared copy primitive behind copy_design_source and every call site
     that only has a raw path (not a DesignEntry) available -- e.g.
     run_single_workflow, which only has launch_params["design_document"].
+    Public (not underscore-prefixed): pipeline.py imports this directly for
+    that path-only call site, so it is a real, intentional entry point into
+    this module, not an internal it's reaching past.
 
     File case: copies source to heph_dir / filename. Directory case:
     recursively copies the entire tree to heph_dir / "specs" / source.name,
@@ -63,7 +66,15 @@ def _copy_design_content(source: Path, heph_dir: Path, filename: str, is_directo
     if is_directory:
         dest = heph_dir / "specs" / source.name
         if dest.exists():
-            shutil.rmtree(dest)
+            # A stale non-directory at this exact path (partial prior run,
+            # manual touch, naming collision) would make shutil.rmtree raise
+            # NotADirectoryError -- handle it explicitly rather than let an
+            # opaque exception bubble out of what looks like a normal
+            # directory-replacement path.
+            if dest.is_dir():
+                shutil.rmtree(dest)
+            else:
+                dest.unlink()
         shutil.copytree(source, dest)
         return dest
     dest = heph_dir / filename
@@ -96,8 +107,8 @@ def copy_design_source(design_entry: DesignEntry, heph_dir: Path, filename: str 
             design_entry.source_dir (directory-sourced) does not exist.
     """
     if design_entry.source_dir is not None:
-        return _copy_design_content(design_entry.source_dir, heph_dir, filename, is_directory=True)
-    return _copy_design_content(design_entry.path, heph_dir, filename, is_directory=False)
+        return copy_design_source_path(design_entry.source_dir, heph_dir, filename, is_directory=True)
+    return copy_design_source_path(design_entry.path, heph_dir, filename, is_directory=False)
 
 
 def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Path:

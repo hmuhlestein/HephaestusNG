@@ -908,20 +908,26 @@ def migrate_speckit_design_columns(engine):
 
     Idempotent - safe to call on every startup.
     """
+
+    def _add_column_or_raise(conn, ddl: str) -> None:
+        """Swallow only "duplicate column" -- the expected outcome when this
+        already ran. Anything else (disk full, table locked, permissions)
+        must not be silently absorbed: a genuine failure here means
+        repo_id/source_dir/speckit_autoscan_enabled never get created, and
+        every caller downstream hits a much less obvious "no such column"
+        error with no link back to this migration.
+        """
+        try:
+            conn.execute(text(ddl))
+        except Exception as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+
     try:
         with engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN repo_id VARCHAR"))
-            except Exception:
-                pass  # Column already exists
-            try:
-                conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN source_dir TEXT"))
-            except Exception:
-                pass  # Column already exists
-            try:
-                conn.execute(text("ALTER TABLE autopilot_projects ADD COLUMN speckit_autoscan_enabled BOOLEAN NOT NULL DEFAULT 0"))
-            except Exception:
-                pass  # Column already exists
+            _add_column_or_raise(conn, "ALTER TABLE autopilot_designs ADD COLUMN repo_id VARCHAR")
+            _add_column_or_raise(conn, "ALTER TABLE autopilot_designs ADD COLUMN source_dir TEXT")
+            _add_column_or_raise(conn, "ALTER TABLE autopilot_projects ADD COLUMN speckit_autoscan_enabled BOOLEAN NOT NULL DEFAULT 0")
             conn.commit()
             logger.info("Migrated speckit design columns")
     except Exception as e:
