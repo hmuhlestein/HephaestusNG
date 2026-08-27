@@ -130,3 +130,146 @@ class TestPrintPipelineStatus:
         autopilot_cli._print_pipeline_status({"running": False})
         out = capsys.readouterr().out
         assert "Running projects" not in out
+
+
+def _start_args(project_path, **overrides):
+    base = {
+        "project_path": str(project_path),
+        "design_queue": None,
+        "max_iterations": 3,
+        "drop_db": False,
+        "feature": None,
+        "repo": None,
+        "api_base": API_BASE,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def _git_project(tmp_path):
+    (tmp_path / ".git").mkdir()
+    return tmp_path
+
+
+class TestStartPipelineSpeckitForwarding:
+    """--feature/--repo forwarding (REQ-10/11/12/13) and 422 rendering."""
+
+    def _running_status_stops_immediately(self):
+        return MagicMock(status_code=200, json=lambda: {"running": False})
+
+    def test_no_feature_omits_speckit_params(self, tmp_path):
+        project = _git_project(tmp_path)
+        mock_post = MagicMock(return_value=MagicMock(status_code=200, json=lambda: {"project": str(project)}))
+        mock_get = MagicMock(return_value=self._running_status_stops_immediately())
+        with patch("requests.post", mock_post), patch("requests.get", mock_get), patch("time.sleep"):
+            rc = autopilot_cli.start_pipeline(_start_args(project))
+
+        assert rc == 0
+        _, kwargs = mock_post.call_args
+        assert "feature" not in kwargs["params"]
+        assert "repo" not in kwargs["params"]
+
+    def test_feature_forwarded_without_repo(self, tmp_path):
+        project = _git_project(tmp_path)
+        mock_post = MagicMock(return_value=MagicMock(status_code=200, json=lambda: {"project": str(project)}))
+        mock_get = MagicMock(return_value=self._running_status_stops_immediately())
+        with patch("requests.post", mock_post), patch("requests.get", mock_get), patch("time.sleep"):
+            autopilot_cli.start_pipeline(_start_args(project, feature="001-x"))
+
+        _, kwargs = mock_post.call_args
+        assert kwargs["params"]["feature"] == "001-x"
+        assert "repo" not in kwargs["params"]
+
+    def test_feature_and_repo_both_forwarded(self, tmp_path):
+        project = _git_project(tmp_path)
+        mock_post = MagicMock(return_value=MagicMock(status_code=200, json=lambda: {"project": str(project)}))
+        mock_get = MagicMock(return_value=self._running_status_stops_immediately())
+        with patch("requests.post", mock_post), patch("requests.get", mock_get), patch("time.sleep"):
+            autopilot_cli.start_pipeline(_start_args(project, feature="001-x", repo="backend"))
+
+        _, kwargs = mock_post.call_args
+        assert kwargs["params"]["feature"] == "001-x"
+        assert kwargs["params"]["repo"] == "backend"
+
+    def test_ambiguous_selection_renders_candidates_and_returns_1(self, tmp_path, capsys):
+        project = _git_project(tmp_path)
+        body = {
+            "code": "MULTIPLE_FEATURES",
+            "message": "Multiple Spec Kit features found; pass --feature to select one",
+            "candidates": ["001-x", "002-y"],
+        }
+        mock_post = MagicMock(return_value=MagicMock(status_code=422, json=lambda: {"detail": body}))
+        with patch("requests.post", mock_post):
+            rc = autopilot_cli.start_pipeline(_start_args(project))
+
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "Multiple Spec Kit features found" in out
+        assert "001-x" in out and "002-y" in out
+
+
+class TestCheckSpeckitReadiness:
+    def _check_args(self, project_path, **overrides):
+        base = {"project_path": str(project_path), "feature": None, "repo": None, "api_base": API_BASE}
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    def test_reports_missing_files_and_clarification_markers(self, tmp_path, capsys):
+        data = {
+            "multi_repo_scan": True,
+            "features": [
+                {
+                    "number": "001",
+                    "slug": "x",
+                    "repo_label": None,
+                    "missing_files": ["plan.md"],
+                    "needs_clarification": ["which auth method?"],
+                }
+            ],
+        }
+        with patch("requests.get", return_value=MagicMock(status_code=200, json=lambda: data)):
+            rc = autopilot_cli.check_speckit_readiness(self._check_args(tmp_path))
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "001-x" in out
+        assert "Missing: plan.md" in out
+        assert "which auth method?" in out
+
+    def test_ready_feature_reports_ready(self, tmp_path, capsys):
+        data = {
+            "multi_repo_scan": True,
+            "features": [{"number": "001", "slug": "x", "repo_label": None, "missing_files": [], "needs_clarification": []}],
+        }
+        with patch("requests.get", return_value=MagicMock(status_code=200, json=lambda: data)):
+            autopilot_cli.check_speckit_readiness(self._check_args(tmp_path))
+
+        assert "Ready." in capsys.readouterr().out
+
+    def test_no_features_found(self, tmp_path, capsys):
+        data = {"multi_repo_scan": True, "features": []}
+        with patch("requests.get", return_value=MagicMock(status_code=200, json=lambda: data)):
+            rc = autopilot_cli.check_speckit_readiness(self._check_args(tmp_path))
+
+        assert rc == 0
+        assert "No Spec Kit features found." in capsys.readouterr().out
+
+    def test_ambiguous_selection_renders_candidates_but_never_fails(self, tmp_path, capsys):
+        """REQ-15: voluntary check must never fail the command, even on an
+        ambiguous --feature match."""
+        body = {"code": "AMBIGUOUS_REPO", "message": "ambiguous across repos", "candidates": ["001-x (backend)", "001-x (frontend)"]}
+        with patch("requests.get", return_value=MagicMock(status_code=422, json=lambda: {"detail": body})):
+            rc = autopilot_cli.check_speckit_readiness(self._check_args(tmp_path, feature="001"))
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "ambiguous across repos" in out
+
+    def test_backend_unreachable_never_fails(self, tmp_path, capsys):
+        import requests
+
+        with patch("requests.get", side_effect=requests.exceptions.ConnectionError()):
+            rc = autopilot_cli.check_speckit_readiness(self._check_args(tmp_path))
+
+        assert rc == 0
+        assert "Backend not running" in capsys.readouterr().out

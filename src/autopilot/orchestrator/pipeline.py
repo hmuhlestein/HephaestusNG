@@ -85,7 +85,7 @@ from src.autopilot.orchestrator.state import (
     _delete_project_context,
     _workflow_belongs_to_project,
 )
-from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree, _copy_design_content, _create_designs_folder, _create_integration_worktree, copy_design_source
+from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree, _create_designs_folder, _create_integration_worktree, copy_speckit_feature
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, HEPHAESTUS_INSTALL_DIR, PHASE0_DEFINITION_IDS
 from src.core.database import DatabaseManager, Workflow, get_db, get_default_db_manager, utc_now
 from src.core.simple_config import get_config
@@ -978,6 +978,22 @@ def run_bugfix_single_feature(
     return features_json, designs_folder
 
 
+def _copy_design_input_into_worktree(design_entry: DesignEntry, worktree: Path) -> None:
+    """Populate <worktree>/.hephaestus/ with this run's design input. A
+    Spec Kit-selected entry copies its whole feature directory (spec.md,
+    plan.md, tasks.md, data-model.md, contracts/, etc -- REQ-03/FR-002a)
+    instead of a single design.md, so every Spec Kit-aware phase prompt has
+    what it needs regardless of which phase reads first. Shared by both
+    worktree-creation call sites (Phase 0 and per-feature) so they can't
+    silently diverge."""
+    wt_heph = worktree / CONTEXT_DIR_NAME
+    wt_heph.mkdir(parents=True, exist_ok=True)
+    if design_entry.speckit_feature_dir is not None:
+        copy_speckit_feature(design_entry.speckit_feature_dir, worktree)
+    else:
+        shutil.copy2(design_entry.path, wt_heph / "design.md")
+
+
 def run_phase0(
     sdk,
     design_entry: DesignEntry,
@@ -1167,9 +1183,7 @@ def run_phase0(
     phase0_succeeded = False
     try:
         # Copy design doc into worktree
-        wt_heph = worktree / CONTEXT_DIR_NAME
-        wt_heph.mkdir(parents=True, exist_ok=True)
-        copy_design_source(design_entry, wt_heph)
+        _copy_design_input_into_worktree(design_entry, worktree)
 
         # Launch Phase 0 workflow
         launch_params = {
@@ -2048,7 +2062,7 @@ def _run_one_feature(
         wt_heph.mkdir(parents=True, exist_ok=True)
 
         # Copy design document
-        copy_design_source(design_entry, wt_heph)
+        _copy_design_input_into_worktree(design_entry, worktree)
 
         # Copy features.json
         features_json_path = designs_folder / "features.json"

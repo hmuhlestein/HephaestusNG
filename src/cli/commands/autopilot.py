@@ -21,7 +21,16 @@ def register(subparsers):
         "--max-iterations", type=int, default=3, help="Max iterations per design"
     )
     s.add_argument("--drop-db", action="store_true", help="Drop database first")
+    s.add_argument("--feature", help="Spec Kit feature to build (NNN or NNN-name)")
+    s.add_argument("--repo", help="Repo label to disambiguate --feature in a multi-repo project")
     s.set_defaults(func=start_pipeline)
+
+    # check
+    c = sub.add_parser("check", help="Voluntary Spec Kit feature readiness check (never blocks start)")
+    c.add_argument("--project-path", "-p", required=True, help="Project directory")
+    c.add_argument("--feature", help="Spec Kit feature to check (NNN or NNN-name); omit to check all")
+    c.add_argument("--repo", help="Repo label to disambiguate --feature in a multi-repo project")
+    c.set_defaults(func=check_speckit_readiness)
 
     # stop
     st = sub.add_parser("stop", help="Stop the autopilot pipeline")
@@ -74,6 +83,70 @@ def _resolve_project_id_by_path(project_path, api_base):
     return None
 
 
+def _print_speckit_selection_error(resp):
+    """Render a 422 {code, message, candidates} body as readable text
+    instead of a raw JSON blob (REQ-10's "error listing available
+    directories")."""
+    try:
+        detail = resp.json().get("detail", {})
+    except Exception:
+        detail = {}
+    message = detail.get("message") or resp.text
+    candidates = detail.get("candidates") or []
+    print(f"Error: {message}")
+    if candidates:
+        print("Available options:")
+        for c in candidates:
+            print(f"  - {c}")
+
+
+def check_speckit_readiness(args):
+    import requests
+
+    project_path = Path(args.project_path).resolve()
+    params = {"project_path": str(project_path)}
+    if getattr(args, "feature", None):
+        params["feature"] = args.feature
+    if getattr(args, "repo", None):
+        params["repo"] = args.repo
+
+    try:
+        resp = requests.get(f"{args.api_base}/api/autopilot/speckit/check", params=params, timeout=10)
+    except requests.exceptions.ConnectionError:
+        print("Error: Backend not running. Start it with: heph start")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 0
+
+    if resp.status_code == 422:
+        _print_speckit_selection_error(resp)
+        return 0
+    if resp.status_code != 200:
+        print(f"Error: {resp.status_code} - {resp.text}")
+        return 0
+
+    data = resp.json()
+    features = data.get("features", [])
+    if not data.get("multi_repo_scan", True):
+        print("Note: project not yet registered -- single-repo scan only.")
+    if not features:
+        print("No Spec Kit features found.")
+        return 0
+    for f in features:
+        label = f"{f['number']}-{f['slug']}" + (f" (repo: {f['repo_label']})" if f.get("repo_label") else "")
+        print(f"{label}:")
+        if f["missing_files"]:
+            print(f"  Missing: {', '.join(f['missing_files'])}")
+        if f["needs_clarification"]:
+            print(f"  NEEDS CLARIFICATION ({len(f['needs_clarification'])}):")
+            for marker in f["needs_clarification"]:
+                print(f"    - {marker}")
+        if not f["missing_files"] and not f["needs_clarification"]:
+            print("  Ready.")
+    return 0  # voluntary check -- never fails the command (REQ-15)
+
+
 def start_pipeline(args):
     import requests
 
@@ -100,13 +173,21 @@ def start_pipeline(args):
 
     # Call the API to start the pipeline (single spawn path)
     try:
+        params = {
+            "project_path": str(project_path),
+            "design_queue": str(design_queue),
+            "max_iterations": args.max_iterations,
+        }
+        feature = getattr(args, "feature", None)
+        if feature:
+            params["feature"] = feature
+            repo = getattr(args, "repo", None)
+            if repo:
+                params["repo"] = repo
+
         resp = requests.post(
             f"{args.api_base}/api/autopilot/start",
-            params={
-                "project_path": str(project_path),
-                "design_queue": str(design_queue),
-                "max_iterations": args.max_iterations,
-            },
+            params=params,
             timeout=10,
         )
         if resp.status_code == 200:
@@ -116,6 +197,9 @@ def start_pipeline(args):
             print()
             print("Press Ctrl+C to stop.")
             print()
+        elif resp.status_code == 422:
+            _print_speckit_selection_error(resp)
+            return 1
         else:
             print(f"Error: {resp.status_code} - {resp.text}")
             return 1

@@ -501,6 +501,43 @@ async def browse_project_files(project_id: str, path: str = Query("")):
     return BrowseResult(path=rel_path, parent=parent, entries=entries)
 
 
+@router.get("/projects/{project_id}/speckit/features")
+async def list_project_speckit_features(project_id: str):
+    """Dashboard picker's data source (REQ-10), project_id-scoped to match
+    this file's REST convention -- the dashboard only has projectId on
+    hand, not a raw project_path. Thin wrapper around
+    speckit.discover_speckit_features; same shape as
+    control_routes.list_speckit_features."""
+    from src.autopilot.orchestrator.speckit import discover_speckit_features
+    from src.core.database import AutopilotProject, ProjectRepo, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        features = discover_speckit_features(db, project_id, proj.base_dir)
+        primary_repo = db.query(ProjectRepo).filter_by(project_id=project_id, is_primary=True).first()
+        primary_repo_id = primary_repo.id if primary_repo else None
+
+    return [
+        {
+            "number": f.number,
+            "slug": f.slug,
+            # None for the project's PRIMARY repo (even once ProjectRepo rows
+            # exist, discover_speckit_features sets a real label on every
+            # repo including primary -- see repo_id_for_path's own
+            # tie-break). The frontend's file-browse endpoints only ever
+            # reach base_dir/the primary repo, so this is what the dashboard
+            # picker actually needs to decide "selectable here" vs "needs
+            # --repo on the CLI" -- not "is this project multi-repo at all."
+            "repoLabel": None if f.repo_id == primary_repo_id else f.repo_label,
+            "hasPlan": f.plan_path is not None,
+            "hasTasks": f.tasks_path is not None,
+        }
+        for f in features
+    ]
+
+
 @router.get("/projects/{project_id}/browse/content")
 async def browse_project_file_content(project_id: str, path: str = Query(...)):
     """Read the content of a .md/.txt file under a project's base_dir."""

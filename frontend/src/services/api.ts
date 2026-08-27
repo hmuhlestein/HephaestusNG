@@ -889,6 +889,11 @@ export const apiService = {
     return data;
   },
 
+  getAutopilotProjectSpeckitFeatures: async (projectId: string): Promise<{ number: string; slug: string; repoLabel: string | null; hasPlan: boolean; hasTasks: boolean }[]> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/speckit/features`);
+    return data;
+  },
+
   reorderAutopilotProjectDesigns: async (projectId: string, designIds: string[]): Promise<void> => {
     await api.put(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/reorder`, { design_ids: designIds });
   },

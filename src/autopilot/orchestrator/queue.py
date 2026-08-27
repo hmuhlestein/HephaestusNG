@@ -163,7 +163,65 @@ def is_design_fully_complete(workflow_id: str, logger: "OrchestratorLogger") -> 
     return True, "All phases done, branches merged"
 
 
-def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: list = None, project_id: Optional[str] = None) -> List[DesignEntry]:
+def _speckit_content_hash(feature) -> str:
+    """Combined hash over (spec.md + plan.md) bytes -- file_hash() takes a
+    file, not a directory (Gotcha #1), so this hashes the two files whose
+    content changing should count as "new/updated" (REQ-17) and combines
+    them into one dedup key."""
+    import hashlib
+
+    spec_hash = file_hash(feature.spec_path)
+    plan_hash = file_hash(feature.plan_path) if feature.plan_path else ""
+    return hashlib.sha256((spec_hash + plan_hash).encode()).hexdigest()[:16]
+
+
+def _scan_speckit_features(project_id: str, processed_hashes: Set[str]) -> List[DesignEntry]:
+    """REQ-17/18: DesignEntry per new/changed Spec Kit feature with plan.md
+    present, for a project that has speckit_auto_scan enabled. Never raises
+    (NFR-07) -- a discovery failure yields no entries, not a crash."""
+    from src.autopilot.orchestrator.speckit import discover_speckit_features
+    from src.core.database import AutopilotProject, get_db
+
+    entries: List[DesignEntry] = []
+    try:
+        with get_db() as db:
+            project = db.query(AutopilotProject).filter_by(id=project_id).first()
+            if project is None:
+                return []
+            features = discover_speckit_features(db, project_id, project.base_dir)
+    except Exception as e:
+        logger.warning(f"[SPECKIT] auto-scan discovery failed for project {project_id}: {e}")
+        return []
+
+    for feature in features:
+        if feature.plan_path is None:
+            continue  # REQ-18: spec.md alone is not enough for auto-scan
+        content_hash = _speckit_content_hash(feature)
+        if content_hash in processed_hashes:
+            continue
+        entries.append(
+            DesignEntry(
+                path=feature.spec_path,
+                name=f"{feature.number}-{feature.slug}",
+                content_hash=content_hash,
+                speckit_feature_dir=feature.dir_path,
+            )
+        )
+    return entries
+
+
+def scan_design_queue(
+    queue_dir: Path,
+    processed_hashes: Set[str],
+    extra_dirs: list = None,
+    speckit_project_id: Optional[str] = None,
+) -> List[DesignEntry]:
+    """extra_dirs/existing behavior unchanged when speckit_project_id is None
+    (REQ-19: disabled projects take zero automatic action). When set,
+    additionally recognizes new/updated Spec Kit specs/<NNN>-<name>/ feature
+    dirs -- gated by plan.md presence (REQ-18, stricter than manual
+    `heph autopilot start`) -- as queued designs, using the same dedup
+    (processed_hashes) and self-heal semantics as a design.md drop."""
     designs = []
     dirs = [queue_dir]
     # Also scan docs/spec-queue if it exists as a sibling of the primary queue.
@@ -224,69 +282,22 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: l
                     )
                 )
 
-    # Spec Kit directory detection (REQ-03/06), per-repo, unconditional --
-    # detection never depends on speckit_autoscan_enabled (NFR-05). The
-    # setting only gates whether a detected feature is appended below
-    # (REQ-12), read once here rather than per-feature.
-    if project_id:
-        try:
-            from src.core.database import AutopilotProject as _AP
-            from src.core.database import get_db as _gdb
-
-            with _gdb() as _db:
-                _project = _db.query(_AP).filter_by(id=project_id).first()
-                _autoscan_enabled = bool(_project and _project.speckit_autoscan_enabled)
-                for feature in find_speckit_features(_db, project_id):  # unconditional -- REQ-03/06
-                    if not _autoscan_enabled:
-                        continue  # detected, never queued (REQ-12)
-                    if not feature.has_plan:
-                        continue  # detected, not ready to auto-build yet (REQ-13)
-                    try:
-                        content_hash = directory_content_hash(feature.dir_path)
-                    except (FileNotFoundError, OSError) as e:
-                        logger.warning(f"[SPECKIT-QUEUE] skipping {feature.dir_name}: {e}")
-                        continue
-                    if content_hash in processed_hashes:
-                        # Same self-heal check as the file-sourced branch above.
-                        try:
-                            from src.core.database import (
-                                AutopilotDesign as _AD,
-                            )
-                            from src.core.database import (
-                                Feature as _Feat,
-                            )
-
-                            _des = _db.query(_AD).filter_by(content_hash=content_hash).first()
-                            if _des:
-                                _feats = _db.query(_Feat).filter_by(design_id=_des.id).all()
-                                if not _feats or all(f.status == "pending" for f in _feats):
-                                    logger.warning(f"[SELF-HEAL] Design {_des.name} is in processed_hashes but has no features or all pending — re-queuing")
-                                    processed_hashes.discard(content_hash)
-                                else:
-                                    continue
-                            else:
-                                continue
-                        except Exception:
-                            continue
-                    designs.append(
-                        DesignEntry(
-                            path=feature.dir_path,
-                            name=f"{feature.number}-{feature.slug}",
-                            content_hash=content_hash,
-                            source_dir=feature.dir_path,
-                            repo_id=feature.repo_id,
-                        )
-                    )
-        except Exception as e:
-            logger.warning(f"[SPECKIT-QUEUE] Spec Kit detection failed: {e}")
+    if speckit_project_id is not None:
+        designs.extend(_scan_speckit_features(speckit_project_id, processed_hashes))
 
     # Check for manual reorder file — stored in .hephaestus/ (not in docs/spec/)
     order_file = queue_dir.parent.parent / CONTEXT_DIR_NAME / ".queue_order.json"
     if order_file.exists():
         try:
             saved_order = json.loads(order_file.read_text())
-            # Create lookup by filename
-            by_filename = {d.path.name: d for d in designs}
+            # Create lookup by filename -- Spec Kit entries all share the
+            # basename "spec.md" (path is .../specs/<NNN-name>/spec.md), so
+            # a plain d.path.name key collapses every Spec Kit feature but
+            # the last one in this dict. Key those by their unique feature
+            # dir name instead; design.md-style entries (unaffected by
+            # saved_order, which only ever names real queue-dir filenames)
+            # keep the existing bare-filename key.
+            by_filename = {(d.speckit_feature_dir.name if d.speckit_feature_dir else d.path.name): d for d in designs}
             # Order by saved order, then append any new files not in saved order
             ordered = []
             for fname in saved_order:
@@ -604,12 +615,20 @@ def pick_next_design(
                     design_path = Path(project.base_dir) / DESIGN_CONTEXT_SUBDIR / design.filename
 
                 if design_path.exists():
+                    from src.autopilot.orchestrator.speckit import speckit_feature_dir_for_path
+
                     entry = DesignEntry(
                         path=design_path,
                         name=design.name,
                         content_hash=design.content_hash or file_hash(design_path),
                         db_id=design.id,
                         file_path=str(design_path),
+                        # REQ-03: a design row whose file_path was set to a
+                        # Spec Kit spec.md (e.g. via the manual "load
+                        # design" file-browser flow selecting one) must
+                        # still get plan.md/tasks.md/contracts/ copied into
+                        # the worktree, not just spec.md's bytes.
+                        speckit_feature_dir=speckit_feature_dir_for_path(design_path),
                     )
                     logger.info(f"Selected from DB: {design.name} (ordinal={design.ordinal})")
                     return entry
@@ -618,8 +637,27 @@ def pick_next_design(
     except Exception as e:
         logger.warning(f"DB queue read failed, falling back to file scan: {e}")
 
-    # Fallback: file-based queue
-    designs = scan_design_queue(queue_dir, processed_hashes, project_id=project_id)
+    # Fallback: file-based queue. speckit_project_id makes scan_design_queue
+    # also recognize Spec Kit specs/<NNN-name>/ dirs -- only when this
+    # project has opted in (REQ-16/17/18/19: disabled by default, zero
+    # automatic action unless explicitly enabled).
+    speckit_project_id = None
+    try:
+        from src.core.database import AutopilotProject
+        from src.core.database import get_db as _gdb2
+
+        with _gdb2() as _db2:
+            _proj = (
+                _db2.query(AutopilotProject).filter_by(id=project_id).first()
+                if project_id
+                else _db2.query(AutopilotProject).filter_by(is_active=True).first()
+            )
+            if _proj is not None and _proj.speckit_auto_scan:
+                speckit_project_id = _proj.id
+    except Exception as e:
+        logger.warning(f"[SPECKIT] failed to read speckit_auto_scan flag: {e}")
+
+    designs = scan_design_queue(queue_dir, processed_hashes, speckit_project_id=speckit_project_id)
 
     if not designs:
         return None

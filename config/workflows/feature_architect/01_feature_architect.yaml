@@ -43,6 +43,28 @@ additional_notes: |
   - Technology requirements
   - Any dependencies or constraints
 
+  ### Step 1b: Check for Spec Kit Input (if present)
+  Check for a Spec Kit feature directory in your worktree:
+  `find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null`
+
+  If found, read `spec.md`, `plan.md`, AND `tasks.md` together from that
+  same `./.hephaestus/specs/<NNN-name>/` directory — a wider scope than
+  just the design document, since decomposition quality depends on seeing
+  the full picture before Step 3. Recognize Spec Kit's own structured
+  conventions as direct signal for feature boundaries and `depends_on`,
+  rather than reading them as undifferentiated prose:
+  - Story priorities (`P1`/`P2`/`P3`) and `FR-NNN` requirement numbering in `spec.md`
+  - `plan.md`'s Technical Context section — its own description of which
+    parts of the system are touched is direct signal for feature boundaries
+  - `tasks.md`'s existing dependency-ordered breakdown — reuse its ordering
+    for `depends_on` relationships instead of inventing one from scratch
+
+  This composes with, and does not replace, the existing multi-repo
+  repo-binding rules below (`repo_label`, one repo per feature,
+  cross-repo ordering via `depends_on`) — those rules apply unchanged
+  whether the input is Spec Kit or a hand-written design.md. If no
+  `spec.md` is found, proceed exactly as before using ./.hephaestus/design.md.
+
   ### Step 2: Explore the Existing Codebase
   Before decomposing, look at what's actually there:
   - List the directory structure (ls, find) and read key entry points (package.json,
