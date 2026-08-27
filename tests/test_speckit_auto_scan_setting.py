@@ -156,6 +156,66 @@ class TestPatchEndpoint:
         assert proj_b.speckit_auto_scan_enabled is False
 
 
+class TestStatusPayload:
+    """REQ-03: GET /api/autopilot/status must include speckit_auto_scan_enabled
+    reflecting the current DB value (architecture-988fc040.md Task 2 AC)."""
+
+    async def test_status_reflects_speckit_auto_scan_enabled(self, db_manager, monkeypatch):
+        import src.mcp.autopilot.control_routes as routes
+        from src.autopilot.orchestrator.state import PipelineState
+        from src.core.database import AutopilotProject, get_db
+
+        with get_db() as db:
+            db.add(
+                AutopilotProject(
+                    id="proj-status-test",
+                    name="p",
+                    base_dir="/tmp/status-test",
+                    speckit_auto_scan_enabled=True,
+                )
+            )
+            db.commit()
+
+        monkeypatch.setattr(routes, "_cached", lambda *a, **k: None)
+        monkeypatch.setattr(routes, "_store", lambda *a, **k: a[1] if len(a) > 1 else None)
+
+        mock_service = MagicMock()
+        mock_service.status.return_value = {"running": False}
+        monkeypatch.setattr(routes, "get_autopilot_service", lambda project_id: mock_service, raising=False)
+        mock_registry = MagicMock()
+        mock_registry.running.return_value = []
+        monkeypatch.setattr(routes, "get_registry", lambda: mock_registry, raising=False)
+
+        with patch("src.autopilot.orchestrator.state.PersistentPipelineState.load", lambda self: (PipelineState(), set())):
+            result = await routes.get_pipeline_status(project_id="proj-status-test", project_path=None)
+
+        assert result.speckit_auto_scan_enabled is True
+
+    async def test_status_reflects_speckit_auto_scan_disabled_by_default(self, db_manager, monkeypatch):
+        import src.mcp.autopilot.control_routes as routes
+        from src.autopilot.orchestrator.state import PipelineState
+        from src.core.database import AutopilotProject, get_db
+
+        with get_db() as db:
+            db.add(AutopilotProject(id="proj-status-default", name="p", base_dir="/tmp/status-default"))
+            db.commit()
+
+        monkeypatch.setattr(routes, "_cached", lambda *a, **k: None)
+        monkeypatch.setattr(routes, "_store", lambda *a, **k: a[1] if len(a) > 1 else None)
+
+        mock_service = MagicMock()
+        mock_service.status.return_value = {"running": False}
+        monkeypatch.setattr(routes, "get_autopilot_service", lambda project_id: mock_service, raising=False)
+        mock_registry = MagicMock()
+        mock_registry.running.return_value = []
+        monkeypatch.setattr(routes, "get_registry", lambda: mock_registry, raising=False)
+
+        with patch("src.autopilot.orchestrator.state.PersistentPipelineState.load", lambda self: (PipelineState(), set())):
+            result = await routes.get_pipeline_status(project_id="proj-status-default", project_path=None)
+
+        assert result.speckit_auto_scan_enabled is False
+
+
 class TestSyncSpeckitDesigns:
     def test_disabled_produces_zero_rows(self, db_session, project_with_repo):
         proj, repo_path = project_with_repo
@@ -382,6 +442,37 @@ class TestSyncSpeckitDesigns:
         on_features = find_speckit_features(db_session, proj.id)
 
         assert [f.dir_name for f in off_features] == [f.dir_name for f in on_features] == ["001-foo"]
+
+    def test_renaming_synced_pending_feature_leaves_old_row_untouched(self, db_session, project_with_repo):
+        # Gotcha 10: renaming/renumbering a synced-but-still-pending feature's
+        # directory must NOT archive, delete, or otherwise mutate its old
+        # AutopilotDesign row -- a prior revision did this and was reverted
+        # (architecture review round 3, BLOCKER 2) because find_speckit_features's
+        # own is_dir()/exists() checks silently swallow OSError on ANY stat
+        # failure, not just genuine deletion, so archiving on absence could
+        # permanently hide a legitimately pending, ready feature.
+        proj, repo_path = project_with_repo
+        proj.speckit_auto_scan_enabled = True
+        db_session.commit()
+        _make_feature(repo_path, "001", "foo", plan=True)
+
+        _sync_speckit_designs(db_session, proj)
+        original = db_session.query(AutopilotDesign).one()
+        original_id = original.id
+
+        (repo_path / "specs" / "001-foo").rename(repo_path / "specs" / "002-renamed")
+        _sync_speckit_designs(db_session, proj)
+
+        rows = db_session.query(AutopilotDesign).all()
+        assert len(rows) == 2  # old row untouched + a new row for the renamed feature
+        old_row = next(r for r in rows if r.id == original_id)
+        assert old_row.status == "pending"
+        assert old_row.archived_at is None
+        assert "001-foo" in old_row.file_path
+
+        new_row = next(r for r in rows if r.id != original_id)
+        assert "002-renamed" in new_row.file_path
+        assert new_row.status == "pending"
 
     def test_is_synchronous_no_new_loop(self):
         # NFR-03: hooks into the existing scan loop, no new asyncio task.
