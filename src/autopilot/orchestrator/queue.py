@@ -599,8 +599,27 @@ def pick_next_design(
     except Exception as e:
         logger.warning(f"DB queue read failed, falling back to file scan: {e}")
 
-    # Fallback: file-based queue
-    designs = scan_design_queue(queue_dir, processed_hashes)
+    # Fallback: file-based queue. speckit_project_id makes scan_design_queue
+    # also recognize Spec Kit specs/<NNN-name>/ dirs -- only when this
+    # project has opted in (REQ-16/17/18/19: disabled by default, zero
+    # automatic action unless explicitly enabled).
+    speckit_project_id = None
+    try:
+        from src.core.database import AutopilotProject
+        from src.core.database import get_db as _gdb2
+
+        with _gdb2() as _db2:
+            _proj = (
+                _db2.query(AutopilotProject).filter_by(id=project_id).first()
+                if project_id
+                else _db2.query(AutopilotProject).filter_by(is_active=True).first()
+            )
+            if _proj is not None and _proj.speckit_auto_scan:
+                speckit_project_id = _proj.id
+    except Exception as e:
+        logger.warning(f"[SPECKIT] failed to read speckit_auto_scan flag: {e}")
+
+    designs = scan_design_queue(queue_dir, processed_hashes, speckit_project_id=speckit_project_id)
 
     if not designs:
         return None
