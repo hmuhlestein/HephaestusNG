@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from src.autopilot.orchestrator.speckit import (
-    Candidate,
     SpecKitFeature,
     SpecKitSelectionError,
     _scan_one_repo,

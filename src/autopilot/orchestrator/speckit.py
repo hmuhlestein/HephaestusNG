@@ -46,7 +46,7 @@ class Candidate:
     is_design_md: bool = False
 
     def label(self) -> str:
-        if self.is_design_md:
+        if self.is_design_md or self.feature is None:
             return "design.md"
         return f"{self.feature.number}-{self.feature.slug}"
 
@@ -127,7 +127,7 @@ def discover_speckit_features(db: Session, project_id: str, project_base_dir: st
     repos = get_project_repos(db, project_id)
     if repos:
         for repo in repos:
-            features.extend(_scan_one_repo(Path(repo.path) / "specs", repo.id, repo.label))
+            features.extend(_scan_one_repo(Path(repo.path) / "specs", str(repo.id), str(repo.label)))
     else:
         features.extend(_scan_one_repo(Path(project_base_dir) / "specs", None, None))
 
