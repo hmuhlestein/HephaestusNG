@@ -46,6 +46,27 @@ def file_hash(path: Path) -> str:
     return h.hexdigest()[:16]
 
 
+def directory_content_hash(feature_dir: Path) -> str:
+    """SHA-256 (truncated to 16 hex chars, matching file_hash) of
+    spec.md's bytes, followed by plan.md's bytes if plan.md exists.
+
+    Args:
+        feature_dir: the specs/<NNN>-<name>/ directory. Must contain
+            spec.md -- callers only invoke this after find_speckit_features
+            has already confirmed spec.md exists.
+
+    Raises:
+        FileNotFoundError: feature_dir / "spec.md" does not exist.
+        OSError: spec.md or plan.md exists but is unreadable.
+    """
+    h = hashlib.sha256()
+    h.update((feature_dir / "spec.md").read_bytes())
+    plan_path = feature_dir / "plan.md"
+    if plan_path.exists():
+        h.update(plan_path.read_bytes())
+    return h.hexdigest()[:16]
+
+
 def api_post(endpoint: str, data: dict = None, timeout: int = 5, headers: dict = None) -> Optional[dict]:
     """Legacy HTTP POST - prefer direct DB access functions below."""
     try:
