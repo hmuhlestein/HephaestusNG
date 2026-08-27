@@ -41,6 +41,24 @@ additional_notes: |
   YOUR MISSION: Parse the design document and produce structured requirements
   within the context of the larger project vision.
 
+  ## STEP -1: DETECT SPEC KIT INPUT
+
+  Before anything else, check whether this run was started from a Spec Kit
+  feature instead of a hand-written design.md:
+
+  ```bash
+  find ./.hephaestus/specs -maxdepth 2 -name spec.md 2>/dev/null
+  ```
+
+  If a `spec.md` exists under `./.hephaestus/specs/<NNN-name>/`, read THAT
+  file as your primary input instead of `./.hephaestus/design.md` for every
+  step below that says "read the design document" (REQ-04). Spec Kit's
+  `spec.md` already carries prioritized (P1/P2/P3) user stories, functional
+  requirements (`FR-NNN`), and measurable success criteria — treat it as
+  authoritative in the same role design.md plays for a hand-written input.
+  If no `spec.md` is present, proceed exactly as before (design.md is your
+  input).
+
   ## STEP 0: DETECT TECH DEBT FLOW (AUTO-SWITCH)
 
   Before doing anything else, check if this is a tech-debt/refactor flow:
@@ -232,6 +250,27 @@ additional_notes: |
   - These IDs will be tracked by reviewers and product validation
   - Non-functional requirements use `NFR-XX` format
 
+  **TRACEABILITY (MANDATORY):** every `REQ-XX` row's `Source` column MUST
+  cite the exact origin it was derived from — a Spec Kit `FR-NNN`/`US-N`/
+  `SC-NNN` ID when the input was `spec.md`, or the `design.md` section name
+  when the input was hand-written. This makes traceability mechanically
+  diffable: every source ID that never appears in a `Source` citation is a
+  silent drop.
+
+  **STORY PRIORITY & SUCCESS CRITERIA (MANDATORY, both input types):**
+  Organize requirements as prioritized, independently-testable user stories
+  (`P1`/`P2`/`P3`, highest priority first) with measurable, technology-
+  agnostic success criteria — Spec Kit's own quality bar, applied whether
+  the source was `spec.md` or a hand-written `design.md` with no explicit
+  priorities of its own.
+
+  **NEEDS CLARIFICATION (MANDATORY, bounded):** for a requirement that is
+  genuinely ambiguous with no reasonable default, flag it with a
+  `NEEDS CLARIFICATION: <question>` marker instead of silently guessing —
+  maximum 3 markers total, prioritized in this order when trimming:
+  scope > security/privacy > user experience > technical detail. Never
+  leave a marker unbounded or a genuinely-resolvable ambiguity flagged.
+
   # Requirements Analysis: [Feature Name]
 
   ## Project Context
@@ -243,16 +282,20 @@ additional_notes: |
   ## Feature Requirements (from design document)
 
   ### Functional Requirements
-  | REQ ID | Requirement | Acceptance Criteria | Priority | Integration |
-  |--------|-------------|---------------------|----------|-------------|
-  | REQ-01 | [Requirement] | [criteria] | High/Med/Low | [components] |
-  | REQ-02 | [Requirement] | [criteria] | High/Med/Low | [components] |
+  | REQ ID | Requirement | Acceptance Criteria | Priority | Source | Integration |
+  |--------|-------------|---------------------|----------|--------|-------------|
+  | REQ-01 | [Requirement] | [criteria] | P1/P2/P3 | [FR-NNN / design.md section] | [components] |
+  | REQ-02 | [Requirement] | [criteria] | P1/P2/P3 | [FR-NNN / design.md section] | [components] |
 
   ### Non-Functional Requirements
   | REQ ID | Category | Requirement | Target |
   |--------|----------|-------------|--------|
   | NFR-01 | Performance | [requirement] | [target] |
   | NFR-02 | Security | [requirement] | [target] |
+
+  ## NEEDS CLARIFICATION
+  - [ ] (max 3, priority order: scope > security/privacy > UX > technical
+    detail) [question] — omit this section entirely if nothing qualifies
 
   ## Integration Points
   - [Component A] needs [modification] to support [new feature]

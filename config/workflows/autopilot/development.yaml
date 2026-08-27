@@ -110,6 +110,11 @@ additional_notes: |
     type hints: `X | Y` union syntax requires Python ≥ 3.10; `list[str]` / `dict[k,v]`
     builtins require ≥ 3.9. Use `Union[X, Y]` / `Optional[X]` / `List[str]` from `typing`
     if the project targets an earlier version.
+  - `./.hephaestus/specs/<NNN-name>/tasks.md` (if present) — a Spec Kit
+    dependency-ordered task breakdown for this feature. Read it as
+    supplementary implementation-order/dependency context alongside
+    architecture.md's own task breakdown. If absent, proceed exactly as
+    today — zero complaint.
 
   **REQUIREMENT TRACKING (MANDATORY):**
   requirements.md contains REQ-XX numbered requirements. When implementing:
