@@ -8,10 +8,6 @@ router file, since the routers were already split by domain but the class
 underneath them wasn't.
 """
 
-from src.mcp.frontend.agent_service import AgentService
-from src.mcp.frontend.dashboard_service import DashboardService
-from src.mcp.frontend.phase_service import PhaseService
-from src.mcp.frontend.task_service import TaskService
 
 # Set in create_frontend_routes().
 dashboard_service = None

@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-
 GIT_SCRIPT = str(
     Path(__file__).parent.parent / "scripts" / "agent-safe-bin" / "git"
 )

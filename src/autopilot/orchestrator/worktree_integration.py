@@ -48,23 +48,40 @@ def create_feature_folder(project_path: Path, design_name: str, logger: "Orchest
     return feature_folder
 
 
-def _copy_design_content(source: Path, heph_dir: Path, filename: str, is_directory: bool) -> Path:
+def copy_design_source_path(source: Path, heph_dir: Path, filename: str, is_directory: bool) -> Path:
     """Shared copy primitive behind copy_design_source and every call site
     that only has a raw path (not a DesignEntry) available -- e.g.
     run_single_workflow, which only has launch_params["design_document"].
+    Public (not underscore-prefixed): pipeline.py imports this directly for
+    that path-only call site, so it is a real, intentional entry point into
+    this module, not an internal it's reaching past.
 
     File case: copies source to heph_dir / filename. Directory case:
     recursively copies the entire tree to heph_dir / "specs" / source.name,
     replacing any existing destination wholesale (rmtree + copytree) rather
     than merging, so a file deleted from the source between runs does not
-    silently survive at the destination.
+    silently survive at the destination. Symlinks within the source tree
+    are preserved as symlinks (symlinks=True), not followed -- a Spec Kit
+    feature directory is git-tracked and editable by anyone with repo
+    write access; without this, a symlink pointing outside the repo (e.g.
+    to a credentials file readable by the Hephaestus process user) would
+    have its target's actual content copied into the worktree and the
+    permanent designs_folder, both later read by development-phase agents.
     """
     heph_dir.mkdir(parents=True, exist_ok=True)
     if is_directory:
         dest = heph_dir / "specs" / source.name
         if dest.exists():
-            shutil.rmtree(dest)
-        shutil.copytree(source, dest)
+            # A stale non-directory at this exact path (partial prior run,
+            # manual touch, naming collision) would make shutil.rmtree raise
+            # NotADirectoryError -- handle it explicitly rather than let an
+            # opaque exception bubble out of what looks like a normal
+            # directory-replacement path.
+            if dest.is_dir():
+                shutil.rmtree(dest)
+            else:
+                dest.unlink()
+        shutil.copytree(source, dest, symlinks=True)
         return dest
     dest = heph_dir / filename
     shutil.copy2(source, dest)
@@ -95,9 +112,9 @@ def copy_design_source(design_entry: DesignEntry, heph_dir: Path, filename: str 
         FileNotFoundError: design_entry.path (file-sourced) or
             design_entry.source_dir (directory-sourced) does not exist.
     """
-    is_directory = design_entry.source_dir is not None
-    source = design_entry.source_dir if is_directory else design_entry.path
-    return _copy_design_content(source, heph_dir, filename, is_directory)
+    if design_entry.source_dir is not None:
+        return copy_design_source_path(design_entry.source_dir, heph_dir, filename, is_directory=True)
+    return copy_design_source_path(design_entry.path, heph_dir, filename, is_directory=False)
 
 
 def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Path:

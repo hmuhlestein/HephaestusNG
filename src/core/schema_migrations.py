@@ -948,6 +948,137 @@ def migrate_speckit_design_columns(engine):
         logger.warning(f"autopilot_designs filename-nullable rebuild failed: {e}")
 
 
+def migrate_speckit_design_columns(engine):
+    """Add AutopilotDesign.repo_id/source_dir and
+    AutopilotProject.speckit_autoscan_enabled for existing databases.
+
+    Also relaxes autopilot_designs.filename to nullable: a Spec-Kit
+    directory-sourced design has no single filename (source_dir is set
+    instead, mutually exclusive per NFR-02), but the column has carried a
+    NOT NULL constraint since it was first created. SQLite has no ALTER
+    COLUMN, so dropping that constraint requires the standard rebuild-and-
+    swap: copy rows into a freshly created table (built from the current,
+    already-nullable model) under a temp name, drop the old table, rename.
+
+    Idempotent - safe to call on every startup.
+    """
+
+    def _add_column_or_raise(conn, ddl: str) -> None:
+        """Swallow only "duplicate column" -- the expected outcome when this
+        already ran. Anything else (disk full, table locked, permissions)
+        must not be silently absorbed: a genuine failure here means
+        repo_id/source_dir/speckit_autoscan_enabled never get created, and
+        every caller downstream hits a much less obvious "no such column"
+        error with no link back to this migration.
+        """
+        try:
+            conn.execute(text(ddl))
+        except Exception as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+
+    try:
+        with engine.connect() as conn:
+            _add_column_or_raise(conn, "ALTER TABLE autopilot_designs ADD COLUMN repo_id VARCHAR")
+            _add_column_or_raise(conn, "ALTER TABLE autopilot_designs ADD COLUMN source_dir TEXT")
+            _add_column_or_raise(conn, "ALTER TABLE autopilot_projects ADD COLUMN speckit_autoscan_enabled BOOLEAN NOT NULL DEFAULT 0")
+            conn.commit()
+            logger.info("Migrated speckit design columns")
+    except Exception as e:
+        logger.warning(f"speckit design columns migration failed (not just 'already exists' -- check this): {e}")
+
+    # create+copy+drop+rename must be ONE atomic unit: a crash mid-sequence
+    # would otherwise leave every design row stranded in a table nothing
+    # points back at (silent total data loss -- adversarial review
+    # BLOCKER). SQLite's DDL statements DO participate in transactions, but
+    # pysqlite's default driver auto-commits before each DDL statement
+    # regardless of any surrounding `engine.begin()` -- a plain SQLAlchemy
+    # transaction does NOT actually make this atomic. The workaround is to
+    # put the raw DBAPI connection in autocommit mode (isolation_level =
+    # None) and drive the transaction with explicit BEGIN/COMMIT/ROLLBACK
+    # ourselves.
+    #
+    # The replacement table is built under a TEMPORARY name and swapped in
+    # at the end (create autopilot_designs_new -> copy -> drop the
+    # original autopilot_designs -> rename autopilot_designs_new to
+    # autopilot_designs), rather than renaming the original away first. An
+    # earlier version renamed autopilot_designs itself to
+    # autopilot_designs_old before rebuilding: SQLite's ALTER TABLE RENAME
+    # auto-updates OTHER tables' FK definitions to follow the renamed
+    # table (documented behavior since 3.25.0), so the moment
+    # autopilot_designs was renamed, features.design_id's FK definition
+    # started reading "REFERENCES autopilot_designs_old" -- and dropping
+    # that table afterward left features permanently referencing a table
+    # that no longer exists (caught by PRAGMA foreign_key_check in testing:
+    # a real FK integrity break, not just an enforcement-pragma hiccup).
+    # This sequence never renames the table other tables actually
+    # reference, so their FK text never changes.
+    raw_conn = engine.raw_connection()
+    try:
+        raw_conn.isolation_level = None
+        cur = raw_conn.cursor()
+        # DatabaseManager sets PRAGMA foreign_keys=ON on every NEW physical
+        # connection, but this raw connection is checked out of the SAME
+        # pool session_scope() uses -- it's an existing connection, so that
+        # "connect" event never fires for it, and its current pragma value
+        # reflects whatever the checkout actually has (ON in production; a
+        # test harness can legitimately override it OFF via its own connect
+        # listener). Read and restore THAT value rather than hardcoding ON:
+        # hardcoding would silently flip a test database's connection to
+        # FK-enforced for the rest of its life in the pool, breaking any
+        # fixture that (by test-only design) creates rows with dangling FKs.
+        original_fk_state = cur.execute("PRAGMA foreign_keys").fetchone()[0]
+        # Dropping autopilot_designs while `features`/`workflows`/etc. still
+        # reference it (real rows, real FKs) raises "FOREIGN KEY constraint
+        # failed" if enforcement is on -- and the pragma can only be changed
+        # outside an active transaction, so it must be turned off here,
+        # before BEGIN, and restored to its original value after COMMIT/
+        # ROLLBACK, before this raw connection goes back to the pool.
+        cur.execute("PRAGMA foreign_keys=OFF")
+        try:
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                info = cur.execute("PRAGMA table_info(autopilot_designs)").fetchall()
+                filename_col = next((row for row in info if row[1] == "filename"), None)
+                if filename_col is None or filename_col[3] == 0:
+                    cur.execute("ROLLBACK")
+                    return  # table missing (fresh DB, handled by create_all) or already nullable
+                col_list = ", ".join(row[1] for row in info)
+
+                from sqlalchemy.schema import CreateTable
+
+                from src.core.database import AutopilotDesign
+
+                # Clone into AutopilotDesign's OWN metadata (not a fresh empty
+                # one) -- repo_id's ForeignKey("project_repos.id") and
+                # phase0_workflow_id's ForeignKey("workflows.id") are resolved
+                # by looking up those table names in the target metadata; an
+                # empty MetaData() has neither registered and CreateTable
+                # fails outright ("could not find table 'project_repos'").
+                temp_table = AutopilotDesign.__table__.to_metadata(AutopilotDesign.metadata, name="autopilot_designs_new")
+                cur.execute(str(CreateTable(temp_table).compile(engine)))
+                cur.execute(f"INSERT INTO autopilot_designs_new ({col_list}) SELECT {col_list} FROM autopilot_designs")
+                cur.execute("DROP TABLE autopilot_designs")
+                cur.execute("ALTER TABLE autopilot_designs_new RENAME TO autopilot_designs")
+                # foreign_key_check runs even with enforcement off -- catch a
+                # genuinely broken reference before committing, rather than
+                # silently re-enabling enforcement over inconsistent data.
+                violations = cur.execute("PRAGMA foreign_key_check").fetchall()
+                if violations:
+                    raise RuntimeError(f"foreign_key_check found violations after rebuild: {violations}")
+                cur.execute("COMMIT")
+                logger.info("Rebuilt autopilot_designs with nullable filename")
+            except Exception:
+                cur.execute("ROLLBACK")
+                raise
+        finally:
+            cur.execute(f"PRAGMA foreign_keys={'ON' if original_fk_state else 'OFF'}")
+    except Exception as e:
+        logger.warning(f"autopilot_designs filename-nullable rebuild failed: {e}")
+    finally:
+        raw_conn.close()
+
+
 # ── Registry ─────────────────────────────────────────────────────────
 # (id, function). Ids match the pre-split method names -- see module
 # docstring for why they must not be renamed.

@@ -5,9 +5,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-
 # Import authentication function from server module
-
 from src.mcp.autopilot._shared import MessageItem, _cached, _get_latest_run_dir, _store
 
 logger = logging.getLogger(__name__)

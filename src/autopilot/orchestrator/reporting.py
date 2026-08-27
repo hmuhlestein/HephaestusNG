@@ -3,19 +3,15 @@
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
-
-
-from src.core.database import (
-    get_db,
-)
+from typing import TYPE_CHECKING, Dict
 
 from src.autopilot.orchestrator.state import (
     DesignEntry,
     FeatureReport,
 )
-
-from typing import TYPE_CHECKING
+from src.core.database import (
+    get_db,
+)
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger

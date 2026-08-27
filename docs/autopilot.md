@@ -692,7 +692,7 @@ Neither metrics file carries cost. The feature-record API reads
 
 ```
 AutopilotDesign
-  │  id, name, status, feature_folder, design_file_path
+  │  id, name, status, feature_folder, file_path, source_dir, repo_id
   │
   ├── DesignWorkflow (one per design — runs Phase 0)
   │     id, design_id, status
@@ -898,14 +898,21 @@ implementation decisions.
 ## Design Queue
 
 The design queue is a list of `AutopilotDesign` records in the database. Each
-record stores the absolute path to the design document — the file can live
-anywhere on the filesystem. The pipeline processes queued designs in
-priority/creation order.
+record stores either an absolute path to a single design document (`file_path`
+— the file can live anywhere on the filesystem) or, for a Spec Kit
+`specs/<NNN>-<name>/` feature directory, `source_dir` plus the owning
+`repo_id`; the two are mutually exclusive per row. The pipeline processes
+queued designs in priority/creation order.
 
-- Design docs can live anywhere — a personal notes folder, a shared drive, a
-  repo subdirectory, anywhere the pipeline process can read
-- The DB record is the source of truth for queue state; the file is read at
-  pipeline start time
+- Single-file design docs can live anywhere — a personal notes folder, a
+  shared drive, a repo subdirectory, anywhere the pipeline process can read
+- Spec Kit directory-sourced designs are detected per-`ProjectRepo` under that
+  repo's `specs/` directory; a project only auto-queues them for a build once
+  `speckit_autoscan_enabled` is set on `AutopilotProject` (default off) and
+  the feature has both `spec.md` and `plan.md` — detection alone never queues
+  a build
+- The DB record is the source of truth for queue state; the file (or
+  directory) is read at pipeline start time
 - If the file has changed since it was registered, the pipeline reads the
   current content (re-registering is not required)
 

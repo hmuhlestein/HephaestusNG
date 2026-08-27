@@ -204,7 +204,8 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
         # before declaring the feature done. Observed live: tech-debt
         # feature with 13 phases, only 2 had tasks (all done), derived
         # "completed" while stuck at scope_review.
-        from src.core.database import PhaseExecution as _PE, Phase as _Ph
+        from src.core.database import Phase as _Ph
+        from src.core.database import PhaseExecution as _PE
         incomplete_phases = (
             db.query(_PE)
             .join(_Ph, _PE.phase_id == _Ph.id)

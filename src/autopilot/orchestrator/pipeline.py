@@ -61,7 +61,15 @@ from src.autopilot.orchestrator.policy import (
     detect_hard_error,
     detect_impasse,
 )
-from src.autopilot.orchestrator.queue import _archived_design_for_workflow, _get_phase0_completion, _has_resumable_active_design, _set_workflow_type, _update_design_status, is_design_fully_complete, pick_next_design
+from src.autopilot.orchestrator.queue import (
+    _archived_design_for_workflow,
+    _get_phase0_completion,
+    _has_resumable_active_design,
+    _set_workflow_type,
+    _update_design_status,
+    is_design_fully_complete,
+    pick_next_design,
+)
 from src.autopilot.orchestrator.reporting import _empty_report, _generate_design_report_html
 from src.autopilot.orchestrator.runtime_registries import (
     _get_orchestrator_agent_id,
@@ -85,7 +93,7 @@ from src.autopilot.orchestrator.state import (
     _delete_project_context,
     _workflow_belongs_to_project,
 )
-from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree, _copy_design_content, _create_designs_folder, _create_integration_worktree, copy_design_source
+from src.autopilot.orchestrator.worktree_integration import _cleanup_worktree, _create_designs_folder, _create_integration_worktree, copy_design_source, copy_design_source_path
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, HEPHAESTUS_INSTALL_DIR, PHASE0_DEFINITION_IDS
 from src.core.database import DatabaseManager, Workflow, get_db, get_default_db_manager, utc_now
 from src.core.simple_config import get_config
@@ -555,8 +563,8 @@ def run_single_workflow(
         if "design_document" in (launch_params or {}):
             _dd = Path(launch_params["design_document"])
             if _dd.exists():
-                _copy_design_content(_dd, wt_heph, "design.md", is_directory=_dd.is_dir())
-                logger.info(f"Copied design doc to worktree: {wt_heph / 'design.md'}")
+                _dest = copy_design_source_path(_dd, wt_heph, "design.md", is_directory=_dd.is_dir())
+                logger.info(f"Copied design doc to worktree: {_dest}")
     except Exception as e:
         logger.warning(f"Failed to create shared worktree, using project path: {e}")
         design_worktree_path = project_path

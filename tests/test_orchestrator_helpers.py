@@ -745,10 +745,11 @@ class TestPickNextDesign:
         query filtered on status alone, so an archived-but-still-"pending"
         design (lower ordinal) kept winning over a real, non-archived design
         queued behind it, which never got picked up at all."""
+        from datetime import datetime
+
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.queue import pick_next_design
         from src.core.database import AutopilotDesign, AutopilotProject
-        from datetime import datetime
 
         (tmp_path / "archived.md").write_text("# Archived")
         (tmp_path / "real.md").write_text("# Real")
@@ -993,9 +994,10 @@ class TestArchivedDesignForWorkflow:
     in-memory."""
 
     def test_returns_design_when_archived(self, tmp_path, orch_db_env):
+        from datetime import datetime
+
         from src.autopilot.orchestrator.queue import _archived_design_for_workflow
         from src.core.database import AutopilotDesign, AutopilotProject, Workflow
-        from datetime import datetime
 
         session = orch_db_env.get_session()
         session.add(
@@ -4296,8 +4298,8 @@ class TestRunOneFeatureRepoScopedWorktree:
     root) -- see _run_one_feature's repo-resolution block."""
 
     def _setup(self, orch_db_env, tmp_path, feature_repo_id=None):
-        from src.core.database import AutopilotDesign, AutopilotProject, Feature, ProjectRepo
         from src.autopilot.orchestrator.state import DesignEntry
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, ProjectRepo
 
         backend_dir = tmp_path / "backend"
         frontend_dir = tmp_path / "frontend"
@@ -7999,7 +8001,7 @@ class TestCreatePhaseTaskReviewPassSkip:
         passed in this workflow) -- must not skip."""
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _create_phase_task
-        from src.core.database import Task, Workflow
+        from src.core.database import Workflow
 
         self._seed(orch_db_env)
         mock_create_agent.return_value = {"agent_id": "agent-x"}
@@ -8024,7 +8026,7 @@ class TestCreatePhaseTaskReviewPassSkip:
         never be consulted."""
         from src.autopilot.orchestrator import OrchestratorLogger
         from src.autopilot.orchestrator.phase_transitions import _create_phase_task
-        from src.core.database import Task, Workflow
+        from src.core.database import Workflow
 
         self._seed(orch_db_env, phase_name="qa_validation")
         mock_create_agent.return_value = {"agent_id": "agent-x"}

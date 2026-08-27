@@ -7,8 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
-from src.core.database import Agent
-
 
 @pytest.fixture
 def mock_db():

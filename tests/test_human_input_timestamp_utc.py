@@ -23,8 +23,8 @@ import pytest
 
 @pytest.fixture
 def input_dir(tmp_path, monkeypatch):
-    import src.mcp.autopilot.intervention_routes as ir
     import src.autopilot.orchestrator as orch
+    import src.mcp.autopilot.intervention_routes as ir
 
     monkeypatch.setattr(ir, "AUTOPILOT_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(orch, "AUTOPILOT_STATE_DIR", str(tmp_path))

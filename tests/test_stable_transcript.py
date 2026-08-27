@@ -468,7 +468,6 @@ class TestTmuxHistoryLimit:
     is part of what needs to be correct here."""
 
     def test_new_session_gets_a_generous_history_limit(self, agent_manager, request):
-        import libtmux
 
         session_name = f"test_history_limit_{uuid.uuid4().hex[:8]}"
         server = agent_manager._launch.tmux_server

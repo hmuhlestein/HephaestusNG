@@ -15,7 +15,6 @@ from src.core.constants import (
 )
 
 # Import authentication function from server module
-
 from src.mcp.autopilot._shared import _invalidate
 
 logger = logging.getLogger(__name__)

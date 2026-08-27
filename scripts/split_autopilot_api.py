@@ -292,7 +292,7 @@ def main() -> None:
     for name, (s, e) in spans.items():
         if set(SYM2MOD) != set(spans):
             fail("SYM2MOD name set != file name set")
-    print(f"OK: 138 spans match doc §3.2 exactly")
+    print("OK: 138 spans match doc §3.2 exactly")
 
     # ── 2. territory check ────────────────────────────────────────────
     for name, (s, e) in sorted(spans.items(), key=lambda kv: kv[1][0]):
@@ -410,7 +410,6 @@ def main() -> None:
                 fail(f"line {i} claimed twice")
             claimed.add(i)
     remainder = [i for i in range(1, len(lines) + 1) if i not in claimed]
-    import re
     for i in remainder:
         l = lines[i - 1]
         if not (not l.strip()

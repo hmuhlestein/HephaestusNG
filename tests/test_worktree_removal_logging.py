@@ -13,7 +13,6 @@ reclaim) goes through this same choke point, and none of them left a
 mark.
 """
 
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest

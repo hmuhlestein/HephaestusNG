@@ -19,9 +19,8 @@ resolve_cli_model_dispatch/reservation primitives is already covered by
 this file and test_queue_service.py.
 """
 
-import uuid
 from contextlib import contextmanager
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from sqlalchemy import create_engine

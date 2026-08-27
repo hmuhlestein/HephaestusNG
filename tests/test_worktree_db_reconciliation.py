@@ -14,7 +14,6 @@ path missing from here says nothing about another project's worktree.
 """
 
 import subprocess
-from pathlib import Path
 
 import pytest
 

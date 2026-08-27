@@ -10,12 +10,11 @@ from typing import Generator
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.core.database import Base, DatabaseManager
-from sqlalchemy import event
 
 # Set test database env var BEFORE any test module imports server.py,
 # which triggers ServerState() -> DatabaseManager(config.database_path)
@@ -535,7 +534,8 @@ def mock_app(autopilot_dirs, mock_autopilot_service):
     from fastapi import FastAPI
 
     from src.mcp.autopilot import _shared as api_mod
-    from src.mcp.autopilot import intervention_routes, queue_routes, router as autopilot_router
+    from src.mcp.autopilot import intervention_routes, queue_routes
+    from src.mcp.autopilot import router as autopilot_router
 
     app = FastAPI()
 
@@ -561,7 +561,8 @@ def client(autopilot_dirs):
     from fastapi.testclient import TestClient
 
     from src.mcp.autopilot import _shared as api_mod
-    from src.mcp.autopilot import intervention_routes, queue_routes, router as autopilot_router
+    from src.mcp.autopilot import intervention_routes, queue_routes
+    from src.mcp.autopilot import router as autopilot_router
 
     app = FastAPI()
 

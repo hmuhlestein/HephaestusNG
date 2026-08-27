@@ -40,12 +40,43 @@ def isolate_queue_order(monkeypatch, tmp_path):
     monkeypatch.setattr(qr, "_invalidate", lambda *a, **k: None)
 
 
+def _ensure_project(db, project_id):
+    """Workflow.project_id is a real FK to autopilot_projects.id, enforced
+    (DatabaseManager runs every connection with PRAGMA foreign_keys=ON) --
+    create the row once per project_id so _make_workflow's insert doesn't
+    violate that constraint. Idempotent: safe to call for the same
+    project_id from multiple _make_workflow calls in one test.
+    """
+    from src.core.database import AutopilotProject
+
+    with db.session_scope() as session:
+        if not session.query(AutopilotProject).filter_by(id=project_id).first():
+            session.add(AutopilotProject(id=project_id, name=project_id, base_dir=f"/tmp/{project_id}"))
+
+
+def _ensure_workflow_definition(db, definition_id):
+    """Workflow.definition_id is also a real FK (to workflow_definitions.id)
+    -- create_tables() does not seed any rows there, and this fixture never
+    created one, so the very first Workflow insert already violated this
+    FK regardless of project_id. Idempotent, same reasoning as
+    _ensure_project.
+    """
+    from src.core.database import WorkflowDefinition
+
+    with db.session_scope() as session:
+        if not session.query(WorkflowDefinition).filter_by(id=definition_id).first():
+            session.add(WorkflowDefinition(id=definition_id, name=definition_id))
+
+
 def _make_workflow(db, wf_id, project_id, design_doc):
     import json
 
     from src.core.constants import DESIGN_WORKFLOW_DEFINITION_IDS
     from src.core.database import Workflow
 
+    definition_id = next(iter(DESIGN_WORKFLOW_DEFINITION_IDS))
+    _ensure_project(db, project_id)
+    _ensure_workflow_definition(db, definition_id)
     with db.session_scope() as session:
         session.add(
             Workflow(
@@ -54,7 +85,7 @@ def _make_workflow(db, wf_id, project_id, design_doc):
                 phases_folder_path="/tmp",
                 status="active",
                 project_id=project_id,
-                definition_id=next(iter(DESIGN_WORKFLOW_DEFINITION_IDS)),
+                definition_id=definition_id,
                 launch_params=json.dumps({"design_document": design_doc}),
             )
         )
@@ -64,8 +95,8 @@ def _make_workflow(db, wf_id, project_id, design_doc):
 async def test_requeue_does_not_pause_another_projects_same_named_design(
     queue_db, isolate_queue_order
 ):
-    from src.mcp.autopilot.queue_routes import requeue_design
     from src.core.database import Workflow
+    from src.mcp.autopilot.queue_routes import requeue_design
 
     _make_workflow(queue_db, "wf-mine", "proj-a", "/repos/a/designs/design.md")
     _make_workflow(queue_db, "wf-theirs", "proj-b", "/repos/b/designs/design.md")
@@ -83,8 +114,8 @@ async def test_requeue_does_not_match_a_design_merely_containing_the_name(
     queue_db, isolate_queue_order
 ):
     """`filename in design_doc` also matched supersets of the name."""
-    from src.mcp.autopilot.queue_routes import requeue_design
     from src.core.database import Workflow
+    from src.mcp.autopilot.queue_routes import requeue_design
 
     _make_workflow(queue_db, "wf-exact", "proj-a", "/repos/a/designs/api.md")
     _make_workflow(queue_db, "wf-superset", "proj-a", "/repos/a/designs/legacy-api.md")

@@ -5,9 +5,20 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, List, Optional, Set, Tuple
 
-
+from src.autopilot.orchestrator.engine_client import (
+    directory_content_hash,
+    file_hash,
+    get_agents,
+    get_tasks,
+    get_workflow_status,
+)
+from src.autopilot.orchestrator.state import (
+    DesignEntry,
+    _get_project_context,
+    _set_project_context,
+)
 from src.core.constants import (
     CONTEXT_DIR_NAME,
     DESIGN_CONTEXT_SUBDIR,
@@ -20,22 +31,7 @@ from src.core.database import (
     Workflow,
     get_db,
 )
-
-from src.autopilot.orchestrator.state import (
-    DesignEntry,
-    _get_project_context,
-    _set_project_context,
-)
-from src.autopilot.orchestrator.engine_client import (
-    directory_content_hash,
-    file_hash,
-    get_agents,
-    get_tasks,
-    get_workflow_status,
-)
 from src.core.speckit_detection import find_speckit_features
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.autopilot.orchestrator import OrchestratorLogger
@@ -68,8 +64,8 @@ def is_design_fully_complete(workflow_id: str, logger: "OrchestratorLogger") -> 
     # Use derive_workflow_status to check if the workflow is actually done.
     # This replaces a hand-rolled "all tasks done + all phases completed"
     # check that was missing the phase-completeness gate.
-    from src.core.status_derivation import derive_workflow_status
     from src.core.database import get_db
+    from src.core.status_derivation import derive_workflow_status
     with get_db() as db:
         derived = derive_workflow_status(db, workflow_id, write_back=False)
     if derived == "completed":
@@ -192,20 +188,13 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: l
                     # features are all pending (e.g. server crashed between
                     # marking processed and creating features), re-queue it.
                     try:
-                        from src.core.database import (
-                            AutopilotDesign as _AD,
-                        )
-                        from src.core.database import (
-                            Feature as _Feat,
-                        )
-                        from src.core.database import (
-                            get_db as _gdb,
-                        )
+                        from src.core.database import AutopilotDesign, Feature
+                        from src.core.database import get_db as _gdb
 
                         with _gdb() as _db:
-                            _des = _db.query(_AD).filter_by(content_hash=content_hash).first()
+                            _des = _db.query(AutopilotDesign).filter_by(content_hash=content_hash).first()
                             if _des:
-                                _feats = _db.query(_Feat).filter_by(design_id=_des.id).all()
+                                _feats = _db.query(Feature).filter_by(design_id=_des.id).all()
                                 if not _feats or all(f.status == "pending" for f in _feats):
                                     logger.warning(f"[SELF-HEAL] Design {_des.name} is in processed_hashes but has no features or all pending — re-queuing")
                                     processed_hashes.discard(content_hash)
@@ -230,35 +219,43 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: l
     # (REQ-12), read once here rather than per-feature.
     if project_id:
         try:
-            from src.core.database import AutopilotProject as _AP
+            from src.core.database import AutopilotProject
             from src.core.database import get_db as _gdb
 
+            # Fetch the autoscan flag and run detection with the DB session
+            # open only as long as that takes -- find_speckit_features
+            # returns plain, session-independent SpecKitFeature dataclasses
+            # (per its own docstring), so nothing below needs the session.
+            # The per-feature hashing/self-heal work that follows is
+            # filesystem I/O (potentially slow: many repos, a network
+            # mount) that must not hold the DB open for its duration --
+            # a session held open that long blocks any other writer on
+            # SQLite's WAL lock (e.g. a running workflow's status update).
             with _gdb() as _db:
-                _project = _db.query(_AP).filter_by(id=project_id).first()
+                _project = _db.query(AutopilotProject).filter_by(id=project_id).first()
                 _autoscan_enabled = bool(_project and _project.speckit_autoscan_enabled)
-                for feature in find_speckit_features(_db, project_id):  # unconditional -- REQ-03/06
-                    if not _autoscan_enabled:
-                        continue  # detected, never queued (REQ-12)
-                    if not feature.has_plan:
-                        continue  # detected, not ready to auto-build yet (REQ-13)
-                    try:
-                        content_hash = directory_content_hash(feature.dir_path)
-                    except (FileNotFoundError, OSError) as e:
-                        logger.warning(f"[SPECKIT-QUEUE] skipping {feature.dir_name}: {e}")
-                        continue
-                    if content_hash in processed_hashes:
-                        # Same self-heal check as the file-sourced branch above.
-                        try:
-                            from src.core.database import (
-                                AutopilotDesign as _AD,
-                            )
-                            from src.core.database import (
-                                Feature as _Feat,
-                            )
+                _features = find_speckit_features(_db, project_id)  # unconditional -- REQ-03/06
 
-                            _des = _db.query(_AD).filter_by(content_hash=content_hash).first()
+            for feature in _features:
+                if not _autoscan_enabled:
+                    continue  # detected, never queued (REQ-12)
+                if not feature.has_plan:
+                    continue  # detected, not ready to auto-build yet (REQ-13)
+                try:
+                    content_hash = directory_content_hash(feature.dir_path)
+                except (FileNotFoundError, OSError) as e:
+                    logger.warning(f"[SPECKIT-QUEUE] skipping {feature.dir_name}: {e}")
+                    continue
+                if content_hash in processed_hashes:
+                    # Same self-heal check as the file-sourced branch above --
+                    # its own short-lived session, not the one above.
+                    try:
+                        from src.core.database import AutopilotDesign, Feature
+
+                        with _gdb() as _db2:
+                            _des = _db2.query(AutopilotDesign).filter_by(content_hash=content_hash).first()
                             if _des:
-                                _feats = _db.query(_Feat).filter_by(design_id=_des.id).all()
+                                _feats = _db2.query(Feature).filter_by(design_id=_des.id).all()
                                 if not _feats or all(f.status == "pending" for f in _feats):
                                     logger.warning(f"[SELF-HEAL] Design {_des.name} is in processed_hashes but has no features or all pending — re-queuing")
                                     processed_hashes.discard(content_hash)
@@ -266,17 +263,18 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str], extra_dirs: l
                                     continue
                             else:
                                 continue
-                        except Exception:
-                            continue
-                    designs.append(
-                        DesignEntry(
-                            path=feature.dir_path,
-                            name=f"{feature.number}-{feature.slug}",
-                            content_hash=content_hash,
-                            source_dir=feature.dir_path,
-                            repo_id=feature.repo_id,
-                        )
+                    except Exception as e:
+                        logger.warning(f"[SELF-HEAL] re-queue check failed for hash {content_hash}: {e}")
+                        continue
+                designs.append(
+                    DesignEntry(
+                        path=feature.dir_path,
+                        name=f"{feature.number}-{feature.slug}",
+                        content_hash=content_hash,
+                        source_dir=feature.dir_path,
+                        repo_id=feature.repo_id,
                     )
+                )
         except Exception as e:
             logger.warning(f"[SPECKIT-QUEUE] Spec Kit detection failed: {e}")
 
@@ -438,18 +436,27 @@ def pick_next_design(
             # FRESH pick_next_design call to be eligible, not be picked
             # right back up by the pending-fallback query at the bottom of
             # this same call as if it had been queued all along.
-            # AutopilotDesign.name is added as a tertiary sort key: a
-            # directory-sourced row always has filename=NULL (NFR-02), and
+            # A directory-sourced row always has filename=NULL (NFR-02), and
             # SQLite sorts NULL first in ascending order, which would bias
             # every directory-sourced design ahead of any equal-ordinal
-            # file-sourced design without this. name is populated for both
-            # sources, so this restores a deterministic, source-independent
-            # tie-break without changing ordering for any all-file-sourced
-            # queue.
-            pending_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending", archived_at=None).order_by(AutopilotDesign.ordinal, AutopilotDesign.filename, AutopilotDesign.name).all()
+            # file-sourced design. Appending AutopilotDesign.name as a bare
+            # THIRD sort key does not fix this -- the tie is already broken
+            # (NULL vs non-NULL) at the SECOND key, so the third key never
+            # gets evaluated; empirically confirmed, a name-only tertiary
+            # key still put the NULL-filename row first regardless of name
+            # (architectural review FIX). coalesce(filename, name) as the
+            # secondary key instead falls through to name only when
+            # filename is NULL, giving a genuinely source-independent,
+            # deterministic tie-break -- and is a complete no-op for any
+            # all-file-sourced queue (filename is never NULL there, so
+            # coalesce always returns it), preserving REQ-10.
+            from sqlalchemy import func as _func
+
+            _tiebreak = _func.coalesce(AutopilotDesign.filename, AutopilotDesign.name)
+            pending_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending", archived_at=None).order_by(AutopilotDesign.ordinal, _tiebreak).all()
 
             design = None
-            active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active", archived_at=None).order_by(AutopilotDesign.ordinal, AutopilotDesign.filename, AutopilotDesign.name).all()
+            active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active", archived_at=None).order_by(AutopilotDesign.ordinal, _tiebreak).all()
             if active_designs:
                 logger.info(f"pick_next_design: found {len(active_designs)} active design(s), checking for incomplete work before considering pending designs")
                 for candidate in active_designs:
@@ -577,10 +584,34 @@ def pick_next_design(
                     # directory-sourced row per NFR-02).
                     source_path = Path(design.source_dir)
                     if source_path.is_dir():
+                        if design.content_hash:
+                            content_hash = design.content_hash
+                        else:
+                            # spec.md/plan.md can vanish between an earlier
+                            # scan and this pick (concurrent /speckit.* edit,
+                            # manual deletion). Failing here must not bubble
+                            # up to the generic DB-read except below -- that
+                            # would fall through to file-scan and potentially
+                            # pick a different design entirely, leaving this
+                            # one stuck in "processing" forever.
+                            try:
+                                content_hash = directory_content_hash(source_path)
+                            except (FileNotFoundError, OSError) as e:
+                                logger.warning(f"Could not hash design directory {source_path}: {e}")
+                                # This design was just marked "processing" above
+                                # (line 566) -- pending/active queries never
+                                # select it again, so without resetting status
+                                # here it is permanently stranded with no
+                                # workflow and no visible failure anywhere the
+                                # UI/API reads design status from.
+                                design.status = "failed"
+                                design.error = f"Could not hash design directory {source_path}: {e}"
+                                db.commit()
+                                return None
                         entry = DesignEntry(
                             path=source_path,
                             name=design.name,
-                            content_hash=design.content_hash or directory_content_hash(source_path),
+                            content_hash=content_hash,
                             db_id=design.id,
                             source_dir=source_path,
                             repo_id=design.repo_id,
@@ -588,6 +619,12 @@ def pick_next_design(
                         logger.info(f"Selected from DB: {design.name} (ordinal={design.ordinal})")
                         return entry
                     logger.warning(f"Design directory not found: {source_path}")
+                    # Same stranding risk as the hash-failure branch above --
+                    # this row was just marked "processing" and would
+                    # otherwise never be picked up (or retried) again.
+                    design.status = "failed"
+                    design.error = f"Design directory not found: {source_path}"
+                    db.commit()
                     return None
 
                 # Try file_path first, fall back to filename-based path

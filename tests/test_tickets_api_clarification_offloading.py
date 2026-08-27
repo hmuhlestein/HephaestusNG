@@ -2,7 +2,7 @@
 blocking DB queries (ticket lookup, 60 recent tickets, 60 recent tasks)
 directly inside async def with no offload."""
 
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
