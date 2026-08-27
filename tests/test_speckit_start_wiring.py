@@ -81,6 +81,26 @@ class TestResolveAndEnqueueSpeckitFeature:
         assert exc.value.status_code == 422
         assert exc.value.detail["code"] == "NOT_FOUND"
 
+    def test_ambiguous_selection_creates_no_design_row(self, tmp_path, monkeypatch):
+        """Architecture Task 4 acceptance criterion: an ambiguous selection
+        must not start anything -- verify no AutopilotDesign row is created
+        (the mechanism this feature uses to enqueue a selected feature)."""
+        from src.mcp.autopilot.control_routes import _resolve_and_enqueue_speckit_feature
+
+        project_id = _setup_db(tmp_path, monkeypatch, tmp_path)
+        _make_feature_dir(tmp_path, "001-x")
+        _make_feature_dir(tmp_path, "002-y")
+
+        with pytest.raises(HTTPException) as exc:
+            _resolve_and_enqueue_speckit_feature(project_id, str(tmp_path), None, None)
+        assert exc.value.status_code == 422
+        assert exc.value.detail["code"] == "MULTIPLE_FEATURES"
+
+        from src.core.database import get_db
+
+        with get_db() as db:
+            assert db.query(AutopilotDesign).filter_by(project_id=project_id).count() == 0
+
     def test_repeat_call_reuses_row_and_resets_priority(self, tmp_path, monkeypatch):
         """A second `--feature 001-x` call (e.g. after a failed run) must not
         create a duplicate row -- it re-enqueues the same one at top priority."""
@@ -126,6 +146,29 @@ class TestSpeckitCheckAndFeaturesRoutes:
         assert len(data) == 1
         assert data[0]["number"] == "001"
         assert data[0]["hasPlan"] is True
+
+    def test_speckit_features_returns_repo_labels_for_multi_repo_project(self, tmp_path, client):
+        """Architecture Task 4 acceptance criterion: /speckit/features returns
+        repo labels for multi-repo projects -- the unregistered-project test
+        above only covers the single-repo (repo_label=None) case."""
+        from src.core.database import AutopilotProject, ProjectRepo, get_db
+
+        backend_dir = tmp_path / "backend"
+        frontend_dir = tmp_path / "frontend"
+        _make_feature_dir(backend_dir, "001-x")
+        _make_feature_dir(frontend_dir, "002-y")
+
+        with get_db() as db:
+            db.add(AutopilotProject(id="proj-1", name="p", base_dir=str(tmp_path)))
+            db.add(ProjectRepo(id="repo-a", project_id="proj-1", label="backend", path=str(backend_dir), is_primary=True))
+            db.add(ProjectRepo(id="repo-b", project_id="proj-1", label="frontend", path=str(frontend_dir)))
+            db.commit()
+
+        resp = client.get("/api/autopilot/speckit/features", params={"project_path": str(tmp_path)})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert {d["repoLabel"] for d in data} == {"backend", "frontend"}
 
     def test_speckit_check_reports_missing_files_and_markers(self, tmp_path, client):
         d = tmp_path / "specs" / "001-x"
