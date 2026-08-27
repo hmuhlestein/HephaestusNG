@@ -73,15 +73,19 @@ class TestVerifyAgentAuthentication:
         assert fake_session.calls == 1
 
     @pytest.mark.asyncio
-    async def test_terminated_agent_rejected_without_retry(self):
-        """A terminated agent is a confirmed rejection, not a visibility
-        race — must not retry (would just waste 0.3s for no benefit)."""
+    async def test_terminated_agent_authenticated_but_action_controlled_elsewhere(self):
+        """A terminated agent IS authenticated (returns True) because
+        per-endpoint authorization (e.g. _authorize_agent_for_task) already
+        controls what actions terminated agents may take. Rejecting at the
+        auth gate prevented agents whose tmux session survived a server
+        restart (while agent status was flipped to 'terminated' by
+        mechanical_recovery) from reporting task completion — 9+ agents
+        hit 'Agent not authenticated' on update_task_status/complete_my_task."""
         fake_session = _FakeSession([_FakeAgent("terminated")])
         with patch("src.mcp.server._shared.server_state") as mock_state:
             mock_state.db_manager.get_session.return_value = fake_session
             result = await verify_agent_authentication("agent-2")
-        assert result is False
-        assert fake_session.calls == 1
+        assert result is True  # authenticated, endpoint authorization decides further
 
     @pytest.mark.asyncio
     async def test_transient_miss_retries_and_succeeds(self):
@@ -89,9 +93,7 @@ class TestVerifyAgentAuthentication:
         lookup (after the retry sleep) finds it active -> must succeed,
         not reject as permanently unknown."""
         fake_session = _FakeSession([None, _FakeAgent("working")])
-        with patch("src.mcp.server._shared.server_state") as mock_state, patch(
-            "asyncio.sleep", new_callable=AsyncMock
-        ):
+        with patch("src.mcp.server._shared.server_state") as mock_state, patch("asyncio.sleep", new_callable=AsyncMock):
             mock_state.db_manager.get_session.return_value = fake_session
             result = await verify_agent_authentication("agent-3")
         assert result is True
