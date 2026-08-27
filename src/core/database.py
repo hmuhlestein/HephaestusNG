@@ -1160,6 +1160,10 @@ class AutopilotProject(Base):
     # and waits for the user to approve or request changes before continuing.
     review_mode = Column(Boolean, default=False, nullable=False)
 
+    # Spec Kit auto-scan: when True, the design-queue scan also auto-queues
+    # ready (has_plan=True) specs/<NNN>-<name>/ Spec Kit feature directories.
+    speckit_auto_scan_enabled = Column(Boolean, default=False, nullable=False)
+
     designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
     repos = relationship("ProjectRepo", back_populates="project", cascade="all, delete-orphan")
 
