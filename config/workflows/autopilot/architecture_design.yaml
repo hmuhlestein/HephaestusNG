@@ -145,6 +145,15 @@ additional_notes: |
   priority language `requirements.md` already carries forward into your own
   architecture sections. If no `plan.md` exists, proceed exactly as before.
 
+  **NEEDS CLARIFICATION (MANDATORY, bounded):** for a genuinely ambiguous
+  architecture decision with no reasonable default — same bounded
+  convention `product_requirements.yaml` uses — flag it with a
+  `NEEDS CLARIFICATION: <question>` marker instead of silently guessing.
+  Maximum 3 markers total, prioritized in this order when trimming:
+  scope > security/privacy > user experience > technical detail. Include a
+  `## NEEDS CLARIFICATION` section in architecture.md listing any that
+  apply (omit the section entirely if none do).
+
   Also read the original design document to understand the overall vision.
   This context goes into architecture.md — the development agent reads it
   from there (see STEP 12: do not call create_task to hand this to developers).
@@ -450,7 +459,11 @@ additional_notes: |
   ## Implementation Order
   1. [Component A] → 2. [Component B] → 3. [Component C]
   ...
-  
+
+  ## NEEDS CLARIFICATION
+  - [ ] (max 3, priority order: scope > security/privacy > UX > technical
+    detail) [question] — omit this section entirely if nothing qualifies
+
   ## STEP 12: OBJECT-ORIENTED DESIGN PASS
   
   Before finalizing the architecture, perform an OO design pass:
