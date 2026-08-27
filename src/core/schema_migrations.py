@@ -893,6 +893,7 @@ def migrate_project_repos_table(engine):
     except Exception as e:
         logger.warning(f"project_repos primary backfill failed: {e}")
 
+
 def migrate_speckit_design_columns(engine):
     """Add AutopilotDesign.repo_id/source_dir and
     AutopilotProject.speckit_autoscan_enabled for existing databases.
